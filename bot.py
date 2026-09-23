@@ -9,6 +9,7 @@ from goje.core.config import settings
 from goje.core.logging import logger, log_event, Events
 from goje.database.connection import init_db
 from goje.handlers import register_all_handlers
+from goje.middleware.rate_limit import RateLimitMiddleware
 
 
 async def create_bot_and_dispatcher() -> tuple[Bot, Dispatcher]:
@@ -22,6 +23,10 @@ async def create_bot_and_dispatcher() -> tuple[Bot, Dispatcher]:
         default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN),
     )
     dp = Dispatcher()
+
+    # Global anti-spam protection. Dropped updates never reach handlers.
+    dp.message.outer_middleware(RateLimitMiddleware())
+    dp.callback_query.outer_middleware(RateLimitMiddleware())
 
     # Register handlers
     register_all_handlers(dp)

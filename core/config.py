@@ -49,6 +49,16 @@ class Settings(BaseSettings):
     MATCHMAKING_TIMEOUT_SECONDS: int = Field(default=600, description="Matchmaking search timeout")
     ACCEPTANCE_TIMEOUT_SECONDS: int = Field(default=120, description="Match acceptance timeout")
     
+    # Anti-spam / Rate Limiting
+    RATE_LIMIT_MESSAGE_COUNT: int = Field(default=10, description="Maximum normal messages per window")
+    RATE_LIMIT_MESSAGE_WINDOW: int = Field(default=5, description="Normal message rate-limit window")
+    RATE_LIMIT_COMMAND_COUNT: int = Field(default=3, description="Maximum commands per window")
+    RATE_LIMIT_COMMAND_WINDOW: int = Field(default=10, description="Command rate-limit window")
+    RATE_LIMIT_WAKE_WORD_COUNT: int = Field(default=2, description="Maximum wake-word messages per window")
+    RATE_LIMIT_WAKE_WORD_WINDOW: int = Field(default=10, description="Wake-word rate-limit window")
+    RATE_LIMIT_CALLBACK_COUNT: int = Field(default=30, description="Maximum callbacks per window")
+    RATE_LIMIT_CALLBACK_WINDOW: int = Field(default=5, description="Callback rate-limit window")
+
     # Game Turn Timeouts (in seconds)
     HIGH_CARD_TIMEOUT: int = Field(default=60, description="High card turn timeout")
     ROCK_PAPER_SCISSORS_TIMEOUT: int = Field(default=60, description="Rock Paper Scissors turn timeout")
