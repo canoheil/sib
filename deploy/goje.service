@@ -1,0 +1,32 @@
+[Unit]
+Description=Goje Production Telegram Group Game Bot
+After=network.target mariadb.service
+Wants=mariadb.service
+
+[Service]
+Type=simple
+User=goje
+Group=goje
+WorkingDirectory=/opt/goje
+Environment="PATH=/opt/goje/venv/bin:/usr/local/bin:/usr/bin"
+EnvironmentFile=/opt/goje/.env
+ExecStart=/opt/goje/venv/bin/python3 /opt/goje/bot.py
+ExecReload=/bin/kill -HUP $MAINPID
+
+# Restart configuration
+Restart=always
+RestartSec=5s
+
+# Resource limits and process sandboxing
+LimitNOFILE=65535
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+
+# Standard logging to journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=goje-bot
+
+[Install]
+WantedBy=multi-user.target

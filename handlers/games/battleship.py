@@ -1,0 +1,18 @@
+"""Telegram gameplay handlers for Battleship."""
+
+from aiogram import Router, F, Bot
+from aiogram.types import CallbackQuery
+from goje.handlers.games.common import process_game_action
+
+router = Router(name="game_battleship")
+
+
+@router.callback_query(F.data.startswith("bs_action:"))
+async def handle_bs_action(callback: CallbackQuery, bot: Bot):
+    """Handle a player firing a shot in Battleship."""
+    parts = callback.data.split(":")
+    match_id = int(parts[1])
+    r = int(parts[2])
+    c = int(parts[3])
+
+    await process_game_action(callback, bot, match_id, {"r": r, "c": c})
