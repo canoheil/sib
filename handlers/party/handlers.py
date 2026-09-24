@@ -30,7 +30,7 @@ router = Router(name="party")
 async def cmd_group_games(message: Message):
     """Show group games menu."""
     if message.chat.type not in ("group", "supergroup"):
-        await message.reply("🍅 این دستور فقط درون گروه‌های تلگرام قابل استفاده است!")
+        await message.reply("🍏 این دستور فقط درون گروه‌های تلگرام قابل استفاده است!")
         return
 
     async with get_session() as session:
@@ -41,11 +41,11 @@ async def cmd_group_games(message: Message):
 
         active_parties = await PartyService.get_active_parties_for_group(session, message.chat.id)
         if active_parties:
-            text = "🍅 **بازی‌های فعال و پارتی‌های باز گروه:**\nبرای پیوستن یا مشاهده جزئیات انتخاب کنید:"
+            text = "🍏 **بازی‌های فعال و پارتی‌های باز گروه:**\nبرای پیوستن یا مشاهده جزئیات انتخاب کنید:"
             kb = get_active_parties_keyboard(active_parties)
         else:
             games = list((await session.scalars(select(Game).where(Game.is_active == True))).all())
-            text = "🍅 **منوی بازی‌های سیب**\nبازی مورد نظرتون رو برای شروع انتخاب کنید:"
+            text = "🍏 **منوی بازی‌های سیب**\nبازی مورد نظرتون رو برای شروع انتخاب کنید:"
             kb = get_game_selection_keyboard(games)
 
         await message.reply(text, reply_markup=kb, parse_mode="Markdown")
@@ -56,17 +56,17 @@ async def handle_games_panel(callback: CallbackQuery):
     """Handle opening or refreshing the active parties/games panel."""
     chat = callback.message.chat if callback.message else None
     if not chat or chat.type not in ("group", "supergroup"):
-        await callback.answer("این بخش مخصوص گروه‌هاست 🍅", show_alert=True)
+        await callback.answer("این بخش مخصوص گروه‌هاست 🍏", show_alert=True)
         return
 
     async with get_session() as session:
         active_parties = await PartyService.get_active_parties_for_group(session, chat.id)
         if active_parties:
-            text = "🍅 **بازی‌های فعال و در حال انتظار گروه:**"
+            text = "🍏 **بازی‌های فعال و در حال انتظار گروه:**"
             kb = get_active_parties_keyboard(active_parties)
         else:
             games = list((await session.scalars(select(Game).where(Game.is_active == True))).all())
-            text = "🍅 **در حال حاضر هیچ پارتی فعالی در این گروه وجود ندارد!**\nیک بازی انتخاب کن تا تیم بسازیم:"
+            text = "🍏 **در حال حاضر هیچ پارتی فعالی در این گروه وجود ندارد!**\nیک بازی انتخاب کن تا تیم بسازیم:"
             kb = get_game_selection_keyboard(games)
 
         await callback.answer()
@@ -93,7 +93,7 @@ async def handle_select_game(callback: CallbackQuery):
     async with get_session() as session:
         game = await session.scalar(select(Game).where(Game.code == game_code))
         if not game:
-            await callback.answer("بازی یافت نشد 🍅", show_alert=True)
+            await callback.answer("بازی یافت نشد 🍏", show_alert=True)
             return
 
         text = (
@@ -141,7 +141,7 @@ async def handle_create_party(callback: CallbackQuery):
         text = render_party_card(party)
         kb = get_party_action_keyboard(party, is_member=True)
 
-        await callback.answer("پارتی با موفقیت ایجاد شد! 🍅")
+        await callback.answer("پارتی با موفقیت ایجاد شد! 🍏")
         if callback.message:
             await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
 
@@ -155,7 +155,7 @@ async def handle_view_party(callback: CallbackQuery):
     async with get_session() as session:
         party = await PartyService.get_party_by_id(session, party_id)
         if not party or party.status in (PartyStatus.CANCELLED, PartyStatus.IN_MATCH):
-            await callback.answer("این پارتی دیگر در دسترس نیست 🍅", show_alert=True)
+            await callback.answer("این پارتی دیگر در دسترس نیست 🍏", show_alert=True)
             return
 
         is_member = any(m.user_id == user.id for m in party.members) if user else False
@@ -188,7 +188,7 @@ async def handle_join_party(callback: CallbackQuery):
         text = render_party_card(party)
         kb = get_party_action_keyboard(party, is_member=True)
 
-        await callback.answer("به پارتی اضافه شدی! 🍅✨")
+        await callback.answer("به پارتی اضافه شدی! 🍏✨")
         if callback.message:
             await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
 
@@ -210,11 +210,11 @@ async def handle_leave_party(callback: CallbackQuery):
             return
 
         if was_cancelled:
-            await callback.answer("شما خارج شدید و چون کسی نمانده بود، پارتی لغو شد 🍅")
+            await callback.answer("شما خارج شدید و چون کسی نمانده بود، پارتی لغو شد 🍏")
             if callback.message:
                 await callback.message.edit_text("❌ **این پارتی لغو شد.**", reply_markup=None, parse_mode="Markdown")
         else:
-            await callback.answer("از پارتی خارج شدی 🍅")
+            await callback.answer("از پارتی خارج شدی 🍏")
             text = render_party_card(party)
             kb = get_party_action_keyboard(party, is_member=False)
             if callback.message:
@@ -237,7 +237,7 @@ async def handle_cancel_party(callback: CallbackQuery):
             await callback.answer(e.message, show_alert=True)
             return
 
-        await callback.answer("پارتی لغو شد 🍅")
+        await callback.answer("پارتی لغو شد 🍏")
         if callback.message:
             await callback.message.edit_text("❌ **این پارتی توسط کاربر لغو گردید.**", reply_markup=None, parse_mode="Markdown")
 

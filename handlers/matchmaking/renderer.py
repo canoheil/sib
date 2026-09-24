@@ -43,7 +43,7 @@ def render_match_found_for_group(match: Match, for_group_id: int) -> str:
         my_name = my_player.user.display_name if my_player and my_player.user else "شما"
 
         text = (
-            "⚔️ **حریف پیدا شد!** 🍅\n\n"
+            "⚔️ **حریف پیدا شد!** 🍏\n\n"
             f"🎮 **بازی:** {match.game.name_fa}\n"
             f"⚔️ **حالت:** {mode_title}\n\n"
             f"👤 **شما:** {my_name}\n"
@@ -60,7 +60,7 @@ def render_match_found_for_group(match: Match, for_group_id: int) -> str:
         opp_roster = "\n".join([f"  • {p.user.display_name}" for p in opp_players if p.user])
 
         text = (
-            "⚔️ **حریف تیمی پیدا شد!** 🍅\n\n"
+            "⚔️ **حریف تیمی پیدا شد!** 🍏\n\n"
             f"🎮 **بازی:** {match.game.name_fa}\n"
             f"⚔️ **حالت:** {mode_title}\n\n"
             f"🛡️ **تیم شما:** {my_group.title} (ریتینگ: `{my_rating_val:g}`)\n"

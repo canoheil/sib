@@ -243,9 +243,9 @@ class RockPaperScissorsEngine(BaseGameEngine):
             if result.is_draw:
                 outcome_text = "🤝 **نتیجه مسابقه: مساوی!**"
             elif result.winner_team == my_p["team"]:
-                outcome_text = "🎉 **تیم شما پیروز شد!** 🍅🏆"
+                outcome_text = "🎉 **تیم شما پیروز شد!** 🍏🏆"
             else:
-                outcome_text = "💔 **تیم حریف پیروز شد!** 🍅"
+                outcome_text = "💔 **تیم حریف پیروز شد!** 🍏"
 
             my_choice = self.CHOICES.get(my_p["choice"], "—")
             opp_choice = self.CHOICES.get(opp_p["choice"], "—")
@@ -272,7 +272,7 @@ class RockPaperScissorsEngine(BaseGameEngine):
         )
 
         return (
-            "✂️ **بازی سنگ، کاغذ، قیچی!** 🍅\n\n"
+            "✂️ **بازی سنگ، کاغذ، قیچی!** 🍏\n\n"
             f"🎯 **راند {round_no} از {self.TOTAL_ROUNDS}**\n"
             f"🏆 **امتیاز:** {p1_score} - {p2_score}\n\n"
             f"👤 **شما ({my_p['name']}):** {my_status}\n"

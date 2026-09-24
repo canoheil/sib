@@ -71,11 +71,11 @@ async def process_game_action(
         )
         match = await session.scalar(match_stmt)
         if not match:
-            await callback.answer("مسابقه پیدا نشد 🍅", show_alert=True)
+            await callback.answer("مسابقه پیدا نشد 🍏", show_alert=True)
             return
 
         if match.state != MatchState.ACTIVE:
-            await callback.answer("این مسابقه در جریان نیست یا قبلاً به پایان رسیده 🍅", show_alert=True)
+            await callback.answer("این مسابقه در جریان نیست یا قبلاً به پایان رسیده 🍏", show_alert=True)
             return
 
         engine = get_game_engine(match.game.code)
@@ -89,7 +89,7 @@ async def process_game_action(
         # Validate action
         is_valid, reason = engine.validate_action(state, user.id, action)
         if not is_valid:
-            await callback.answer(reason or "حرکت نامعتبر است 🍅", show_alert=True)
+            await callback.answer(reason or "حرکت نامعتبر است 🍏", show_alert=True)
             return
 
         # Apply action
@@ -136,7 +136,7 @@ async def process_game_action(
         # Check if match is finished
         if not engine.is_finished(state):
             await session.flush()
-            await callback.answer("حرکت شما ثبت شد! 🍅")
+            await callback.answer("حرکت شما ثبت شد! 🍏")
 
             if has_message_ids:
                 for group_id, msg_id in (
@@ -171,7 +171,7 @@ async def process_game_action(
         # 1. Apply rating and record statistics atomically and idempotently
         await RatingService.apply_match_result(session, match, result)
         await session.commit()
-        await callback.answer("بازی به پایان رسید! 🍅✨")
+        await callback.answer("بازی به پایان رسید! 🍏✨")
 
         # 2. Fetch eligible post-match ad safely (never affects match result if fails)
         selected_ad: Optional[AdCampaign] = None

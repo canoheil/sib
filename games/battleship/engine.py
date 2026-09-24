@@ -213,7 +213,7 @@ class BattleshipEngine(BaseGameEngine):
         winner_team = game_state.get("winner_team")
         is_a = str(winner_team) in ("1", "A")
         team_name = "تیم A" if is_a else "تیم B"
-        summary = f"{team_name} تمامی ناوگان دشمن را غرق کرد و پیروز نبرد دریایی شد! 🚢💥🍅"
+        summary = f"{team_name} تمامی ناوگان دشمن را غرق کرد و پیروز نبرد دریایی شد! 🚢💥🍏"
         return GameResult(
             winner_team=winner_team,
             is_draw=False,
@@ -254,7 +254,7 @@ class BattleshipEngine(BaseGameEngine):
         if self.is_finished(game_state):
             result = self.get_result(game_state)
             is_winner = (my_p and result.winner_team == my_p["team"])
-            outcome = "🎉 **گروه شما پیروز شد!** 🍅🚢" if is_winner else "💔 **گروه حریف پیروز شد!** 🍅"
+            outcome = "🎉 **گروه شما پیروز شد!** 🍏🚢" if is_winner else "💔 **گروه حریف پیروز شد!** 🍏"
             return (
                 "🚢 **پایان نبرد دریایی (Battleship)**\n\n"
                 f"{radar_art}\n\n"
@@ -271,7 +271,7 @@ class BattleshipEngine(BaseGameEngine):
         turn_msg = "🟢 **نوبت شلیک شماست!** یک مختصات روی رادار زیر را هدف بگیرید:" if is_my_turn else f"⏳ در انتظار شلیک {curr_p.get('name', 'بازیکن')}..."
 
         return (
-            "🚢 **جنگ کشتی‌ها (Battleship)** 🍅\n\n"
+            "🚢 **جنگ کشتی‌ها (Battleship)** 🍏\n\n"
             f"🎯 **رادار شلیک‌های شما به سمت دشمن:**\n"
             f"{radar_art}\n\n"
             f"🛡️ سلول‌های سالم ناوگان شما: {my_remaining}/14\n"

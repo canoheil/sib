@@ -137,7 +137,7 @@ class PartyService:
             .where(PartyMember.user_id == user_id)
         )
         if await session.scalar(is_member_stmt):
-            raise InvalidActionException("شما در حال حاضر عضو این پارتی هستید 🍅")
+            raise InvalidActionException("شما در حال حاضر عضو این پارتی هستید 🍏")
 
         # Check capacity
         if party.current_players_count >= party.max_players:
@@ -197,7 +197,7 @@ class PartyService:
         )
         member = await session.scalar(member_stmt)
         if not member:
-            raise InvalidActionException("شما عضو این پارتی نیستید 🍅")
+            raise InvalidActionException("شما عضو این پارتی نیستید 🍏")
 
         await session.delete(member)
         party.current_players_count = max(0, party.current_players_count - 1)
@@ -249,7 +249,7 @@ class PartyService:
         )
         is_member = await session.scalar(member_stmt)
         if not is_member and party.creator_user_id != user_id:
-            raise InvalidActionException("فقط اعضای این پارتی امکان لغو آن را دارند 🍅")
+            raise InvalidActionException("فقط اعضای این پارتی امکان لغو آن را دارند 🍏")
 
         party.status = PartyStatus.CANCELLED
         await session.flush()

@@ -28,6 +28,6 @@ async def handle_ad_click(callback: CallbackQuery):
             info_text = f"✨ **اسپانسر:** {campaign.sponsor_name}\n\n{campaign.ad_text}"
             if campaign.target_url:
                 info_text += f"\n\n🔗 لینک: {campaign.target_url}"
-            await callback.answer(f"حمایت شما از {campaign.sponsor_name} ثبت شد! 🍅✨", show_alert=True)
+            await callback.answer(f"حمایت شما از {campaign.sponsor_name} ثبت شد! 🍏✨", show_alert=True)
         else:
-            await callback.answer("اطلاعات اسپانسر یافت نشد 🍅", show_alert=True)
+            await callback.answer("اطلاعات اسپانسر یافت نشد 🍏", show_alert=True)

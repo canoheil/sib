@@ -13,7 +13,7 @@ DB_HOST="${DB_HOST:-localhost}"
 
 mkdir -p "$BACKUP_DIR"
 
-echo "🍅 [1/2] Creating compressed MariaDB dump for database: ${DB_NAME}..."
+echo "🍏 [1/2] Creating compressed MariaDB dump for database: ${DB_NAME}..."
 mysqldump -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASSWORD" \
     --single-transaction \
     --quick \

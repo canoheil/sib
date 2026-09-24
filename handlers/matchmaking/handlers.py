@@ -37,12 +37,12 @@ async def handle_find_match(callback: CallbackQuery, bot: Bot):
         if not match:
             # Still in queue waiting for an opponent
             queue_text = (
-                "🔍 **در حال جستجوی حریف از گروه‌های تلگرام...** 🍅\n\n"
+                "🔍 **در حال جستجوی حریف از گروه‌های تلگرام...** 🍏\n\n"
                 "سیب در حال جستجوی یک حریف متناسب با ریتینگ گروه شماست.\n"
                 "با گذشت زمان، دامنه جستجو به‌طور خودکار گسترش می‌یابد.\n\n"
                 "⏳ لطفاً منتظر بمانید..."
             )
-            await callback.answer("وارد صف مسابقات شدی! 🍅")
+            await callback.answer("وارد صف مسابقات شدی! 🍏")
             if callback.message:
                 await callback.message.edit_text(
                     queue_text,
@@ -52,7 +52,7 @@ async def handle_find_match(callback: CallbackQuery, bot: Bot):
             return
 
         # Match was found immediately!
-        await callback.answer("حریف پیدا شد! 🍅✨")
+        await callback.answer("حریف پیدا شد! 🍏✨")
 
         # 1. Update/Send to Group 1
         text_g1 = render_match_found_for_group(match, match.group1_id)
@@ -90,7 +90,7 @@ async def handle_cancel_matchmaking(callback: CallbackQuery):
             await callback.answer(e.message, show_alert=True)
             return
 
-        await callback.answer("جستجوی حریف لغو شد 🍅")
+        await callback.answer("جستجوی حریف لغو شد 🍏")
         if party and callback.message:
             text = render_party_card(party)
             kb = get_party_action_keyboard(party, is_member=True)
@@ -136,7 +136,7 @@ async def handle_accept_match(callback: CallbackQuery, bot: Bot):
 
             await session.flush()
 
-            await callback.answer("مسابقه آغاز شد! 🍅🎉")
+            await callback.answer("مسابقه آغاز شد! 🍏🎉")
 
             # Render interactive board for both groups
             for group_id, msg_id in ((match.group1_id, match.group1_message_id), (match.group2_id, match.group2_message_id)):
@@ -151,7 +151,7 @@ async def handle_accept_match(callback: CallbackQuery, bot: Bot):
                         logger.warning(f"Failed to edit board message in group {group_id}: {e}")
         else:
             # This side accepted, waiting for other side
-            await callback.answer("مسابقه توسط شما پذیرفته شد! در انتظار تایید حریف... 🍅")
+            await callback.answer("مسابقه توسط شما پذیرفته شد! در انتظار تایید حریف... 🍏")
             if callback.message:
                 await callback.message.edit_reply_markup(reply_markup=get_acceptance_keyboard(match.id, has_accepted=True))
 
@@ -174,9 +174,9 @@ async def handle_reject_match(callback: CallbackQuery, bot: Bot):
 
         reject_text = (
             "❌ **این مسابقه توسط یکی از طرفین رد شد.**\n\n"
-            "پارتی‌ها مجدداً بازگشتند و هیچ تغییری در ریتینگ رخ نداد 🍅"
+            "پارتی‌ها مجدداً بازگشتند و هیچ تغییری در ریتینگ رخ نداد 🍏"
         )
-        await callback.answer("مسابقه لغو شد 🍅")
+        await callback.answer("مسابقه لغو شد 🍏")
 
         for group_id, msg_id in ((match.group1_id, match.group1_message_id), (match.group2_id, match.group2_message_id)):
             if group_id and msg_id:

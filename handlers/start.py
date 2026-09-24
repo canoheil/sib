@@ -36,7 +36,7 @@ async def handle_start(message: Message, bot: Bot):
         if chat.type in ("group", "supergroup"):
             group = await GroupService.get_or_create_group(session, chat)
             welcome_text = (
-                f"🍅 **سیب وارد شد! سلام به برو بچِ {chat.title}!**\n\n"
+                f"🍏 **سیب وارد شد! سلام به برو بچِ {chat.title}!**\n\n"
                 f"گروه شما ثبت شد و ریتینگ رقابتی اولیه **{settings.INITIAL_RATING:g}** براتون لحاظ شد.\n\n"
                 f"برای ساخت پارتی بازی و مبارزه با گروه‌های دیگه، دکمه‌های زیر رو لمس کنید 👇"
             )
@@ -50,7 +50,7 @@ async def handle_start(message: Message, bot: Bot):
         if not is_member:
             channel_link = missing_channel.invite_link if missing_channel else settings.OFFICIAL_CHANNEL_LINK
             membership_text = (
-                "🍅 **سلام!**\n\n"
+                "🍏 **سلام!**\n\n"
                 "برای استفاده از سیب و دریافت اطلاعیه‌ها و بازی با گروه‌ها، عضو کانال رسمی شو 👇"
             )
             await message.answer(
@@ -62,7 +62,7 @@ async def handle_start(message: Message, bot: Bot):
 
         # If already member
         welcome_text = (
-            f"🍅 **سلام {user.first_name} عزیز! من سیب‌ام!**\n\n"
+            f"🍏 **سلام {user.first_name} عزیز! من سیب‌ام!**\n\n"
             "من ربات بازی گروهی آنلاین تلگرام هستم.\n"
             "من رو به گروه‌هات اضافه کن، تیم تشکیل بده و با گروه‌های دیگه در سراسر تلگرام مسابقه بده!\n\n"
             "🎮 بازی‌های فعال:\n"
@@ -99,7 +99,7 @@ async def handle_check_membership(callback: CallbackQuery, bot: Bot):
         
         # Replace gate message with welcome
         welcome_text = (
-            f"🍅 **سلام {user.first_name}! عضویتت تایید شد!**\n\n"
+            f"🍏 **سلام {user.first_name}! عضویتت تایید شد!**\n\n"
             "به جمع سیب‌ای‌ها خوش اومدی!\n"
             "سیب رو به گروه‌تون اضافه کن و چالش بازی‌های تیمی رو آغاز کنید 👇"
         )
@@ -115,7 +115,7 @@ async def handle_check_membership(callback: CallbackQuery, bot: Bot):
 async def handle_help_menu(callback: CallbackQuery):
     """Show help menu in private chat."""
     help_text = (
-        "🍅 **راهنمای بازی‌های سیب**\n\n"
+        "🍏 **راهنمای بازی‌های سیب**\n\n"
         "۱. سیب رو به گروه تلگرامی خودت اضافه کن.\n"
         "۲. توی گروه دکمه «بازی‌های فعال گروه» رو بزن یا بازی مورد علاقه‌ت رو انتخاب کن.\n"
         "۳. بازی‌های انفرادی (Solo) یا تیمی (2v2 و 4v4) وجود داره.\n"

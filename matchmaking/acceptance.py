@@ -66,12 +66,12 @@ class AcceptanceService:
             raise MatchNotFoundException()
 
         if match.state != MatchState.WAITING_FOR_ACCEPTANCE:
-            raise InvalidActionException(f"این مسابقه در وضعیت پذیرش نیست (وضعیت: {match.state}) 🍅")
+            raise InvalidActionException(f"این مسابقه در وضعیت پذیرش نیست (وضعیت: {match.state}) 🍏")
 
         # Find user's player record
         player = next((p for p in match.players if p.user_id == user_id), None)
         if not player:
-            raise InvalidActionException("شما بازیکن این مسابقه نیستید 🍅")
+            raise InvalidActionException("شما بازیکن این مسابقه نیستید 🍏")
 
         player.has_accepted = True
 
@@ -96,7 +96,7 @@ class AcceptanceService:
 
         if both_accepted:
             if not cls.can_transition(match.state, MatchState.ACTIVE):
-                raise InvalidActionException("انتقال به وضعیت شروع بازی غیرمجاز است 🍅")
+                raise InvalidActionException("انتقال به وضعیت شروع بازی غیرمجاز است 🍏")
 
             match.state = MatchState.ACTIVE
             match.started_at = datetime.now(timezone.utc)
@@ -138,14 +138,14 @@ class AcceptanceService:
             raise MatchNotFoundException()
 
         if match.state != MatchState.WAITING_FOR_ACCEPTANCE:
-            raise InvalidActionException("امکان رد این مسابقه در وضعیت کنونی وجود ندارد 🍅")
+            raise InvalidActionException("امکان رد این مسابقه در وضعیت کنونی وجود ندارد 🍏")
 
         player = next((p for p in match.players if p.user_id == user_id), None)
         if not player:
-            raise InvalidActionException("شما بازیکن این مسابقه نیستید 🍅")
+            raise InvalidActionException("شما بازیکن این مسابقه نیستید 🍏")
 
         if not cls.can_transition(match.state, MatchState.CANCELLED):
-            raise InvalidActionException("انتقال به وضعیت لغو مسابقه غیرمجاز است 🍅")
+            raise InvalidActionException("انتقال به وضعیت لغو مسابقه غیرمجاز است 🍏")
 
         match.state = MatchState.CANCELLED
 

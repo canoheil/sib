@@ -78,7 +78,7 @@ class TimeoutService:
                 summary=(
                     "به دلیل پایان زمان نوبت بازیکن حریف، "
                     + ("تیم ۱" if winner_team == 1 else "تیم ۲")
-                    + " برنده مسابقه اعلام شد! 🍅⏱️"
+                    + " برنده مسابقه اعلام شد! 🍏⏱️"
                 ),
                 details={
                     "turn_timeout": True,
@@ -102,21 +102,21 @@ class TimeoutService:
                 result = GameResult(
                     winner_team=1,
                     is_draw=False,
-                    summary="به دلیل پایان زمان، تیم ۱ برنده مسابقه اعلام شد! 🍅⏱️",
+                    summary="به دلیل پایان زمان، تیم ۱ برنده مسابقه اعلام شد! 🍏⏱️",
                     details={"simultaneous_timeout": True, "locked_team": 1},
                 )
             elif locked_teams == {2}:
                 result = GameResult(
                     winner_team=2,
                     is_draw=False,
-                    summary="به دلیل پایان زمان، تیم ۲ برنده مسابقه اعلام شد! 🍅⏱️",
+                    summary="به دلیل پایان زمان، تیم ۲ برنده مسابقه اعلام شد! 🍏⏱️",
                     details={"simultaneous_timeout": True, "locked_team": 2},
                 )
             else:
                 result = GameResult(
                     winner_team=None,
                     is_draw=True,
-                    summary="زمان بازیکنان به پایان رسید؛ مسابقه مساوی شد! 🍅⏱️",
+                    summary="زمان بازیکنان به پایان رسید؛ مسابقه مساوی شد! 🍏⏱️",
                     details={
                         "simultaneous_timeout": True,
                         "locked_teams": sorted(locked_teams),

@@ -75,16 +75,16 @@ class MatchmakingService:
 
         # 2. Hard requirements
         if party.status == PartyStatus.IN_QUEUE:
-            raise InvalidActionException("این تیم در حال حاضر در صف جستجوی حریف قرار دارد 🍅")
+            raise InvalidActionException("این تیم در حال حاضر در صف جستجوی حریف قرار دارد 🍏")
         if party.status == PartyStatus.IN_MATCH:
-            raise InvalidActionException("این تیم در حال حاضر در مسابقه است 🍅")
+            raise InvalidActionException("این تیم در حال حاضر در مسابقه است 🍏")
         if not party.is_full:
-            raise InvalidActionException("برای شروع جستجوی حریف، ابتدا باید ظرفیت تیم تکمیل شود 🍅")
+            raise InvalidActionException("برای شروع جستجوی حریف، ابتدا باید ظرفیت تیم تکمیل شود 🍏")
 
         # 3. Check user is a member of this party
         is_member = any(m.user_id == user_id for m in party.members)
         if not is_member:
-            raise InvalidActionException("فقط اعضای تیم می‌توانند جستجوی حریف را آغاز کنند 🍅")
+            raise InvalidActionException("فقط اعضای تیم می‌توانند جستجوی حریف را آغاز کنند 🍏")
 
         # 4. Fetch group rating
         rating_stmt = select(Rating.rating).where(Rating.group_id == party.group_id)
@@ -154,7 +154,7 @@ class MatchmakingService:
 
         is_member = any(m.user_id == user_id for m in party.members)
         if not is_member and party.creator_user_id != user_id:
-            raise InvalidActionException("فقط اعضای تیم می‌توانند جستجوی حریف را لغو کنند 🍅")
+            raise InvalidActionException("فقط اعضای تیم می‌توانند جستجوی حریف را لغو کنند 🍏")
 
         queue_entry = await session.scalar(
             select(MatchmakingQueue)

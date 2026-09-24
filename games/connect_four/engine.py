@@ -172,7 +172,7 @@ class ConnectFourEngine(BaseGameEngine):
         winner_team = game_state.get("winner_team")
         is_a = str(winner_team) in ("1", "A")
         team_name = f"تیم {'قرمز (A)' if is_a else 'زرد (B)'}"
-        summary = f"{team_name} با ۴ مهره متوالی پیروز شد! 🍅🎉"
+        summary = f"{team_name} با ۴ مهره متوالی پیروز شد! 🍏🎉"
         return GameResult(
             winner_team=winner_team,
             is_draw=False,
@@ -210,9 +210,9 @@ class ConnectFourEngine(BaseGameEngine):
             if result.is_draw:
                 outcome = "🤝 **نتیجه: مساوی!**"
             elif result.winner_team == my_team:
-                outcome = "🎉 **گروه شما پیروز شد!** 🍅🏆"
+                outcome = "🎉 **گروه شما پیروز شد!** 🍏🏆"
             else:
-                outcome = "💔 **گروه حریف پیروز شد!** 🍅"
+                outcome = "💔 **گروه حریف پیروز شد!** 🍏"
 
             return (
                 "🔴🟡 **پایان بازی چهار در یک خط (Connect Four)**\n\n"
@@ -232,7 +232,7 @@ class ConnectFourEngine(BaseGameEngine):
             turn_msg = f"⏳ **نوبت بازیکن:** {current_p.get('name', 'حریف')} ({current_p.get('symbol', '')})"
 
         return (
-            "🔴🟡 **چهار در یک خط (Connect Four)** 🍅\n\n"
+            "🔴🟡 **چهار در یک خط (Connect Four)** 🍏\n\n"
             f"{board_art}\n\n"
             f"{team_info}\n\n"
             f"{turn_msg}"

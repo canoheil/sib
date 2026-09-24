@@ -4,7 +4,7 @@ set -euo pipefail
 export PYTHONPATH="${PYTHONPATH:-/home/user}:$(pwd)/..:."
 
 # Health check script for sib Bot
-echo "🍅 --- بررسی سلامت سیستم ربات سیب (sib Health Check) ---"
+echo "🍏 --- بررسی سلامت سیستم ربات سیب (sib Health Check) ---"
 
 # 1. Check MariaDB connection
 echo -n "1. اتصال به دیتابیس MariaDB: "
@@ -48,4 +48,4 @@ else
     exit 1
 fi
 
-echo "🍅 کلیه شاخص‌های سلامت سیستم تایید شد! ✅"
+echo "🍏 کلیه شاخص‌های سلامت سیستم تایید شد! ✅"

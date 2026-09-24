@@ -153,7 +153,7 @@ class TicTacToeEngine(BaseGameEngine):
         if self.is_finished(game_state):
             result = self.get_result(game_state)
             outcome = "🤝 **نتیجه: مساوی!**" if result.is_draw else (
-                "🎉 **تیم شما پیروز شد!** 🍅🏆" if result.winner_team == my_p["team"] else "💔 **تیم حریف پیروز شد!** 🍅"
+                "🎉 **تیم شما پیروز شد!** 🍏🏆" if result.winner_team == my_p["team"] else "💔 **تیم حریف پیروز شد!** 🍏"
             )
             return (
                 "⭕ **پایان بازی دوز (Tic-Tac-Toe)**\n\n"
@@ -166,7 +166,7 @@ class TicTacToeEngine(BaseGameEngine):
         turn_text = "🟢 **نوبت شماست!** یک خانه خالی را لمس کنید." if current_pid == for_player_id else f"⏳ در انتظار حرکت {opp_p['name']}..."
 
         return (
-            "⭕ **بازی دوز (Tic-Tac-Toe)** 🍅\n\n"
+            "⭕ **بازی دوز (Tic-Tac-Toe)** 🍏\n\n"
             f"👤 شما: {my_p['name']} ({icons[my_p['symbol']]})\n"
             f"👤 حریف: {opp_p['name']} ({icons[opp_p['symbol']]})\n\n"
             f"{board_art}\n\n"

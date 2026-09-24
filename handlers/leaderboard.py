@@ -21,10 +21,10 @@ router = Router(name="leaderboard")
 def format_leaderboard_text(top_groups: list) -> str:
     """Format global leaderboard in Persian."""
     if not top_groups:
-        return "🏆 **برترین گروه‌های سیب** 🍅\n\nهنوز مسابقه‌ای ثبت نشده است! اولین گروه قهرمان باشید!"
+        return "🏆 **برترین گروه‌های سیب** 🍏\n\nهنوز مسابقه‌ای ثبت نشده است! اولین گروه قهرمان باشید!"
 
     medals = {1: "🥇", 2: "🥈", 3: "🥉"}
-    lines = ["🏆 **برترین گروه‌های سیب** 🍅\n"]
+    lines = ["🏆 **برترین گروه‌های سیب** 🍏\n"]
 
     for rank, group, rating in top_groups:
         medal = medals.get(rank, f"**{rank}.**")
@@ -65,7 +65,7 @@ async def callback_group_rating_stats(callback: CallbackQuery):
     """Show group rating and performance stats."""
     chat = callback.message.chat if callback.message else None
     if not chat or chat.type not in ("group", "supergroup"):
-        await callback.answer("این بخش مخصوص گروه‌هاست 🍅", show_alert=True)
+        await callback.answer("این بخش مخصوص گروه‌هاست 🍏", show_alert=True)
         return
 
     async with get_session() as session:
@@ -75,7 +75,7 @@ async def callback_group_rating_stats(callback: CallbackQuery):
             stats = await LeaderboardService.get_group_stats_and_rank(session, chat.id)
 
         text = (
-            f"📊 **شناسنامه و ریتینگ گروه: {stats['title']}** 🍅\n\n"
+            f"📊 **شناسنامه و ریتینگ گروه: {stats['title']}** 🍏\n\n"
             f"🏆 رتبه در جدول کل: `#{stats['rank']}`\n"
             f"⭐️ ریتینگ جهانی: `{stats['rating']:g}`\n"
             f"⚔️ تعداد کل مسابقات: `{stats['matches_played']}`\n"
@@ -114,7 +114,7 @@ async def cmd_stats(message: Message):
                 stats = await LeaderboardService.get_group_stats_and_rank(session, chat.id)
 
             text = (
-                f"📊 **آمار گروه {chat.title}** 🍅\n\n"
+                f"📊 **آمار گروه {chat.title}** 🍏\n\n"
                 f"🏆 رتبه جهانی: `#{stats['rank']}`\n"
                 f"⭐️ ریتینگ الو: `{stats['rating']:g}`\n"
                 f"⚔️ مسابقات: `{stats['matches_played']}`\n"
@@ -128,7 +128,7 @@ async def cmd_stats(message: Message):
             p_stats = await LeaderboardService.get_player_stats(session, user.id)
             name = user.first_name or "شما"
             text = (
-                f"👤 **کارنامه بازیکن: {name}** 🍅\n\n"
+                f"👤 **کارنامه بازیکن: {name}** 🍏\n\n"
                 f"🎮 مجموع حضور در مسابقات: `{p_stats['matches_played']}`\n"
                 f"🟢 پیروزی‌ها: `{p_stats['wins']}` ({p_stats['win_rate']}٪)\n"
                 f"🔴 شکست‌ها: `{p_stats['losses']}`\n"

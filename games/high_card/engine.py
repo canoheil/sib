@@ -141,7 +141,7 @@ class HighCardEngine(BaseGameEngine):
             c2 = f"{opp_p['card_suit']} {self.CARD_NAMES.get(opp_p['card_rank'])}"
 
             outcome = "🤝 **نتیجه: مساوی!**" if result.is_draw else (
-                "🎉 **تیم شما پیروز شد!** 🍅🏆" if result.winner_team == my_p["team"] else "💔 **تیم حریف پیروز شد!** 🍅"
+                "🎉 **تیم شما پیروز شد!** 🍏🏆" if result.winner_team == my_p["team"] else "💔 **تیم حریف پیروز شد!** 🍏"
             )
 
             return (
@@ -156,7 +156,7 @@ class HighCardEngine(BaseGameEngine):
         opp_status = "✅ کارت خود را کشید" if opp_p["locked"] else "⏳ در انتظار کشیدن کارت..."
 
         return (
-            "🃏 **مسابقه کارت بالا (High Card)** 🍅\n\n"
+            "🃏 **مسابقه کارت بالا (High Card)** 🍏\n\n"
             f"👤 **شما ({my_p['name']}):** {my_status}\n"
             f"👤 **حریف ({opp_p['name']}):** {opp_status}\n\n"
             "⚠️ کارت‌ها تا زمان کشیدن هر دو بازیکن مخفی می‌مانند!"

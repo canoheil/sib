@@ -60,7 +60,7 @@ class MatchLifecycleService:
         result = GameResult(
             winner_team=winner_team,
             is_draw=False,
-            summary="بازیکن حریف از مسابقه خارج شد و تیم مقابل برنده شد! 🍅",
+            summary="بازیکن حریف از مسابقه خارج شد و تیم مقابل برنده شد! 🍏",
             details={
                 "player_forfeit": True,
                 "forfeited_player_id": user_id,

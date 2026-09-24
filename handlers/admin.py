@@ -25,7 +25,7 @@ async def handle_admin_command(message: Message):
         log_event(Events.ADMIN_COMMAND_EXECUTED, {"user_id": user.id, "command": "/admin"})
 
     admin_text = (
-        "🍅 **پنل مدیریت ربات سیب (Admin Panel)**\n\n"
+        "🍏 **پنل مدیریت ربات سیب (Admin Panel)**\n\n"
         "به بخش مدیریت خوش آمدید. لطفاً گزینه مورد نظر خود را انتخاب نمایید:"
     )
     await message.reply(admin_text, reply_markup=get_admin_main_keyboard(), parse_mode="Markdown")
@@ -35,7 +35,7 @@ async def handle_admin_command(message: Message):
 async def handle_admin_main_menu(callback: CallbackQuery):
     """Return to admin main menu."""
     admin_text = (
-        "🍅 **پنل مدیریت ربات سیب (Admin Panel)**\n\n"
+        "🍏 **پنل مدیریت ربات سیب (Admin Panel)**\n\n"
         "به بخش مدیریت خوش آمدید. لطفاً گزینه مورد نظر خود را انتخاب نمایید:"
     )
     await callback.answer()
@@ -83,7 +83,7 @@ async def handle_admin_ads(callback: CallbackQuery):
         campaigns = analytics["campaigns"]
 
     text = (
-        "📢 **مدیریت تبلیغات و مانیتایزیشن (Monetization)** 🍅\n\n"
+        "📢 **مدیریت تبلیغات و مانیتایزیشن (Monetization)** 🍏\n\n"
         f"📊 کل کمپین‌ها: `{analytics['total_campaigns']}` | فعال: `{analytics['active_campaigns']}`\n"
         f"👁️ مجموع ایمپرشن: `{analytics['total_impressions']}`\n"
         f"🖱️ مجموع کلیک‌ها: `{analytics['total_clicks']}`\n"
@@ -113,7 +113,7 @@ async def handle_admin_ad_view(callback: CallbackQuery):
     async with get_session() as session:
         campaign = await AdService.get_campaign(session, campaign_id)
         if not campaign:
-            await callback.answer("کمپین یافت نشد 🍅", show_alert=True)
+            await callback.answer("کمپین یافت نشد 🍏", show_alert=True)
             return
 
         status_text = "🟢 فعال" if campaign.is_active else "🔴 غیرفعال"
@@ -161,9 +161,9 @@ async def handle_admin_ad_toggle(callback: CallbackQuery):
 
         if campaign:
             state_str = "فعال" if campaign.is_active else "غیرفعال"
-            await callback.answer(f"وضعیت کمپین به {state_str} تغییر یافت! 🍅")
+            await callback.answer(f"وضعیت کمپین به {state_str} تغییر یافت! 🍏")
         else:
-            await callback.answer("کمپین یافت نشد 🍅", show_alert=True)
+            await callback.answer("کمپین یافت نشد 🍏", show_alert=True)
 
     # Refresh view
     await handle_admin_ad_view(callback)
@@ -176,7 +176,7 @@ async def handle_admin_channels(callback: CallbackQuery):
         channels = await SponsorService.get_all_channels(session)
 
     text = (
-        "🤝 **مدیریت کانال‌های رسمی و اسپانسر (Sponsor Channels)** 🍅\n\n"
+        "🤝 **مدیریت کانال‌های رسمی و اسپانسر (Sponsor Channels)** 🍏\n\n"
         "در این بخش می‌توانید کانال‌های دروازه عضویت اجباری یا اختیاری را مدیریت کنید:\n\n"
     )
 
@@ -208,9 +208,9 @@ async def handle_admin_channel_toggle(callback: CallbackQuery):
 
         if ch:
             state_str = "فعال" if ch.is_active else "غیرفعال"
-            await callback.answer(f"وضعیت کانال {ch.title} به {state_str} تغییر یافت! 🍅")
+            await callback.answer(f"وضعیت کانال {ch.title} به {state_str} تغییر یافت! 🍏")
         else:
-            await callback.answer("کانال پیدا نشد 🍅", show_alert=True)
+            await callback.answer("کانال پیدا نشد 🍏", show_alert=True)
 
     await handle_admin_channels(callback)
 

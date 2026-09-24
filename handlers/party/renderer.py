@@ -23,7 +23,7 @@ def render_party_card(party: Party) -> str:
         header = "✅ **تیم کامل شد!**" if party.mode != "solo" else "✅ **آماده برای رقابت!**"
         status_line = ""
     else:
-        header = "🍅 **پارتی بازی گروه**"
+        header = "🍏 **پارتی بازی گروه**"
         remaining = party.remaining_slots
         status_line = f"\n⏳ **{remaining} جای خالی**"
 
