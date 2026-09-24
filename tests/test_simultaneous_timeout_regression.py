@@ -6,13 +6,13 @@ import json
 import pytest
 from sqlalchemy import select
 
-from goje.database.models import Match, MatchState, Rating
-from goje.services.timeout import TimeoutService
-from goje.services.recovery import RecoveryService
-from goje.services.party import PartyService
-from goje.matchmaking.matcher import MatchmakingService
-from goje.matchmaking.acceptance import AcceptanceService
-from goje.tests.test_parties import create_test_user, create_test_group
+from sib.database.models import Match, MatchState, Rating
+from sib.services.timeout import TimeoutService
+from sib.services.recovery import RecoveryService
+from sib.services.party import PartyService
+from sib.matchmaking.matcher import MatchmakingService
+from sib.matchmaking.acceptance import AcceptanceService
+from sib.tests.test_parties import create_test_user, create_test_group
 
 
 async def create_active_match(

@@ -1,15 +1,15 @@
-"""Main entry point for Goje bot."""
+"""Main entry point for sib bot."""
 
 import asyncio
 import sys
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from goje.core.config import settings
-from goje.core.logging import logger, log_event, Events
-from goje.database.connection import init_db
-from goje.handlers import register_all_handlers
-from goje.middleware.rate_limit import RateLimitMiddleware
+from sib.core.config import settings
+from sib.core.logging import logger, log_event, Events
+from sib.database.connection import init_db
+from sib.handlers import register_all_handlers
+from sib.middleware.rate_limit import RateLimitMiddleware
 
 
 async def create_bot_and_dispatcher() -> tuple[Bot, Dispatcher]:
@@ -36,15 +36,15 @@ async def create_bot_and_dispatcher() -> tuple[Bot, Dispatcher]:
 
 async def main():
     """Bot application lifecycle."""
-    logger.info("Initializing Goje bot system...")
+    logger.info("Initializing sib bot system...")
 
     # Initialize database tables and seed data
     await init_db()
 
     # Perform startup recovery and cleanup
-    from goje.database.connection import get_session
-    from goje.services.recovery import RecoveryService
-    from goje.services.maintenance import MaintenanceService
+    from sib.database.connection import get_session
+    from sib.services.recovery import RecoveryService
+    from sib.services.maintenance import MaintenanceService
     async with get_session() as session:
         await RecoveryService.recover_on_startup(session)
 
@@ -55,7 +55,7 @@ async def main():
         MaintenanceService.run_forever(maintenance_stop)
     )
 
-    logger.info("Goje bot is ready. Starting polling...")
+    logger.info("sib bot is ready. Starting polling...")
     log_event(Events.SYSTEM_RESTART_RECOVERY, {"status": "starting_polling"})
 
     try:
@@ -69,7 +69,7 @@ async def main():
             pass
 
         await bot.session.close()
-        logger.info("Goje bot stopped cleanly.")
+        logger.info("sib bot stopped cleanly.")
 
 
 if __name__ == "__main__":

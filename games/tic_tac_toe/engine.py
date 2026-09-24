@@ -4,9 +4,9 @@ import random
 from typing import Any, Dict, List, Optional, Tuple
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from goje.core.config import settings
-from goje.database.models import MatchPlayer
-from goje.games.base import BaseGameEngine, GameResult
+from sib.core.config import settings
+from sib.database.models import MatchPlayer
+from sib.games.base import BaseGameEngine, GameResult
 
 
 class TicTacToeEngine(BaseGameEngine):

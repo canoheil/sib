@@ -2,8 +2,8 @@
 
 from aiogram import Router, F
 from aiogram.types import CallbackQuery
-from goje.database.connection import get_session
-from goje.services.ad.service import AdService
+from sib.database.connection import get_session
+from sib.services.ad.service import AdService
 
 router = Router(name="game_ads")
 

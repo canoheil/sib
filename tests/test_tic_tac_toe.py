@@ -1,8 +1,8 @@
 """Tests for Tic-Tac-Toe game engine and rules."""
 
 import pytest
-from goje.database.models import User, MatchPlayer
-from goje.games.tic_tac_toe.engine import TicTacToeEngine
+from sib.database.models import User, MatchPlayer
+from sib.games.tic_tac_toe.engine import TicTacToeEngine
 
 
 @pytest.fixture

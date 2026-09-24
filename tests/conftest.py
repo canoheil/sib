@@ -4,10 +4,10 @@ import os
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from goje.core.config import settings
-from goje.database.base import Base
-from goje.database.models import Game, SponsorChannel, ChannelType
-from goje.database.connection import seed_default_data
+from sib.core.config import settings
+from sib.database.base import Base
+from sib.database.models import Game, SponsorChannel, ChannelType
+from sib.database.connection import seed_default_data
 
 
 from sqlalchemy.pool import NullPool
@@ -21,16 +21,16 @@ def test_settings():
 @pytest_asyncio.fixture(scope="function")
 async def db_session():
     """Provides a clean transactional database session with test tables cleaned before each test."""
-    test_database_url = os.getenv("GOJE_TEST_DATABASE_URL")
+    test_database_url = os.getenv("sib_TEST_DATABASE_URL")
     if not test_database_url:
         raise RuntimeError(
-            "GOJE_TEST_DATABASE_URL is required. "
+            "sib_TEST_DATABASE_URL is required. "
             "Refusing to run tests against production database."
         )
 
-    if "gojecom_goje_test" not in test_database_url:
+    if "sibcom_sib_test" not in test_database_url:
         raise RuntimeError(
-            "GOJE_TEST_DATABASE_URL does not point to the expected test database."
+            "sib_TEST_DATABASE_URL does not point to the expected test database."
         )
 
     engine = create_async_engine(
@@ -46,7 +46,7 @@ async def db_session():
     session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
     # Make get_session() use the isolated test database.
-    import goje.database.connection as db_connection
+    import sib.database.connection as db_connection
     previous_engine = db_connection._async_engine
     previous_sessionmaker = db_connection._async_sessionmaker
     db_connection._async_engine = engine

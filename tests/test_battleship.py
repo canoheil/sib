@@ -1,8 +1,8 @@
 """Tests for Battleship game engine and rules."""
 
 import pytest
-from goje.database.models import User, MatchPlayer
-from goje.games.battleship.engine import BattleshipEngine
+from sib.database.models import User, MatchPlayer
+from sib.games.battleship.engine import BattleshipEngine
 
 
 @pytest.fixture

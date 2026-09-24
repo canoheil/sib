@@ -1,4 +1,4 @@
-"""SQLAlchemy Declarative Base for Goje."""
+"""SQLAlchemy Declarative Base for sib."""
 
 from datetime import datetime, timezone
 from sqlalchemy import DateTime, func

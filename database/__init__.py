@@ -1,13 +1,13 @@
 """Database package."""
 
-from goje.database.base import Base
-from goje.database.connection import (
+from sib.database.base import Base
+from sib.database.connection import (
     get_async_engine,
     get_async_sessionmaker,
     get_session,
     init_db,
 )
-from goje.database.models import (
+from sib.database.models import (
     User,
     Group,
     Game,

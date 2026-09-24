@@ -1,7 +1,7 @@
 """Tests for configuration parsing and validation."""
 
 import pytest
-from goje.core.config import Settings
+from sib.core.config import Settings
 
 
 def test_settings_default_values():
@@ -19,7 +19,7 @@ def test_settings_default_values():
     assert s.TIC_TAC_TOE_TIMEOUT == 60
     assert s.CONNECT_FOUR_TIMEOUT == 60
     assert s.BATTLESHIP_TIMEOUT == 90
-    assert s.OFFICIAL_CHANNEL_ID == "@goje_official"
+    assert s.OFFICIAL_CHANNEL_ID == "@sib_official"
     assert s.MEMBERSHIP_CHECK_ENABLED is True
 
 

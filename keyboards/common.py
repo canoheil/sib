@@ -9,7 +9,7 @@ def get_membership_keyboard(channel_link: str) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="📢 عضویت در کانال گوجه",
+                    text="📢 عضویت در کانال سیب",
                     url=channel_link,
                 )
             ],
@@ -31,7 +31,7 @@ def get_private_welcome_keyboard(bot_username: str) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="➕ افزودن گوجه به گروه",
+                    text="➕ افزودن سیب به گروه",
                     url=add_group_url,
                 )
             ],

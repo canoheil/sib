@@ -4,15 +4,15 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from aiogram.types import Message, CallbackQuery, User as TelegramUser, Chat as TelegramChat
 from sqlalchemy import select
-from goje.database.models import Group, Rating, PlayerStats
-from goje.services.leaderboard import LeaderboardService
-from goje.handlers.leaderboard import (
+from sib.database.models import Group, Rating, PlayerStats
+from sib.services.leaderboard import LeaderboardService
+from sib.handlers.leaderboard import (
     cmd_leaderboard,
     callback_show_leaderboard,
     callback_group_rating_stats,
     cmd_stats,
 )
-from goje.tests.test_parties import create_test_user, create_test_group
+from sib.tests.test_parties import create_test_user, create_test_group
 
 
 @pytest.mark.asyncio
@@ -115,7 +115,7 @@ async def test_cmd_leaderboard_handler(db_session):
 
     mock_msg.reply.assert_called_once()
     args, kwargs = mock_msg.reply.call_args
-    assert "برترین گروه‌های گوجه" in args[0]
+    assert "برترین گروه‌های سیب" in args[0]
     assert kwargs.get("reply_markup") is not None
 
 

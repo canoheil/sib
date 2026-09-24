@@ -4,9 +4,9 @@ from functools import wraps
 from typing import Callable, Any
 from aiogram.filters import BaseFilter
 from aiogram.types import Message, CallbackQuery, TelegramObject
-from goje.core.config import settings
-from goje.core.errors import UnauthorizedAdminException
-from goje.core.logging import logger, log_event, Events
+from sib.core.config import settings
+from sib.core.errors import UnauthorizedAdminException
+from sib.core.logging import logger, log_event, Events
 
 
 def is_admin(user_id: int) -> bool:

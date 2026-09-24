@@ -2,8 +2,8 @@
 
 from aiogram import Router
 from aiogram.types import ErrorEvent
-from goje.core.errors import GojeException, MESSAGES
-from goje.core.logging import logger
+from sib.core.errors import sibException, MESSAGES
+from sib.core.logging import logger
 
 router = Router(name="error_handler")
 
@@ -15,8 +15,8 @@ async def global_error_handler(event: ErrorEvent):
     update = event.update
 
     # Domain exceptions
-    if isinstance(exception, GojeException):
-        logger.warning(f"GojeException handled: {exception.message}")
+    if isinstance(exception, sibException):
+        logger.warning(f"sibException handled: {exception.message}")
         if update.message:
             await update.message.reply(exception.message)
         elif update.callback_query:

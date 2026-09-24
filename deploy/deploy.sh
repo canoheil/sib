@@ -3,11 +3,11 @@ set -euo pipefail
 
 export PYTHONPATH="${PYTHONPATH:-/home/user}:$(pwd)/..:."
 
-# Goje Production Deployment Script
-APP_DIR="${APP_DIR:-/opt/goje}"
-SERVICE_NAME="goje.service"
+# sib Production Deployment Script
+APP_DIR="${APP_DIR:-/opt/sib}"
+SERVICE_NAME="sib.service"
 
-echo "🍅 [1/5] Starting Goje production deployment..."
+echo "🍅 [1/5] Starting sib production deployment..."
 
 cd "$APP_DIR"
 
@@ -27,7 +27,7 @@ python3 -m pytest -q
 echo "🍅 [5/5] Restarting systemd service..."
 if command -v systemctl >/dev/null 2>&1; then
     sudo systemctl restart "$SERVICE_NAME"
-    echo "✅ Goje service successfully restarted!"
+    echo "✅ sib service successfully restarted!"
     sudo systemctl status "$SERVICE_NAME" --no-pager
 else
     echo "⚠️ systemctl not found. Please restart bot process manually."

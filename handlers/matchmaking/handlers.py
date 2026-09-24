@@ -2,16 +2,16 @@
 
 from aiogram import Router, F, Bot
 from aiogram.types import CallbackQuery
-from goje.core.errors import InvalidActionException, MatchNotFoundException, PartyNotFoundException
-from goje.core.logging import logger, log_event, Events
-from goje.database.connection import get_session
-from goje.handlers.party.renderer import render_party_card
-from goje.keyboards.party import get_party_action_keyboard
-from goje.keyboards.matchmaking import get_queue_keyboard, get_acceptance_keyboard
-from goje.handlers.matchmaking.renderer import render_match_found_for_group
-from goje.matchmaking.matcher import MatchmakingService
-from goje.matchmaking.acceptance import AcceptanceService
-from goje.services.party import PartyService
+from sib.core.errors import InvalidActionException, MatchNotFoundException, PartyNotFoundException
+from sib.core.logging import logger, log_event, Events
+from sib.database.connection import get_session
+from sib.handlers.party.renderer import render_party_card
+from sib.keyboards.party import get_party_action_keyboard
+from sib.keyboards.matchmaking import get_queue_keyboard, get_acceptance_keyboard
+from sib.handlers.matchmaking.renderer import render_match_found_for_group
+from sib.matchmaking.matcher import MatchmakingService
+from sib.matchmaking.acceptance import AcceptanceService
+from sib.services.party import PartyService
 
 router = Router(name="matchmaking")
 
@@ -38,7 +38,7 @@ async def handle_find_match(callback: CallbackQuery, bot: Bot):
             # Still in queue waiting for an opponent
             queue_text = (
                 "🔍 **در حال جستجوی حریف از گروه‌های تلگرام...** 🍅\n\n"
-                "گوجه در حال جستجوی یک حریف متناسب با ریتینگ گروه شماست.\n"
+                "سیب در حال جستجوی یک حریف متناسب با ریتینگ گروه شماست.\n"
                 "با گذشت زمان، دامنه جستجو به‌طور خودکار گسترش می‌یابد.\n\n"
                 "⏳ لطفاً منتظر بمانید..."
             )
@@ -116,7 +116,7 @@ async def handle_accept_match(callback: CallbackQuery, bot: Bot):
         if both_accepted:
             # Both accepted! Initialize game state and render board
             import json
-            from goje.games.registry import get_game_engine
+            from sib.games.registry import get_game_engine
             
             engine = get_game_engine(match.game.code)
             initial_state = engine.create_initial_state(match.players, match.mode)

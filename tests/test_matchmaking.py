@@ -3,9 +3,9 @@
 from datetime import datetime, timezone, timedelta
 import pytest
 from sqlalchemy import select
-from goje.core.config import settings
-from goje.core.errors import InvalidActionException
-from goje.database.models import (
+from sib.core.config import settings
+from sib.core.errors import InvalidActionException
+from sib.database.models import (
     Party,
     PartyStatus,
     Match,
@@ -13,11 +13,11 @@ from goje.database.models import (
     Rating,
     MatchmakingQueue,
 )
-from goje.matchmaking.matcher import MatchmakingService
-from goje.matchmaking.acceptance import AcceptanceService
-from goje.services.party import PartyService
-from goje.services.timeout.service import TimeoutService
-from goje.tests.test_parties import create_test_user, create_test_group
+from sib.matchmaking.matcher import MatchmakingService
+from sib.matchmaking.acceptance import AcceptanceService
+from sib.services.party import PartyService
+from sib.services.timeout.service import TimeoutService
+from sib.tests.test_parties import create_test_user, create_test_group
 
 
 @pytest.mark.asyncio
@@ -417,7 +417,7 @@ async def test_concurrent_matchmaking_does_not_create_duplicate_match(db_session
     await MatchmakingService.enqueue_party(db_session, party2.id, u2.id)
     await db_session.commit()
 
-    test_database_url = os.environ["GOJE_TEST_DATABASE_URL"]
+    test_database_url = os.environ["sib_TEST_DATABASE_URL"]
     engine = create_async_engine(test_database_url, pool_size=5, max_overflow=0)
     session_factory = async_sessionmaker(
         engine,
@@ -534,8 +534,8 @@ async def test_cancel_matchmaking_releases_party_and_queue(db_session):
 async def test_expired_queue_entry_is_cleaned_up(db_session):
     """Expired queue entries are deactivated and their parties released."""
     from datetime import datetime, timezone, timedelta
-    from goje.database.models import MatchmakingQueue, PartyStatus
-    from goje.services.maintenance import MaintenanceService
+    from sib.database.models import MatchmakingQueue, PartyStatus
+    from sib.services.maintenance import MaintenanceService
 
     group = await create_test_group(db_session, "گروه expired")
     user = await create_test_user(db_session, "بازیکن expired")
@@ -593,8 +593,8 @@ async def test_expired_queue_entry_is_cleaned_up(db_session):
 async def test_active_orphan_queue_entry_is_not_silently_expired(db_session):
     """An unexpired queue entry for a non-queued party is currently left untouched."""
     from datetime import datetime, timezone, timedelta
-    from goje.database.models import MatchmakingQueue, PartyStatus
-    from goje.services.maintenance import MaintenanceService
+    from sib.database.models import MatchmakingQueue, PartyStatus
+    from sib.services.maintenance import MaintenanceService
 
     group = await create_test_group(db_session, "گروه orphan")
     user = await create_test_user(db_session, "بازیکن orphan")

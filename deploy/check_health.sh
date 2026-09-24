@@ -3,14 +3,14 @@ set -euo pipefail
 
 export PYTHONPATH="${PYTHONPATH:-/home/user}:$(pwd)/..:."
 
-# Health check script for Goje Bot
-echo "🍅 --- بررسی سلامت سیستم ربات گوجه (Goje Health Check) ---"
+# Health check script for sib Bot
+echo "🍅 --- بررسی سلامت سیستم ربات سیب (sib Health Check) ---"
 
 # 1. Check MariaDB connection
 echo -n "1. اتصال به دیتابیس MariaDB: "
 if python3 -c "
 import asyncio
-from goje.database.connection import get_session
+from sib.database.connection import get_session
 from sqlalchemy import text
 
 async def check():
@@ -32,7 +32,7 @@ CURRENT_REV=$(alembic current 2>/dev/null | head -n1 || echo "unknown")
 echo "🟢 آخرین نسخه مایگریشن (${CURRENT_REV})"
 
 # 3. Check bot process or systemd service if available
-echo -n "3. فرآیند ربات گوجه: "
+echo -n "3. فرآیند ربات سیب: "
 if pgrep -f "python3.*bot.py" >/dev/null 2>&1; then
     echo "🟢 در حال اجرا"
 else

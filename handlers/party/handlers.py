@@ -4,24 +4,24 @@ from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery
 from sqlalchemy import select
-from goje.core.errors import (
+from sib.core.errors import (
     ActiveSessionExistsException,
     PartyFullException,
     PartyNotFoundException,
     InvalidActionException,
 )
-from goje.database.connection import get_session
-from goje.database.models import Game, Party, PartyMember, PartyStatus
-from goje.keyboards.party import (
+from sib.database.connection import get_session
+from sib.database.models import Game, Party, PartyMember, PartyStatus
+from sib.keyboards.party import (
     get_game_selection_keyboard,
     get_game_mode_keyboard,
     get_party_action_keyboard,
     get_active_parties_keyboard,
 )
-from goje.handlers.party.renderer import render_party_card
-from goje.services.user import UserService
-from goje.services.group import GroupService
-from goje.services.party import PartyService
+from sib.handlers.party.renderer import render_party_card
+from sib.services.user import UserService
+from sib.services.group import GroupService
+from sib.services.party import PartyService
 
 router = Router(name="party")
 
@@ -45,7 +45,7 @@ async def cmd_group_games(message: Message):
             kb = get_active_parties_keyboard(active_parties)
         else:
             games = list((await session.scalars(select(Game).where(Game.is_active == True))).all())
-            text = "🍅 **منوی بازی‌های گوجه**\nبازی مورد نظرتون رو برای شروع انتخاب کنید:"
+            text = "🍅 **منوی بازی‌های سیب**\nبازی مورد نظرتون رو برای شروع انتخاب کنید:"
             kb = get_game_selection_keyboard(games)
 
         await message.reply(text, reply_markup=kb, parse_mode="Markdown")

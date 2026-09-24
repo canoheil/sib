@@ -9,9 +9,9 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy import create_engine, select
-from goje.core.config import settings
-from goje.core.logging import logger
-from goje.database.models import (
+from sib.core.config import settings
+from sib.core.logging import logger
+from sib.database.models import (
     Base,
     Game,
     SponsorChannel,
@@ -123,7 +123,7 @@ async def seed_default_data(
         if not existing_ch:
             session.add(SponsorChannel(
                 channel_id=settings.OFFICIAL_CHANNEL_ID,
-                title="کانال رسمی گوجه",
+                title="کانال رسمی سیب",
                 invite_link=settings.OFFICIAL_CHANNEL_LINK,
                 channel_type=ChannelType.OFFICIAL,
                 is_required=True, is_active=True, priority=100,
@@ -133,11 +133,11 @@ async def seed_default_data(
         existing_ad = await session.scalar(select(AdCampaign).limit(1))
         if not existing_ad:
             session.add(AdCampaign(
-                sponsor_name="حامی گوجه",
+                sponsor_name="حامی سیب",
                 campaign_name="کمپین خوش‌آمدگویی",
-                ad_text="با حمایت از کانال رسمی، از توسعه بازی‌های جدید گوجه پشتیبانی کنید!",
+                ad_text="با حمایت از کانال رسمی، از توسعه بازی‌های جدید سیب پشتیبانی کنید!",
                 cta_label="کانال حامی",
-                target_url=settings.OFFICIAL_CHANNEL_LINK or "https://t.me/gojebot",
+                target_url=settings.OFFICIAL_CHANNEL_LINK or "https://t.me/sibbot",
                 is_active=True, priority=10,
                 frequency_mode=FrequencyMode.SMART, max_impressions=10000,
             ))

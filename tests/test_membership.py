@@ -3,9 +3,9 @@
 from unittest.mock import AsyncMock, MagicMock
 import pytest
 from aiogram.exceptions import TelegramBadRequest
-from goje.core.config import settings
-from goje.database.models import SponsorChannel, ChannelType
-from goje.services.membership.checker import MembershipService
+from sib.core.config import settings
+from sib.database.models import SponsorChannel, ChannelType
+from sib.services.membership.checker import MembershipService
 
 
 @pytest.mark.asyncio
@@ -37,7 +37,7 @@ async def test_membership_rejected_for_left_user(db_session):
 
     assert is_allowed is False
     assert missing is not None
-    assert missing.channel_id == "@goje_official"
+    assert missing.channel_id == "@sib_official"
 
 
 @pytest.mark.asyncio

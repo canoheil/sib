@@ -5,16 +5,16 @@ import asyncio
 import uuid
 import pytest
 from sqlalchemy import select
-from goje.core.config import settings
-from goje.core.errors import (
+from sib.core.config import settings
+from sib.core.errors import (
     ActiveSessionExistsException,
     PartyFullException,
     PartyNotFoundException,
     InvalidActionException,
 )
-from goje.database.models import User, Group, Game, Party, PartyMember, PartyStatus, Rating
-from goje.services.party import PartyService
-from goje.services.session import SessionService
+from sib.database.models import User, Group, Game, Party, PartyMember, PartyStatus, Rating
+from sib.services.party import PartyService
+from sib.services.session import SessionService
 
 
 async def create_test_user(session, name: str) -> User:
@@ -218,7 +218,7 @@ async def test_concurrent_party_join_atomic(db_session):
     """Simulate two concurrent users attempting to fill the last party slot."""
     from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
     from sqlalchemy.pool import NullPool
-    from goje.core.config import settings
+    from sib.core.config import settings
 
     u1 = await create_test_user(db_session, "سازنده رقابت")
     u2 = await create_test_user(db_session, "رقابت‌کننده الف")
@@ -229,9 +229,9 @@ async def test_concurrent_party_join_atomic(db_session):
     party = await PartyService.create_party(db_session, group.id, u1.id, "connect_four", "2v2")
     await db_session.commit()
 
-    test_database_url = os.getenv("GOJE_TEST_DATABASE_URL")
+    test_database_url = os.getenv("sib_TEST_DATABASE_URL")
     if not test_database_url:
-        raise RuntimeError("GOJE_TEST_DATABASE_URL is required")
+        raise RuntimeError("sib_TEST_DATABASE_URL is required")
     engine = create_async_engine(test_database_url, poolclass=NullPool, echo=False)
     session_maker = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 

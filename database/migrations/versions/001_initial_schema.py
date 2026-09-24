@@ -1,4 +1,4 @@
-"""Initial schema for Goje
+"""Initial schema for sib
 
 Revision ID: 001_initial_schema
 Revises: 

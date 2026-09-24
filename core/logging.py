@@ -1,4 +1,4 @@
-"""Structured logging and event definitions for Goje."""
+"""Structured logging and event definitions for sib."""
 
 import logging
 import sys
@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 
 
 class Events:
-    """Standard structured audit events for Goje bot."""
+    """Standard structured audit events for sib bot."""
     USER_REGISTERED = "USER_REGISTERED"
     GROUP_REGISTERED = "GROUP_REGISTERED"
     MEMBERSHIP_VERIFIED = "MEMBERSHIP_VERIFIED"
@@ -49,7 +49,7 @@ def setup_logging(log_level: str = "INFO") -> logging.Logger:
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(formatter)
     
-    root_logger = logging.getLogger("goje")
+    root_logger = logging.getLogger("sib")
     root_logger.setLevel(numeric_level)
     
     # Avoid duplicate handlers if called multiple times

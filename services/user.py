@@ -3,12 +3,12 @@
 from aiogram.types import User as TelegramUser
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from goje.core.logging import log_event, Events
-from goje.database.models import User
+from sib.core.logging import log_event, Events
+from sib.database.models import User
 
 
 class UserService:
-    """Service for managing Goje users."""
+    """Service for managing sib users."""
 
     @staticmethod
     async def get_or_create_user(session: AsyncSession, tg_user: TelegramUser) -> User:

@@ -1,10 +1,10 @@
-"""Background maintenance worker for Goje."""
+"""Background maintenance worker for sib."""
 
 import asyncio
 
-from goje.core.logging import logger
-from goje.database.connection import get_session
-from goje.services.timeout import TimeoutService
+from sib.core.logging import logger
+from sib.database.connection import get_session
+from sib.services.timeout import TimeoutService
 
 
 class MaintenanceService:
@@ -18,7 +18,7 @@ class MaintenanceService:
         from datetime import datetime, timezone
 
         from sqlalchemy import select
-        from goje.database.models import (
+        from sib.database.models import (
             MatchmakingQueue,
             Party,
             PartyStatus,

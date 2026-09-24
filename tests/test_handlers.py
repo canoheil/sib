@@ -3,9 +3,9 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from aiogram.types import Message, CallbackQuery, User as TelegramUser, Chat as TelegramChat
-from goje.core.config import settings
-from goje.handlers.start import handle_start, handle_check_membership, handle_help_menu
-from goje.handlers.admin import handle_admin_command, handle_admin_dashboard
+from sib.core.config import settings
+from sib.handlers.start import handle_start, handle_check_membership, handle_help_menu
+from sib.handlers.admin import handle_admin_command, handle_admin_dashboard
 
 
 @pytest.mark.asyncio
@@ -18,7 +18,7 @@ async def test_start_private_chat_not_member(db_session):
 
     mock_bot = AsyncMock()
     # Mock membership check returning not member
-    with patch("goje.services.membership.checker.MembershipService.check_user_membership") as mock_check:
+    with patch("sib.services.membership.checker.MembershipService.check_user_membership") as mock_check:
         mock_check.return_value = (False, None)
         await handle_start(mock_msg, mock_bot)
 
@@ -37,13 +37,13 @@ async def test_start_private_chat_already_member(db_session):
     mock_msg.answer = AsyncMock()
 
     mock_bot = AsyncMock()
-    with patch("goje.services.membership.checker.MembershipService.check_user_membership") as mock_check:
+    with patch("sib.services.membership.checker.MembershipService.check_user_membership") as mock_check:
         mock_check.return_value = (True, None)
         await handle_start(mock_msg, mock_bot)
 
     mock_msg.answer.assert_called_once()
     args, kwargs = mock_msg.answer.call_args
-    assert "سارا عزیز! من گوجه‌ام!" in args[0]
+    assert "سارا عزیز! من سیب‌ام!" in args[0]
     assert kwargs.get("reply_markup") is not None
 
 
@@ -51,7 +51,7 @@ async def test_start_private_chat_already_member(db_session):
 async def test_start_group_chat_registers_group_and_rating(db_session):
     """Adding bot or calling /start in group registers group and sends group menu."""
     mock_msg = MagicMock(spec=Message)
-    mock_msg.chat = TelegramChat(id=-1009988776655, type="supergroup", title="گروه بر و بچ گوجه")
+    mock_msg.chat = TelegramChat(id=-1009988776655, type="supergroup", title="گروه بر و بچ سیب")
     mock_msg.from_user = TelegramUser(id=777, is_bot=False, first_name="کیان")
     mock_msg.reply = AsyncMock()
 
@@ -75,7 +75,7 @@ async def test_check_membership_callback(db_session):
     mock_cb.message.edit_text = AsyncMock()
 
     mock_bot = AsyncMock()
-    with patch("goje.services.membership.checker.MembershipService.check_user_membership") as mock_check:
+    with patch("sib.services.membership.checker.MembershipService.check_user_membership") as mock_check:
         mock_check.return_value = (True, None)
         await handle_check_membership(mock_cb, mock_bot)
 
@@ -98,4 +98,4 @@ async def test_admin_dashboard_callback(db_session):
     mock_cb.answer.assert_called_once()
     mock_cb.message.edit_text.assert_called_once()
     args, _ = mock_cb.message.edit_text.call_args
-    assert "داشبورد وضعیت گوجه" in args[0]
+    assert "داشبورد وضعیت سیب" in args[0]

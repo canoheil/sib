@@ -2,10 +2,10 @@
 
 import asyncio
 import pytest
-from goje.core.errors import PartyFullException
-from goje.services.party import PartyService
-from goje.tests.test_parties import create_test_user, create_test_group
-from goje.database.connection import get_session
+from sib.core.errors import PartyFullException
+from sib.services.party import PartyService
+from sib.tests.test_parties import create_test_user, create_test_group
+from sib.database.connection import get_session
 
 
 @pytest.mark.asyncio
@@ -51,7 +51,7 @@ async def test_high_concurrency_party_join_atomic(db_session):
     async with get_session() as verify_session:
         from sqlalchemy.orm import selectinload
         from sqlalchemy import select
-        from goje.database.models import Party
+        from sib.database.models import Party
         party_refreshed = await verify_session.scalar(
             select(Party).where(Party.id == party.id).options(selectinload(Party.members))
         )

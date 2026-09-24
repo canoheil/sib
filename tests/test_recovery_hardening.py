@@ -4,17 +4,17 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy import select
 
-from goje.database.models import (
+from sib.database.models import (
     Match,
     MatchState,
     MatchmakingQueue,
     Party,
     PartyStatus,
 )
-from goje.services.recovery import RecoveryService
-from goje.services.party import PartyService
-from goje.matchmaking.matcher import MatchmakingService
-from goje.tests.test_parties import create_test_user, create_test_group
+from sib.services.recovery import RecoveryService
+from sib.services.party import PartyService
+from sib.matchmaking.matcher import MatchmakingService
+from sib.tests.test_parties import create_test_user, create_test_group
 
 
 @pytest.mark.asyncio

@@ -1,4 +1,4 @@
-"""Configuration module for Goje bot using Pydantic Settings."""
+"""Configuration module for sib bot using Pydantic Settings."""
 
 from pathlib import Path
 from typing import List, Union
@@ -20,7 +20,7 @@ class Settings(BaseSettings):
         description="Telegram Bot Token from BotFather",
     )
     BOT_USERNAME: str = Field(
-        default="goje_game_bot",
+        default="sib_game_bot",
         validation_alias=AliasChoices("BOT_USERNAME", "TELEGRAM_BOT_USERNAME"),
         description="Telegram Bot Username",
     )
@@ -31,17 +31,17 @@ class Settings(BaseSettings):
     )
 
     # Official Channel & Membership Gate
-    OFFICIAL_CHANNEL_ID: str = Field(default="@goje_official", description="Official channel username or ID")
-    OFFICIAL_CHANNEL_LINK: str = Field(default="https://t.me/goje_official", description="Official channel invite link")
+    OFFICIAL_CHANNEL_ID: str = Field(default="@sib_official", description="Official channel username or ID")
+    OFFICIAL_CHANNEL_LINK: str = Field(default="https://t.me/sib_official", description="Official channel invite link")
     MEMBERSHIP_CHECK_ENABLED: bool = Field(default=True, description="Enable or disable membership verification")
 
     # Database
     DATABASE_URL: str = Field(
-        default="mysql+asyncmy://goje:goje_password@127.0.0.1:3306/goje",
+        default="mysql+asyncmy://sib:sib_password@127.0.0.1:3306/sib",
         description="Async database connection string",
     )
     DATABASE_SYNC_URL: str = Field(
-        default="mysql+pymysql://goje:goje_password@127.0.0.1:3306/goje",
+        default="mysql+pymysql://sib:sib_password@127.0.0.1:3306/sib",
         description="Sync database connection string for Alembic migrations",
     )
 

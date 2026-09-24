@@ -6,10 +6,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from goje.core.logging import logger, log_event, Events
-from goje.database.models import Match, MatchState, MatchPlayer, Party, PartyStatus, Group
-from goje.games.base import GameResult
-from goje.services.rating import RatingService
+from sib.core.logging import logger, log_event, Events
+from sib.database.models import Match, MatchState, MatchPlayer, Party, PartyStatus, Group
+from sib.games.base import GameResult
+from sib.services.rating import RatingService
 
 
 class TimeoutService:

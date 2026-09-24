@@ -1,6 +1,6 @@
 """Persian rendering for Match Found and Acceptance messages."""
 
-from goje.database.models import Match, MatchPlayer
+from sib.database.models import Match, MatchPlayer
 
 
 def render_match_found_for_group(match: Match, for_group_id: int) -> str:

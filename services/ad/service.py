@@ -5,8 +5,8 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from goje.core.logging import logger, log_event, Events
-from goje.database.models import AdCampaign, FrequencyMode, Match, Rating
+from sib.core.logging import logger, log_event, Events
+from sib.database.models import AdCampaign, FrequencyMode, Match, Rating
 
 
 class AdService:

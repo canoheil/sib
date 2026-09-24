@@ -1,4 +1,4 @@
-# Production Dockerfile for Goje Telegram Bot
+# Production Dockerfile for sib Telegram Bot
 FROM python:3.12-slim
 
 # Set environment variables
@@ -24,8 +24,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . /app
 
 # Create unprivileged user for security
-RUN useradd -m -u 1001 gojeuser && chown -R gojeuser:gojeuser /app
-USER gojeuser
+RUN useradd -m -u 1001 sibuser && chown -R sibuser:sibuser /app
+USER sibuser
 
 # Health check verifies alembic current head
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \

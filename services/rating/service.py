@@ -5,9 +5,9 @@ import math
 from typing import Optional, Tuple
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from goje.core.config import settings
-from goje.core.logging import logger, log_event, Events
-from goje.database.models import (
+from sib.core.config import settings
+from sib.core.logging import logger, log_event, Events
+from sib.database.models import (
     Match,
     MatchPlayer,
     MatchState,
@@ -16,7 +16,7 @@ from goje.database.models import (
     Party,
     PartyStatus,
 )
-from goje.games.base import GameResult
+from sib.games.base import GameResult
 
 
 class RatingService:

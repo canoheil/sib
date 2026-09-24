@@ -1,8 +1,8 @@
 """Tests for Connect Four game engine and rules."""
 
 import pytest
-from goje.database.models import User, MatchPlayer
-from goje.games.connect_four.engine import ConnectFourEngine
+from sib.database.models import User, MatchPlayer
+from sib.games.connect_four.engine import ConnectFourEngine
 
 
 @pytest.fixture

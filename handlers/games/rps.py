@@ -2,7 +2,7 @@
 
 from aiogram import Router, F, Bot
 from aiogram.types import CallbackQuery
-from goje.handlers.games.common import process_game_action
+from sib.handlers.games.common import process_game_action
 
 router = Router(name="game_rps")
 

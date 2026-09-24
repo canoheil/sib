@@ -2,8 +2,8 @@
 
 from typing import List
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from goje.database.models import Game, Party
-from goje.keyboards.common import primary_button, success_button, danger_button
+from sib.database.models import Game, Party
+from sib.keyboards.common import primary_button, success_button, danger_button
 
 
 def get_game_selection_keyboard(games: List[Game]) -> InlineKeyboardMarkup:

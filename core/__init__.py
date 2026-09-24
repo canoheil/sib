@@ -1,1 +1,1 @@
-"""Core module for Goje bot."""
+"""Core module for sib bot."""

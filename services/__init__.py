@@ -1,12 +1,12 @@
 """Services package."""
 
-from goje.services.membership.checker import MembershipService
-from goje.services.user import UserService
-from goje.services.group import GroupService
-from goje.services.session import SessionService
-from goje.services.party import PartyService
-from goje.services.rating import RatingService
-from goje.services.leaderboard import LeaderboardService
+from sib.services.membership.checker import MembershipService
+from sib.services.user import UserService
+from sib.services.group import GroupService
+from sib.services.session import SessionService
+from sib.services.party import PartyService
+from sib.services.rating import RatingService
+from sib.services.leaderboard import LeaderboardService
 
 __all__ = [
     "MembershipService",

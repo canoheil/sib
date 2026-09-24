@@ -6,13 +6,13 @@ from sqlalchemy import select, and_, func
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from goje.core.errors import (
-    GojeException,
+from sib.core.errors import (
+    sibException,
     InvalidActionException,
     MatchNotFoundException,
 )
-from goje.core.logging import logger, log_event, Events
-from goje.database.models import (
+from sib.core.logging import logger, log_event, Events
+from sib.database.models import (
     Match,
     MatchPlayer,
     MatchState,

@@ -5,9 +5,9 @@ from typing import Any, Dict
 from sqlalchemy import select, update, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from goje.core.logging import logger, log_event, Events
-from goje.database.models import Match, MatchState, MatchmakingQueue, Party, PartyStatus
-from goje.services.timeout import TimeoutService
+from sib.core.logging import logger, log_event, Events
+from sib.database.models import Match, MatchState, MatchmakingQueue, Party, PartyStatus
+from sib.services.timeout import TimeoutService
 
 
 class RecoveryService:

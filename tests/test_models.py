@@ -3,7 +3,7 @@
 import uuid
 import pytest
 from sqlalchemy import select
-from goje.database.models import User, Group, Game, Match, MatchPlayer, Rating, SponsorChannel, ChannelType
+from sib.database.models import User, Group, Game, Match, MatchPlayer, Rating, SponsorChannel, ChannelType
 
 
 @pytest.mark.asyncio
@@ -13,7 +13,7 @@ async def test_user_creation_and_properties(db_session):
     user = User(
         id=unique_id,
         first_name="علیرضا",
-        last_name="گوجه‌ای",
+        last_name="سیب‌ای",
         username=f"alireza_{unique_id}",
     )
     db_session.add(user)
@@ -21,7 +21,7 @@ async def test_user_creation_and_properties(db_session):
 
     saved_user = await db_session.scalar(select(User).where(User.id == unique_id))
     assert saved_user is not None
-    assert saved_user.display_name == "علیرضا گوجه‌ای"
+    assert saved_user.display_name == "علیرضا سیب‌ای"
     assert saved_user.username == f"alireza_{unique_id}"
     assert saved_user.is_active is True
 
@@ -32,7 +32,7 @@ async def test_group_and_rating_relationship(db_session):
     unique_gid = -int(uuid.uuid4().int % 1000000000)
     group = Group(
         id=unique_gid,
-        title="تیم ابرقدرت گوجه",
+        title="تیم ابرقدرت سیب",
     )
     rating = Rating(
         group_id=group.id,

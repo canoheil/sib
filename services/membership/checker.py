@@ -5,9 +5,9 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from goje.core.config import settings
-from goje.core.logging import logger, log_event, Events
-from goje.database.models import SponsorChannel, ChannelType
+from sib.core.config import settings
+from sib.core.logging import logger, log_event, Events
+from sib.database.models import SponsorChannel, ChannelType
 
 
 class MembershipService:
@@ -45,7 +45,7 @@ class MembershipService:
         if not required_channels and settings.OFFICIAL_CHANNEL_ID:
             fallback_channel = SponsorChannel(
                 channel_id=settings.OFFICIAL_CHANNEL_ID,
-                title="کانال رسمی گوجه",
+                title="کانال رسمی سیب",
                 invite_link=settings.OFFICIAL_CHANNEL_LINK,
                 channel_type=ChannelType.OFFICIAL,
                 is_required=True,

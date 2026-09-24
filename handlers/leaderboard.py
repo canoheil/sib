@@ -5,11 +5,11 @@ from aiogram.filters import Command
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import Message, CallbackQuery
 
-from goje.database.connection import get_session
-from goje.services.leaderboard import LeaderboardService
-from goje.services.group import GroupService
-from goje.services.user import UserService
-from goje.keyboards.leaderboard import (
+from sib.database.connection import get_session
+from sib.services.leaderboard import LeaderboardService
+from sib.services.group import GroupService
+from sib.services.user import UserService
+from sib.keyboards.leaderboard import (
     get_leaderboard_keyboard,
     get_group_stats_keyboard,
     get_player_stats_keyboard,
@@ -21,10 +21,10 @@ router = Router(name="leaderboard")
 def format_leaderboard_text(top_groups: list) -> str:
     """Format global leaderboard in Persian."""
     if not top_groups:
-        return "🏆 **برترین گروه‌های گوجه** 🍅\n\nهنوز مسابقه‌ای ثبت نشده است! اولین گروه قهرمان باشید!"
+        return "🏆 **برترین گروه‌های سیب** 🍅\n\nهنوز مسابقه‌ای ثبت نشده است! اولین گروه قهرمان باشید!"
 
     medals = {1: "🥇", 2: "🥈", 3: "🥉"}
-    lines = ["🏆 **برترین گروه‌های گوجه** 🍅\n"]
+    lines = ["🏆 **برترین گروه‌های سیب** 🍅\n"]
 
     for rank, group, rating in top_groups:
         medal = medals.get(rank, f"**{rank}.**")
@@ -133,6 +133,6 @@ async def cmd_stats(message: Message):
                 f"🟢 پیروزی‌ها: `{p_stats['wins']}` ({p_stats['win_rate']}٪)\n"
                 f"🔴 شکست‌ها: `{p_stats['losses']}`\n"
                 f"⚪ تساوی‌ها: `{p_stats['draws']}`\n\n"
-                "ℹ️ ریتینگ رقابتی گوجه متعلق به گروه است و بازیکنان ریتینگ فردی جداگانه ندارند."
+                "ℹ️ ریتینگ رقابتی سیب متعلق به گروه است و بازیکنان ریتینگ فردی جداگانه ندارند."
             )
             await message.reply(text, reply_markup=get_player_stats_keyboard(), parse_mode="Markdown")

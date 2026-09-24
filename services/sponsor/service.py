@@ -4,7 +4,7 @@ from typing import List, Optional
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from goje.database.models import SponsorChannel, ChannelType
+from sib.database.models import SponsorChannel, ChannelType
 
 
 class SponsorService:

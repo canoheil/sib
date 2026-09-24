@@ -3,7 +3,7 @@
 from typing import Optional
 from sqlalchemy import BigInteger, Boolean, String
 from sqlalchemy.orm import Mapped, mapped_column
-from goje.database.base import Base, TimestampMixin
+from sib.database.base import Base, TimestampMixin
 
 
 class User(Base, TimestampMixin):

@@ -3,7 +3,7 @@
 from typing import Optional
 from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
-from goje.database.models import Party, PartyMember, PartyStatus, Match, MatchPlayer, MatchState
+from sib.database.models import Party, PartyMember, PartyStatus, Match, MatchPlayer, MatchState
 
 
 class SessionService:

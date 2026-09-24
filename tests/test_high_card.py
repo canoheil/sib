@@ -1,8 +1,8 @@
 """Tests for High Card game engine and rules."""
 
 import pytest
-from goje.database.models import User, MatchPlayer
-from goje.games.high_card.engine import HighCardEngine
+from sib.database.models import User, MatchPlayer
+from sib.games.high_card.engine import HighCardEngine
 
 
 @pytest.fixture

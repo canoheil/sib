@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import List, Optional
 from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from goje.database.base import Base, TimestampMixin
+from sib.database.base import Base, TimestampMixin
 
 
 class PartyStatus:

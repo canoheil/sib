@@ -1,4 +1,4 @@
-# گوجه (Goje) — ربات بازی گروهی پروداکشن تلگرام 🍅
+# سیب (sib) — ربات بازی گروهی پروداکشن تلگرام 🍅
 
 ربات تلگرامی پیشرفته برای بازی‌های گروهی آنلاین بین گروه‌های مختلف تلگرام با سیستم ریتینگ گروهی سراسری (Elo Rating)، احراز هویت ادمین، و سیستم تبلیغات غیرمتمرکز.
 
@@ -7,7 +7,7 @@
 ## 🏗️ ساختار ماژولار پروژه
 
 ```
-goje/
+sib/
 ├── core/                   # تنظیمات مرکزی، مدیریت خطاها و لاگ‌های ساختاریافته
 │   ├── config.py           # اعتبارسنجی با Pydantic Settings
 │   ├── logging.py          # رویدادهای استاندارد (Events) و فرمت لاگ
@@ -68,9 +68,9 @@ sudo service mariadb start
 
 ایجاد دیتابیس و کاربر در MariaDB:
 ```sql
-CREATE DATABASE IF NOT EXISTS goje CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER IF NOT EXISTS 'goje'@'localhost' IDENTIFIED BY 'goje_password';
-GRANT ALL PRIVILEGES ON goje.* TO 'goje'@'localhost';
+CREATE DATABASE IF NOT EXISTS sib CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS 'sib'@'localhost' IDENTIFIED BY 'sib_password';
+GRANT ALL PRIVILEGES ON sib.* TO 'sib'@'localhost';
 FLUSH PRIVILEGES;
 ```
 
@@ -88,7 +88,7 @@ nano .env
 
 ### ۴. اجرای مایگریشن‌های امن دیتابیس
 ```bash
-cd goje
+cd sib
 alembic upgrade head
 ```
 
@@ -111,7 +111,7 @@ python3 bot.py
 2. **مایگریشن‌های برگشت‌پذیر و ایمن:** با استفاده از ابزار Alembic روی MariaDB با کاراکترست `utf8mb4`.
 3. **دروازه عضویت کانال رسمی (Official Channel Gate):** استعلام مستقیم وضعیت عضویت از تلگرام (`get_chat_member`).
 4. **سیستم احراز هویت ادمین:** بررسی سمت سرور براساس شناسه‌های عددی تلگرام بدون هیچ هاردکد کردن در سورس کد.
-5. **رابط کاربری فارسی:** لحن طبیعی، خودمانی، همراه با شوخ‌طبعی کاراکتر گوجه و خطاهای دوستانه.
+5. **رابط کاربری فارسی:** لحن طبیعی، خودمانی، همراه با شوخ‌طبعی کاراکتر سیب و خطاهای دوستانه.
 6. **لاگ‌های ساختاریافته رویدادها (Structured Events):** مطابق استانداردهای تعریف شده در مستند مشخصات.
 
 ### فاز ۲ — گروه‌ها و پارتی‌ها (Groups & Parties)

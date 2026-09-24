@@ -2,19 +2,19 @@
 
 from datetime import datetime, timedelta, timezone
 import pytest
-from goje.core.errors import MatchNotFoundException
+from sib.core.errors import MatchNotFoundException
 
-from goje.database.models import (
+from sib.database.models import (
     Match,
     MatchState,
     Party,
     PartyStatus,
 )
-from goje.services.timeout import TimeoutService
-from goje.services.party import PartyService
-from goje.matchmaking.matcher import MatchmakingService
-from goje.matchmaking.acceptance import AcceptanceService
-from goje.tests.test_parties import create_test_user, create_test_group
+from sib.services.timeout import TimeoutService
+from sib.services.party import PartyService
+from sib.matchmaking.matcher import MatchmakingService
+from sib.matchmaking.acceptance import AcceptanceService
+from sib.tests.test_parties import create_test_user, create_test_group
 
 
 @pytest.mark.asyncio
@@ -83,7 +83,7 @@ async def test_turn_timeout_awards_forfeit_win_and_updates_rating(db_session):
 
     # Check that ratings were changed
     from sqlalchemy import select
-    from goje.database.models import Rating
+    from sib.database.models import Rating
     r1 = await db_session.scalar(select(Rating).where(Rating.group_id == match.group1_id))
     r2 = await db_session.scalar(select(Rating).where(Rating.group_id == match.group2_id))
     assert r1.matches_played == 1
@@ -93,8 +93,8 @@ async def test_turn_timeout_awards_forfeit_win_and_updates_rating(db_session):
 async def test_active_match_leaver_forfeits_and_updates_rating(db_session):
     """An active match leaver forfeits for their team and applies rating exactly once."""
     from sqlalchemy import select
-    from goje.database.models import MatchPlayer, Rating
-    from goje.services.match_lifecycle import MatchLifecycleService
+    from sib.database.models import MatchPlayer, Rating
+    from sib.services.match_lifecycle import MatchLifecycleService
 
     g1 = await create_test_group(db_session, "گروه لیور ۱")
     g2 = await create_test_group(db_session, "گروه لیور ۲")

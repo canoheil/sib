@@ -4,13 +4,13 @@ from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy import select, func
-from goje.admin.auth import IsAdminFilter
-from goje.core.logging import log_event, Events
-from goje.database.connection import get_session
-from goje.database.models import User, Group, Game, Match, AdCampaign, SponsorChannel
-from goje.keyboards.common import get_admin_main_keyboard
-from goje.services.ad.service import AdService
-from goje.services.sponsor.service import SponsorService
+from sib.admin.auth import IsAdminFilter
+from sib.core.logging import log_event, Events
+from sib.database.connection import get_session
+from sib.database.models import User, Group, Game, Match, AdCampaign, SponsorChannel
+from sib.keyboards.common import get_admin_main_keyboard
+from sib.services.ad.service import AdService
+from sib.services.sponsor.service import SponsorService
 
 router = Router(name="admin")
 router.message.filter(IsAdminFilter())
@@ -25,7 +25,7 @@ async def handle_admin_command(message: Message):
         log_event(Events.ADMIN_COMMAND_EXECUTED, {"user_id": user.id, "command": "/admin"})
 
     admin_text = (
-        "🍅 **پنل مدیریت ربات گوجه (Admin Panel)**\n\n"
+        "🍅 **پنل مدیریت ربات سیب (Admin Panel)**\n\n"
         "به بخش مدیریت خوش آمدید. لطفاً گزینه مورد نظر خود را انتخاب نمایید:"
     )
     await message.reply(admin_text, reply_markup=get_admin_main_keyboard(), parse_mode="Markdown")
@@ -35,7 +35,7 @@ async def handle_admin_command(message: Message):
 async def handle_admin_main_menu(callback: CallbackQuery):
     """Return to admin main menu."""
     admin_text = (
-        "🍅 **پنل مدیریت ربات گوجه (Admin Panel)**\n\n"
+        "🍅 **پنل مدیریت ربات سیب (Admin Panel)**\n\n"
         "به بخش مدیریت خوش آمدید. لطفاً گزینه مورد نظر خود را انتخاب نمایید:"
     )
     await callback.answer()
@@ -54,7 +54,7 @@ async def handle_admin_dashboard(callback: CallbackQuery):
         ad_stats = await AdService.get_analytics(session)
 
     dashboard_text = (
-        "📊 **داشبورد وضعیت گوجه**\n\n"
+        "📊 **داشبورد وضعیت سیب**\n\n"
         f"👥 تعداد کل کاربران: `{users_count}`\n"
         f"💬 تعداد کل گروه‌ها: `{groups_count}`\n"
         f"🎮 بازی‌های فعال: `{games_count}`\n"

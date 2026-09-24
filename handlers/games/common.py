@@ -8,12 +8,12 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from goje.core.logging import logger, log_event, Events
-from goje.database.connection import get_session
-from goje.database.models import Match, MatchPlayer, MatchState, Group, AdCampaign
-from goje.games.registry import get_game_engine
-from goje.services.rating import RatingService
-from goje.services.ad.service import AdService
+from sib.core.logging import logger, log_event, Events
+from sib.database.connection import get_session
+from sib.database.models import Match, MatchPlayer, MatchState, Group, AdCampaign
+from sib.games.registry import get_game_engine
+from sib.services.rating import RatingService
+from sib.services.ad.service import AdService
 
 
 def get_rematch_keyboard(ad: Optional[AdCampaign] = None) -> InlineKeyboardMarkup:
@@ -210,7 +210,7 @@ async def process_game_action(
             )
             ad_banner = ""
             if selected_ad:
-                ad_banner = f"\n\n📢 **اسپانسر گوجه ({selected_ad.sponsor_name}):**\n_{selected_ad.ad_text}_"
+                ad_banner = f"\n\n📢 **اسپانسر سیب ({selected_ad.sponsor_name}):**\n_{selected_ad.ad_text}_"
 
             return base_text + rating_summary + ad_banner
 

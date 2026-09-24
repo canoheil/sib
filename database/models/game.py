@@ -2,7 +2,7 @@
 
 from sqlalchemy import Boolean, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
-from goje.database.base import Base, TimestampMixin
+from sib.database.base import Base, TimestampMixin
 
 
 class Game(Base, TimestampMixin):

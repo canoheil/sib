@@ -1,5 +1,5 @@
 """Membership package."""
 
-from goje.services.membership.checker import MembershipService
+from sib.services.membership.checker import MembershipService
 
 __all__ = ["MembershipService"]

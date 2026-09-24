@@ -1,5 +1,5 @@
 """Timeout package."""
 
-from goje.services.timeout.service import TimeoutService
+from sib.services.timeout.service import TimeoutService
 
 __all__ = ["TimeoutService"]

@@ -7,7 +7,7 @@ import pytest
 from aiogram.types import CallbackQuery, Message, User as TelegramUser, Chat as TelegramChat
 from sqlalchemy import select
 
-from goje.database.models import (
+from sib.database.models import (
     AdCampaign,
     FrequencyMode,
     SponsorChannel,
@@ -15,9 +15,9 @@ from goje.database.models import (
     Match,
     MatchState,
 )
-from goje.services.ad.service import AdService
-from goje.services.sponsor.service import SponsorService
-from goje.handlers.admin import (
+from sib.services.ad.service import AdService
+from sib.services.sponsor.service import SponsorService
+from sib.handlers.admin import (
     handle_admin_dashboard,
     handle_admin_ads,
     handle_admin_ad_view,
@@ -25,13 +25,13 @@ from goje.handlers.admin import (
     handle_admin_channels,
     handle_admin_channel_toggle,
 )
-from goje.handlers.games.ads import handle_ad_click
-from goje.handlers.games.rps import handle_rps_action
-from goje.matchmaking.matcher import MatchmakingService
-from goje.matchmaking.acceptance import AcceptanceService
-from goje.services.party import PartyService
-from goje.games.rock_paper_scissors.engine import RockPaperScissorsEngine
-from goje.tests.test_parties import create_test_user, create_test_group
+from sib.handlers.games.ads import handle_ad_click
+from sib.handlers.games.rps import handle_rps_action
+from sib.matchmaking.matcher import MatchmakingService
+from sib.matchmaking.acceptance import AcceptanceService
+from sib.services.party import PartyService
+from sib.games.rock_paper_scissors.engine import RockPaperScissorsEngine
+from sib.tests.test_parties import create_test_user, create_test_group
 
 
 @pytest.mark.asyncio
@@ -198,7 +198,7 @@ async def test_post_match_ad_delivery_and_resilience(db_session):
         db_session,
         sponsor_name="اسپانسر ویژه مسابقه",
         campaign_name="تبلیغ پایان بازی",
-        ad_text="با تشکر از اسپانسر ویژه مسابقات گوجه!",
+        ad_text="با تشکر از اسپانسر ویژه مسابقات سیب!",
         cta_label="مشاهده وبسایت",
         target_url="https://example.com/sponsor",
         priority=100,
@@ -262,7 +262,7 @@ async def test_post_match_ad_delivery_and_resilience(db_session):
     calls = mock_bot.edit_message_text.call_args_list
     assert len(calls) >= 2
     final_text_g1 = calls[-2][0][0]
-    assert "اسپانسر گوجه (اسپانسر ویژه مسابقه)" in final_text_g1
+    assert "اسپانسر سیب (اسپانسر ویژه مسابقه)" in final_text_g1
 
     final_kb_g1 = calls[-2][1]["reply_markup"]
     cta_btn = final_kb_g1.inline_keyboard[1][0]

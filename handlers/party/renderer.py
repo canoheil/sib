@@ -1,6 +1,6 @@
 """Rendering helpers for party messages in Persian."""
 
-from goje.database.models import Party
+from sib.database.models import Party
 
 
 def render_party_card(party: Party) -> str:

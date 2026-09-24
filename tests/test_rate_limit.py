@@ -1,6 +1,6 @@
 import pytest
 from aiogram.types import Chat, Message, User
-from goje.middleware.rate_limit import RateLimitMiddleware
+from sib.middleware.rate_limit import RateLimitMiddleware
 
 
 def make_message(text: str, user_id: int = 100, chat_id: int = 200) -> Message:
@@ -16,10 +16,10 @@ def make_message(text: str, user_id: int = 100, chat_id: int = 200) -> Message:
 @pytest.mark.asyncio
 async def test_command_rate_limit_drops_after_limit(monkeypatch):
     monkeypatch.setattr(
-        "goje.middleware.rate_limit.settings.RATE_LIMIT_COMMAND_COUNT", 2
+        "sib.middleware.rate_limit.settings.RATE_LIMIT_COMMAND_COUNT", 2
     )
     monkeypatch.setattr(
-        "goje.middleware.rate_limit.settings.RATE_LIMIT_COMMAND_WINDOW", 10
+        "sib.middleware.rate_limit.settings.RATE_LIMIT_COMMAND_WINDOW", 10
     )
 
     middleware = RateLimitMiddleware()
@@ -41,10 +41,10 @@ async def test_command_rate_limit_drops_after_limit(monkeypatch):
 @pytest.mark.asyncio
 async def test_wake_word_has_separate_bucket(monkeypatch):
     monkeypatch.setattr(
-        "goje.middleware.rate_limit.settings.RATE_LIMIT_COMMAND_COUNT", 1
+        "sib.middleware.rate_limit.settings.RATE_LIMIT_COMMAND_COUNT", 1
     )
     monkeypatch.setattr(
-        "goje.middleware.rate_limit.settings.RATE_LIMIT_WAKE_WORD_COUNT", 1
+        "sib.middleware.rate_limit.settings.RATE_LIMIT_WAKE_WORD_COUNT", 1
     )
 
     middleware = RateLimitMiddleware()
@@ -56,7 +56,7 @@ async def test_wake_word_has_separate_bucket(monkeypatch):
         return True
 
     assert await middleware(handler, make_message("/start"), {}) is True
-    assert await middleware(handler, make_message("گوجه"), {}) is True
+    assert await middleware(handler, make_message("سیب"), {}) is True
     assert calls == 2
 
 
@@ -64,5 +64,5 @@ def test_event_categories():
     middleware = RateLimitMiddleware()
 
     assert middleware._get_event_info(make_message("/admin"))[2] == "command"
-    assert middleware._get_event_info(make_message("گوجه"))[2] == "wake_word"
+    assert middleware._get_event_info(make_message("سیب"))[2] == "wake_word"
     assert middleware._get_event_info(make_message("سلام"))[2] == "message"

@@ -4,13 +4,13 @@ import json
 from unittest.mock import AsyncMock, MagicMock
 import pytest
 from aiogram.types import CallbackQuery, Message, User as TelegramUser, Chat as TelegramChat
-from goje.database.models import Match, MatchState
-from goje.games.rock_paper_scissors.engine import RockPaperScissorsEngine
-from goje.handlers.games.rps import handle_rps_action
-from goje.matchmaking.matcher import MatchmakingService
-from goje.matchmaking.acceptance import AcceptanceService
-from goje.services.party import PartyService
-from goje.tests.test_parties import create_test_user, create_test_group
+from sib.database.models import Match, MatchState
+from sib.games.rock_paper_scissors.engine import RockPaperScissorsEngine
+from sib.handlers.games.rps import handle_rps_action
+from sib.matchmaking.matcher import MatchmakingService
+from sib.matchmaking.acceptance import AcceptanceService
+from sib.services.party import PartyService
+from sib.tests.test_parties import create_test_user, create_test_group
 
 
 @pytest.mark.asyncio

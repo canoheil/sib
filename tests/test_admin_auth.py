@@ -3,9 +3,9 @@
 from unittest.mock import MagicMock
 import pytest
 from aiogram.types import Message, User as TelegramUser
-from goje.admin.auth import is_admin, IsAdminFilter, admin_required
-from goje.core.config import settings
-from goje.core.errors import UnauthorizedAdminException
+from sib.admin.auth import is_admin, IsAdminFilter, admin_required
+from sib.core.config import settings
+from sib.core.errors import UnauthorizedAdminException
 
 
 def test_is_admin_check():

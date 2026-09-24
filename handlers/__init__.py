@@ -1,12 +1,12 @@
 """Handlers package."""
 
 from aiogram import Dispatcher
-from goje.handlers.start import router as start_router
-from goje.handlers.admin import router as admin_router
-from goje.handlers.errors import router as errors_router
-from goje.handlers.party import party_router
-from goje.handlers.matchmaking import matchmaking_router
-from goje.handlers.games import (
+from sib.handlers.start import router as start_router
+from sib.handlers.admin import router as admin_router
+from sib.handlers.errors import router as errors_router
+from sib.handlers.party import party_router
+from sib.handlers.matchmaking import matchmaking_router
+from sib.handlers.games import (
     rps_router,
     high_card_router,
     tic_tac_toe_router,
@@ -14,7 +14,7 @@ from goje.handlers.games import (
     battleship_router,
     ads_router,
 )
-from goje.handlers.leaderboard import router as leaderboard_router
+from sib.handlers.leaderboard import router as leaderboard_router
 
 
 def register_all_handlers(dp: Dispatcher) -> None:

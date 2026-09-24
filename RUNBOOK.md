@@ -1,6 +1,6 @@
-# راهنمای جامع عملیاتی و استقرار پروداکشن ربات گوجه (Goje Runbook) 🍅📖
+# راهنمای جامع عملیاتی و استقرار پروداکشن ربات سیب (sib Runbook) 🍅📖
 
-این سند راهنمای عملیاتی و اجرایی برای مدیر سیستم، ادمین‌ها و تیم فنی جهت استقرار، راه‌اندازی، نگهداری و عیب‌یابی ربات **گوجه (Goje)** در محیط پروداکشن است.
+این سند راهنمای عملیاتی و اجرایی برای مدیر سیستم، ادمین‌ها و تیم فنی جهت استقرار، راه‌اندازی، نگهداری و عیب‌یابی ربات **سیب (sib)** در محیط پروداکشن است.
 
 ---
 
@@ -10,29 +10,29 @@
 
 1. کپی فایل سرویس به مسیر systemd:
    ```bash
-   sudo cp /opt/goje/deploy/goje.service /etc/systemd/system/goje.service
+   sudo cp /opt/sib/deploy/sib.service /etc/systemd/system/sib.service
    sudo systemctl daemon-reload
    ```
 
 2. فعال‌سازی و شروع خودکار سرویس:
    ```bash
-   sudo systemctl enable goje
-   sudo systemctl start goje
+   sudo systemctl enable sib
+   sudo systemctl start sib
    ```
 
 3. بررسی وضعیت و لاگ‌ها:
    ```bash
    # مشاهده وضعیت اجرای سرویس
-   sudo systemctl status goje
+   sudo systemctl status sib
 
    # مشاهده زنده لاگ‌های سرویس در journalctl
-   sudo journalctl -u goje -f -n 100
+   sudo journalctl -u sib -f -n 100
    ```
 
 4. ری‌استارت یا توقف سرویس:
    ```bash
-   sudo systemctl restart goje
-   sudo systemctl stop goje
+   sudo systemctl restart sib
+   sudo systemctl stop sib
    ```
 
 ---
@@ -41,7 +41,7 @@
 
 1. ساخت ایمیج و اجرای کانتینرها در پس‌زمینه:
    ```bash
-   cd /opt/goje
+   cd /opt/sib
    docker compose up -d --build
    ```
 
@@ -64,16 +64,16 @@
 
 ```bash
 # مشاهده مسابقات ایجاد شده
-journalctl -u goje | grep "EVENT:MATCH_CREATED"
+journalctl -u sib | grep "EVENT:MATCH_CREATED"
 
 # مشاهده مسابقات پایان یافته و تغییرات الو
-journalctl -u goje | grep "EVENT:RATING_UPDATED"
+journalctl -u sib | grep "EVENT:RATING_UPDATED"
 
 # مشاهده نمایش و کلیک‌های تبلیغات
-journalctl -u goje | grep -E "EVENT:AD_DISPLAYED|EVENT:AD_CLICKED"
+journalctl -u sib | grep -E "EVENT:AD_DISPLAYED|EVENT:AD_CLICKED"
 
 # مشاهده رویدادهای بازیابی استارت‌آپ
-journalctl -u goje | grep "EVENT:SYSTEM_RESTART_RECOVERY"
+journalctl -u sib | grep "EVENT:SYSTEM_RESTART_RECOVERY"
 ```
 
 ---
@@ -84,7 +84,7 @@ journalctl -u goje | grep "EVENT:SYSTEM_RESTART_RECOVERY"
 
 1. **اعمال آخرین مایگریشن‌ها:**
    ```bash
-   cd /opt/goje
+   cd /opt/sib
    alembic upgrade head
    ```
 
@@ -100,9 +100,9 @@ journalctl -u goje | grep "EVENT:SYSTEM_RESTART_RECOVERY"
 
 4. **ایجاد نسخه پشتیبان دوره‌ای (Backup):**
    ```bash
-   /opt/goje/deploy/backup_db.sh
+   /opt/sib/deploy/backup_db.sh
    ```
-   نسخه‌های فشرده `.sql.gz` در مسیر `/opt/goje/backups/` ذخیره شده و بکاپ‌های بیش از ۱۴ روز به صورت خودکار حذف می‌شوند.
+   نسخه‌های فشرده `.sql.gz` در مسیر `/opt/sib/backups/` ذخیره شده و بکاپ‌های بیش از ۱۴ روز به صورت خودکار حذف می‌شوند.
 
 ---
 
@@ -116,7 +116,7 @@ journalctl -u goje | grep "EVENT:SYSTEM_RESTART_RECOVERY"
      ```
   2. سرویس را ری‌استارت کنید:
      ```bash
-     sudo systemctl restart goje
+     sudo systemctl restart sib
      ```
 - ادمین با ارسال دستور `/admin` در پیوی ربات به داشبورد مدیریتی دسترسی خواهد داشت.
 
@@ -132,7 +132,7 @@ journalctl -u goje | grep "EVENT:SYSTEM_RESTART_RECOVERY"
 2. **تنظیم اولیه کانال رسمی در `.env`:**
    ```env
    OFFICIAL_CHANNEL_ID=-1001234567890
-   OFFICIAL_CHANNEL_LINK=https://t.me/gojebot_channel
+   OFFICIAL_CHANNEL_LINK=https://t.me/sibbot_channel
    CHECK_MEMBERSHIP_REQUIRED=True
    ```
 
@@ -157,7 +157,7 @@ journalctl -u goje | grep "EVENT:SYSTEM_RESTART_RECOVERY"
 
 ## ۷. مدیریت مسابقات معلق و نشست‌های گیرکرده (Hung Sessions & Recovery)
 
-ربات گوجه دارای سیستم خودکار بازیابی در استارت‌آپ و پردازش تایم‌اوت‌ها است:
+ربات سیب دارای سیستم خودکار بازیابی در استارت‌آپ و پردازش تایم‌اوت‌ها است:
 
 1. **بازیابی خودکار هنگام راه‌اندازی (`RecoveryService`):**
    - به محض راه‌اندازی ربات، متد `recover_on_startup` اجرا شده و:
@@ -175,16 +175,16 @@ journalctl -u goje | grep "EVENT:SYSTEM_RESTART_RECOVERY"
 اسکریپت سلامت‌سنجی یکپارچه وضعیت اتصال دیتابیس، مایگریشن‌ها و تست‌ها را ارزیابی می‌کند:
 
 ```bash
-cd /opt/goje
+cd /opt/sib
 ./deploy/check_health.sh
 ```
 
 خروجی استاندارد:
 ```
-🍅 --- بررسی سلامت سیستم ربات گوجه (Goje Health Check) ---
+🍅 --- بررسی سلامت سیستم ربات سیب (sib Health Check) ---
 1. اتصال به دیتابیس MariaDB: 🟢 متصل و آماده
 2. وضعیت مایگریشن‌های دیتابیس (Alembic): 🟢 آخرین نسخه مایگریشن (005_monetization_and_ads (head))
-3. فرآیند ربات گوجه: 🟢 در حال اجرا
+3. فرآیند ربات سیب: 🟢 در حال اجرا
 4. وضعیت تست‌های جامع: 🟢 تمام ۹۷ آزمون بدون خطا پاس می‌شوند
 🍅 کلیه شاخص‌های سلامت سیستم تایید شد! ✅
 ```

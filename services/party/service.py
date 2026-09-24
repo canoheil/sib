@@ -4,15 +4,15 @@ from typing import List, Optional, Tuple
 from sqlalchemy import select, and_
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
-from goje.core.errors import (
+from sib.core.errors import (
     ActiveSessionExistsException,
     PartyFullException,
     PartyNotFoundException,
     InvalidActionException,
 )
-from goje.core.logging import log_event, Events
-from goje.database.models import Party, PartyMember, PartyStatus, Game, User
-from goje.services.session import SessionService
+from sib.core.logging import log_event, Events
+from sib.database.models import Party, PartyMember, PartyStatus, Game, User
+from sib.services.session import SessionService
 
 
 class PartyService:

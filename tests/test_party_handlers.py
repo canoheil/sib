@@ -3,8 +3,8 @@
 from unittest.mock import AsyncMock, MagicMock
 import pytest
 from aiogram.types import Message, CallbackQuery, User as TelegramUser, Chat as TelegramChat
-from goje.database.models import PartyStatus
-from goje.handlers.party.handlers import (
+from sib.database.models import PartyStatus
+from sib.handlers.party.handlers import (
     cmd_group_games,
     handle_create_party,
     handle_join_party,
@@ -12,7 +12,7 @@ from goje.handlers.party.handlers import (
     handle_cancel_party,
     handle_games_panel,
 )
-from goje.tests.test_parties import create_test_user, create_test_group
+from sib.tests.test_parties import create_test_user, create_test_group
 
 
 @pytest.mark.asyncio
@@ -30,7 +30,7 @@ async def test_cmd_games_in_group(db_session):
 
     mock_msg.reply.assert_called_once()
     args, kwargs = mock_msg.reply.call_args
-    assert "منوی بازی‌های گوجه" in args[0] or "بازی‌های فعال" in args[0]
+    assert "منوی بازی‌های سیب" in args[0] or "بازی‌های فعال" in args[0]
     assert kwargs.get("reply_markup") is not None
 
 
@@ -66,7 +66,7 @@ async def test_handle_join_party_callback(db_session):
     u2 = await create_test_user(db_session, "ملحق‌شونده")
 
     # Create 2v2 party
-    from goje.services.party import PartyService
+    from sib.services.party import PartyService
     party = await PartyService.create_party(db_session, group.id, u1.id, "connect_four", "2v2")
     await db_session.commit()
 

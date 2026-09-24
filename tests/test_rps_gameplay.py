@@ -3,19 +3,19 @@
 import json
 import pytest
 from sqlalchemy import select
-from goje.core.config import settings
-from goje.database.models import (
+from sib.core.config import settings
+from sib.database.models import (
     Match,
     MatchState,
     Rating,
     PlayerStats,
 )
-from goje.games.rock_paper_scissors.engine import RockPaperScissorsEngine
-from goje.services.rating import RatingService
-from goje.matchmaking.matcher import MatchmakingService
-from goje.matchmaking.acceptance import AcceptanceService
-from goje.services.party import PartyService
-from goje.tests.test_parties import create_test_user, create_test_group
+from sib.games.rock_paper_scissors.engine import RockPaperScissorsEngine
+from sib.services.rating import RatingService
+from sib.matchmaking.matcher import MatchmakingService
+from sib.matchmaking.acceptance import AcceptanceService
+from sib.services.party import PartyService
+from sib.tests.test_parties import create_test_user, create_test_group
 
 
 def test_rps_game_rules():

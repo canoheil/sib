@@ -5,8 +5,8 @@ from sqlalchemy import select, func, desc
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from goje.core.config import settings
-from goje.database.models import Group, Rating, PlayerStats, User
+from sib.core.config import settings
+from sib.database.models import Group, Rating, PlayerStats, User
 
 
 class LeaderboardService:

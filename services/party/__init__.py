@@ -1,5 +1,5 @@
 """Party service package."""
 
-from goje.services.party.service import PartyService
+from sib.services.party.service import PartyService
 
 __all__ = ["PartyService"]

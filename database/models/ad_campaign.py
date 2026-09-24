@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from goje.database.base import Base, TimestampMixin
+from sib.database.base import Base, TimestampMixin
 
 
 class FrequencyMode:

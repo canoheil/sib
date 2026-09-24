@@ -8,7 +8,7 @@ from typing import Any, Awaitable, Callable
 from aiogram import BaseMiddleware
 from aiogram.types import CallbackQuery, Message, TelegramObject
 
-from goje.core.config import settings
+from sib.core.config import settings
 
 
 class RateLimitMiddleware(BaseMiddleware):
@@ -74,7 +74,7 @@ class RateLimitMiddleware(BaseMiddleware):
 
             if text.startswith("/"):
                 category = "command"
-            elif text == "گوجه":
+            elif text == "سیب":
                 category = "wake_word"
             else:
                 category = "message"

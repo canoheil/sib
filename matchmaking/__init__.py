@@ -1,6 +1,6 @@
 """Matchmaking package."""
 
-from goje.matchmaking.matcher import MatchmakingService
-from goje.matchmaking.acceptance import AcceptanceService
+from sib.matchmaking.matcher import MatchmakingService
+from sib.matchmaking.acceptance import AcceptanceService
 
 __all__ = ["MatchmakingService", "AcceptanceService"]

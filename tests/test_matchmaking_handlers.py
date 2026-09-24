@@ -3,17 +3,17 @@
 from unittest.mock import AsyncMock, MagicMock
 import pytest
 from aiogram.types import CallbackQuery, Message, User as TelegramUser, Chat as TelegramChat
-from goje.database.models import MatchState
-from goje.handlers.matchmaking.handlers import (
+from sib.database.models import MatchState
+from sib.handlers.matchmaking.handlers import (
     handle_find_match,
     handle_cancel_matchmaking,
     handle_accept_match,
     handle_reject_match,
 )
-from goje.handlers.matchmaking.renderer import render_match_found_for_group
-from goje.matchmaking.matcher import MatchmakingService
-from goje.services.party import PartyService
-from goje.tests.test_parties import create_test_user, create_test_group
+from sib.handlers.matchmaking.renderer import render_match_found_for_group
+from sib.matchmaking.matcher import MatchmakingService
+from sib.services.party import PartyService
+from sib.tests.test_parties import create_test_user, create_test_group
 
 
 @pytest.mark.asyncio

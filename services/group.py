@@ -3,13 +3,13 @@
 from aiogram.types import Chat as TelegramChat
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from goje.core.config import settings
-from goje.core.logging import log_event, Events
-from goje.database.models import Group, Rating
+from sib.core.config import settings
+from sib.core.logging import log_event, Events
+from sib.database.models import Group, Rating
 
 
 class GroupService:
-    """Service for managing Goje group chats."""
+    """Service for managing sib group chats."""
 
     @staticmethod
     async def get_or_create_group(session: AsyncSession, tg_chat: TelegramChat) -> Group:

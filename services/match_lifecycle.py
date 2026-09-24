@@ -4,11 +4,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from goje.core.errors import InvalidActionException, MatchNotFoundException
-from goje.core.logging import Events, log_event
-from goje.database.models import Match, MatchPlayer, MatchState
-from goje.games.base import GameResult
-from goje.services.rating import RatingService
+from sib.core.errors import InvalidActionException, MatchNotFoundException
+from sib.core.logging import Events, log_event
+from sib.database.models import Match, MatchPlayer, MatchState
+from sib.games.base import GameResult
+from sib.services.rating import RatingService
 
 
 class MatchLifecycleService:

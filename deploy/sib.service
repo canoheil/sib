@@ -1,16 +1,16 @@
 [Unit]
-Description=Goje Production Telegram Group Game Bot
+Description=sib Production Telegram Group Game Bot
 After=network.target mariadb.service
 Wants=mariadb.service
 
 [Service]
 Type=simple
-User=goje
-Group=goje
-WorkingDirectory=/opt/goje
-Environment="PATH=/opt/goje/venv/bin:/usr/local/bin:/usr/bin"
-EnvironmentFile=/opt/goje/.env
-ExecStart=/opt/goje/venv/bin/python3 /opt/goje/bot.py
+User=sib
+Group=sib
+WorkingDirectory=/opt/sib
+Environment="PATH=/opt/sib/venv/bin:/usr/local/bin:/usr/bin"
+EnvironmentFile=/opt/sib/.env
+ExecStart=/opt/sib/venv/bin/python3 /opt/sib/bot.py
 ExecReload=/bin/kill -HUP $MAINPID
 
 # Restart configuration
@@ -26,7 +26,7 @@ ProtectHome=true
 # Standard logging to journald
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=goje-bot
+SyslogIdentifier=sib-bot
 
 [Install]
 WantedBy=multi-user.target

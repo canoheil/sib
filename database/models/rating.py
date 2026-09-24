@@ -2,7 +2,7 @@
 
 from sqlalchemy import BigInteger, Float, ForeignKey, Integer
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from goje.database.base import Base, TimestampMixin
+from sib.database.base import Base, TimestampMixin
 
 
 class Rating(Base, TimestampMixin):

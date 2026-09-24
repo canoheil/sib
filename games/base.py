@@ -1,10 +1,10 @@
-"""Base Game Engine abstraction for Goje games."""
+"""Base Game Engine abstraction for sib games."""
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 from aiogram.types import InlineKeyboardMarkup
-from goje.database.models import MatchPlayer
+from sib.database.models import MatchPlayer
 
 
 @dataclass
@@ -17,7 +17,7 @@ class GameResult:
 
 
 class BaseGameEngine(ABC):
-    """Abstract base class for all Goje game engines."""
+    """Abstract base class for all sib game engines."""
 
     game_code: str
     name_fa: str

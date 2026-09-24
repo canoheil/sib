@@ -1,13 +1,13 @@
 services:
   mariadb:
     image: mariadb:10.11
-    container_name: goje_mariadb
+    container_name: sib_mariadb
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root_secret}
-      MYSQL_DATABASE: ${DB_NAME:-goje}
-      MYSQL_USER: ${DB_USER:-goje}
-      MYSQL_PASSWORD: ${DB_PASSWORD:-goje_password}
+      MYSQL_DATABASE: ${DB_NAME:-sib}
+      MYSQL_USER: ${DB_USER:-sib}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-sib_password}
     volumes:
       - mariadb_data:/var/lib/mysql
     command:
@@ -26,7 +26,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: goje_bot
+    container_name: sib_bot
     restart: unless-stopped
     depends_on:
       mariadb:

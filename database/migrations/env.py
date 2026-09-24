@@ -9,8 +9,8 @@ from alembic import context
 # Add project root to sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
 
-from goje.core.config import settings
-from goje.database.models import Base
+from sib.core.config import settings
+from sib.database.models import Base
 
 config = context.config
 
