@@ -21,7 +21,7 @@ class BotService:
 
         bot = User(
             id=settings.BOT_USER_ID,
-            first_name="Goje Bot",
+            first_name="بات سیب کوچولو🍏",
             last_name=None,
             username="goje_game_bot",
             language_code="fa",
