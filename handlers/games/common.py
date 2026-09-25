@@ -14,6 +14,7 @@ from sib.database.models import Match, MatchPlayer, MatchState, Group, AdCampaig
 from sib.games.registry import get_game_engine
 from sib.services.rating import RatingService
 from sib.services.ad.service import AdService
+from sib.bots.runner import run_bot_turns
 
 
 def get_rematch_keyboard(ad: Optional[AdCampaign] = None) -> InlineKeyboardMarkup:
@@ -94,6 +95,16 @@ async def process_game_action(
 
         # Apply action
         state = engine.apply_action(state, user.id, action)
+
+        # Sync Match turn metadata before running the bot.
+        if not engine.is_finished(state):
+            match.current_turn_player_id = state.get("current_player_id")
+
+        # If this is a bot match and the bot now has the turn,
+        # execute the bot move before rendering the updated board.
+        if match.is_bot_match and not engine.is_finished(state):
+            state = await run_bot_turns(match, state)
+
         match.game_state = json.dumps(state)
 
         # Keep Match timeout metadata synchronized with the game engine state.
@@ -197,28 +208,42 @@ async def process_game_action(
         def build_post_match_text(for_group_id: int) -> str:
             target_pid = get_group_target_player_id(for_group_id)
             base_text = engine.render_for_group(state, for_group_id, target_pid)
-            is_g1 = (for_group_id == match.group1_id)
-            delta = match.group1_rating_change if is_g1 else match.group2_rating_change
-            delta_str = f"+{delta:g}" if delta > 0 else f"{delta:g}"
 
-            group_obj = match.group1 if is_g1 else match.group2
-            current_rating = group_obj.rating.rating if group_obj and group_obj.rating else 1500.0
+            rating_summary = ""
+            if not match.is_bot_match:
+                is_g1 = (for_group_id == match.group1_id)
+                delta = (
+                    match.group1_rating_change
+                    if is_g1
+                    else match.group2_rating_change
+                )
+                delta_str = f"+{delta:g}" if delta > 0 else f"{delta:g}"
 
-            rating_summary = (
-                f"\n\n📊 **تغییر ریتینگ گروه شما:** `{delta_str}`\n"
-                f"🏆 **ریتینگ جدید گروه:** `{current_rating:g}`"
-            )
+                group_obj = match.group1 if is_g1 else match.group2
+                current_rating = (
+                    group_obj.rating.rating
+                    if group_obj and group_obj.rating
+                    else 1500.0
+                )
+
+                rating_summary = (
+                    f"\n\n📊 **تغییر ریتینگ گروه شما:** `{delta_str}`\n"
+                    f"🏆 **ریتینگ جدید گروه:** `{current_rating:g}`"
+                )
+
             ad_banner = ""
             if selected_ad:
-                ad_banner = f"\n\n📢 **اسپانسر سیب ({selected_ad.sponsor_name}):**\n_{selected_ad.ad_text}_"
+                ad_banner = (
+                    f"\n\n📢 **اسپانسر سیب ({selected_ad.sponsor_name}):**\n"
+                    f"_{selected_ad.ad_text}_"
+                )
 
             return base_text + rating_summary + ad_banner
 
         if has_message_ids:
-            text_g1 = build_post_match_text(match.group1_id)
-            text_g2 = build_post_match_text(match.group2_id)
-
             if match.group1_id and match.group1_message_id:
+                text_g1 = build_post_match_text(match.group1_id)
+
                 try:
                     await bot.edit_message_text(
                         text_g1,
@@ -231,6 +256,8 @@ async def process_game_action(
                     logger.warning(f"Failed to edit group1 final message: {e}")
 
             if match.group2_id and match.group2_message_id:
+                text_g2 = build_post_match_text(match.group2_id)
+
                 try:
                     await bot.edit_message_text(
                         text_g2,
@@ -241,6 +268,7 @@ async def process_game_action(
                     )
                 except Exception as e:
                     logger.warning(f"Failed to edit group2 final message: {e}")
+
         elif callback.message:
             final_text = build_post_match_text(callback.message.chat.id)
             await callback.message.edit_text(final_text, reply_markup=rematch_kb, parse_mode="Markdown")

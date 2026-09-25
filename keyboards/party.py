@@ -76,6 +76,14 @@ def get_party_action_keyboard(party: Party, is_member: bool = False) -> InlineKe
 
     if party.is_full:
         # Full party actions
+        if party.mode == "solo":
+            buttons.append([
+                success_button(
+                    text="🤖 بازی با Bot",
+                    callback_data=f"play_bot:{party.id}",
+                )
+            ])
+
         buttons.append([
             success_button(
                 text="🔎 پیدا کردن حریف",

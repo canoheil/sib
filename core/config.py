@@ -24,6 +24,10 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("BOT_USERNAME", "TELEGRAM_BOT_USERNAME"),
         description="Telegram Bot Username",
     )
+    BOT_USER_ID: int = Field(
+        default=-900000000001,
+        description="Internal user ID for game bots",
+    )
     ADMIN_IDS: Union[str, List[int]] = Field(
         default_factory=list,
         validation_alias=AliasChoices("ADMIN_IDS", "TELEGRAM_ADMIN_IDS"),
@@ -48,6 +52,8 @@ class Settings(BaseSettings):
     # Timeouts (in seconds)
     MATCHMAKING_TIMEOUT_SECONDS: int = Field(default=600, description="Matchmaking search timeout")
     ACCEPTANCE_TIMEOUT_SECONDS: int = Field(default=120, description="Match acceptance timeout")
+    BOT_OPPONENTS_ENABLED: bool = Field(default=False, description="Enable bot opponents")
+    BOT_OPPONENT_DELAY_SECONDS: int = Field(default=30, description="Delay before bot fallback")
     
     # Anti-spam / Rate Limiting
     RATE_LIMIT_MESSAGE_COUNT: int = Field(default=10, description="Maximum normal messages per window")

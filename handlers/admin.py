@@ -80,7 +80,7 @@ async def handle_admin_ads(callback: CallbackQuery):
     """Monetization and Ad Campaigns dashboard."""
     async with get_session() as session:
         analytics = await AdService.get_analytics(session)
-        campaigns = analytics["campaigns"]
+        campaigns = [c for c in analytics["campaigns"] if c.is_active]
 
     text = (
         "📢 **مدیریت تبلیغات و مانیتایزیشن (Monetization)** 🍏\n\n"

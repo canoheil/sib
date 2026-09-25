@@ -153,7 +153,7 @@ class TicTacToeEngine(BaseGameEngine):
         if self.is_finished(game_state):
             result = self.get_result(game_state)
             outcome = "🤝 **نتیجه: مساوی!**" if result.is_draw else (
-                "🎉 **تیم شما پیروز شد!** 🍏🏆" if result.winner_team == my_p["team"] else "💔 **تیم حریف پیروز شد!** 🍏"
+                "🎉 **برنده شدید!** 🍏🏆" if result.winner_team == my_p["team"] else "💔 **بازی را واگذار کردید!** 🍏"
             )
             return (
                 "⭕ **پایان بازی دوز (Tic-Tac-Toe)**\n\n"

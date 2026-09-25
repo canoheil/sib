@@ -62,6 +62,84 @@ class RatingService:
             logger.warning(f"Rating already applied for match_id={match.id}. Skipping duplicate update.")
             return match
 
+        # Bot matches never affect group rating.
+        if match.is_bot_match:
+            if result.is_draw:
+                match.is_draw = True
+                match.winner_group_id = None
+            elif result.winner_team in (1, "1", "A"):
+                match.is_draw = False
+                match.winner_group_id = match.group1_id
+            elif result.winner_team in (2, "2", "B"):
+                match.is_draw = False
+                match.winner_group_id = None
+            else:
+                raise ValueError(
+                    f"Invalid game result: winner_team={result.winner_team}, "
+                    f"is_draw={result.is_draw}"
+                )
+
+            # Record individual player statistics only.
+            for p in match.players:
+                p_stat = await session.scalar(
+                    select(PlayerStats)
+                    .where(PlayerStats.user_id == p.user_id)
+                    .with_for_update()
+                )
+
+                if not p_stat:
+                    p_stat = PlayerStats(
+                        user_id=p.user_id,
+                        matches_played=0,
+                        wins=0,
+                        losses=0,
+                        draws=0,
+                    )
+                    session.add(p_stat)
+                    await session.flush()
+
+                p_stat.matches_played += 1
+
+                if result.is_draw:
+                    p.result = "DRAW"
+                    p_stat.draws += 1
+                elif p.team == result.winner_team:
+                    p.result = "WIN"
+                    p_stat.wins += 1
+                else:
+                    p.result = "LOSS"
+                    p_stat.losses += 1
+
+            match.rating_applied = True
+            match.group1_rating_change = 0.0
+            match.group2_rating_change = 0.0
+            match.state = MatchState.FINISHED
+            match.finished_at = datetime.now(timezone.utc)
+
+            # Free the human party after the bot match.
+            if match.party1_id:
+                party = await session.scalar(
+                    select(Party)
+                    .where(Party.id == match.party1_id)
+                    .with_for_update()
+                )
+                if party and party.status == PartyStatus.IN_MATCH:
+                    party.status = PartyStatus.CANCELLED
+
+            await session.flush()
+
+            log_event(
+                Events.MATCH_FINISHED,
+                {
+                    "match_id": match.id,
+                    "winner_group_id": match.winner_group_id,
+                    "is_draw": match.is_draw,
+                    "is_bot_match": True,
+                },
+            )
+
+            return match
+
         # 2. Lock group ratings
         g1_rating_stmt = select(Rating).where(Rating.group_id == match.group1_id).with_for_update()
         r1 = await session.scalar(g1_rating_stmt)

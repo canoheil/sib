@@ -50,6 +50,7 @@ class Match(Base, TimestampMixin):
     acceptance_deadline: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Rating application tracking (idempotency)
+    is_bot_match: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     rating_applied: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     group1_rating_change: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     group2_rating_change: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
