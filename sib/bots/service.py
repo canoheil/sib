@@ -17,13 +17,15 @@ class GameBotService:
     async def play_turn(
         match: Match,
         state: Dict[str, Any],
+        bot_player_id: int | None = None,
     ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """Choose and apply one bot move.
 
         Returns:
             (updated_state, action)
         """
-        bot_player_id = match.current_turn_player_id
+        if bot_player_id is None:
+            bot_player_id = match.current_turn_player_id
 
         if bot_player_id is None:
             raise ValueError("Bot turn has no current player.")
