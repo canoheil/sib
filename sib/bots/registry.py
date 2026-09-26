@@ -5,12 +5,16 @@ from typing import Dict, Any
 from sib.bots.strategies.tic_tac_toe import TicTacToeBotStrategy
 from sib.bots.strategies.connect_four import ConnectFourBotStrategy
 from sib.bots.strategies.rock_paper_scissors import RockPaperScissorsBotStrategy
+from sib.bots.strategies.high_card import HighCardBotStrategy
+from sib.bots.strategies.battleship import BattleshipBotStrategy
 
 
 BOT_STRATEGIES: Dict[str, Any] = {
     "tic_tac_toe": TicTacToeBotStrategy(),
     "connect_four": ConnectFourBotStrategy(),
     "rock_paper_scissors": RockPaperScissorsBotStrategy(),
+    "high_card": HighCardBotStrategy(),
+    "battleship": BattleshipBotStrategy(),
 }
 
 
