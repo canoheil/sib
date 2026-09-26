@@ -32,6 +32,9 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     # Apple Battle
     "apple_battle_winner_seedlings": 1,
     "apple_battle_queue_timeout_seconds": 600,
+    # Weekly shop
+    "shop_rotation_hours": 168,
+    "shop_pool_character_ids": [],
 }
 
 

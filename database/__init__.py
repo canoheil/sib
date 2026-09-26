@@ -28,6 +28,9 @@ from sib.database.models import (
     Rarity,
     ReleaseStatus,
     PlayerCard,
+    ShopEntry,
+    ShopEntryType,
+    ShopRotation,
     SponsorChannel,
     ChannelType,
 )
@@ -58,6 +61,9 @@ __all__ = [
     "Rarity",
     "ReleaseStatus",
     "PlayerCard",
+    "ShopEntry",
+    "ShopEntryType",
+    "ShopRotation",
     "SponsorChannel",
     "ChannelType",
 ]
