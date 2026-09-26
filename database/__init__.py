@@ -15,6 +15,8 @@ from sib.database.models import (
     MatchState,
     MatchPlayer,
     GroupStats,
+    SeedlingInventory,
+    SeedlingAward,
     SponsorChannel,
     ChannelType,
 )
@@ -32,6 +34,8 @@ __all__ = [
     "MatchState",
     "MatchPlayer",
     "GroupStats",
+    "SeedlingInventory",
+    "SeedlingAward",
     "SponsorChannel",
     "ChannelType",
 ]

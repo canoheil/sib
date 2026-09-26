@@ -126,13 +126,16 @@ async def cmd_stats(message: Message):
         else:
             # Personal player stats in private chat
             p_stats = await LeaderboardService.get_player_stats(session, user.id)
+            from sib.services.seedling import SeedlingService
+            seedlings = await SeedlingService.get_total(session, user.id)
             name = user.first_name or "شما"
             text = (
                 f"👤 **کارنامه بازیکن: {name}** 🍏\n\n"
                 f"🎮 مجموع حضور در مسابقات: `{p_stats['matches_played']}`\n"
                 f"🟢 پیروزی‌ها: `{p_stats['wins']}` ({p_stats['win_rate']}٪)\n"
                 f"🔴 شکست‌ها: `{p_stats['losses']}`\n"
-                f"⚪ تساوی‌ها: `{p_stats['draws']}`\n\n"
+                f"⚪ تساوی‌ها: `{p_stats['draws']}`\n"
+                f"🌱 نهال‌ها: `{seedlings}`\n\n"
                 "ℹ️ جایگاه رقابتی سیب بر اساس برد گروه‌هاست؛ بازیکنان رکورد فردی خودشان را دارند."
             )
             await message.reply(text, reply_markup=get_player_stats_keyboard(), parse_mode="Markdown")

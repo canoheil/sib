@@ -13,6 +13,7 @@ from sib.database.models.matchmaking import MatchmakingQueue
 from sib.database.models.player_stats import PlayerStats
 from sib.database.models.ad_campaign import AdCampaign, FrequencyMode
 from sib.database.models.panel import PanelOwner
+from sib.database.models.seedling import SeedlingInventory, SeedlingAward
 
 __all__ = [
     "Base",
@@ -34,4 +35,6 @@ __all__ = [
     "AdCampaign",
     "FrequencyMode",
     "PanelOwner",
+    "SeedlingInventory",
+    "SeedlingAward",
 ]

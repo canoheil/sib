@@ -24,6 +24,7 @@ from sib.database.models import (
     PartyStatus,
 )
 from sib.games.base import GameResult
+from sib.services.seedling import SeedlingService
 
 
 class MatchResultService:
@@ -80,6 +81,12 @@ class MatchResultService:
             elif p.team == result.winner_team:
                 p.result = "WIN"
                 p_stat.wins += 1
+                # Seedling rewards belong to eligible NORMAL group wins
+                # only; bot-match winners never receive seedlings.
+                if not match.is_bot_match:
+                    await SeedlingService.award_match_win(
+                        session, match_id=match.id, user_id=p.user_id
+                    )
             else:
                 p.result = "LOSS"
                 p_stat.losses += 1
