@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from sib.core.config import settings
+from sib.core.text import safe_name
 from sib.database.models import MatchPlayer
 from sib.games.base import BaseGameEngine, GameResult
 
@@ -95,7 +96,7 @@ class BattleshipEngine(BaseGameEngine):
                 "team": p.team,
                 "team_code": "A" if is_team_a else "B",
                 "group_id": p.group_id,
-                "name": p.user.display_name if p.user else f"بازیکن {p.user_id}",
+                "name": safe_name(p.user.display_name if p.user else None, f"بازیکن {p.user_id}"),
             }
 
         fleet_a = self.generate_fleet(fleet_seed_a)

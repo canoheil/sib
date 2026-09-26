@@ -6,6 +6,7 @@ from sib.handlers.games.tic_tac_toe import router as tic_tac_toe_router
 from sib.handlers.games.connect_four import router as connect_four_router
 from sib.handlers.games.battleship import router as battleship_router
 from sib.handlers.games.ads import router as ads_router
+from sib.handlers.games.common import router as game_common_router
 
 __all__ = [
     "rps_router",
@@ -14,4 +15,5 @@ __all__ = [
     "connect_four_router",
     "battleship_router",
     "ads_router",
+    "game_common_router",
 ]

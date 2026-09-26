@@ -13,6 +13,7 @@ from sib.handlers.games import (
     connect_four_router,
     battleship_router,
     ads_router,
+    game_common_router,
 )
 from sib.handlers.leaderboard import router as leaderboard_router
 
@@ -29,6 +30,7 @@ def register_all_handlers(dp: Dispatcher) -> None:
     dp.include_router(connect_four_router)
     dp.include_router(battleship_router)
     dp.include_router(ads_router)
+    dp.include_router(game_common_router)
     dp.include_router(party_router)
     dp.include_router(start_router)
 

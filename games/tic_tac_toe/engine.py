@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from sib.core.config import settings
+from sib.core.text import safe_name
 from sib.database.models import MatchPlayer
 from sib.games.base import BaseGameEngine, GameResult
 
@@ -37,13 +38,13 @@ class TicTacToeEngine(BaseGameEngine):
                 "symbol": "X",
                 "team": p_x.team,
                 "group_id": p_x.group_id,
-                "name": p_x.user.display_name if p_x.user else "بازیکن X",
+                "name": safe_name(p_x.user.display_name if p_x.user else None, "بازیکن X"),
             },
             str(p_o.user_id): {
                 "symbol": "O",
                 "team": p_o.team,
                 "group_id": p_o.group_id,
-                "name": p_o.user.display_name if p_o.user else "بازیکن O",
+                "name": safe_name(p_o.user.display_name if p_o.user else None, "بازیکن O"),
             },
         }
 
