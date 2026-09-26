@@ -30,6 +30,12 @@ OWNER_SCOPED_CALLBACKS: Tuple[str, ...] = (
     "garden_harvest:",
     "garden_expand",
     "garden_refresh",
+    # Shop / cards / trading (spend apples or change ownership)
+    "shop_buy:",
+    "card_panel:",
+    "card_up:",
+    "trade_ok:",
+    "trade_cancel:",
 )
 
 REJECT_MESSAGE = (

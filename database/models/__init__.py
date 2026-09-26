@@ -19,6 +19,7 @@ from sib.database.models.garden import Garden, GardenPlot, PlotState
 from sib.database.models.system_config import SystemConfig
 from sib.database.models.player_card import PlayerCard
 from sib.database.models.shop import ShopEntry, ShopEntryType, ShopRotation
+from sib.database.models.trade import Trade, TradeStatus
 from sib.database.models.character import (
     Character,
     CharacterBalanceVersion,
@@ -62,4 +63,6 @@ __all__ = [
     "ShopEntry",
     "ShopEntryType",
     "ShopRotation",
+    "Trade",
+    "TradeStatus",
 ]

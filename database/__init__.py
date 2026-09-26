@@ -31,6 +31,8 @@ from sib.database.models import (
     ShopEntry,
     ShopEntryType,
     ShopRotation,
+    Trade,
+    TradeStatus,
     SponsorChannel,
     ChannelType,
 )
@@ -64,6 +66,8 @@ __all__ = [
     "ShopEntry",
     "ShopEntryType",
     "ShopRotation",
+    "Trade",
+    "TradeStatus",
     "SponsorChannel",
     "ChannelType",
 ]

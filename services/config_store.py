@@ -35,6 +35,9 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     # Weekly shop
     "shop_rotation_hours": 168,
     "shop_pool_character_ids": [],
+    # Trading
+    "trades_per_day": 1,
+    "trade_expiration_hours": 24,
 }
 
 
