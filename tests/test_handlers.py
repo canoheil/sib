@@ -48,7 +48,7 @@ async def test_start_private_chat_already_member(db_session):
 
 
 @pytest.mark.asyncio
-async def test_start_group_chat_registers_group_and_rating(db_session):
+async def test_start_group_chat_registers_group_and_stats(db_session):
     """Adding bot or calling /start in group registers group and sends group menu."""
     mock_msg = MagicMock(spec=Message)
     mock_msg.chat = TelegramChat(id=-1009988776655, type="supergroup", title="گروه بر و بچ سیب")
@@ -61,7 +61,7 @@ async def test_start_group_chat_registers_group_and_rating(db_session):
     mock_msg.reply.assert_called_once()
     args, kwargs = mock_msg.reply.call_args
     assert "گروه شما ثبت شد" in args[0]
-    assert "1500" in args[0]
+    assert "ریتینگ" not in args[0]
     assert kwargs.get("reply_markup") is not None
 
 

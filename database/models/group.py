@@ -16,7 +16,7 @@ class Group(Base, TimestampMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     # Relationships
-    rating = relationship("Rating", back_populates="group", uselist=False, cascade="all, delete-orphan")
+    stats = relationship("GroupStats", back_populates="group", uselist=False, cascade="all, delete-orphan")
 
     def __repr__(self) -> str:
         return f"<Group id={self.id} title={self.title}>"

@@ -6,7 +6,7 @@ from sib.database.models.group import Group
 from sib.database.models.game import Game
 from sib.database.models.match import Match, MatchState
 from sib.database.models.match_player import MatchPlayer
-from sib.database.models.rating import Rating
+from sib.database.models.group_stats import GroupStats
 from sib.database.models.sponsor_channel import SponsorChannel, ChannelType
 from sib.database.models.party import Party, PartyMember, PartyStatus
 from sib.database.models.matchmaking import MatchmakingQueue
@@ -23,7 +23,7 @@ __all__ = [
     "Match",
     "MatchState",
     "MatchPlayer",
-    "Rating",
+    "GroupStats",
     "SponsorChannel",
     "ChannelType",
     "Party",

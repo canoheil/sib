@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from typing import Optional, List
-from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sib.database.base import Base, TimestampMixin
 
@@ -49,11 +49,9 @@ class Match(Base, TimestampMixin):
     group2_accepted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     acceptance_deadline: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    # Rating application tracking (idempotency)
+    # Result application tracking (idempotency). No Elo/rating exists.
     is_bot_match: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    rating_applied: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    group1_rating_change: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
-    group2_rating_change: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    result_applied: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

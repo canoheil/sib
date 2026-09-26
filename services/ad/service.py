@@ -6,7 +6,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sib.core.logging import logger, log_event, Events
-from sib.database.models import AdCampaign, FrequencyMode, Match, Rating
+from sib.database.models import AdCampaign, FrequencyMode, Match, GroupStats
 
 
 class AdService:

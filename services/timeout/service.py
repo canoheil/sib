@@ -9,7 +9,7 @@ from sqlalchemy.orm import selectinload
 from sib.core.logging import logger, log_event, Events
 from sib.database.models import Match, MatchState, MatchPlayer, Party, PartyStatus, Group
 from sib.games.base import GameResult
-from sib.services.rating import RatingService
+from sib.services.match_result import MatchResultService
 
 
 class TimeoutService:
@@ -123,7 +123,7 @@ class TimeoutService:
                     },
                 )
 
-        await RatingService.apply_match_result(session, match, result)
+        await MatchResultService.apply_match_result(session, match, result)
 
     @classmethod
     async def process_turn_timeouts(cls, session: AsyncSession) -> List[int]:
@@ -141,8 +141,8 @@ class TimeoutService:
             )
             .options(
                 selectinload(Match.players).selectinload(MatchPlayer.user),
-                selectinload(Match.group1).selectinload(Group.rating),
-                selectinload(Match.group2).selectinload(Group.rating),
+                selectinload(Match.group1).selectinload(Group.stats),
+                selectinload(Match.group2).selectinload(Group.stats),
                 selectinload(Match.game),
             )
             .with_for_update()

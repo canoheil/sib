@@ -1,16 +1,40 @@
-"""Leaderboard and Statistics Service."""
+"""Leaderboard and Statistics Service (win-based, no Elo)."""
 
 from typing import Any, Dict, List, Optional, Tuple
-from sqlalchemy import select, func, desc
-from sqlalchemy.orm import selectinload
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sib.core.config import settings
-from sib.database.models import Group, Rating, PlayerStats, User
+from sib.database.models import Group, GroupStats, PlayerStats, User
 
 
 class LeaderboardService:
-    """Manages global group leaderboard, group statistics, and player records."""
+    """Global group leaderboard ranked by wins.
+
+    Deterministic ordering (no hidden skill score):
+    1. Wins descending
+    2. Win rate descending
+    3. Matches played descending
+    4. Stable group id tie-break (ascending)
+    """
+
+    @staticmethod
+    def _sort_key(row: Tuple[Group, GroupStats]):
+        group, stats = row
+        win_rate = (stats.wins / stats.matches_played) if stats.matches_played > 0 else 0.0
+        return (-stats.wins, -win_rate, -stats.matches_played, group.id)
+
+    @classmethod
+    async def _ranked_rows(
+        cls,
+        session: AsyncSession,
+    ) -> List[Tuple[Group, GroupStats]]:
+        stmt = (
+            select(Group, GroupStats)
+            .join(GroupStats, Group.id == GroupStats.group_id)
+            .where(Group.is_active == True)
+        )
+        results = (await session.execute(stmt)).all()
+        return sorted(results, key=cls._sort_key)
 
     @classmethod
     async def get_top_groups(
@@ -18,26 +42,15 @@ class LeaderboardService:
         session: AsyncSession,
         limit: int = 10,
         offset: int = 0,
-    ) -> List[Tuple[int, Group, Rating]]:
-        """
-        Get global leaderboard sorted by Elo rating DESC, then wins DESC.
-        Returns list of (rank, Group, Rating).
-        """
-        stmt = (
-            select(Group, Rating)
-            .join(Rating, Group.id == Rating.group_id)
-            .where(Group.is_active == True)
-            .order_by(desc(Rating.rating), desc(Rating.wins), desc(Rating.matches_played))
-            .limit(limit)
-            .offset(offset)
-        )
-        results = await session.execute(stmt)
-        
-        ranked_list = []
-        for index, (group, rating) in enumerate(results.all(), start=offset + 1):
-            ranked_list.append((index, group, rating))
-            
-        return ranked_list
+    ) -> List[Tuple[int, Group, GroupStats]]:
+        """Get global leaderboard sorted by wins with deterministic ties."""
+        ranked = await cls._ranked_rows(session)
+        return [
+            (index, group, stats)
+            for index, (group, stats) in enumerate(
+                ranked[offset : offset + limit], start=offset + 1
+            )
+        ]
 
     @classmethod
     async def get_group_stats_and_rank(
@@ -45,38 +58,34 @@ class LeaderboardService:
         session: AsyncSession,
         group_id: int,
     ) -> Optional[Dict[str, Any]]:
-        """Fetch group statistics along with its global competitive rank."""
-        # Fetch group & rating
-        stmt = (
-            select(Group, Rating)
-            .join(Rating, Group.id == Rating.group_id)
-            .where(Group.id == group_id)
-        )
-        res = (await session.execute(stmt)).first()
-        if not res:
+        """Fetch group statistics along with its global rank."""
+        ranked = await cls._ranked_rows(session)
+        for rank, (group, stats) in enumerate(ranked, start=1):
+            if group.id == group_id:
+                return {
+                    "group_id": group.id,
+                    "title": group.title,
+                    "rank": rank,
+                    "matches_played": stats.matches_played,
+                    "wins": stats.wins,
+                    "losses": stats.losses,
+                    "draws": stats.draws,
+                    "win_rate": round(stats.win_rate, 1),
+                }
+
+        # Group has no stats row yet: fetch the group itself for the title.
+        group = await session.get(Group, group_id)
+        if not group:
             return None
-
-        group, rating = res
-
-        # Calculate rank: count groups with strictly higher rating
-        higher_count_stmt = (
-            select(func.count(Rating.id))
-            .where(Rating.rating > rating.rating)
-        )
-        rank = (await session.scalar(higher_count_stmt)) + 1
-
-        win_rate = (rating.wins / rating.matches_played * 100.0) if rating.matches_played > 0 else 0.0
-
         return {
             "group_id": group.id,
             "title": group.title,
-            "rating": rating.rating,
-            "rank": rank,
-            "matches_played": rating.matches_played,
-            "wins": rating.wins,
-            "losses": rating.losses,
-            "draws": rating.draws,
-            "win_rate": round(win_rate, 1),
+            "rank": len(ranked) + 1,
+            "matches_played": 0,
+            "wins": 0,
+            "losses": 0,
+            "draws": 0,
+            "win_rate": 0.0,
         }
 
     @classmethod

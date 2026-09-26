@@ -22,7 +22,7 @@ from sib.core.logging import logger, log_event, Events
 from sib.database.connection import get_session
 from sib.database.models import Match, MatchPlayer, MatchState, Group, AdCampaign
 from sib.games.registry import get_game_engine
-from sib.services.rating import RatingService
+from sib.services.match_result import MatchResultService
 from sib.services.ad.service import AdService
 from sib.services.telegram_ui import (
     REFRESH_CALLBACK_PREFIX,
@@ -87,8 +87,8 @@ async def process_game_action(
             .execution_options(populate_existing=True)
             .options(
                 selectinload(Match.players).selectinload(MatchPlayer.user),
-                selectinload(Match.group1).selectinload(Group.rating),
-                selectinload(Match.group2).selectinload(Group.rating),
+                selectinload(Match.group1).selectinload(Group.stats),
+                selectinload(Match.group2).selectinload(Group.stats),
                 selectinload(Match.game),
             )
             .with_for_update()
@@ -164,13 +164,13 @@ async def process_game_action(
         if finished:
             result = engine.get_result(state)
             # Apply the result (idempotent) BEFORE committing.
-            await RatingService.apply_match_result(session, match, result)
+            await MatchResultService.apply_match_result(session, match, result)
 
             # Fetch eligible post-match ad safely (never affects match result if fails)
             try:
                 match_num = 1
-                if match.group1 and match.group1.rating:
-                    match_num = match.group1.rating.matches_played
+                if match.group1 and match.group1.stats:
+                    match_num = match.group1.stats.matches_played
 
                 selected_ad = await AdService.get_eligible_ad(
                     session,
@@ -197,8 +197,8 @@ async def process_game_action(
             "group2_id": match.group2_id,
             "group1_message_id": match.group1_message_id,
             "group2_message_id": match.group2_message_id,
-            "group1_rating_change": match.group1_rating_change,
-            "group2_rating_change": match.group2_rating_change,
+            "group1_wins": match.group1.stats.wins if match.group1 and match.group1.stats else 0,
+            "group2_wins": match.group2.stats.wins if match.group2 and match.group2.stats else 0,
             "game_id": match.game_id,
             "game_code": match.game.code,
             "players": [(p.user_id, p.group_id) for p in match.players],
@@ -278,17 +278,15 @@ async def process_game_action(
         base_text = engine.render_for_group(state, for_group_id, target_pid)
 
         rating_summary = ""
-        if not render_payload["is_bot_match"]:
+        if not render_payload["is_bot_match"] and not render_payload.get("is_draw"):
             is_g1 = (for_group_id == render_payload["group1_id"])
-            delta = (
-                render_payload["group1_rating_change"]
+            wins = (
+                render_payload["group1_wins"]
                 if is_g1
-                else render_payload["group2_rating_change"]
+                else render_payload["group2_wins"]
             )
-            delta_str = f"+{delta:g}" if delta > 0 else f"{delta:g}"
-
             rating_summary = (
-                f"\n\n📊 **تغییر ریتینگ گروه شما:** `{delta_str}`"
+                f"\n\n🏆 **برد‌های گروه شما:** `{wins}`"
             )
 
         ad_banner = ""

@@ -15,7 +15,6 @@ class MatchmakingQueue(Base, TimestampMixin):
     group_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("groups.id", ondelete="CASCADE"), index=True, nullable=False)
     game_id: Mapped[int] = mapped_column(Integer, ForeignKey("games.id"), index=True, nullable=False)
     mode: Mapped[str] = mapped_column(String(20), index=True, nullable=False)  # solo, 2v2, 4v4
-    group_rating: Mapped[float] = mapped_column(Float, default=1500.0, nullable=False)
     entered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True, nullable=False)
@@ -26,4 +25,4 @@ class MatchmakingQueue(Base, TimestampMixin):
     game = relationship("Game")
 
     def __repr__(self) -> str:
-        return f"<MatchmakingQueue id={self.id} party_id={self.party_id} group_id={self.group_id} mode={self.mode} rating={self.group_rating}>"
+        return f"<MatchmakingQueue id={self.id} party_id={self.party_id} group_id={self.group_id} mode={self.mode}>"

@@ -8,7 +8,7 @@ from sib.core.errors import InvalidActionException, MatchNotFoundException
 from sib.core.logging import Events, log_event
 from sib.database.models import Match, MatchPlayer, MatchState
 from sib.games.base import GameResult
-from sib.services.rating import RatingService
+from sib.services.match_result import MatchResultService
 
 
 class MatchLifecycleService:
@@ -67,7 +67,7 @@ class MatchLifecycleService:
             },
         )
 
-        await RatingService.apply_match_result(
+        await MatchResultService.apply_match_result(
             session,
             match,
             result,

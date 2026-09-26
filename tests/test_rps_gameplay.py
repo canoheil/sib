@@ -1,4 +1,4 @@
-"""Tests for Rock Paper Scissors gameplay, result evaluation, rating updates, and idempotency."""
+"""Tests for Rock Paper Scissors gameplay, result evaluation, result application, and idempotency."""
 
 import json
 import pytest
@@ -7,11 +7,11 @@ from sib.core.config import settings
 from sib.database.models import (
     Match,
     MatchState,
-    Rating,
+    GroupStats,
     PlayerStats,
 )
 from sib.games.rock_paper_scissors.engine import RockPaperScissorsEngine
-from sib.services.rating import RatingService
+from sib.services.match_result import MatchResultService
 from sib.matchmaking.matcher import MatchmakingService
 from sib.matchmaking.acceptance import AcceptanceService
 from sib.services.party import PartyService
@@ -108,27 +108,11 @@ def test_rps_action_validation():
     assert "قفل" in err
 
 
-def test_elo_calculation_formula():
-    """Verify Elo calculation for equal and asymmetric ratings."""
-    # Equal ratings: 1500 vs 1500, K=32
-    d_win, d_loss = RatingService.calculate_elo_change(1500.0, 1500.0, 1.0, k_factor=32.0)
-    assert d_win == 16.0
-    assert d_loss == -16.0
-
-    # Draw between equal ratings -> 0 delta
-    d_draw1, d_draw2 = RatingService.calculate_elo_change(1500.0, 1500.0, 0.5, k_factor=32.0)
-    assert d_draw1 == 0.0
-    assert d_draw2 == 0.0
-
-    # Underdog win: 1400 beats 1600 -> higher delta
-    d_underdog, d_fav = RatingService.calculate_elo_change(1400.0, 1600.0, 1.0, k_factor=32.0)
-    assert d_underdog > 20.0
-    assert d_fav < -20.0
 
 
 @pytest.mark.asyncio
-async def test_rating_update_idempotency(db_session):
-    """Calling apply_match_result twice must NEVER update ratings twice."""
+async def test_result_application_idempotency(db_session):
+    """Calling apply_match_result twice must NEVER apply the result twice."""
     g1 = await create_test_group(db_session, "تیم تست ریتینگ ۱")
     g2 = await create_test_group(db_session, "تیم تست ریتینگ ۲")
     u1 = await create_test_user(db_session, "بازیکن ریتینگ ۱")
@@ -153,32 +137,32 @@ async def test_rating_update_idempotency(db_session):
     result = engine.get_result(state)
 
     # First application
-    await RatingService.apply_match_result(db_session, match, result)
+    await MatchResultService.apply_match_result(db_session, match, result)
     await db_session.commit()
 
-    # Get ratings after first application
-    r1_after_first = (await db_session.scalar(select(Rating).where(Rating.group_id == match.group1_id))).rating
-    r2_after_first = (await db_session.scalar(select(Rating).where(Rating.group_id == match.group2_id))).rating
-    matches_g1_first = (await db_session.scalar(select(Rating).where(Rating.group_id == match.group1_id))).matches_played
+    # Get group stats after first application
+    g1_stats_first = await db_session.scalar(select(GroupStats).where(GroupStats.group_id == match.group1_id))
+    g2_stats_first = await db_session.scalar(select(GroupStats).where(GroupStats.group_id == match.group2_id))
+    wins_g1_first = g1_stats_first.wins
+    matches_g1_first = g1_stats_first.matches_played
 
     # Second application (must be completely ignored due to idempotency)
-    await RatingService.apply_match_result(db_session, match, result)
+    await MatchResultService.apply_match_result(db_session, match, result)
     await db_session.commit()
 
-    r1_after_second = (await db_session.scalar(select(Rating).where(Rating.group_id == match.group1_id))).rating
-    r2_after_second = (await db_session.scalar(select(Rating).where(Rating.group_id == match.group2_id))).rating
-    matches_g1_second = (await db_session.scalar(select(Rating).where(Rating.group_id == match.group1_id))).matches_played
+    g1_stats_second = await db_session.scalar(select(GroupStats).where(GroupStats.group_id == match.group1_id))
+    g2_stats_second = await db_session.scalar(select(GroupStats).where(GroupStats.group_id == match.group2_id))
 
-    assert r1_after_first == r1_after_second
-    assert r2_after_first == r2_after_second
-    assert matches_g1_first == matches_g1_second
+    assert g1_stats_second.wins == wins_g1_first
+    assert g2_stats_second.wins == g2_stats_first.wins
+    assert g1_stats_second.matches_played == matches_g1_first
 
 
 @pytest.mark.asyncio
 async def test_full_rock_paper_scissors_lifecycle(db_session):
     """
     End-to-end integration test:
-    Parties -> Matchmaking -> Acceptance -> Gameplay choices -> Results & Rating updates -> Player Stats.
+    Parties -> Matchmaking -> Acceptance -> Gameplay choices -> Result application -> Player Stats.
     """
     g1 = await create_test_group(db_session, "گروه ستاره")
     g2 = await create_test_group(db_session, "گروه خورشید")
@@ -226,12 +210,12 @@ async def test_full_rock_paper_scissors_lifecycle(db_session):
     result = engine.get_result(state)
     assert result.is_draw is False
 
-    # 6. Apply Rating
-    finished_match = await RatingService.apply_match_result(db_session, match, result)
+    # 6. Apply match result (no Elo)
+    finished_match = await MatchResultService.apply_match_result(db_session, match, result)
     await db_session.commit()
 
     assert finished_match.state == MatchState.FINISHED
-    assert finished_match.rating_applied is True
+    assert finished_match.result_applied is True
 
     # 7. Verify Player Statistics
     p1_stats = await db_session.scalar(select(PlayerStats).where(PlayerStats.user_id == u1.id))

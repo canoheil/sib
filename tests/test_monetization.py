@@ -254,7 +254,7 @@ async def test_post_match_ad_delivery_and_resilience(db_session):
     # Verify match is completed, rating applied, and ad was attached
     await db_session.refresh(match)
     assert match.state == MatchState.FINISHED
-    assert match.rating_applied is True
+    assert match.result_applied is True
     assert match.ad_campaign_id == ad.id
 
     # Verify message sent to groups contains sponsor banner and CTA button

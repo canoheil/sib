@@ -102,4 +102,4 @@ async def test_recovery_finishes_interrupted_active_matches_past_turn_deadline(d
 
     await db_session.refresh(match)
     assert match.state == MatchState.FINISHED
-    assert match.rating_applied is True
+    assert match.result_applied is True

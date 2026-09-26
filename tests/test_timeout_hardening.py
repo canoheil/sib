@@ -79,21 +79,21 @@ async def test_turn_timeout_awards_forfeit_win_and_updates_rating(db_session):
 
     await db_session.refresh(match)
     assert match.state == MatchState.FINISHED
-    assert match.rating_applied is True
+    assert match.result_applied is True
 
     # Check that ratings were changed
     from sqlalchemy import select
-    from sib.database.models import Rating
-    r1 = await db_session.scalar(select(Rating).where(Rating.group_id == match.group1_id))
-    r2 = await db_session.scalar(select(Rating).where(Rating.group_id == match.group2_id))
+    from sib.database.models import GroupStats
+    r1 = await db_session.scalar(select(GroupStats).where(GroupStats.group_id == match.group1_id))
+    r2 = await db_session.scalar(select(GroupStats).where(GroupStats.group_id == match.group2_id))
     assert r1.matches_played == 1
     assert r2.matches_played == 1
 
 @pytest.mark.asyncio
-async def test_active_match_leaver_forfeits_and_updates_rating(db_session):
-    """An active match leaver forfeits for their team and applies rating exactly once."""
+async def test_active_match_leaver_forfeits_and_applies_result(db_session):
+    """An active match leaver forfeits for their team and applies the result exactly once."""
     from sqlalchemy import select
-    from sib.database.models import MatchPlayer, Rating
+    from sib.database.models import MatchPlayer, GroupStats
     from sib.services.match_lifecycle import MatchLifecycleService
 
     g1 = await create_test_group(db_session, "گروه لیور ۱")
@@ -125,7 +125,7 @@ async def test_active_match_leaver_forfeits_and_updates_rating(db_session):
 
     assert result.id == match.id
     assert result.state == MatchState.FINISHED
-    assert result.rating_applied is True
+    assert result.result_applied is True
     leaver_team = await db_session.scalar(
         select(MatchPlayer.team)
         .where(MatchPlayer.match_id == match.id)
@@ -150,19 +150,19 @@ async def test_active_match_leaver_forfeits_and_updates_rating(db_session):
     assert opponent.result == "WIN"
 
     r1 = await db_session.scalar(
-        select(Rating).where(Rating.group_id == match.group1_id)
+        select(GroupStats).where(GroupStats.group_id == match.group1_id)
     )
     r2 = await db_session.scalar(
-        select(Rating).where(Rating.group_id == match.group2_id)
+        select(GroupStats).where(GroupStats.group_id == match.group2_id)
     )
 
     assert r1.matches_played == 1
     assert r2.matches_played == 1
 
-    first_delta_1 = r1.rating
-    first_delta_2 = r2.rating
+    wins1_first = r1.wins
+    wins2_first = r2.wins
 
-    # A second leave attempt must not apply another result/rating update.
+    # A second leave attempt must not apply another result/win update.
     with pytest.raises(MatchNotFoundException):
         await MatchLifecycleService.forfeit_player(
             db_session, match.id, u1.id
@@ -171,7 +171,7 @@ async def test_active_match_leaver_forfeits_and_updates_rating(db_session):
     await db_session.refresh(r1)
     await db_session.refresh(r2)
 
-    assert r1.rating == first_delta_1
-    assert r2.rating == first_delta_2
+    assert r1.wins == wins1_first
+    assert r2.wins == wins2_first
     assert r1.matches_played == 1
     assert r2.matches_played == 1
