@@ -22,6 +22,8 @@ from sib.handlers.party.renderer import render_party_card
 from sib.services.user import UserService
 from sib.services.group import GroupService
 from sib.services.party import PartyService
+from sib.services.panel import PanelOwnershipService
+from sib.services.telegram_ui import safe_answer_callback, safe_edit_callback_message
 
 router = Router(name="party")
 
@@ -60,6 +62,14 @@ async def handle_games_panel(callback: CallbackQuery):
         return
 
     async with get_session() as session:
+        # The games/parties list is a shared group panel: anyone may use it.
+        message = callback.message
+        if message is not None:
+            chat_obj = getattr(message, "chat", None)
+            msg_id = getattr(message, "message_id", None)
+            if chat_obj is not None and msg_id:
+                await PanelOwnershipService.release(session, chat_obj.id, msg_id)
+
         active_parties = await PartyService.get_active_parties_for_group(session, chat.id)
         if active_parties:
             text = "🍏 **بازی‌های فعال و در حال انتظار گروه:**"
@@ -69,7 +79,7 @@ async def handle_games_panel(callback: CallbackQuery):
             text = "🍏 **در حال حاضر هیچ پارتی فعالی در این گروه وجود ندارد!**\nیک بازی انتخاب کن تا تیم بسازیم:"
             kb = get_game_selection_keyboard(games)
 
-        await callback.answer()
+        await safe_answer_callback(callback)
         if callback.message:
             await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
 

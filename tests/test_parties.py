@@ -12,7 +12,7 @@ from sib.core.errors import (
     PartyNotFoundException,
     InvalidActionException,
 )
-from sib.database.models import User, Group, Game, Party, PartyMember, PartyStatus, Rating
+from sib.database.models import User, Group, Game, Party, PartyMember, PartyStatus, GroupStats
 from sib.services.party import PartyService
 from sib.services.session import SessionService
 
@@ -29,8 +29,8 @@ async def create_test_group(session, title: str) -> Group:
     gid = -int(uuid.uuid4().int % 1000000000)
     group = Group(id=gid, title=title)
     session.add(group)
-    rating = Rating(group_id=gid, rating=settings.INITIAL_RATING)
-    session.add(rating)
+    stats = GroupStats(group_id=gid)
+    session.add(stats)
     await session.commit()
     return group
 

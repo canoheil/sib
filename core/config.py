@@ -72,10 +72,6 @@ class Settings(BaseSettings):
     CONNECT_FOUR_TIMEOUT: int = Field(default=60, description="Connect Four turn timeout")
     BATTLESHIP_TIMEOUT: int = Field(default=90, description="Battleship turn timeout")
 
-    # Rating Settings
-    INITIAL_RATING: float = Field(default=1500.0, description="Initial Elo rating for groups")
-    ELO_K_FACTOR: float = Field(default=32.0, description="Elo K-factor for rating calculation")
-
     # Logging
     LOG_LEVEL: str = Field(default="INFO", description="Log level: DEBUG, INFO, WARNING, ERROR")
 

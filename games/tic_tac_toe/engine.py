@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from sib.core.config import settings
+from sib.core.text import safe_name
 from sib.database.models import MatchPlayer
 from sib.games.base import BaseGameEngine, GameResult
 
@@ -37,13 +38,13 @@ class TicTacToeEngine(BaseGameEngine):
                 "symbol": "X",
                 "team": p_x.team,
                 "group_id": p_x.group_id,
-                "name": p_x.user.display_name if p_x.user else "بازیکن X",
+                "name": safe_name(p_x.user.display_name if p_x.user else None, "بازیکن X"),
             },
             str(p_o.user_id): {
                 "symbol": "O",
                 "team": p_o.team,
                 "group_id": p_o.group_id,
-                "name": p_o.user.display_name if p_o.user else "بازیکن O",
+                "name": safe_name(p_o.user.display_name if p_o.user else None, "بازیکن O"),
             },
         }
 
@@ -143,7 +144,7 @@ class TicTacToeEngine(BaseGameEngine):
             return "اطلاعات بازی ناقص است."
 
         # Display symbols
-        icons = {None: "⬜", "X": "❌", "O": "⭕"}
+        icons = {None: "⬜", "X": "🍎", "O": "🍏"}
         grid_rows = []
         for r in range(3):
             row_str = " ".join(icons[board[r * 3 + c]] for c in range(3))
@@ -156,7 +157,7 @@ class TicTacToeEngine(BaseGameEngine):
                 "🎉 **برنده شدید!** 🍏🏆" if result.winner_team == my_p["team"] else "💔 **بازی را واگذار کردید!** 🍏"
             )
             return (
-                "⭕ **پایان بازی دوز (Tic-Tac-Toe)**\n\n"
+                "🍎🍏 **پایان بازی دوز (Tic-Tac-Toe)**\n\n"
                 f"{board_art}\n\n"
                 f"{outcome}\n"
                 f"📝 {result.summary}"
@@ -166,7 +167,7 @@ class TicTacToeEngine(BaseGameEngine):
         turn_text = "🟢 **نوبت شماست!** یک خانه خالی را لمس کنید." if current_pid == for_player_id else f"⏳ در انتظار حرکت {opp_p['name']}..."
 
         return (
-            "⭕ **بازی دوز (Tic-Tac-Toe)** 🍏\n\n"
+            "🍎🍏 **بازی دوز (Tic-Tac-Toe)** 🍏\n\n"
             f"👤 شما: {my_p['name']} ({icons[my_p['symbol']]})\n"
             f"👤 حریف: {opp_p['name']} ({icons[opp_p['symbol']]})\n\n"
             f"{board_art}\n\n"
@@ -184,7 +185,7 @@ class TicTacToeEngine(BaseGameEngine):
 
         board = game_state["board"]
         is_my_turn = (game_state.get("current_player_id") == for_player_id)
-        icons = {None: "⬜", "X": "❌", "O": "⭕"}
+        icons = {None: "⬜", "X": "🍎", "O": "🍏"}
 
         buttons = []
         for r in range(3):

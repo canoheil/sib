@@ -3,7 +3,7 @@
 import uuid
 import pytest
 from sqlalchemy import select
-from sib.database.models import User, Group, Game, Match, MatchPlayer, Rating, SponsorChannel, ChannelType
+from sib.database.models import User, Group, Game, Match, MatchPlayer, GroupStats, SponsorChannel, ChannelType
 
 
 @pytest.mark.asyncio
@@ -27,30 +27,29 @@ async def test_user_creation_and_properties(db_session):
 
 
 @pytest.mark.asyncio
-async def test_group_and_rating_relationship(db_session):
-    """Test Group model and 1-to-1 Rating relationship."""
+async def test_group_and_stats_relationship(db_session):
+    """Test Group model and 1-to-1 GroupStats relationship (no Elo)."""
     unique_gid = -int(uuid.uuid4().int % 1000000000)
     group = Group(
         id=unique_gid,
         title="تیم ابرقدرت سیب",
     )
-    rating = Rating(
+    stats = GroupStats(
         group_id=group.id,
-        rating=1550.0,
         matches_played=10,
         wins=7,
         losses=2,
         draws=1,
     )
-    group.rating = rating
+    group.stats = stats
     db_session.add(group)
     await db_session.commit()
 
     saved_group = await db_session.scalar(select(Group).where(Group.id == unique_gid))
     assert saved_group is not None
-    assert saved_group.rating is not None
-    assert saved_group.rating.rating == 1550.0
-    assert saved_group.rating.wins == 7
+    assert saved_group.stats is not None
+    assert saved_group.stats.wins == 7
+    assert not hasattr(saved_group, "rating")
 
 
 @pytest.mark.asyncio

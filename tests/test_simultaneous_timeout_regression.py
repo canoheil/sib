@@ -6,7 +6,7 @@ import json
 import pytest
 from sqlalchemy import select
 
-from sib.database.models import Match, MatchState, Rating
+from sib.database.models import Match, MatchState, GroupStats
 from sib.services.timeout import TimeoutService
 from sib.services.recovery import RecoveryService
 from sib.services.party import PartyService
@@ -91,14 +91,14 @@ async def test_high_card_timeout_awards_locked_player_and_rating(db_session):
 
     await db_session.refresh(match)
     assert match.state == MatchState.FINISHED
-    assert match.rating_applied is True
+    assert match.result_applied is True
     assert match.winner_group_id == match.group1_id
 
     r1 = await db_session.scalar(
-        select(Rating).where(Rating.group_id == match.group1_id)
+        select(GroupStats).where(GroupStats.group_id == match.group1_id)
     )
     r2 = await db_session.scalar(
-        select(Rating).where(Rating.group_id == match.group2_id)
+        select(GroupStats).where(GroupStats.group_id == match.group2_id)
     )
     assert r1.matches_played == 1
     assert r2.matches_played == 1
@@ -152,7 +152,7 @@ async def test_rps_timeout_with_no_locked_players_is_draw(db_session):
 
     await db_session.refresh(match)
     assert match.state == MatchState.FINISHED
-    assert match.rating_applied is True
+    assert match.result_applied is True
     assert match.is_draw is True
     assert match.winner_group_id is None
 
@@ -203,14 +203,14 @@ async def test_recovery_finishes_expired_simultaneous_match_with_rating(db_sessi
 
     await db_session.refresh(match)
     assert match.state == MatchState.FINISHED
-    assert match.rating_applied is True
+    assert match.result_applied is True
     assert match.is_draw is True
 
     r1 = await db_session.scalar(
-        select(Rating).where(Rating.group_id == match.group1_id)
+        select(GroupStats).where(GroupStats.group_id == match.group1_id)
     )
     r2 = await db_session.scalar(
-        select(Rating).where(Rating.group_id == match.group2_id)
+        select(GroupStats).where(GroupStats.group_id == match.group2_id)
     )
     assert r1.matches_played == 1
     assert r2.matches_played == 1

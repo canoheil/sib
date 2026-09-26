@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from sib.core.config import settings
+from sib.core.text import safe_name
 from sib.database.models import MatchPlayer
 from sib.games.base import BaseGameEngine, GameResult
 
@@ -95,7 +96,7 @@ class BattleshipEngine(BaseGameEngine):
                 "team": p.team,
                 "team_code": "A" if is_team_a else "B",
                 "group_id": p.group_id,
-                "name": p.user.display_name if p.user else f"بازیکن {p.user_id}",
+                "name": safe_name(p.user.display_name if p.user else None, f"بازیکن {p.user_id}"),
             }
 
         fleet_a = self.generate_fleet(fleet_seed_a)
@@ -245,7 +246,7 @@ class BattleshipEngine(BaseGameEngine):
                 elif state == "miss":
                     row_symbols.append("🌊")
                 else:
-                    row_symbols.append("◽")
+                    row_symbols.append("🟦")
             grid_rows.append("".join(row_symbols))
         radar_art = "\n".join(grid_rows)
 
@@ -310,7 +311,7 @@ class BattleshipEngine(BaseGameEngine):
                     label = "🌊"
                     cb = "noop"
                 else:
-                    label = "◽"
+                    label = "🟦"
                     cb = f"bs_action:{match_id}:{r}:{c}" if is_my_turn else "noop"
                 row.append(InlineKeyboardButton(text=label, callback_data=cb))
             buttons.append(row)

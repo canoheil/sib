@@ -1,4 +1,8 @@
-"""Matchmaking engine with rating expansion, cross-group enforcement, and concurrency safety."""
+"""Matchmaking engine with compatibility rules, cross-group enforcement, and concurrency safety.
+
+Elo/MMR has been removed: matching uses ONLY game, mode, team/party size,
+queue state and queue time. Incompatible parties are never mixed.
+"""
 
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Tuple
@@ -19,7 +23,6 @@ from sib.database.models import (
     PartyStatus,
     Group,
     Game,
-    Rating,
     Match,
     MatchPlayer,
     MatchState,
@@ -28,31 +31,17 @@ from sib.database.models import (
 
 
 class MatchmakingService:
-    """Manages matchmaking queues, rating expansion, and atomic match creation."""
+    """Manages matchmaking queues and atomic match creation.
 
-    INITIAL_RATING_WINDOW = 100.0
-    RATING_EXPANSION_RATE_PER_MINUTE = 60.0  # 1 Elo per second
+    Compatibility rules (never violated):
+    - same game
+    - same mode (solo / 2v2 / 4v4)
+    - same party size
+    - different Telegram groups
+    - active, non-expired queue entries
 
-    @classmethod
-    def calculate_rating_window(cls, entered_at: datetime, now: Optional[datetime] = None) -> float:
-        """
-        Deterministic, testable rating window calculation.
-        Expands linearly with wait time. After 5 minutes, expands generously.
-        """
-        current_time = now or datetime.now(timezone.utc)
-        if entered_at.tzinfo is None:
-            entered_at = entered_at.replace(tzinfo=timezone.utc)
-        if current_time.tzinfo is None:
-            current_time = current_time.replace(tzinfo=timezone.utc)
-
-        elapsed_seconds = max(0.0, (current_time - entered_at).total_seconds())
-
-        if elapsed_seconds >= 300.0:
-            # After 5 minutes, allow wide match to prevent endless waiting
-            return 5000.0
-
-        expansion = (elapsed_seconds / 60.0) * cls.RATING_EXPANSION_RATE_PER_MINUTE
-        return cls.INITIAL_RATING_WINDOW + expansion
+    Fairness rule: the longest-waiting compatible party is matched first.
+    """
 
     @classmethod
     async def enqueue_party(
@@ -86,12 +75,6 @@ class MatchmakingService:
         if not is_member:
             raise InvalidActionException("فقط اعضای تیم می‌توانند جستجوی حریف را آغاز کنند 🍏")
 
-        # 4. Fetch group rating
-        rating_stmt = select(Rating.rating).where(Rating.group_id == party.group_id)
-        group_rating = await session.scalar(rating_stmt)
-        if group_rating is None:
-            group_rating = settings.INITIAL_RATING
-
         now = datetime.now(timezone.utc)
         expires_at = now + timedelta(seconds=settings.MATCHMAKING_TIMEOUT_SECONDS)
 
@@ -103,7 +86,6 @@ class MatchmakingService:
             existing_queue.is_active = True
             existing_queue.entered_at = now
             existing_queue.expires_at = expires_at
-            existing_queue.group_rating = group_rating
             queue_entry = existing_queue
         else:
             queue_entry = MatchmakingQueue(
@@ -111,7 +93,6 @@ class MatchmakingService:
                 group_id=party.group_id,
                 game_id=party.game_id,
                 mode=party.mode,
-                group_rating=group_rating,
                 entered_at=now,
                 expires_at=expires_at,
                 is_active=True,
@@ -128,7 +109,6 @@ class MatchmakingService:
                 "group_id": party.group_id,
                 "game": party.game.code,
                 "mode": party.mode,
-                "group_rating": group_rating,
             },
         )
 
@@ -197,43 +177,36 @@ class MatchmakingService:
         if not my_queue:
             return None
 
-        # 2. Hard compatibility query:
+        # 2. Hard compatibility query (NO Elo/MMR involved):
         # - Same game
-        # - Same mode
+        # - Same mode (team size)
+        # - Same party size
         # - DIFFERENT Telegram group (Group A != Group B is NEVER allowed to match!)
         # - Active & not expired
+        my_party_size = await session.scalar(
+            select(Party.max_players).where(Party.id == my_queue.party_id)
+        )
+
         candidate_stmt = (
             select(MatchmakingQueue)
+            .join(Party, Party.id == MatchmakingQueue.party_id)
             .where(MatchmakingQueue.game_id == my_queue.game_id)
             .where(MatchmakingQueue.mode == my_queue.mode)
+            .where(Party.max_players == my_party_size)
             .where(MatchmakingQueue.group_id != my_queue.group_id)
             .where(MatchmakingQueue.is_active == True)
             .where(MatchmakingQueue.expires_at > now)
+            .order_by(MatchmakingQueue.entered_at.asc())
             .with_for_update()
         )
         candidates = list((await session.scalars(candidate_stmt)).all())
         if not candidates:
             return None
 
-        # 3. Soft preference: Rating window and wait time
-        my_window = cls.calculate_rating_window(my_queue.entered_at, now)
-        eligible_candidates: List[Tuple[float, datetime, MatchmakingQueue]] = []
-
-        for cand in candidates:
-            cand_window = cls.calculate_rating_window(cand.entered_at, now)
-            effective_window = max(my_window, cand_window)
-            rating_diff = abs(cand.group_rating - my_queue.group_rating)
-
-            if rating_diff <= effective_window:
-                # Store tuple for deterministic sorting: (rating_diff, entered_at, candidate)
-                eligible_candidates.append((rating_diff, cand.entered_at, cand))
-
-        if not eligible_candidates:
-            return None
-
-        # Sort: Primary by closest rating, secondary by longest wait time (earliest entered_at)
-        eligible_candidates.sort(key=lambda x: (x[0], x[1]))
-        chosen_cand = eligible_candidates[0][2]
+        # 3. Fair selection: the longest-waiting compatible party first
+        # (deterministic, queue-time based, no hidden skill rating).
+        candidates.sort(key=lambda c: c.entered_at)
+        chosen_cand = candidates[0]
 
         # 4. Atomic lock on both parties
         party1_stmt = (
@@ -342,8 +315,8 @@ class MatchmakingService:
             .execution_options(populate_existing=True)
             .options(
                 selectinload(Match.game),
-                selectinload(Match.group1).selectinload(Group.rating),
-                selectinload(Match.group2).selectinload(Group.rating),
+                selectinload(Match.group1).selectinload(Group.stats),
+                selectinload(Match.group2).selectinload(Group.stats),
                 selectinload(Match.players).selectinload(MatchPlayer.user),
             )
         )

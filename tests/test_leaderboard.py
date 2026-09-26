@@ -1,10 +1,10 @@
-"""Tests for Global Leaderboard, Group Stats, and Player Stats."""
+"""Tests for Global Leaderboard, Group Stats, and Player Stats (win-based)."""
 
 from unittest.mock import AsyncMock, MagicMock
 import pytest
 from aiogram.types import Message, CallbackQuery, User as TelegramUser, Chat as TelegramChat
 from sqlalchemy import select
-from sib.database.models import Group, Rating, PlayerStats
+from sib.database.models import Group, GroupStats, PlayerStats
 from sib.services.leaderboard import LeaderboardService
 from sib.handlers.leaderboard import (
     cmd_leaderboard,
@@ -15,62 +15,84 @@ from sib.handlers.leaderboard import (
 from sib.tests.test_parties import create_test_user, create_test_group
 
 
+async def _set_stats(db_session, group_id, wins=0, losses=0, draws=0, matches_played=0):
+    stats = await db_session.scalar(select(GroupStats).where(GroupStats.group_id == group_id))
+    stats.wins = wins
+    stats.losses = losses
+    stats.draws = draws
+    stats.matches_played = matches_played
+    await db_session.commit()
+    return stats
+
+
 @pytest.mark.asyncio
-async def test_global_leaderboard_sorting(db_session):
-    """Leaderboard must sort groups by Rating DESC, then wins DESC."""
+async def test_global_leaderboard_sorting_by_wins(db_session):
+    """Leaderboard must sort groups by wins DESC (losses never subtract wins)."""
     g1 = await create_test_group(db_session, "تیم طلایی")
     g2 = await create_test_group(db_session, "تیم نقره‌ای")
     g3 = await create_test_group(db_session, "تیم برنزی")
 
-    # Set distinct ratings
-    r1 = await db_session.scalar(select(Rating).where(Rating.group_id == g1.id))
-    r1.rating = 1750.0
-    r1.wins = 15
-
-    r2 = await db_session.scalar(select(Rating).where(Rating.group_id == g2.id))
-    r2.rating = 1620.0
-    r2.wins = 8
-
-    r3 = await db_session.scalar(select(Rating).where(Rating.group_id == g3.id))
-    r3.rating = 1490.0
-    r3.wins = 2
-
-    await db_session.commit()
+    await _set_stats(db_session, g1.id, wins=15, losses=2, draws=1, matches_played=18)
+    await _set_stats(db_session, g2.id, wins=8, losses=10, draws=0, matches_played=18)
+    await _set_stats(db_session, g3.id, wins=2, losses=1, draws=0, matches_played=3)
 
     top_groups = await LeaderboardService.get_top_groups(db_session, limit=10)
 
     assert len(top_groups) >= 3
-    # First place must be g1
-    assert top_groups[0][0] == 1  # Rank 1
+    assert top_groups[0][0] == 1
     assert top_groups[0][1].id == g1.id
-    assert top_groups[0][2].rating == 1750.0
+    assert top_groups[0][2].wins == 15
 
-    # Second place must be g2
-    assert top_groups[1][0] == 2  # Rank 2
+    assert top_groups[1][0] == 2
     assert top_groups[1][1].id == g2.id
 
-    # Third place must be g3
-    assert top_groups[2][0] == 3  # Rank 3
+    assert top_groups[2][0] == 3
     assert top_groups[2][1].id == g3.id
 
 
 @pytest.mark.asyncio
+async def test_leaderboard_loss_does_not_subtract_wins(db_session):
+    """A group with more losses but more wins stays above."""
+    g1 = await create_test_group(db_session, "تیم پربرد")
+    g2 = await create_test_group(db_session, "تیم کم‌برد")
+
+    await _set_stats(db_session, g1.id, wins=5, losses=20, draws=0, matches_played=25)
+    await _set_stats(db_session, g2.id, wins=4, losses=0, draws=0, matches_played=4)
+
+    top_groups = await LeaderboardService.get_top_groups(db_session, limit=10)
+    ids_in_order = [g.id for _, g, _ in top_groups]
+    assert ids_in_order.index(g1.id) < ids_in_order.index(g2.id)
+
+
+@pytest.mark.asyncio
+async def test_leaderboard_tie_breakers_are_deterministic(db_session):
+    """Equal wins -> win rate, then matches played, then group id."""
+    g1 = await create_test_group(db_session, "گروه الف")
+    g2 = await create_test_group(db_session, "گروه ب")
+    g3 = await create_test_group(db_session, "گروه ج")
+
+    # Same wins; g1 has better win rate (fewer matches).
+    await _set_stats(db_session, g1.id, wins=5, losses=0, draws=0, matches_played=5)
+    await _set_stats(db_session, g2.id, wins=5, losses=5, draws=0, matches_played=10)
+    # Same wins AND same rate AND same matches -> stable id ordering.
+    await _set_stats(db_session, g3.id, wins=5, losses=0, draws=0, matches_played=5)
+
+    top_groups = await LeaderboardService.get_top_groups(db_session, limit=10)
+    ids_in_order = [g.id for _, g, _ in top_groups]
+    i1, i2, i3 = (ids_in_order.index(g1.id), ids_in_order.index(g2.id), ids_in_order.index(g3.id))
+    assert i2 > i1  # worse win rate ranks lower
+    # identical stats: lower group id first
+    assert (i1 < i3) if g1.id < g3.id else (i3 < i1)
+
+
+@pytest.mark.asyncio
 async def test_group_rank_and_stats_calculation(db_session):
-    """Group rank calculation matches position in global rating hierarchy."""
+    """Group rank calculation matches position in win hierarchy."""
     g_high = await create_test_group(db_session, "تیم صدرنشین")
     g_mid = await create_test_group(db_session, "تیم میانه")
 
-    r_high = await db_session.scalar(select(Rating).where(Rating.group_id == g_high.id))
-    r_high.rating = 1800.0
-
-    r_mid = await db_session.scalar(select(Rating).where(Rating.group_id == g_mid.id))
-    r_mid.rating = 1600.0
-    r_mid.matches_played = 10
-    r_mid.wins = 6
-    r_mid.losses = 3
-    r_mid.draws = 1
-
-    await db_session.commit()
+    await _set_stats(db_session, g_high.id, wins=20, matches_played=20)
+    await _set_stats(db_session, g_mid.id, wins=6, losses=3, draws=1, matches_played=10)
 
     stats = await LeaderboardService.get_group_stats_and_rank(db_session, g_mid.id)
     assert stats is not None
@@ -78,6 +100,7 @@ async def test_group_rank_and_stats_calculation(db_session):
     assert stats["matches_played"] == 10
     assert stats["wins"] == 6
     assert stats["win_rate"] == 60.0
+    assert "rating" not in stats
 
 
 @pytest.mark.asyncio
@@ -116,6 +139,7 @@ async def test_cmd_leaderboard_handler(db_session):
     mock_msg.reply.assert_called_once()
     args, kwargs = mock_msg.reply.call_args
     assert "برترین گروه‌های سیب" in args[0]
+    assert "ریتینگ" not in args[0]
     assert kwargs.get("reply_markup") is not None
 
 
@@ -135,3 +159,4 @@ async def test_cmd_stats_in_private_chat(db_session):
     args, kwargs = mock_msg.reply.call_args
     assert "کارنامه بازیکن" in args[0]
     assert user.first_name in args[0]
+    assert "ریتینگ" not in args[0]

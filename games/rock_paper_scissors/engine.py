@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from sib.core.config import settings
+from sib.core.text import safe_name
 from sib.database.models import MatchPlayer
 from sib.games.base import BaseGameEngine, GameResult
 
@@ -45,7 +46,7 @@ class RockPaperScissorsEngine(BaseGameEngine):
             player_map[str(p.user_id)] = {
                 "team": p.team,
                 "group_id": p.group_id,
-                "name": p.user.display_name if p.user else "بازیکن",
+                "name": safe_name(p.user.display_name if p.user else None, "بازیکن"),
                 "choice": None,
                 "locked": False,
                 "score": 0,

@@ -51,9 +51,9 @@ def render_match_found_for_group(match: Match, for_group_id: int) -> str:
             "⏳ برای شروع مسابقه، روی دکمه «پذیرش مسابقه» بزنید (مهلت: ۱۲۰ ثانیه)."
         )
     else:
-        # Team Mode: group name, members display names, group ratings
-        my_rating_val = my_group.rating.rating if my_group and my_group.rating else 1500.0
-        opp_rating_val = opp_group.rating.rating if opp_group and opp_group.rating else 1500.0
+        # Team Mode: group name, members display names, group win record
+        my_wins = my_group.stats.wins if my_group and my_group.stats else 0
+        opp_wins = opp_group.stats.wins if opp_group and opp_group.stats else 0
         opp_title = opp_group.title if opp_group else "تیم حریف"
 
         my_roster = "\n".join([f"  • {p.user.display_name}" for p in my_players if p.user])
@@ -63,9 +63,9 @@ def render_match_found_for_group(match: Match, for_group_id: int) -> str:
             "⚔️ **حریف تیمی پیدا شد!** 🍏\n\n"
             f"🎮 **بازی:** {match.game.name_fa}\n"
             f"⚔️ **حالت:** {mode_title}\n\n"
-            f"🛡️ **تیم شما:** {my_group.title} (ریتینگ: `{my_rating_val:g}`)\n"
+            f"🛡️ **تیم شما:** {my_group.title} (برد‌ها: `{my_wins}`)\n"
             f"{my_roster}\n\n"
-            f"⚔️ **تیم حریف:** {opp_title} (ریتینگ: `{opp_rating_val:g}`)\n"
+            f"⚔️ **تیم حریف:** {opp_title} (برد‌ها: `{opp_wins}`)\n"
             f"{opp_roster}\n\n"
             "⏳ یک تایید از هر تیم برای شروع کافی است (مهلت: ۱۲۰ ثانیه)."
         )

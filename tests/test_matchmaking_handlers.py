@@ -76,7 +76,7 @@ async def test_team_transparency_rendering(db_session):
     assert "ببر ۲" in rendered_g1
     assert "شیر ۱" in rendered_g1
     assert "شیر ۲" in rendered_g1
-    assert "ریتینگ" in rendered_g1
+    assert "برد" in rendered_g1
 
 
 @pytest.mark.asyncio

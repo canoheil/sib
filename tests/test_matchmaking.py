@@ -1,4 +1,4 @@
-"""Tests for Matchmaking Queue, Rating Expansion, Cross-Group Enforcement, and State Machine."""
+"""Tests for Matchmaking Queue, Cross-Group Enforcement, and State Machine."""
 
 from datetime import datetime, timezone, timedelta
 import pytest
@@ -10,7 +10,7 @@ from sib.database.models import (
     PartyStatus,
     Match,
     MatchState,
-    Rating,
+    GroupStats,
     MatchmakingQueue,
 )
 from sib.matchmaking.matcher import MatchmakingService
@@ -21,28 +21,11 @@ from sib.tests.test_parties import create_test_user, create_test_group
 
 
 @pytest.mark.asyncio
-async def test_rating_expansion_algorithm():
-    """Verify deterministic expansion of rating window over time."""
-    now = datetime(2026, 9, 18, 12, 0, 0, tzinfo=timezone.utc)
-    
-    # At start (0 seconds wait)
-    w0 = MatchmakingService.calculate_rating_window(now, now)
-    assert w0 == 100.0  # Initial window
-
-    # After 1 minute (60 seconds)
-    t1 = now + timedelta(seconds=60)
-    w1 = MatchmakingService.calculate_rating_window(now, t1)
-    assert w1 == 160.0  # 100 + 60
-
-    # After 2.5 minutes (150 seconds)
-    t2 = now + timedelta(seconds=150)
-    w2 = MatchmakingService.calculate_rating_window(now, t2)
-    assert w2 == 250.0  # 100 + 150
-
-    # After 5+ minutes (>= 300 seconds)
-    t3 = now + timedelta(seconds=300)
-    w3 = MatchmakingService.calculate_rating_window(now, t3)
-    assert w3 == 5000.0  # Unrestricted window to avoid stuck parties
+async def test_no_elo_or_rating_window_code_remains():
+    """Elo/MMR must not exist in the active matchmaking path."""
+    assert not hasattr(MatchmakingService, "calculate_rating_window")
+    assert not hasattr(MatchmakingService, "INITIAL_RATING_WINDOW")
+    assert not hasattr(MatchmakingService, "RATING_EXPANSION_RATE_PER_MINUTE")
 
 
 @pytest.mark.asyncio
@@ -246,7 +229,7 @@ async def test_acceptance_timeout_does_not_cancel_before_deadline(db_session):
 
 @pytest.mark.asyncio
 async def test_match_rejection_before_gameplay(db_session):
-    """If either side rejects before gameplay, match is cancelled with no rating change."""
+    """If either side rejects before gameplay, match is cancelled with no result applied."""
     g1 = await create_test_group(db_session, "تیم قرمز")
     g2 = await create_test_group(db_session, "تیم آبی")
     u1 = await create_test_user(db_session, "قرمز ۱")
@@ -644,8 +627,8 @@ async def test_active_orphan_queue_entry_is_not_silently_expired(db_session):
 
 
 @pytest.mark.asyncio
-async def test_turn_timeout_finishes_match_and_applies_rating(db_session):
-    """Expired turn deadline forfeits the current player and applies rating exactly once."""
+async def test_turn_timeout_finishes_match_and_applies_result(db_session):
+    """Expired turn deadline forfeits the current player and applies the result exactly once."""
     g1 = await create_test_group(db_session, "تیم turn timeout ۱")
     g2 = await create_test_group(db_session, "تیم turn timeout ۲")
     u1 = await create_test_user(db_session, "بازیکن timeout ۱")
@@ -684,13 +667,13 @@ async def test_turn_timeout_finishes_match_and_applies_rating(db_session):
     m.turn_deadline = datetime.now(timezone.utc) - timedelta(seconds=1)
     await db_session.commit()
 
-    # Read ratings by the actual Match group slots, not the local g1/g2
+    # Read group stats by the actual Match group slots, not the local g1/g2
     # variables, because matchmaking may assign either group to either slot.
-    group1_rating = await db_session.scalar(
-        select(Rating).where(Rating.group_id == match.group1_id)
+    group1_stats = await db_session.scalar(
+        select(GroupStats).where(GroupStats.group_id == match.group1_id)
     )
-    group2_rating = await db_session.scalar(
-        select(Rating).where(Rating.group_id == match.group2_id)
+    group2_stats = await db_session.scalar(
+        select(GroupStats).where(GroupStats.group_id == match.group2_id)
     )
 
     processed = await TimeoutService.process_turn_timeouts(db_session)
@@ -698,11 +681,11 @@ async def test_turn_timeout_finishes_match_and_applies_rating(db_session):
     assert match.id in processed
 
     await db_session.refresh(match)
-    await db_session.refresh(group1_rating)
-    await db_session.refresh(group2_rating)
+    await db_session.refresh(group1_stats)
+    await db_session.refresh(group2_stats)
 
     assert match.state == MatchState.FINISHED
-    assert match.rating_applied is True
+    assert match.result_applied is True
 
     # The timed-out player is u1. Determine the actual team from MatchPlayer,
     # because matchmaking is free to assign group1/group2 ordering.
@@ -710,34 +693,29 @@ async def test_turn_timeout_finishes_match_and_applies_rating(db_session):
     assert timed_out_player.team in (1, 2)
 
     if timed_out_player.team == 1:
-        assert match.group1_rating_change < 0
-        assert match.group2_rating_change > 0
-
-        assert group1_rating.matches_played == 1
-        assert group1_rating.losses == 1
-        assert group2_rating.matches_played == 1
-        assert group2_rating.wins == 1
+        assert group1_stats.matches_played == 1
+        assert group1_stats.losses == 1
+        assert group1_stats.wins == 0
+        assert group2_stats.matches_played == 1
+        assert group2_stats.wins == 1
     else:
-        assert match.group1_rating_change > 0
-        assert match.group2_rating_change < 0
+        assert group1_stats.matches_played == 1
+        assert group1_stats.wins == 1
+        assert group2_stats.matches_played == 1
+        assert group2_stats.losses == 1
 
-        assert group1_rating.matches_played == 1
-        assert group1_rating.wins == 1
-        assert group2_rating.matches_played == 1
-        assert group2_rating.losses == 1
+    wins1_after = group1_stats.wins
+    wins2_after = group2_stats.wins
 
-    rating1_after = group1_rating.rating
-    rating2_after = group2_rating.rating
-
-    # Idempotency: a second timeout pass must not apply rating again.
+    # Idempotency: a second timeout pass must not apply the result again.
     processed_again = await TimeoutService.process_turn_timeouts(db_session)
 
     assert match.id not in processed_again
 
-    await db_session.refresh(group1_rating)
-    await db_session.refresh(group2_rating)
+    await db_session.refresh(group1_stats)
+    await db_session.refresh(group2_stats)
 
-    assert group1_rating.rating == rating1_after
-    assert group2_rating.rating == rating2_after
-    assert group1_rating.matches_played == 1
-    assert group2_rating.matches_played == 1
+    assert group1_stats.wins == wins1_after
+    assert group2_stats.wins == wins2_after
+    assert group1_stats.matches_played == 1
+    assert group2_stats.matches_played == 1

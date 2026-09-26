@@ -10,8 +10,6 @@ def test_settings_default_values():
         BOT_TOKEN="123:test_token",
         ADMIN_IDS=[111, 222],
     )
-    assert s.INITIAL_RATING == 1500.0
-    assert s.ELO_K_FACTOR == 32.0
     assert s.MATCHMAKING_TIMEOUT_SECONDS == 600
     assert s.ACCEPTANCE_TIMEOUT_SECONDS == 120
     assert s.HIGH_CARD_TIMEOUT == 60
