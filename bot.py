@@ -10,6 +10,7 @@ from sib.core.logging import logger, log_event, Events
 from sib.database.connection import init_db
 from sib.handlers import register_all_handlers
 from sib.middleware.rate_limit import RateLimitMiddleware
+from sib.middleware.panel_guard import PanelGuardMiddleware
 
 
 async def create_bot_and_dispatcher() -> tuple[Bot, Dispatcher]:
@@ -27,6 +28,7 @@ async def create_bot_and_dispatcher() -> tuple[Bot, Dispatcher]:
     # Global anti-spam protection. Dropped updates never reach handlers.
     dp.message.outer_middleware(RateLimitMiddleware())
     dp.callback_query.outer_middleware(RateLimitMiddleware())
+    dp.callback_query.outer_middleware(PanelGuardMiddleware())
 
     # Register handlers
     register_all_handlers(dp)

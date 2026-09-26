@@ -12,6 +12,7 @@ from sib.database.models.party import Party, PartyMember, PartyStatus
 from sib.database.models.matchmaking import MatchmakingQueue
 from sib.database.models.player_stats import PlayerStats
 from sib.database.models.ad_campaign import AdCampaign, FrequencyMode
+from sib.database.models.panel import PanelOwner
 
 __all__ = [
     "Base",
@@ -32,4 +33,5 @@ __all__ = [
     "PlayerStats",
     "AdCampaign",
     "FrequencyMode",
+    "PanelOwner",
 ]
