@@ -109,7 +109,7 @@ def test_c4_horizontal_win(solo_players):
     result = engine.get_result(state)
     assert not result.is_draw
     assert result.winner_team == "A"
-    assert "قرمز (A)" in result.summary
+    assert "(A)" in result.summary
 
 
 def test_c4_vertical_win(solo_players):
@@ -169,7 +169,8 @@ def test_c4_rendering_and_keyboard(solo_players):
 
     text = engine.render_for_group(state, -3001, 301)
     assert "چهار در یک خط" in text
-    assert "🔴" in text
+    assert "🍎" in text
+    assert "🍏" in text
     assert "نوبت شماست" in text
 
     kb = engine.get_keyboard(state, 1, 301)

@@ -144,7 +144,7 @@ class TicTacToeEngine(BaseGameEngine):
             return "اطلاعات بازی ناقص است."
 
         # Display symbols
-        icons = {None: "⬜", "X": "❌", "O": "⭕"}
+        icons = {None: "⬜", "X": "🍎", "O": "🍏"}
         grid_rows = []
         for r in range(3):
             row_str = " ".join(icons[board[r * 3 + c]] for c in range(3))
@@ -157,7 +157,7 @@ class TicTacToeEngine(BaseGameEngine):
                 "🎉 **برنده شدید!** 🍏🏆" if result.winner_team == my_p["team"] else "💔 **بازی را واگذار کردید!** 🍏"
             )
             return (
-                "⭕ **پایان بازی دوز (Tic-Tac-Toe)**\n\n"
+                "🍎🍏 **پایان بازی دوز (Tic-Tac-Toe)**\n\n"
                 f"{board_art}\n\n"
                 f"{outcome}\n"
                 f"📝 {result.summary}"
@@ -167,7 +167,7 @@ class TicTacToeEngine(BaseGameEngine):
         turn_text = "🟢 **نوبت شماست!** یک خانه خالی را لمس کنید." if current_pid == for_player_id else f"⏳ در انتظار حرکت {opp_p['name']}..."
 
         return (
-            "⭕ **بازی دوز (Tic-Tac-Toe)** 🍏\n\n"
+            "🍎🍏 **بازی دوز (Tic-Tac-Toe)** 🍏\n\n"
             f"👤 شما: {my_p['name']} ({icons[my_p['symbol']]})\n"
             f"👤 حریف: {opp_p['name']} ({icons[opp_p['symbol']]})\n\n"
             f"{board_art}\n\n"
@@ -185,7 +185,7 @@ class TicTacToeEngine(BaseGameEngine):
 
         board = game_state["board"]
         is_my_turn = (game_state.get("current_player_id") == for_player_id)
-        icons = {None: "⬜", "X": "❌", "O": "⭕"}
+        icons = {None: "⬜", "X": "🍎", "O": "🍏"}
 
         buttons = []
         for r in range(3):

@@ -46,7 +46,7 @@ class ConnectFourEngine(BaseGameEngine):
         player_map = {}
         for p in players:
             is_team_a = str(p.team) in ("1", "A") or (team_a and p.user_id == team_a[0].user_id)
-            symbol = "🔴" if is_team_a else "🟡"
+            symbol = "🍎" if is_team_a else "🍏"
             player_map[str(p.user_id)] = {
                 "team": p.team,
                 "team_code": "A" if is_team_a else "B",
@@ -172,7 +172,7 @@ class ConnectFourEngine(BaseGameEngine):
 
         winner_team = game_state.get("winner_team")
         is_a = str(winner_team) in ("1", "A")
-        team_name = f"تیم {'قرمز (A)' if is_a else 'زرد (B)'}"
+        team_name = f"تیم {'سیب قرمز 🍎 (A)' if is_a else 'سیب سبز 🍏 (B)'}"
         summary = f"{team_name} با ۴ مهره متوالی پیروز شد! 🍏🎉"
         return GameResult(
             winner_team=winner_team,
@@ -188,7 +188,7 @@ class ConnectFourEngine(BaseGameEngine):
         for_player_id: Optional[int] = None,
     ) -> str:
         board = game_state["board"]
-        cell_icons = {None: "⚪", "A": "🔴", "B": "🟡"}
+        cell_icons = {None: "⬜", "A": "🍎", "B": "🍏"}
 
         board_lines = []
         for r in range(self.ROWS):
@@ -201,8 +201,8 @@ class ConnectFourEngine(BaseGameEngine):
         team_b_names = [p["name"] for p in game_state["players"].values() if p.get("team_code") == "B"]
 
         team_info = (
-            f"🔴 **تیم قرمز (A):** {', '.join(team_a_names)}\n"
-            f"🟡 **تیم زرد (B):** {', '.join(team_b_names)}"
+            f"🍎 **تیم سیب (A):** {', '.join(team_a_names)}\n"
+            f"🍏 **تیم سیب سبز (B):** {', '.join(team_b_names)}"
         )
 
         if self.is_finished(game_state):
@@ -216,7 +216,7 @@ class ConnectFourEngine(BaseGameEngine):
                 outcome = "💔 **گروه حریف پیروز شد!** 🍏"
 
             return (
-                "🔴🟡 **پایان بازی چهار در یک خط (Connect Four)**\n\n"
+                "🍎🍏 **پایان بازی چهار در یک خط (Connect Four)**\n\n"
                 f"{board_art}\n\n"
                 f"{team_info}\n\n"
                 f"{outcome}\n"
@@ -233,7 +233,7 @@ class ConnectFourEngine(BaseGameEngine):
             turn_msg = f"⏳ **نوبت بازیکن:** {current_p.get('name', 'حریف')} ({current_p.get('symbol', '')})"
 
         return (
-            "🔴🟡 **چهار در یک خط (Connect Four)** 🍏\n\n"
+            "🍎🍏 **چهار در یک خط (Connect Four)** 🍏\n\n"
             f"{board_art}\n\n"
             f"{team_info}\n\n"
             f"{turn_msg}"

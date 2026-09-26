@@ -246,7 +246,7 @@ class BattleshipEngine(BaseGameEngine):
                 elif state == "miss":
                     row_symbols.append("🌊")
                 else:
-                    row_symbols.append("◽")
+                    row_symbols.append("🟦")
             grid_rows.append("".join(row_symbols))
         radar_art = "\n".join(grid_rows)
 
@@ -311,7 +311,7 @@ class BattleshipEngine(BaseGameEngine):
                     label = "🌊"
                     cb = "noop"
                 else:
-                    label = "◽"
+                    label = "🟦"
                     cb = f"bs_action:{match_id}:{r}:{c}" if is_my_turn else "noop"
                 row.append(InlineKeyboardButton(text=label, callback_data=cb))
             buttons.append(row)
