@@ -33,6 +33,9 @@ from sib.database.models import (
     ShopRotation,
     Trade,
     TradeStatus,
+    AppleBattle,
+    AppleBattleQueueEntry,
+    AppleBattleStatus,
     SponsorChannel,
     ChannelType,
 )
@@ -68,6 +71,9 @@ __all__ = [
     "ShopRotation",
     "Trade",
     "TradeStatus",
+    "AppleBattle",
+    "AppleBattleQueueEntry",
+    "AppleBattleStatus",
     "SponsorChannel",
     "ChannelType",
 ]

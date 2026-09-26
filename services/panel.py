@@ -36,6 +36,8 @@ OWNER_SCOPED_CALLBACKS: Tuple[str, ...] = (
     "card_up:",
     "trade_ok:",
     "trade_cancel:",
+    # Apple battle
+    "ab_join:",
 )
 
 REJECT_MESSAGE = (

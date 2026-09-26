@@ -20,6 +20,11 @@ from sib.database.models.system_config import SystemConfig
 from sib.database.models.player_card import PlayerCard
 from sib.database.models.shop import ShopEntry, ShopEntryType, ShopRotation
 from sib.database.models.trade import Trade, TradeStatus
+from sib.database.models.apple_battle import (
+    AppleBattle,
+    AppleBattleQueueEntry,
+    AppleBattleStatus,
+)
 from sib.database.models.character import (
     Character,
     CharacterBalanceVersion,
@@ -65,4 +70,7 @@ __all__ = [
     "ShopRotation",
     "Trade",
     "TradeStatus",
+    "AppleBattle",
+    "AppleBattleQueueEntry",
+    "AppleBattleStatus",
 ]

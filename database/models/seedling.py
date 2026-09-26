@@ -30,11 +30,18 @@ class SeedlingInventory(Base, TimestampMixin):
 
 
 class SeedlingAward(Base, TimestampMixin):
-    """Auditable seedling award ledger entry (idempotency guard)."""
+    """Auditable seedling award ledger entry (idempotency guard).
+
+    source='match'  -> group-game win (match_id set, unique per match+user).
+    source='battle' -> apple battle win (source_ref_id = battle id).
+    """
 
     __tablename__ = "seedling_awards"
     __table_args__ = (
         UniqueConstraint("match_id", "user_id", name="uq_seedling_award_match_user"),
+        UniqueConstraint(
+            "source", "source_ref_id", "user_id", name="uq_seedling_award_source_ref_user"
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
@@ -46,6 +53,8 @@ class SeedlingAward(Base, TimestampMixin):
     )
     amount: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     reason: Mapped[str] = mapped_column(String(50), default="match_win", nullable=False)
+    source: Mapped[str] = mapped_column(String(20), default="match", nullable=False)
+    source_ref_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
 
     def __repr__(self) -> str:
         return f"<SeedlingAward match={self.match_id} user={self.user_id} amount={self.amount}>"
