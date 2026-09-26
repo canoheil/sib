@@ -17,6 +17,7 @@ from sib.database.models.seedling import SeedlingInventory, SeedlingAward
 from sib.database.models.apple import AppleWallet, AppleTransaction
 from sib.database.models.garden import Garden, GardenPlot, PlotState
 from sib.database.models.system_config import SystemConfig
+from sib.database.models.player_card import PlayerCard
 from sib.database.models.character import (
     Character,
     CharacterBalanceVersion,
@@ -56,4 +57,5 @@ __all__ = [
     "CharacterBalanceVersion",
     "Rarity",
     "ReleaseStatus",
+    "PlayerCard",
 ]
