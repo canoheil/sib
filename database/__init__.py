@@ -23,6 +23,10 @@ from sib.database.models import (
     GardenPlot,
     PlotState,
     SystemConfig,
+    Character,
+    CharacterBalanceVersion,
+    Rarity,
+    ReleaseStatus,
     SponsorChannel,
     ChannelType,
 )
@@ -48,6 +52,10 @@ __all__ = [
     "GardenPlot",
     "PlotState",
     "SystemConfig",
+    "Character",
+    "CharacterBalanceVersion",
+    "Rarity",
+    "ReleaseStatus",
     "SponsorChannel",
     "ChannelType",
 ]

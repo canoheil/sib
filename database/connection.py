@@ -143,6 +143,59 @@ async def seed_default_data(
             ))
 
 
+async def seed_characters(session) -> int:
+    """Load the starter character roster from the data layer.
+
+    Characters are data, not code: the JSON file is the source of truth
+    for the initial roster and can be edited without code changes.
+    """
+    from pathlib import Path
+    import json as _json
+
+    from sib.database.models import Character, CharacterBalanceVersion, ReleaseStatus, Rarity
+    from sib.services.characters import CharacterService, CharacterValidationError
+
+    existing = await session.scalar(select(Character.id).limit(1))
+    if existing is not None:
+        return 0
+
+    seed_path = Path(__file__).resolve().parents[1] / "data" / "characters_seed.json"
+    if not seed_path.exists():
+        logger.warning(f"Character seed file not found: {seed_path}")
+        return 0
+
+    entries = _json.loads(seed_path.read_text(encoding="utf-8"))
+    created = 0
+    for entry in entries:
+        try:
+            character = await CharacterService.create(
+                session,
+                code=entry["code"],
+                name_fa=entry["name_fa"],
+                name_en=entry.get("name_en"),
+                lore_fa=entry.get("lore_fa", ""),
+                artwork=entry.get("artwork"),
+                power=entry["power"],
+                speed=entry["speed"],
+                intelligence=entry["intelligence"],
+                passive_key=entry.get("passive_key"),
+                passive_data=entry.get("passive_data"),
+                hidden_modifiers=entry.get("hidden_modifiers"),
+                strengths=entry.get("strengths"),
+                weaknesses=entry.get("weaknesses"),
+                price=entry.get("price", 100),
+                rarity=entry.get("rarity", Rarity.COMMON),
+                release_status=entry.get("release_status", ReleaseStatus.DRAFT),
+            )
+            character.shop_enabled = bool(entry.get("shop_enabled", True))
+            created += 1
+        except CharacterValidationError as exc:
+            logger.error(f"Skipping invalid seed character {entry.get('code')}: {exc}")
+
+    logger.info(f"Seeded {created} characters from data layer.")
+    return created
+
+
 async def init_db(engine: AsyncEngine | None = None) -> None:
     """Initialize database tables and seed essential default records."""
     eng = engine or get_async_engine()
@@ -155,6 +208,7 @@ async def init_db(engine: AsyncEngine | None = None) -> None:
     session_factory = get_async_sessionmaker(eng)
     async with session_factory() as session:
         await seed_default_data(session)
+        await seed_characters(session)
         await session.commit()
 
     logger.info("Default seed data initialized.")
