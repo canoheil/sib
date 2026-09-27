@@ -51,6 +51,7 @@ async def _shop_view(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
     if not entries:
         lines.append("این هفته کالایی در فروشگاه نیست.")
     buttons.append([InlineKeyboardButton(text="🔄 بروزرسانی", callback_data="shop_refresh")])
+    buttons.append([InlineKeyboardButton(text="↩️ بازگشت به منوی اصلی", callback_data="main_menu")])
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -114,6 +115,7 @@ def _allocation_keyboard(card_id: int) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="💪 +20 / ⚡ +20 / 🧠 +20", callback_data=f"card_up:{card_id}:b"),
             ],
             [InlineKeyboardButton(text="🔄 بروزرسانی", callback_data=f"card_panel:{card_id}")],
+            [InlineKeyboardButton(text="↩️ بازگشت به کارت‌های من", callback_data="apple_cards")],
         ]
     )
 

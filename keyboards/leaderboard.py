@@ -10,7 +10,9 @@ def get_leaderboard_keyboard(is_group: bool = True) -> InlineKeyboardMarkup:
     if is_group:
         row.append(InlineKeyboardButton(text="📊 آمار گروه ما", callback_data="group_win_stats"))
     buttons.append(row)
-    buttons.append([InlineKeyboardButton(text="🔙 بستن", callback_data="close_panel")])
+    buttons.append(
+        [InlineKeyboardButton(text="↩️ بازگشت به منوی اصلی", callback_data="main_menu")]
+    )
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -23,7 +25,7 @@ def get_group_stats_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="🔄 بروزرسانی", callback_data="group_win_stats"),
             ],
             [
-                InlineKeyboardButton(text="🔙 بستن", callback_data="close_panel"),
+                InlineKeyboardButton(text="↩️ بازگشت به منوی اصلی", callback_data="main_menu"),
             ]
         ]
     )

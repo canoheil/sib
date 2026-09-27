@@ -36,7 +36,12 @@ async def _queue_view(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
         return (
             "🍎 **نبرد سیبی** ⚔️\n\n"
             "برای شرکت در نبرد به کارت نیاز دارید! ابتدا از فروشگاه 🏪 یک شخصیت بخرید.",
-            _kb([[InlineKeyboardButton(text="🏪 فروشگاه", callback_data="shop_refresh")]]),
+            _kb(
+                [
+                    [InlineKeyboardButton(text="🏪 فروشگاه", callback_data="shop_refresh")],
+                    [InlineKeyboardButton(text="↩️ بازگشت به منوی اصلی", callback_data="main_menu")],
+                ]
+            ),
         )
 
     lines = [
@@ -61,6 +66,7 @@ async def _queue_view(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
         [InlineKeyboardButton(text="🏆 لیدربورد نبرد", callback_data="ab_board")]
     )
     buttons.append([InlineKeyboardButton(text="🔄 بروزرسانی", callback_data="ab_refresh")])
+    buttons.append([InlineKeyboardButton(text="↩️ بازگشت به منوی اصلی", callback_data="main_menu")])
     return "\n".join(lines), _kb(buttons)
 
 
@@ -127,7 +133,12 @@ async def handle_ab_board(callback: CallbackQuery, bot: Bot):
 
     text = "🏆 **لیدربورد نبرد سیبی**\n\n"
     text += "\n".join(names) if names else "هنوز نبردی ثبت نشده است."
-    kb = _kb([[InlineKeyboardButton(text="🔄 بروزرسانی", callback_data="ab_board")]])
+    kb = _kb(
+        [
+            [InlineKeyboardButton(text="🔄 بروزرسانی", callback_data="ab_board")],
+            [InlineKeyboardButton(text="↩️ بازگشت به منوی اصلی", callback_data="main_menu")],
+        ]
+    )
     await safe_answer_callback(callback)
     await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
@@ -178,10 +189,8 @@ async def cmd_profile(message: Message, bot: Bot):
         fav_text.strip() if fav_text else "⭐ کارت اصلی: انتخاب نشده",
         f"⚔️ نبردهای سیبی: `{battles or 0}` | برد: `{wins or 0}`",
     ]
-    kb = _kb(
-        [
-            [InlineKeyboardButton(text="🎴 کارت‌های من", callback_data="ab_refresh")],
-            [InlineKeyboardButton(text="🌳 باغ من", callback_data="garden_refresh")],
-        ]
+    from sib.keyboards.common import get_profile_keyboard
+
+    await message.reply(
+        "\n".join(lines), reply_markup=get_profile_keyboard(), parse_mode="Markdown"
     )
-    await message.reply("\n".join(lines), reply_markup=kb, parse_mode="Markdown")

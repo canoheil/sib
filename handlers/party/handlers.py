@@ -15,6 +15,7 @@ from sib.database.connection import get_session
 from sib.database.models import Game, Party, PartyMember, PartyStatus
 from sib.keyboards.party import (
     get_game_selection_keyboard,
+    get_games_menu_keyboard,
     get_game_mode_keyboard,
     get_party_action_keyboard,
     get_active_parties_keyboard,
@@ -29,6 +30,31 @@ from sib.services.telegram_ui import safe_answer_callback, safe_edit_callback_me
 router = Router(name="party")
 
 
+async def build_games_menu(session, group_id: int) -> tuple:
+    """(text, kb) for the games menu screen - the 'منوی بازی‌ها'."""
+    active_parties = await PartyService.get_active_parties_for_group(session, group_id)
+    games = list(
+        (await session.scalars(select(Game).where(Game.is_active == True))).all()
+    )
+    text = "🍏 **منوی بازی‌های سیب**\nبازی مورد نظرتون رو برای شروع انتخاب کنید:"
+    kb = get_games_menu_keyboard(games, active_count=len(active_parties))
+    return text, kb
+
+
+async def build_active_games_menu(session, group_id: int) -> tuple:
+    """(text, kb) for the active-games screen - 'بازی‌های فعال گروه'."""
+    active_parties = await PartyService.get_active_parties_for_group(session, group_id)
+    if active_parties:
+        text = "🍏 **بازی‌های فعال و در حال انتظار گروه:**\nبرای پیوستن یا مشاهده جزئیات انتخاب کنید:"
+    else:
+        text = (
+            "🍏 **در حال حاضر هیچ بازی فعالی در این گروه وجود ندارد!**\n"
+            "یک بازی جدید بساز تا تیم بسازیم:"
+        )
+    kb = get_active_parties_keyboard(active_parties)
+    return text, kb
+
+
 @router.message(Command("games"))
 async def cmd_group_games(message: Message):
     """Show group games menu."""
@@ -41,29 +67,21 @@ async def cmd_group_games(message: Message):
         if message.from_user:
             await UserService.get_or_create_user(session, message.from_user)
         await GroupService.get_or_create_group(session, message.chat)
-
-        active_parties = await PartyService.get_active_parties_for_group(session, message.chat.id)
-        if active_parties:
-            text = "🍏 **بازی‌های فعال و پارتی‌های باز گروه:**\nبرای پیوستن یا مشاهده جزئیات انتخاب کنید:"
-            kb = get_active_parties_keyboard(active_parties)
-        else:
-            games = list((await session.scalars(select(Game).where(Game.is_active == True))).all())
-            text = "🍏 **منوی بازی‌های سیب**\nبازی مورد نظرتون رو برای شروع انتخاب کنید:"
-            kb = get_game_selection_keyboard(games)
+        text, kb = await build_games_menu(session, message.chat.id)
 
         await message.reply(text, reply_markup=kb, parse_mode="Markdown")
 
 
 @router.callback_query(F.data == "group_games_panel")
 async def handle_games_panel(callback: CallbackQuery, bot: Bot):
-    """Handle opening or refreshing the active parties/games panel."""
+    """Screen: the games menu ('منوی بازی‌ها')."""
     chat = callback.message.chat if callback.message else None
     if not chat or chat.type not in ("group", "supergroup"):
         await callback.answer("این بخش مخصوص گروه‌هاست 🍏", show_alert=True)
         return
 
     async with get_session() as session:
-        # The games/parties list is a shared group panel: anyone may use it.
+        # The games menu is a shared group panel: anyone may use it.
         message = callback.message
         if message is not None:
             chat_obj = getattr(message, "chat", None)
@@ -71,14 +89,29 @@ async def handle_games_panel(callback: CallbackQuery, bot: Bot):
             if chat_obj is not None and msg_id:
                 await PanelOwnershipService.release(session, chat_obj.id, msg_id)
 
-        active_parties = await PartyService.get_active_parties_for_group(session, chat.id)
-        if active_parties:
-            text = "🍏 **بازی‌های فعال و در حال انتظار گروه:**"
-            kb = get_active_parties_keyboard(active_parties)
-        else:
-            games = list((await session.scalars(select(Game).where(Game.is_active == True))).all())
-            text = "🍏 **در حال حاضر هیچ پارتی فعالی در این گروه وجود ندارد!**\nیک بازی انتخاب کن تا تیم بسازیم:"
-            kb = get_game_selection_keyboard(games)
+        text, kb = await build_games_menu(session, chat.id)
+
+        await safe_answer_callback(callback)
+        await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
+
+
+@router.callback_query(F.data == "group_active_games")
+async def handle_active_games(callback: CallbackQuery, bot: Bot):
+    """Screen: active games of the group ('بازی‌های فعال گروه')."""
+    chat = callback.message.chat if callback.message else None
+    if not chat or chat.type not in ("group", "supergroup"):
+        await callback.answer("این بخش مخصوص گروه‌هاست 🍏", show_alert=True)
+        return
+
+    async with get_session() as session:
+        message = callback.message
+        if message is not None:
+            chat_obj = getattr(message, "chat", None)
+            msg_id = getattr(message, "message_id", None)
+            if chat_obj is not None and msg_id:
+                await PanelOwnershipService.release(session, chat_obj.id, msg_id)
+
+        text, kb = await build_active_games_menu(session, chat.id)
 
         await safe_answer_callback(callback)
         await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
@@ -92,14 +125,25 @@ async def handle_create_new_party_menu(callback: CallbackQuery, bot: Bot):
         text = "🎮 **یک بازی برای ایجاد مسابقه انتخاب کنید:**"
         await callback.answer()
         await safe_edit_callback_message(
-            callback, bot, text, reply_markup=get_game_selection_keyboard(games)
+            callback,
+            bot,
+            text,
+            reply_markup=get_game_selection_keyboard(
+                games, back_to="group_active_games", back_label="↩️ بازگشت به بازی‌های فعال"
+            ),
         )
 
 
 @router.callback_query(F.data.startswith("select_game:"))
 async def handle_select_game(callback: CallbackQuery, bot: Bot):
-    """Show modes (solo, 2v2, 4v4) for the selected game."""
-    game_code = callback.data.split(":")[1]
+    """Show modes (solo, 2v2, 4v4) for the selected game.
+
+    Callback format: ``select_game:{code}`` or ``select_game:{code}:{back}``
+    where ``{back}`` is the contextual parent screen (default: games menu).
+    """
+    parts = callback.data.split(":")
+    game_code = parts[1]
+    back_to = parts[2] if len(parts) > 2 and parts[2] else "group_games_panel"
 
     async with get_session() as session:
         game = await session.scalar(select(Game).where(Game.code == game_code))
@@ -113,7 +157,9 @@ async def handle_select_game(callback: CallbackQuery, bot: Bot):
             f"حالت بازی مورد نظرتان را انتخاب کنید:"
         )
         await callback.answer()
-        await safe_edit_callback_message(callback, bot, text, reply_markup=get_game_mode_keyboard(game))
+        await safe_edit_callback_message(
+            callback, bot, text, reply_markup=get_game_mode_keyboard(game, back_to=back_to)
+        )
 
 
 @router.callback_query(F.data.startswith("create_party:"))

@@ -88,6 +88,7 @@ async def _render_garden(user_id: int, session) -> tuple[str, InlineKeyboardMark
         [InlineKeyboardButton(text="➕ خرید ۵ قطعه جدید (با سیب)", callback_data="garden_expand")]
     )
     buttons.append([InlineKeyboardButton(text="🔄 بروزرسانی", callback_data="garden_refresh")])
+    buttons.append([InlineKeyboardButton(text="↩️ بازگشت به منوی اصلی", callback_data="main_menu")])
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=buttons)
 
 

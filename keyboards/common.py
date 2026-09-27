@@ -187,3 +187,62 @@ def nav_refresh_row(text: str, callback_data: str) -> list:
             )
         ]
     ]
+
+
+BACK_TO_MAIN_LABEL = "↩️ بازگشت به منوی اصلی"
+
+
+def get_cards_keyboard() -> InlineKeyboardMarkup:
+    """'کارت‌های من' panel keyboard (contextual Back to main menu)."""
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="📚 ویکی کاراکترها",
+                    callback_data="apple_wiki:cards",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🛒 فروشگاه",
+                    callback_data="apple_shop",
+                )
+            ],
+        ]
+    )
+    keyboard.inline_keyboard.extend(nav_back_row(BACK_TO_MAIN_LABEL, "main_menu"))
+    return keyboard
+
+
+def get_profile_keyboard() -> InlineKeyboardMarkup:
+    """'پروفایل من' panel keyboard (contextual Back to main menu)."""
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🎴 کارت‌های من",
+                    callback_data="apple_cards",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🌳 باغ من",
+                    callback_data="apple_garden",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🛒 فروشگاه",
+                    callback_data="apple_shop",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⚔️ نبرد سیبی",
+                    callback_data="apple_battle",
+                )
+            ],
+        ]
+    )
+    keyboard.inline_keyboard.extend(nav_back_row(BACK_TO_MAIN_LABEL, "main_menu"))
+    return keyboard

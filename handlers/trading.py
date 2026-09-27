@@ -58,6 +58,7 @@ async def _pending_view(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
                 ]
             )
         buttons.append([InlineKeyboardButton(text="🔄 بروزرسانی", callback_data="trade_refresh")])
+    buttons.append([InlineKeyboardButton(text="↩️ بازگشت به منوی اصلی", callback_data="main_menu")])
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=buttons)
 
 

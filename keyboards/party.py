@@ -1,4 +1,13 @@
-"""Inline keyboards for Games and Parties."""
+"""Inline keyboards for Games and Parties.
+
+Navigation is a context-aware chain (task spec #1/#2):
+
+    main menu -> games menu -> active games -> one game
+
+and every screen has a working Back button to its parent. Back never
+cancels an active match or party - cancellations have their own explicit
+buttons.
+"""
 
 from typing import List
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -11,21 +20,25 @@ from sib.keyboards.common import (
     nav_refresh_row,
 )
 
+BACK_TO_MAIN = "↩️ بازگشت به منوی اصلی"
+BACK_TO_GAMES = "↩️ بازگشت به منوی بازی‌ها"
+BACK_TO_ACTIVE = "↩️ بازگشت به بازی‌های فعال"
 
-def get_game_selection_keyboard(games: List[Game]) -> InlineKeyboardMarkup:
-    """Keyboard for selecting a game in group."""
-    game_icons = {
-        "high_card": "🃏",
-        "rock_paper_scissors": "✂️",
-        "tic_tac_toe": "⭕",
-        "connect_four": "🔴",
-        "battleship": "🚢",
-    }
-    
+GAME_ICONS = {
+    "high_card": "🃏",
+    "rock_paper_scissors": "✂️",
+    "tic_tac_toe": "⭕",
+    "connect_four": "🔴",
+    "battleship": "🚢",
+}
+
+
+def _game_grid(games: List[Game]) -> list:
+    """Game selection grid (2 buttons per row, no navigation rows)."""
     keyboard = []
     row = []
     for game in games:
-        icon = game_icons.get(game.code, "🎮")
+        icon = GAME_ICONS.get(game.code, "🎮")
         button = primary_button(
             text=f"{icon} {game.name_fa}",
             callback_data=f"select_game:{game.code}",
@@ -36,15 +49,41 @@ def get_game_selection_keyboard(games: List[Game]) -> InlineKeyboardMarkup:
             row = []
     if row:
         keyboard.append(row)
+    return keyboard
 
-    keyboard.extend(nav_back_row("🔙 بازگشت به منوی بازی‌ها", "group_games_panel"))
+
+def get_game_selection_keyboard(
+    games: List[Game],
+    back_to: str = "group_games_panel",
+    back_label: str = BACK_TO_GAMES,
+) -> InlineKeyboardMarkup:
+    """Game grid + a contextual Back row (used by 'create party' screens)."""
+    keyboard = _game_grid(games)
+    keyboard.extend(nav_back_row(back_label, back_to))
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
-def get_game_mode_keyboard(game: Game) -> InlineKeyboardMarkup:
-    """Keyboard for selecting game mode (solo, 2v2, 4v4)."""
+def get_games_menu_keyboard(
+    games: List[Game], active_count: int = 0
+) -> InlineKeyboardMarkup:
+    """Screen: the games menu (parent of the active-games screen)."""
+    keyboard = _game_grid(games)
+    label = "🎮 بازی‌های فعال گروه"
+    if active_count:
+        label += f" ({active_count})"
+    keyboard.append(
+        [InlineKeyboardButton(text=label, callback_data="group_active_games")]
+    )
+    keyboard.extend(nav_back_row(BACK_TO_MAIN, "main_menu"))
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def get_game_mode_keyboard(
+    game: Game, back_to: str = "group_games_panel"
+) -> InlineKeyboardMarkup:
+    """Screen: game mode selection (solo, 2v2, 4v4)."""
     buttons = []
-    
+
     if game.supports_solo:
         buttons.append([
             primary_button(
@@ -67,12 +106,14 @@ def get_game_mode_keyboard(game: Game) -> InlineKeyboardMarkup:
             )
         ])
 
-    buttons.extend(nav_back_row("🔙 بازگشت به منوی بازی‌ها", "group_games_panel"))
+    buttons.extend(nav_back_row(BACK_TO_GAMES, back_to))
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def get_party_action_keyboard(party: Party, is_member: bool = False) -> InlineKeyboardMarkup:
-    """Keyboard for party interaction (Join, Leave, Find Match, Cancel)."""
+def get_party_action_keyboard(
+    party: Party, is_member: bool = False
+) -> InlineKeyboardMarkup:
+    """Screen: one party/game (child of the active-games screen)."""
     buttons = []
 
     if party.is_full:
@@ -123,13 +164,14 @@ def get_party_action_keyboard(party: Party, is_member: bool = False) -> InlineKe
         buttons.append(row)
 
     buttons.extend(nav_refresh_row("🔄 بروزرسانی", f"view_party:{party.id}"))
+    buttons.extend(nav_back_row(BACK_TO_ACTIVE, "group_active_games"))
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def get_active_parties_keyboard(parties: List[Party]) -> InlineKeyboardMarkup:
-    """Keyboard displaying list of active parties in group."""
+    """Screen: active games of the group (child of the games menu)."""
     buttons = []
-    
+
     for party in parties:
         mode_text = "انفرادی" if party.mode == "solo" else f"تیمی {party.mode}"
         status_icon = "✅" if party.is_full else "⏳"
@@ -146,6 +188,10 @@ def get_active_parties_keyboard(parties: List[Party]) -> InlineKeyboardMarkup:
             text="➕ ساخت بازی جدید",
             callback_data="create_new_party_menu",
         ),
+        InlineKeyboardButton(
+            text="🔄 بروزرسانی",
+            callback_data="group_active_games",
+        ),
     ])
-    buttons.extend(nav_refresh_row("🔄 بروزرسانی", "group_games_panel"))
+    buttons.extend(nav_back_row(BACK_TO_GAMES, "group_games_panel"))
     return InlineKeyboardMarkup(inline_keyboard=buttons)

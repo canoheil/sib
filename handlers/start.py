@@ -11,7 +11,11 @@ from sib.keyboards.common import (
     get_membership_keyboard,
     get_private_welcome_keyboard,
     get_group_welcome_keyboard,
+    get_cards_keyboard,
+    get_profile_keyboard,
+    nav_back_row,
 )
+from sib.services.telegram_ui import safe_answer_callback, safe_edit_callback_message
 from sib.services.membership.checker import MembershipService
 from sib.services.user import UserService
 from sib.services.group import GroupService
@@ -112,7 +116,7 @@ async def handle_check_membership(callback: CallbackQuery, bot: Bot):
 
 
 @router.callback_query(F.data == "help_menu")
-async def handle_help_menu(callback: CallbackQuery):
+async def handle_help_menu(callback: CallbackQuery, bot: Bot):
     """Show help menu in private chat."""
     help_text = (
         "🍏 **راهنمای بازی‌های سیب**\n\n"
@@ -124,9 +128,9 @@ async def handle_help_menu(callback: CallbackQuery):
         "۶. بازی مستقیماً داخل گروه خودتون انجام می‌شه و نیازی به رفتن به گروه دیگه نیست.\n\n"
         "🏆 با برد مسابقه، تعداد بردهای گروه‌تون در جدول برترین گروه‌ها بالا می‌ره!"
     )
-    await callback.answer()
-    if callback.message:
-        await callback.message.answer(help_text, parse_mode="Markdown")
+    kb = InlineKeyboardMarkup(inline_keyboard=nav_back_row("↩️ بازگشت به منوی اصلی", "main_menu"))
+    await safe_answer_callback(callback)
+    await safe_edit_callback_message(callback, bot, help_text, reply_markup=kb)
 
 
 # ---------------------------------------------------------------------------
@@ -171,22 +175,7 @@ async def handle_apple_cards(callback: CallbackQuery, bot: Bot):
     async with get_session() as session:
         text = await CollectionService.render_collection(session, user.id)
 
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="📚 ویکی کاراکترها",
-                    callback_data="apple_wiki",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🛒 فروشگاه",
-                    callback_data="apple_shop",
-                )
-            ],
-        ]
-    )
+    kb = get_cards_keyboard()
 
     await callback.answer()
     if callback.message:
@@ -290,34 +279,7 @@ async def handle_apple_profile(callback: CallbackQuery, bot: Bot):
         f"⚔️ نبردهای سیبی: `{battles or 0}` | برد: `{wins or 0}`",
     ]
 
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="🎴 کارت‌های من",
-                    callback_data="apple_cards",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🌳 باغ من",
-                    callback_data="apple_garden",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🛒 فروشگاه",
-                    callback_data="apple_shop",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="⚔️ نبرد سیبی",
-                    callback_data="apple_battle",
-                )
-            ],
-        ]
-    )
+    kb = get_profile_keyboard()
 
     await callback.answer()
     if callback.message:
@@ -328,11 +290,62 @@ async def handle_apple_profile(callback: CallbackQuery, bot: Bot):
         )
 
 
-@router.message(F.text.regexp(r"^\s*سیب\s*$"))
-async def handle_sib_wake_word(message: Message, bot: Bot):
-    """Handle the exact 'سیب' wake word in group chats."""
+@router.callback_query(F.data == "main_menu")
+async def handle_main_menu(callback: CallbackQuery, bot: Bot):
+    """Context-aware main menu: group chats get the group menu, private
+    chats get the private menu - one button works everywhere."""
+    chat = callback.message.chat if callback.message else None
+    is_group = bool(chat and chat.type in ("group", "supergroup"))
+    if is_group:
+        text = "🍏 **منوی اصلی سیب**\nاز منوی زیر بخش مورد نظرت رو انتخاب کن 👇"
+        kb = get_group_welcome_keyboard()
+    else:
+        name = callback.from_user.first_name if callback.from_user else "دوست"
+        text = (
+            f"🍏 **منوی اصلی سیب**\n\n"
+            f"سلام {name}! از منوی زیر بخش مورد نظرت رو انتخاب کن 👇"
+        )
+        kb = get_private_welcome_keyboard(settings.BOT_USERNAME)
+
+    await safe_answer_callback(callback)
+    await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
+
+
+@router.message(F.text.regexp(r"^\s*سیب\s+بازی\s*$"))
+async def handle_sib_games_word(message: Message, bot: Bot):
+    """'سیب بازی' in groups opens the games menu (task #3)."""
     if message.chat.type not in ("group", "supergroup"):
         return
 
-    # Reuse the existing /start handler so behavior stays identical.
-    await handle_start(message, bot)
+    from sib.handlers.party.handlers import build_games_menu
+
+    async with get_session() as session:
+        if message.from_user:
+            await UserService.get_or_create_user(session, message.from_user)
+        await GroupService.get_or_create_group(session, message.chat)
+        text, kb = await build_games_menu(session, message.chat.id)
+
+    await message.reply(text, reply_markup=kb, parse_mode="Markdown")
+
+
+@router.message(F.text.regexp(r"^\s*سیب\s*$"))
+async def handle_sib_wake_word(message: Message, bot: Bot):
+    """'سیب' in groups is a REAL action: claim apples (task #4).
+
+    Per-user cooldown; the award is persisted to the wallet. This no
+    longer opens any menu - use 'سیب بازی' for the games menu.
+    """
+    if message.chat.type not in ("group", "supergroup"):
+        return
+
+    user = message.from_user
+    if not user:
+        return
+
+    from sib.services.sib_claim import SibClaimService
+
+    async with get_session() as session:
+        await UserService.get_or_create_user(session, user)
+        text, _awarded = await SibClaimService.claim(session, user.id)
+
+    await message.reply(text)

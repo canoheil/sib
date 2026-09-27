@@ -38,6 +38,9 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     # Trading
     "trades_per_day": 1,
     "trade_expiration_hours": 24,
+    # "سیب" group wake-word claim (spec: 5 apples every 5 minutes)
+    "sib_claim_amount": 5,
+    "sib_claim_cooldown_seconds": 5 * 60,
 }
 
 
