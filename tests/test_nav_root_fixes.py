@@ -223,10 +223,11 @@ async def test_wake_words_open_the_right_surfaces(db_session):
         await handle_sib_games_word(msg, MagicMock())
         gm.assert_awaited_once()
 
-    with patch("sib.handlers.start._reply_games_menu", new=AsyncMock()) as gm:
+    # 'سیب منو' -> MAIN menu (decision: group main menu; private unchanged).
+    with patch("sib.handlers.start._reply_main_menu", new=AsyncMock()) as mm:
         msg = _message("سیب منو")
         await handle_sib_games_word(msg, MagicMock())
-        gm.assert_awaited_once()
+        mm.assert_awaited_once()
 
     # 'سیب پروفایل' -> the SENDER's profile (subject = message sender).
     msg = _message("سیب پروفایل", user_id=4242)

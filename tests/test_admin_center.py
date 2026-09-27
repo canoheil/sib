@@ -342,3 +342,153 @@ async def test_channel_add_rejects_unresolvable_channel(db_session):
     msg = _msg("@nope_channel")
     await handle_admin_channel_add_input(msg, state, bot)
     assert "پیدا نشد" in msg.reply.await_args.args[0]
+
+
+# ---------------------------------------------------------------------------
+# FSM lifecycle (decision: success/not-found/cancel/back/home CLEAR the state;
+# invalid input retries in-step; NOTHING may leak every message into an id)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_admin_success_clears_fsm_state(db_session):
+    target = await create_test_user(db_session, "موفق")
+    await db_session.commit()
+    target_id = target.id
+
+    state = _state()
+    await _open_user_flow(state, target_id)
+    await handle_admin_user_op(_cb(f"admin_user_op:{target_id}:apples:add"), state)
+    await handle_admin_amount_input(_msg("50"), state, MagicMock())
+
+    assert await state.get_state() is None
+    await db_session.rollback()  # end snapshot; handler committed in its own session
+    assert await AppleWalletService.get_balance(db_session, target_id) == 50
+
+
+@pytest.mark.asyncio
+async def test_admin_unknown_user_clears_fsm_state(db_session):
+    state = _state()
+    await handle_admin_users(_cb("admin_users"), state)
+    await handle_admin_user_input(_msg("999999"), state)
+    assert await state.get_state() is None
+
+
+@pytest.mark.asyncio
+async def test_admin_invalid_amount_retries_in_step(db_session):
+    target = await create_test_user(db_session, "تلاش‌گر")
+    await db_session.commit()
+    target_id = target.id
+
+    state = _state()
+    await _open_user_flow(state, target_id)
+    await handle_admin_user_op(_cb(f"admin_user_op:{target_id}:apples:add"), state)
+    msg = _msg("not-a-number")
+    await handle_admin_amount_input(msg, state, MagicMock())
+    assert "نامعتبر" in msg.reply.await_args.args[0]
+    assert await state.get_state() is not None  # retry in-step
+
+
+@pytest.mark.asyncio
+async def test_admin_amount_without_pending_op_never_becomes_user_id(db_session):
+    """Regression: the expired-flow branch used to fall back to waiting_user,
+    turning EVERY later message into a user-id lookup (the observed leak)."""
+    target = await create_test_user(db_session, "نشتی")
+    await db_session.commit()
+    target_id = target.id
+
+    state = _state()
+    await _open_user_flow(state, target_id)  # panel state: waiting_amount, no op
+    msg = _msg("123")
+    await handle_admin_amount_input(msg, state, MagicMock())
+    # Must NOT re-enter the user-id step.
+    assert await state.get_state() is None
+    assert "عملیات فعالی نیست" in msg.reply.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_admin_reply_to_bot_never_resolves_the_bot_id(db_session):
+    """Regression: replying to the BOT's message searched the bot's own id."""
+    state = _state()
+    await handle_admin_users(_cb("admin_users"), state)
+
+    msg = _msg("")  # no digits in text
+    bot_user = TelegramUser(id=8806282438, is_bot=True, first_name="سیب")
+    msg.reply_to_message = MagicMock()
+    msg.reply_to_message.from_user = bot_user
+
+    await handle_admin_user_input(msg, state)
+    # Invalid target: retry prompt — the bot's id must never be searched.
+    reply_text = msg.reply.await_args.args[0]
+    assert "8806282438" not in reply_text
+    assert "پیدا نشد" not in reply_text
+    assert await state.get_state() is not None  # retry in-step
+
+
+@pytest.mark.asyncio
+async def test_admin_reply_to_human_resolves_target(db_session):
+    target = await create_test_user(db_session, "ریپلایی")
+    await db_session.commit()
+    target_id = target.id
+
+    state = _state()
+    await handle_admin_users(_cb("admin_users"), state)
+    msg = _msg("")
+    msg.reply_to_message = MagicMock()
+    msg.reply_to_message.from_user = TelegramUser(id=target_id, is_bot=False, first_name="ریپلایی")
+    await handle_admin_user_input(msg, state)
+    assert await state.get_state() is not None  # moved on to the panel step
+
+
+@pytest.mark.asyncio
+async def test_admin_entry_buttons_work_from_stuck_states(db_session):
+    """admin_users / admin_ch_add must ALWAYS open their flows."""
+    from sib.handlers.admin_center import handle_admin_channel_add_start
+
+    state = _state()
+    await handle_admin_users(_cb("admin_users"), state)
+    await handle_admin_user_op(_cb("admin_user_op:1:apples:add"), state)
+    # State is now stuck at waiting_amount (simulates the historical bug).
+
+    await handle_admin_users(_cb("admin_users"), state)
+    assert await state.get_state() is not None  # flow restarted
+
+    await handle_admin_channel_add_start(_cb("admin_ch_add"), state)
+    cb = _cb("admin_ch_add")
+    await handle_admin_channel_add_start(cb, state)
+    assert cb.message.edit_text.called  # the form actually opens
+
+
+@pytest.mark.asyncio
+async def test_admin_main_menu_clears_fsm_state():
+    from sib.handlers.admin import handle_admin_main_menu
+
+    state = _state()
+    await handle_admin_users(_cb("admin_users"), state)
+    assert await state.get_state() is not None
+
+    cb = _cb("admin_main")
+    await handle_admin_main_menu(cb, state)
+    assert await state.get_state() is None
+
+
+@pytest.mark.asyncio
+async def test_admin_channel_add_invalid_ref_retries_but_unresolvable_clears(db_session):
+    from sib.handlers.admin_center import handle_admin_channel_add_start
+
+    bot = MagicMock()
+    bot.get_chat = AsyncMock(side_effect=Exception("chat not found"))
+    state = _state()
+    await handle_admin_channel_add_start(_cb("admin_ch_add"), state)
+
+    # Malformed ref: retry in-step.
+    msg = _msg("!!!")
+    await handle_admin_channel_add_input(msg, state, bot)
+    assert "معتبر نیست" in msg.reply.await_args.args[0]
+    assert await state.get_state() is not None
+
+    # Well-formed but unresolvable: EXIT (state cleared).
+    msg2 = _msg("@nope_channel")
+    await handle_admin_channel_add_input(msg2, state, bot)
+    assert "پیدا نشد" in msg2.reply.await_args.args[0]
+    assert await state.get_state() is None

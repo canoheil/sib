@@ -196,12 +196,12 @@ def test_group_stats_no_longer_closes_the_panel():
 
 
 def test_shop_and_battle_and_garden_and_trade_have_back_to_main():
-    from sib.handlers.apple_battle import _queue_view
+    from sib.handlers.apple_battle import battle_entry_view
     from sib.handlers.garden import _render_garden
     from sib.handlers.shop import _shop_view
     from sib.handlers.trading import _pending_view
 
-    # _queue_view / _shop_view / _pending_view / _render_garden are async
+    # battle_entry_view / _shop_view / _pending_view / _render_garden are async
     # builders; the keyboards are checked via the source-level builders where
     # possible and via direct calls below.
     import asyncio
@@ -218,7 +218,7 @@ def test_shop_and_battle_and_garden_and_trade_have_back_to_main():
             uid = user.id
 
         _, shop_kb = await _shop_view(uid)
-        _, battle_kb = await _queue_view(uid)
+        _, battle_kb = await battle_entry_view(uid)
         _, trade_kb = await _pending_view(uid)
         async with get_session() as session:
             from sib.services.garden import GardenService

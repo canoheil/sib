@@ -33,11 +33,17 @@ GAME_ICONS = {
 }
 
 
+# Games with a dedicated canonical entry point (not shown in generic grids).
+HIDDEN_GAME_CODES = {"apple_battle"}
+
+
 def _game_grid(games: List[Game]) -> list:
     """Game selection grid (2 buttons per row, no navigation rows)."""
     keyboard = []
     row = []
     for game in games:
+        if game.code in HIDDEN_GAME_CODES:
+            continue
         icon = GAME_ICONS.get(game.code, "🎮")
         button = primary_button(
             text=f"{icon} {game.name_fa}",

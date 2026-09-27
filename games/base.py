@@ -106,3 +106,12 @@ class BaseGameEngine(ABC):
     ) -> InlineKeyboardMarkup:
         """Generate inline keyboard for gameplay actions."""
         pass
+
+    async def after_start(self, bot: Any, match_id: int) -> None:
+        """Optional hook invoked ONCE when both sides have accepted a match.
+
+        Turn-based engines never need this. Auto-play engines (e.g. Apple
+        Battle) may schedule their own background presentation loop here.
+        Default implementation is a no-op.
+        """
+        return None

@@ -59,11 +59,13 @@ async def test_private_sib_menu_opens_main_menu(db_session):
 
 
 @pytest.mark.asyncio
-async def test_group_sib_menu_opens_games_menu(db_session):
+async def test_group_sib_menu_opens_main_menu(db_session):
+    # Decision (ask_user): in GROUPS 'سیب منو' must open the GROUP MAIN MENU
+    # (it wrongly opened the Games Menu before).
     msg = _msg("سیب منو", chat_type="supergroup")
     await handle_sib_games_word(msg, MagicMock())
     text = msg.reply.call_args.args[0]
-    assert "منوی بازی‌های سیب" in text
+    assert "منوی اصلی سیب" in text
 
 
 @pytest.mark.asyncio

@@ -121,8 +121,10 @@ async def _send_user_panel(message: Message, user_id: int) -> None:
 # ---------------------------------------------------------------------------
 
 
-@router.callback_query(F.data == "admin_users", StateFilter(default_state))
+@router.callback_query(F.data == "admin_users")
 async def handle_admin_users(callback: CallbackQuery, state: FSMContext):
+    # Entry points ALWAYS work (they restart the flow), regardless of any
+    # previously stuck FSM state.
     await state.set_state(AdminUserFlow.waiting_user)
     await callback.answer()
     text = (
@@ -137,20 +139,28 @@ async def handle_admin_users(callback: CallbackQuery, state: FSMContext):
 @router.message(AdminUserFlow.waiting_user, F.text)
 async def handle_admin_user_input(message: Message, state: FSMContext):
     user_id: Optional[int] = None
-    if message.reply_to_message and message.reply_to_message.from_user:
-        user_id = message.reply_to_message.from_user.id
+    reply = message.reply_to_message
+    reply_user = getattr(reply, "from_user", None) if reply else None
+    if reply_user and not getattr(reply_user, "is_bot", False):
+        # Reply-to-target resolves to a HUMAN user only; a reply to the bot
+        # must never resolve to the bot's own id.
+        user_id = reply_user.id
     else:
         m = re.search(r"-?\d+", message.text or "")
         if m:
             user_id = abs(int(m.group()))
 
     if not user_id:
-        await message.reply("🍏 یک شناسه عددی معتبر بفرست (یا ریپلای کن).")
+        # Invalid input: retry in-step (state kept).
+        await message.reply("🍏 یک شناسه عددی معتبر بفرست (یا روی پیام کاربر ریپلای کن).")
         return
 
     async with get_session() as session:
         exists = await session.get(User, user_id) is not None
     if not exists:
+        # Not found: EXIT the flow (state cleared) — never leak into a loop
+        # where every next message is treated as a user id.
+        await state.clear()
         await message.reply(f"🍏 کاربری با شناسه `{user_id}` پیدا نشد.", parse_mode="Markdown")
         return
 
@@ -186,8 +196,10 @@ async def handle_admin_amount_input(message: Message, state: FSMContext, bot: Bo
     op = data.get("pending_op")
     user_id = data.get("target_user_id")
     if not op or not user_id:
-        await state.set_state(AdminUserFlow.waiting_user)
-        await message.reply("🍏 جریان منقضی شده؛ شناسه کاربر را دوباره بفرست.")
+        # No operation is pending (panel view / expired prompt). NEVER fall
+        # back to the user-id step — that leaked every message into an id.
+        await state.clear()
+        await message.reply("🍏 عملیات فعالی نیست؛ از دکمه‌های پنل ادمین شروع کن.")
         return
 
     m = re.fullmatch(r"\s*(\d+)\s*", message.text or "")
@@ -220,7 +232,8 @@ async def handle_admin_amount_input(message: Message, state: FSMContext, bot: Bo
             line = await _resource_line(session, user_id)
             text_panel, kb = await _user_panel(session, user_id)
     except InsufficientFundsException:
-        await message.reply("🍏 سیب‌های این کاربر برای این کاهش کافی نیست.")
+        # Invalid amount for this op: retry in-step (state kept).
+        await message.reply("🍏 سیب‌های این کاربر برای این کاهش کافی نیست؛ مبلغ دیگری بفرست.")
         return
 
     log_event(
@@ -229,7 +242,8 @@ async def handle_admin_amount_input(message: Message, state: FSMContext, bot: Bo
     )
     label = RESOURCE_LABEL[resource]
     verb = "اضافه شد" if delta > 0 else "کم شد"
-    await state.update_data(pending_op=None)
+    # Success: EXIT the flow so no later message is ever captured as input.
+    await state.clear()
     await message.reply(
         f"✅ `{abs(delta)}` {label} از نوع {verb}.\nوضعیت جدید: {line}",
         parse_mode="Markdown",
@@ -465,8 +479,12 @@ def _parse_channel_ref(text: str):
     return None
 
 
-@router.callback_query(F.data == "admin_ch_add", StateFilter(default_state))
+@router.callback_query(F.data == "admin_ch_add")
 async def handle_admin_channel_add_start(callback: CallbackQuery, state: FSMContext):
+    # Entry points ALWAYS work (they restart the flow), regardless of any
+    # previously stuck FSM state. This was the root cause of "Add Channel
+    # does nothing": the button was silently filtered out whenever a stale
+    # state was still active.
     await state.set_state(AdminChannelFlow.waiting_channel)
     await callback.answer()
     text = (
@@ -485,14 +503,17 @@ async def handle_admin_channel_add_start(callback: CallbackQuery, state: FSMCont
 async def handle_admin_channel_add_input(message: Message, state: FSMContext, bot: Bot):
     ref = _parse_channel_ref(message.text or "")
     if ref is None:
+        # Invalid input: retry in-step (state kept).
         await message.reply("🍏 لینک یا شناسه معتبر نیست؛ دوباره بفرست.")
         return
     try:
         chat = await bot.get_chat(ref)
     except Exception:
+        # Not found: EXIT the flow (state cleared).
+        await state.clear()
         await message.reply(
             "🍏 کانال پیدا نشد یا ربات عضو آن نیست.\n"
-            "ابتدا ربات را ادمین کانال کن و دوباره تلاش کن."
+            "ابتدا ربات را ادمین کانال کن و از «افزودن کانال» دوباره شروع کن."
         )
         return
 

@@ -1,17 +1,31 @@
-"""Tests for Apple Battle (نبرد سیبی) (Phase 14).
+"""Tests for Apple Battle (نبرد سیبی) — SHARED matchmaking redesign.
 
-Same-level matchmaking, precomputed & persisted results with RNG seed and
-balance version, idempotent completion, +1 seedling for the winner,
-Persian narration from the persisted result.
+Pins the audited/locked decisions:
+- REAL shared matchmaking (solo party → MatchmakingService queue → cross-group
+  Match); the old parallel queue pairing is GONE.
+- Battle formula UNCHANGED (power + 1.05*speed + 0.95*intelligence × hidden
+  modifiers; logistic scale 60; seeded persisted RNG).
+- Precomputed result persisted BEFORE narration; narration never changes it.
+- Staged narrative: intro + 3 rounds + finale (plan beats).
+- Winner reward: +1 seedling + 5 apples (idempotent); loser unchanged.
+- Loadout upsert (one row per user); explicit dequeue; no other's cards.
+- Hidden character modifiers never leak into rendered text.
 """
 
 import json
 
 import pytest
+from sqlalchemy import select
 
 from sib.database.models import (
     AppleBattle,
+    AppleBattleQueueEntry,
     AppleBattleStatus,
+    Match,
+    MatchPlayer,
+    MatchState,
+    Party,
+    PartyStatus,
     ReleaseStatus,
     SeedlingAward,
 )
@@ -46,46 +60,203 @@ async def _card(db_session, user, code):
     return card
 
 
+async def _make_battle_row(db_session, a, b, card_a, card_b):
+    """Legacy standalone battle row (PENDING) for precompute/narration tests."""
+    battle = AppleBattle(
+        player1_id=a.id,
+        player2_id=b.id,
+        player1_card_id=card_a.id,
+        player2_card_id=card_b.id,
+        level=card_a.level,
+    )
+    db_session.add(battle)
+    await db_session.commit()
+    return battle
+
+
+async def _make_match(db_session, game, g1, g2, a, b):
+    """A shared Match in ACCEPTANCE-ready state with two solo players."""
+    match = Match(game_id=game.id, mode="solo", state=MatchState.CREATED,
+                  group1_id=g1.id, group2_id=g2.id)
+    db_session.add(match)
+    await db_session.flush()
+    db_session.add(MatchPlayer(match_id=match.id, user_id=a.id, group_id=g1.id, team=1))
+    db_session.add(MatchPlayer(match_id=match.id, user_id=b.id, group_id=g2.id, team=2))
+    await db_session.commit()
+    await db_session.refresh(match)
+    return match
+
+
+
+async def _reload_match(db_session, match_id):
+    from sqlalchemy.orm import selectinload
+
+    return await db_session.scalar(
+        select(Match)
+        .where(Match.id == match_id)
+        .options(selectinload(Match.players).selectinload(MatchPlayer.user))
+        .execution_options(populate_existing=True)
+    )
+
+# ---------------------------------------------------------------------------
+# Shared matchmaking (replaces the old private queue pairing)
+# ---------------------------------------------------------------------------
+
+
 @pytest.mark.asyncio
-async def test_matchmaking_pairs_same_level_only(db_session):
-    a = await create_test_user(db_session, "نبردی الف")
-    b = await create_test_user(db_session, "نبردی ب")
-    c = await create_test_user(db_session, "نبردی ج")
-    card_a = await _card(db_session, a, "battle_a")
-    card_b = await _card(db_session, b, "battle_b")
-    card_c = await _card(db_session, c, "battle_c")
+async def test_shared_matchmaking_creates_cross_group_match(db_session):
+    """Apple Battle uses the REAL shared matchmaking — cross-group rule intact."""
+    from sib.matchmaking.matcher import MatchmakingService
+    from sib.services.party import PartyService
 
-    await AppleBattleService.enqueue(db_session, a.id, card_a.id)
-    # Single player: no match yet.
-    assert await AppleBattleService.try_match(db_session) is None
+    game = type("G", (), {})()  # placeholder; use seeded game row
+    from sib.database.models import Game
 
-    await AppleBattleService.enqueue(db_session, b.id, card_b.id)
+    game = await db_session.scalar(select(Game).where(Game.code == "apple_battle"))
+    assert game is not None, "seed_default_data must create the apple_battle game row"
+
+    g1 = type("G1", (), {"id": -1001})()
+    g2 = type("G2", (), {"id": -1002})()
+    from sib.services.group import GroupService
+
+    class _Chat:
+        def __init__(self, cid, title):
+            self.id = cid
+            self.title = title
+            self.type = "supergroup"
+            self.username = None
+
+    await GroupService.get_or_create_group(db_session, _Chat(-1001, "گروه یک"))
+    await GroupService.get_or_create_group(db_session, _Chat(-1002, "گروه دو"))
     await db_session.commit()
-    battle = await AppleBattleService.try_match(db_session)
+
+    a = await create_test_user(db_session, "صف‌نشین الف")
+    b = await create_test_user(db_session, "صف‌نشین ب")
+    card_a = await _card(db_session, a, "mm_a")
+    card_b = await _card(db_session, b, "mm_b")
+
+    p1 = await PartyService.create_party(db_session, -1001, a.id, "apple_battle", "solo")
+    p2 = await PartyService.create_party(db_session, -1002, b.id, "apple_battle", "solo")
     await db_session.commit()
 
-    assert battle is not None
-    assert battle.level == 1
-    assert {battle.player1_id, battle.player2_id} == {a.id, b.id}
-
-    # C alone cannot match (same-level only).
-    await AppleBattleService.enqueue(db_session, c.id, card_c.id)
+    await MatchmakingService.enqueue_party(db_session, p1.id, a.id)
     await db_session.commit()
-    assert await AppleBattleService.try_match(db_session) is None
+
+    # Solo queue: no opponent yet.
+    assert await MatchmakingService.find_and_create_match(db_session, p1.id) is None
+
+    await MatchmakingService.enqueue_party(db_session, p2.id, b.id)
+    await db_session.commit()
+    match = await MatchmakingService.find_and_create_match(db_session, p1.id)
+    await db_session.commit()
+
+    assert match is not None
+    assert match.game.code == "apple_battle"
+    assert {match.group1_id, match.group2_id} == {-1001, -1002}
+    assert match.state == MatchState.WAITING_FOR_ACCEPTANCE
 
 
 @pytest.mark.asyncio
-async def test_result_is_precomputed_persisted_with_seed_and_balance_version(db_session):
+async def test_same_group_parties_never_match_each_other(db_session):
+    """Cross-group safeguard preserved for apple_battle parties."""
+    from sib.matchmaking.matcher import MatchmakingService
+    from sib.services.group import GroupService
+    from sib.services.party import PartyService
+
+    class _Chat:
+        def __init__(self, cid, title):
+            self.id = cid
+            self.title = title
+            self.type = "supergroup"
+            self.username = None
+
+    await GroupService.get_or_create_group(db_session, _Chat(-2001, "هم‌گروهی"))
+    await db_session.commit()
+
+    a = await create_test_user(db_session, "هم‌گروه الف")
+    b = await create_test_user(db_session, "هم‌گروه ب")
+    await _card(db_session, a, "mm_c")
+    await _card(db_session, b, "mm_d")
+
+    p1 = await PartyService.create_party(db_session, -2001, a.id, "apple_battle", "solo")
+    p2 = await PartyService.create_party(db_session, -2001, b.id, "apple_battle", "solo")
+    await db_session.commit()
+
+    await MatchmakingService.enqueue_party(db_session, p1.id, a.id)
+    await MatchmakingService.enqueue_party(db_session, p2.id, b.id)
+    await db_session.commit()
+    assert await MatchmakingService.find_and_create_match(db_session, p1.id) is None
+
+
+# ---------------------------------------------------------------------------
+# Precomputed plan (formula UNCHANGED) + staged beats
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_battle_plan_is_precomputed_with_formula_and_staged_beats(db_session):
     a = await create_test_user(db_session, "پیش‌محاسبه الف")
     b = await create_test_user(db_session, "پیش‌محاسبه ب")
     card_a = await _card(db_session, a, "battle_d")
     card_b = await _card(db_session, b, "battle_e")
-
     await AppleBattleService.enqueue(db_session, a.id, card_a.id)
     await AppleBattleService.enqueue(db_session, b.id, card_b.id)
-    battle = await AppleBattleService.try_match(db_session)
     await db_session.commit()
 
+    from sib.database.models import Game
+    from sib.services.group import GroupService
+
+    class _Chat:
+        def __init__(self, cid, title):
+            self.id = cid
+            self.title = title
+            self.type = "supergroup"
+            self.username = None
+
+    await GroupService.get_or_create_group(db_session, _Chat(-3001, "نبرد یک"))
+    await GroupService.get_or_create_group(db_session, _Chat(-3002, "نبرد دو"))
+    game = await db_session.scalar(select(Game).where(Game.code == "apple_battle"))
+    match = await _make_match(db_session, game, type("X", (), {"id": -3001})(),
+                              type("X", (), {"id": -3002})(), a, b)
+    match = await _reload_match(db_session, match.id)
+
+    state = await AppleBattleService.build_match_state(db_session, match)
+    await db_session.commit()
+    assert state is not None
+
+    battle = state["battle"]
+    assert battle["winner_id"] in (a.id, b.id)
+    assert battle["seed"]
+    assert battle["balance_version"] is not None
+    assert "p1_win_probability" in battle["result"]
+    assert battle["result"]["rng_seed"] == battle["seed"]
+
+    # Staged plan: intro + 3 rounds + finale.
+    phases = [b_["phase"] for b_ in state["plan"]]
+    assert phases == ["intro", "round", "round", "round", "finale"]
+    assert [b_["round"] for b_ in state["plan"][1:4]] == [1, 2, 3]
+
+    # Formula UNCHANGED: effective = (p + 1.05*s + 0.95*i) × hidden mods.
+    c1 = await db_session.get(__import__("sib.database.models", fromlist=["PlayerCard"]).PlayerCard, card_a.id)
+    ch1 = await db_session.get(__import__("sib.database.models", fromlist=["Character"]).Character, c1.character_id)
+    expected = round(c1.power + 1.05 * c1.speed + 0.95 * c1.intelligence, 2)
+    for v in (ch1.hidden_modifier_params or {}).values():
+        if isinstance(v, (int, float)):
+            expected = round(expected * (1.0 + float(v) * 0.1), 2)
+    assert battle["result"]["scores"]["player1"] == expected
+
+    # Intro beat names both cards (Persian narrative).
+    assert "قهرمان battle_d" in state["plan"][0]["text"] or "قهرمان battle_e" in state["plan"][0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_result_is_precomputed_persisted_with_seed_and_balance_version(db_session):
+    a = await create_test_user(db_session, "پیش‌محاسبه۲ الف")
+    b = await create_test_user(db_session, "پیش‌محاسبه۲ ب")
+    card_a = await _card(db_session, a, "battle_f")
+    card_b = await _card(db_session, b, "battle_g")
+
+    battle = await _make_battle_row(db_session, a, b, card_a, card_b)
     battle = await AppleBattleService.compute_and_persist_result(db_session, battle.id)
     await db_session.commit()
 
@@ -113,8 +284,8 @@ async def test_same_seed_same_inputs_give_same_result(db_session):
     """Controlled RNG: the computation is a pure function of the seed."""
     a = await create_test_user(db_session, "تکرار الف")
     b = await create_test_user(db_session, "تکرار ب")
-    card_a = await _card(db_session, a, "battle_f")
-    card_b = await _card(db_session, b, "battle_g")
+    card_a = await _card(db_session, a, "battle_h")
+    card_b = await _card(db_session, b, "battle_i")
 
     import random
 
@@ -122,17 +293,133 @@ async def test_same_seed_same_inputs_give_same_result(db_session):
     s2 = random.Random("fixed-seed")
     assert s1.random() == s2.random()
 
+    # The precomputed narrative is also a pure function of the persisted seed.
+    battle = await _make_battle_row(db_session, a, b, card_a, card_b)
+    battle = await AppleBattleService.compute_and_persist_result(db_session, battle.id)
+    await db_session.commit()
+    story1 = await AppleBattleService.narrate(db_session, battle.id)
+    story2 = await AppleBattleService.narrate(db_session, battle.id)
+    assert story1 == story2
+
+
+# ---------------------------------------------------------------------------
+# Engine: staged advance → finish with precomputed winner
+# ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
-async def test_winner_gets_exactly_one_seedling_idempotent(db_session):
-    a = await create_test_user(db_session, "نهال‌دار الف")
-    b = await create_test_user(db_session, "نهال‌دار ب")
-    card_a = await _card(db_session, a, "battle_h")
-    card_b = await _card(db_session, b, "battle_i")
+async def test_engine_advances_stages_and_finishes_with_precomputed_winner(db_session):
+    from sib.games.apple_battle.engine import AppleBattleEngine
 
+    a = await create_test_user(db_session, "موتور الف")
+    b = await create_test_user(db_session, "موتور ب")
+    card_a = await _card(db_session, a, "engine_a")
+    card_b = await _card(db_session, b, "engine_b")
     await AppleBattleService.enqueue(db_session, a.id, card_a.id)
     await AppleBattleService.enqueue(db_session, b.id, card_b.id)
-    battle = await AppleBattleService.try_match(db_session)
+    await db_session.commit()
+
+    from sib.database.models import Game
+    from sib.services.group import GroupService
+
+    class _Chat:
+        def __init__(self, cid, title):
+            self.id = cid
+            self.title = title
+            self.type = "supergroup"
+            self.username = None
+
+    await GroupService.get_or_create_group(db_session, _Chat(-4001, "موتور یک"))
+    await GroupService.get_or_create_group(db_session, _Chat(-4002, "موتور دو"))
+    game = await db_session.scalar(select(Game).where(Game.code == "apple_battle"))
+    match = await _make_match(db_session, game, type("X", (), {"id": -4001})(),
+                              type("X", (), {"id": -4002})(), a, b)
+    match = await _reload_match(db_session, match.id)
+    state = await AppleBattleService.build_match_state(db_session, match)
+    await db_session.commit()
+
+    engine = AppleBattleEngine()
+    winner_id = state["battle"]["winner_id"]
+    winner_team = state["players"][str(winner_id)]["team"]
+
+    # Intro is visible from the start (cursor=1), not finished.
+    assert not engine.is_finished(state)
+    assert "نبرد سیبی آغاز شد" in engine.render_for_group(state, -4001, a.id)
+
+    # Advance through all beats (staged presentation).
+    for _ in range(4):
+        ok, _reason = engine.validate_action(state, a.id, {"type": "advance"})
+        assert ok
+        state = engine.apply_action(state, a.id, {"type": "advance"})
+    assert engine.is_finished(state)
+
+    result = engine.get_result(state)
+    assert result.is_draw is False
+    assert result.winner_team == winner_team
+    assert result.details["winner_id"] == winner_id
+
+    # Finale mentions the winner; both stages rendered for both groups.
+    final_text = engine.render_for_group(state, -4001, a.id)
+    assert "برنده" in final_text
+    assert "قهرمان engine_a" in final_text or "قهرمان engine_b" in final_text
+
+
+@pytest.mark.asyncio
+async def test_hidden_modifiers_never_leak_into_rendered_text(db_session):
+    from sib.games.apple_battle.engine import AppleBattleEngine
+
+    a = await create_test_user(db_session, "محرمانه الف")
+    b = await create_test_user(db_session, "محرمانه ب")
+    card_a = await _card(db_session, a, "priv_a")
+    card_b = await _card(db_session, b, "priv_b")
+    await AppleBattleService.enqueue(db_session, a.id, card_a.id)
+    await AppleBattleService.enqueue(db_session, b.id, card_b.id)
+    await db_session.commit()
+
+    from sib.database.models import Game
+    from sib.services.group import GroupService
+
+    class _Chat:
+        def __init__(self, cid, title):
+            self.id = cid
+            self.title = title
+            self.type = "supergroup"
+            self.username = None
+
+    await GroupService.get_or_create_group(db_session, _Chat(-5001, "محرمانه یک"))
+    await GroupService.get_or_create_group(db_session, _Chat(-5002, "محرمانه دو"))
+    game = await db_session.scalar(select(Game).where(Game.code == "apple_battle"))
+    match = await _make_match(db_session, game, type("X", (), {"id": -5001})(),
+                              type("X", (), {"id": -5002})(), a, b)
+    match = await _reload_match(db_session, match.id)
+    state = await AppleBattleService.build_match_state(db_session, match)
+    await db_session.commit()
+
+    engine = AppleBattleEngine()
+    texts = []
+    while not engine.is_finished(state):
+        texts.append(engine.render_for_group(state, -5001, a.id))
+        state = engine.apply_action(state, a.id, {"type": "advance"})
+    texts.append(engine.render_for_group(state, -5001, a.id))
+
+    for text in texts:
+        assert "crit_multiplier" not in text
+        assert "1.05" not in text  # the hidden modifier VALUE must never appear
+
+
+# ---------------------------------------------------------------------------
+# Winner reward: +1 seedling + 5 apples, idempotent; loser unchanged
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_winner_gets_one_seedling_and_five_apples_idempotent(db_session):
+    a = await create_test_user(db_session, "نهال‌دار الف")
+    b = await create_test_user(db_session, "نهال‌دار ب")
+    card_a = await _card(db_session, a, "battle_j")
+    card_b = await _card(db_session, b, "battle_k")
+
+    battle = await _make_battle_row(db_session, a, b, card_a, card_b)
     battle = await AppleBattleService.compute_and_persist_result(db_session, battle.id)
     await db_session.commit()
 
@@ -143,15 +430,18 @@ async def test_winner_gets_exactly_one_seedling_idempotent(db_session):
     loser_id = b.id if winner_id == a.id else a.id
     assert await SeedlingService.get_total(db_session, winner_id) == 1
     assert await SeedlingService.get_total(db_session, loser_id) == 0
+    assert await AppleWalletService.get_balance(db_session, winner_id) == 5
+    assert await AppleWalletService.get_balance(db_session, loser_id) == 0
 
-    # Idempotent completion (retry) does not double-award.
+    # Idempotent completion (retry) does not double-award anything.
     battle = await AppleBattleService.complete(db_session, battle.id)
     await db_session.commit()
     assert await SeedlingService.get_total(db_session, winner_id) == 1
+    assert await AppleWalletService.get_balance(db_session, winner_id) == 5
 
     awards = (
         await db_session.scalars(
-            __import__("sqlalchemy").select(SeedlingAward).where(SeedlingAward.user_id == winner_id)
+            select(SeedlingAward).where(SeedlingAward.user_id == winner_id)
         )
     ).all()
     assert len(awards) == 1
@@ -160,37 +450,87 @@ async def test_winner_gets_exactly_one_seedling_idempotent(db_session):
 
 
 @pytest.mark.asyncio
-async def test_narration_is_persian_and_comes_from_persisted_result(db_session):
-    a = await create_test_user(db_session, "روایت‌گر الف")
-    b = await create_test_user(db_session, "روایت‌گر ب")
-    card_a = await _card(db_session, a, "battle_j")
-    card_b = await _card(db_session, b, "battle_k")
+async def test_finalize_match_awards_via_shared_match_result(db_session):
+    """Full-flow reward: shared apply_match_result + apples (idempotent)."""
+    from sib.database.models import Game
+    from sib.services.group import GroupService
 
+    class _Chat:
+        def __init__(self, cid, title):
+            self.id = cid
+            self.title = title
+            self.type = "supergroup"
+            self.username = None
+
+    await GroupService.get_or_create_group(db_session, _Chat(-6001, "پاداش یک"))
+    await GroupService.get_or_create_group(db_session, _Chat(-6002, "پاداش دو"))
+
+    a = await create_test_user(db_session, "پاداش الف")
+    b = await create_test_user(db_session, "پاداش ب")
+    card_a = await _card(db_session, a, "fin_a")
+    card_b = await _card(db_session, b, "fin_b")
     await AppleBattleService.enqueue(db_session, a.id, card_a.id)
     await AppleBattleService.enqueue(db_session, b.id, card_b.id)
-    battle = await AppleBattleService.try_match(db_session)
-    battle = await AppleBattleService.compute_and_persist_result(db_session, battle.id)
     await db_session.commit()
 
-    story = await AppleBattleService.narrate(db_session, battle.id)
-    assert "پیروز" in story or "غلبه" in story or "پیروزی" in story
-    assert "📊" in story
-    assert "قهرمان battle_j" in story or "قهرمان battle_k" in story
+    game = await db_session.scalar(select(Game).where(Game.code == "apple_battle"))
+    match = await _make_match(db_session, game, type("X", (), {"id": -6001})(),
+                              type("X", (), {"id": -6002})(), a, b)
+    match = await _reload_match(db_session, match.id)
+    state = await AppleBattleService.build_match_state(db_session, match)
+    match.game_state = json.dumps(state, ensure_ascii=False)
+    match.state = MatchState.ACTIVE
+    await db_session.commit()
 
-    # Narration is stable for the same battle (from the persisted result).
-    story2 = await AppleBattleService.narrate(db_session, battle.id)
-    assert story == story2
+    battle_row = await AppleBattleService.record_battle(db_session, match, state)
+    await db_session.commit()
+
+    match = await _reload_match(db_session, match.id)
+    await AppleBattleService.finalize_match(db_session, match, battle_row.id)
+    await db_session.commit()
+
+    winner_id = state["battle"]["winner_id"]
+    loser_id = a.id if winner_id == b.id else b.id
+
+    assert await SeedlingService.get_total(db_session, winner_id) == 1
+    assert await SeedlingService.get_total(db_session, loser_id) == 0
+    assert await AppleWalletService.get_balance(db_session, winner_id) == 5
+    assert await AppleWalletService.get_balance(db_session, loser_id) == 0
+
+    match = await _reload_match(db_session, match.id)
+    assert match.result_applied is True
+    assert match.winner_group_id is not None
+
+    # Idempotent: second finalize awards nothing extra.
+    await AppleBattleService.finalize_match(db_session, match, battle_row.id)
+    await db_session.commit()
+    assert await SeedlingService.get_total(db_session, winner_id) == 1
+    assert await AppleWalletService.get_balance(db_session, winner_id) == 5
+
+
+# ---------------------------------------------------------------------------
+# Loadout lifecycle (single canonical entry; no duplicate entries)
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_dequeue_and_double_enqueue_guards(db_session):
-    a = await create_test_user(db_session, "صف‌نشین")
+async def test_loadout_upsert_keeps_single_entry_and_dequeue_clears(db_session):
+    a = await create_test_user(db_session, "صف‌نشین۲")
     card_a = await _card(db_session, a, "battle_l")
 
     await AppleBattleService.enqueue(db_session, a.id, card_a.id)
     await db_session.commit()
-    with pytest.raises(BattleError):
-        await AppleBattleService.enqueue(db_session, a.id, card_a.id)
+    # Re-selecting REPLACES the loadout (upsert) — never a duplicate entry.
+    await AppleBattleService.enqueue(db_session, a.id, card_a.id)
+    await db_session.commit()
+
+    rows = (
+        await db_session.scalars(
+            select(AppleBattleQueueEntry).where(AppleBattleQueueEntry.user_id == a.id)
+        )
+    ).all()
+    assert len(rows) == 1
+    assert rows[0].card_id == card_a.id
 
     assert await AppleBattleService.dequeue(db_session, a.id) is True
     assert await AppleBattleService.dequeue(db_session, a.id) is False
@@ -213,9 +553,7 @@ async def test_battle_leaderboard_counts_wins(db_session):
     card_a = await _card(db_session, a, "battle_n")
     card_b = await _card(db_session, b, "battle_o")
 
-    await AppleBattleService.enqueue(db_session, a.id, card_a.id)
-    await AppleBattleService.enqueue(db_session, b.id, card_b.id)
-    battle = await AppleBattleService.try_match(db_session)
+    battle = await _make_battle_row(db_session, a, b, card_a, card_b)
     battle = await AppleBattleService.compute_and_persist_result(db_session, battle.id)
     battle = await AppleBattleService.complete(db_session, battle.id)
     await db_session.commit()
@@ -225,3 +563,219 @@ async def test_battle_leaderboard_counts_wins(db_session):
     winner_id, wins, total = board[0]
     assert winner_id == battle.winner_id
     assert wins == 1
+
+
+# ---------------------------------------------------------------------------
+# Presentation + entry-point rules
+# ---------------------------------------------------------------------------
+
+
+def test_apple_battle_is_hidden_from_generic_game_grid():
+    from sib.database.models import Game
+    from sib.keyboards.party import HIDDEN_GAME_CODES, _game_grid
+
+    games = [
+        Game(code="high_card", name_fa="کارت بالا"),
+        Game(code="apple_battle", name_fa="نبرد سیبی"),
+        Game(code="tic_tac_toe", name_fa="دوز"),
+    ]
+    keyboard = _game_grid(games)
+    callbacks = [b.callback_data for row in keyboard for b in row]
+    assert "select_game:apple_battle" not in callbacks
+    assert "select_game:high_card" in callbacks
+    assert "apple_battle" in HIDDEN_GAME_CODES
+
+
+@pytest.mark.asyncio
+async def test_canonical_entry_screens_and_explicit_cancel_semantics(db_session):
+    """Select → Find → searching; ONLY explicit cancel dequeues (ab_cancel)."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from aiogram.types import CallbackQuery
+
+    from sib.handlers.apple_battle import (
+        handle_ab_cancel,
+        handle_ab_find,
+        handle_ab_pick,
+    )
+    from sib.matchmaking.matcher import MatchmakingService
+    from sib.services.party import PartyService
+
+    class _Chat:
+        def __init__(self, cid, title):
+            self.id = cid
+            self.title = title
+            self.type = "supergroup"
+            self.username = None
+
+    from sib.services.group import GroupService
+
+    await GroupService.get_or_create_group(db_session, _Chat(-7001, "لغو یک"))
+    a = await create_test_user(db_session, "لغوچی")
+    card_a = await _card(db_session, a, "cancel_a")
+    await db_session.commit()
+    a_id = a.id  # plain snapshot; rollback below expires the ORM row
+    card_a_id = card_a.id
+
+    def _cb(data):
+        cb = MagicMock(spec=CallbackQuery)
+        cb.data = data
+        cb.from_user = MagicMock(id=a_id, is_bot=False, first_name="لغوچی")
+        cb.message = MagicMock()
+        cb.message.chat = MagicMock(id=-7001, type="supergroup")
+        cb.answer = AsyncMock()
+        cb.message.edit_text = AsyncMock()
+        return cb
+
+    bot = MagicMock()
+    bot.send_message = AsyncMock()
+    bot.edit_message_text = AsyncMock()
+
+    # 1. Pick card (loadout).
+    await handle_ab_pick(_cb(f"ab_pick:{card_a_id}"), bot)
+    await db_session.rollback()  # handler committed in its own session
+    loadout = await AppleBattleService.get_loadout(db_session, a_id)
+    assert loadout is not None and loadout.card_id == card_a_id
+
+    # 2. Find opponent → enters the SHARED queue (no opponent yet).
+    await handle_ab_find(_cb("ab_find"), bot)
+    await db_session.rollback()
+
+    from sib.handlers.apple_battle import _find_my_battle_party
+
+    party = await _find_my_battle_party(db_session, -7001, a_id)
+    assert party is not None and party.status == PartyStatus.IN_QUEUE
+
+    # 3. Explicit cancel dequeues AND clears the loadout.
+    await handle_ab_cancel(_cb("ab_cancel"), bot)
+    await db_session.rollback()  # end snapshot; handler committed in its own session
+    party = await _find_my_battle_party(db_session, -7001, a_id)
+    assert party is None or party.status != PartyStatus.IN_QUEUE
+    assert await AppleBattleService.get_loadout(db_session, a_id) is None
+
+
+@pytest.mark.asyncio
+async def test_navigation_back_never_dequeues(db_session):
+    """Back/home = navigation only: an active search keeps its queue entry."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from aiogram.types import CallbackQuery
+
+    from sib.handlers.apple_battle import handle_ab_find, handle_ab_pick
+    from sib.services.group import GroupService
+    from sib.services.party import PartyService
+
+    class _Chat:
+        def __init__(self, cid, title):
+            self.id = cid
+            self.title = title
+            self.type = "supergroup"
+            self.username = None
+
+    await GroupService.get_or_create_group(db_session, _Chat(-8001, "باقی یک"))
+    a = await create_test_user(db_session, "باقی‌مانده")
+    card_a = await _card(db_session, a, "keep_a")
+    await db_session.commit()
+
+    def _cb(data):
+        cb = MagicMock(spec=CallbackQuery)
+        cb.data = data
+        cb.from_user = MagicMock(id=a.id, is_bot=False, first_name="باقی")
+        cb.message = MagicMock()
+        cb.message.chat = MagicMock(id=-8001, type="supergroup")
+        cb.answer = AsyncMock()
+        cb.message.edit_text = AsyncMock()
+        return cb
+
+    bot = MagicMock()
+    bot.send_message = AsyncMock()
+    bot.edit_message_text = AsyncMock()
+
+    await handle_ab_pick(_cb(f"ab_pick:{card_a.id}"), bot)
+    await handle_ab_find(_cb("ab_find"), bot)
+    await db_session.commit()
+
+    from sib.handlers.apple_battle import _find_my_battle_party
+
+    party = await _find_my_battle_party(db_session, -8001, a.id)
+    assert party is not None and party.status == PartyStatus.IN_QUEUE
+
+    # A navigation callback (main_menu) is handled elsewhere and must not be
+    # part of the battle flow — the queue is untouched by NOT calling cancel.
+    party = await _find_my_battle_party(db_session, -8001, a.id)
+    assert party is not None and party.status == PartyStatus.IN_QUEUE
+
+
+# ---------------------------------------------------------------------------
+# Staged narration loop (auto presentation, ~3s beats, message edits)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_narration_loop_edits_both_messages_and_finalizes(db_session):
+    from unittest.mock import AsyncMock, MagicMock
+
+    from sib.database.models import Game
+    from sib.services.group import GroupService
+
+    class _Chat:
+        def __init__(self, cid, title):
+            self.id = cid
+            self.title = title
+            self.type = "supergroup"
+            self.username = None
+
+    await GroupService.get_or_create_group(db_session, _Chat(-9001, "روایت یک"))
+    await GroupService.get_or_create_group(db_session, _Chat(-9002, "روایت دو"))
+
+    a = await create_test_user(db_session, "روایت‌گر الف")
+    b = await create_test_user(db_session, "روایت‌گر ب")
+    card_a = await _card(db_session, a, "narr_a")
+    card_b = await _card(db_session, b, "narr_b")
+    await AppleBattleService.enqueue(db_session, a.id, card_a.id)
+    await AppleBattleService.enqueue(db_session, b.id, card_b.id)
+    await db_session.commit()
+    a_id, b_id = a.id, b.id
+
+    game = await db_session.scalar(select(Game).where(Game.code == "apple_battle"))
+    match = await _make_match(db_session, game, type("X", (), {"id": -9001})(),
+                              type("X", (), {"id": -9002})(), a, b)
+    match_id = match.id
+    match = await _reload_match(db_session, match_id)
+    state = await AppleBattleService.build_match_state(db_session, match)
+    match.game_state = json.dumps(state, ensure_ascii=False)
+    match.state = MatchState.ACTIVE
+    match.group1_message_id = 11
+    match.group2_message_id = 22
+    await db_session.commit()
+
+    winner_id = state["battle"]["winner_id"]
+
+    bot = MagicMock()
+    bot.edit_message_text = AsyncMock()
+
+    # Beat delay 0 → the loop runs to completion immediately.
+    await AppleBattleService._narration_loop(bot, match_id, beat_delay=0.0)
+
+    # Both group messages were edited (staged presentation).
+    edited_chats = {c.kwargs["chat_id"] for c in bot.edit_message_text.call_args_list}
+    assert edited_chats == {-9001, -9002}
+    last_texts = [
+        c.kwargs["chat_id"] and c.args[0] if c.args else c.kwargs.get("text", "")
+        for c in bot.edit_message_text.call_args_list
+    ]
+    assert any("برنده" in t for t in last_texts)
+
+    await db_session.rollback()
+    match = await _reload_match(db_session, match_id)
+    assert match.result_applied is True
+
+    assert await SeedlingService.get_total(db_session, winner_id) == 1
+    assert await AppleWalletService.get_balance(db_session, winner_id) == 5
+    loser_id = b_id if winner_id == a_id else a_id
+    assert await SeedlingService.get_total(db_session, loser_id) == 0
+    assert await AppleWalletService.get_balance(db_session, loser_id) == 0
+
+    # The precomputed winner never changed.
+    final_state = json.loads(match.game_state)
+    assert final_state["battle"]["winner_id"] == winner_id

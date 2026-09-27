@@ -1,15 +1,28 @@
-"""Apple Battle (نبرد سیبی) handlers — Phases 14+15 UI.
+"""Apple Battle (نبرد سیبی) handlers — shared-matchmaking flow.
 
-Queue, matchmaking, narrated results, battle leaderboard and the
-player's battle profile.
+UX (locked decisions):
+  1. pick a battle card (loadout)        → ``ab_pick:{card_id}``
+  2. press "یافتن حریف" (Find Opponent)  → ``ab_find``  → REAL shared queue
+  3. wait online (searching screen)      → ``ab_cancel`` is the ONLY way out
+  4. match found → shared acceptance → staged narrative battle → reward
+
+Back/home buttons are NAVIGATION ONLY and never dequeue an active search.
 """
 
 from aiogram import Bot, Router, F
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from sqlalchemy.orm import selectinload
+
+from sib.core.errors import (
+    ActiveSessionExistsException,
+    InvalidActionException,
+    PartyNotFoundException,
+)
+from sib.core.logging import logger
 from sib.database.connection import get_session
-from sib.database.models import AppleBattle, AppleBattleStatus, Character, PlayerCard
+from sib.database.models import AppleBattle, AppleBattleStatus, Character, PartyStatus, PlayerCard
 from sib.services.apple_battle import AppleBattleService, BattleError
 from sib.services.player_cards import PlayerCardService
 from sib.services.nav import back_label_for, back_target, parse_callback, with_origin
@@ -22,9 +35,28 @@ def _kb(rows: list[list[InlineKeyboardButton]]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def _queue_view(user_id: int, origin: str = None) -> tuple[str, InlineKeyboardMarkup]:
+def _back_row(origin: str | None) -> list[InlineKeyboardButton]:
+    return [InlineKeyboardButton(text=back_label_for(origin), callback_data=back_target(origin))]
+
+
+# ---------------------------------------------------------------------------
+# Screens
+# ---------------------------------------------------------------------------
+
+
+async def _card_names(session, cards) -> dict[int, str]:
+    names: dict[int, str] = {}
+    for card in cards:
+        character = await session.get(Character, card.character_id)
+        names[card.id] = character.name_fa if character else "کارت"
+    return names
+
+
+async def _select_view(user_id: int, origin: str | None = None) -> tuple[str, InlineKeyboardMarkup]:
+    """Screen 1: choose the battle card (loadout)."""
     async with get_session() as session:
         cards = await PlayerCardService.list_cards(session, user_id)
+        names = await _card_names(session, cards)
         battle_count = await session.scalar(
             __import__("sqlalchemy").select(
                 __import__("sqlalchemy").func.count(AppleBattle.id)
@@ -40,11 +72,7 @@ async def _queue_view(user_id: int, origin: str = None) -> tuple[str, InlineKeyb
             _kb(
                 [
                     [InlineKeyboardButton(text="🏪 فروشگاه", callback_data="shop_refresh")],
-                    [
-                        InlineKeyboardButton(
-                            text=back_label_for(origin), callback_data=back_target(origin)
-                        )
-                    ],
+                    _back_row(origin),
                 ]
             ),
         )
@@ -55,33 +83,133 @@ async def _queue_view(user_id: int, origin: str = None) -> tuple[str, InlineKeyb
         "",
         f"کارت‌های شما: {len(cards)} | نبردهای ثبت‌شده: {battle_count or 0}",
         "",
-        "کارت خود را برای ورود به صف انتخاب کنید (فقط هم‌سطح‌ها با هم می‌جنگند):",
+        "کارت رزمی خود را انتخاب کنید:",
     ]
     buttons: list[list[InlineKeyboardButton]] = []
     for card in cards[:10]:
         buttons.append(
             [
                 InlineKeyboardButton(
-                    text=f"⚔️ نبرد با کارت {card.id} (سطح {card.level})",
-                    callback_data=f"ab_join:{card.id}",
+                    text=f"⚔️ {names.get(card.id, 'کارت')} (سطح {card.level})",
+                    callback_data=f"ab_pick:{card.id}",
                 )
             ]
         )
+    buttons.append([InlineKeyboardButton(text="🏆 لیدربورد نبرد", callback_data="ab_board")])
     buttons.append(
-        [InlineKeyboardButton(text="🏆 لیدربورد نبرد", callback_data="ab_board")]
+        [InlineKeyboardButton(text="🔄 بروزرسانی", callback_data=with_origin("ab_refresh", origin))]
     )
-    buttons.append(
+    buttons.append(_back_row(origin))
+    return "\n".join(lines), _kb(buttons)
+
+
+async def _ready_view(user_id: int, origin: str | None = None) -> tuple[str, InlineKeyboardMarkup]:
+    """Screen 2: card selected — press Find Opponent."""
+    from sqlalchemy import select
+
+    async with get_session() as session:
+        loadout = await AppleBattleService.get_loadout(session, user_id)
+        card = await session.get(PlayerCard, loadout.card_id) if loadout else None
+        if not card:
+            return await _select_view(user_id, origin)
+        character = await session.get(Character, card.character_id)
+        name = character.name_fa if character else "کارت"
+
+    lines = [
+        "🍎 **نبرد سیبی** ⚔️",
+        "",
+        f"کارت انتخاب‌شده: **{name}** (سطح {card.level})",
+        f"⚡ قدرت {card.power} | 💨 سرعت {card.speed} | 🧠 هوش {card.intelligence}",
+        "",
+        "برای ورود به صف جستجوی حریف، دکمه زیر را بزنید.",
+    ]
+    kb = _kb(
         [
-            InlineKeyboardButton(
-                text="🔄 بروزرسانی",
-                callback_data=with_origin("ab_refresh", origin),
-            )
+            [InlineKeyboardButton(text="🔍 یافتن حریف", callback_data="ab_find")],
+            [InlineKeyboardButton(text="↩️ تغییر کارت", callback_data=with_origin("ab_change", origin))],
+            [InlineKeyboardButton(text="🏆 لیدربورد نبرد", callback_data="ab_board")],
+            _back_row(origin),
         ]
     )
-    buttons.append(
-        [InlineKeyboardButton(text=back_label_for(origin), callback_data=back_target(origin))]
+    return "\n".join(lines), kb
+
+
+def _searching_view(party_id: int, origin: str | None = None) -> tuple[str, InlineKeyboardMarkup]:
+    """Screen 3: waiting for a real opponent in the shared queue."""
+    lines = [
+        "🍎 **نبرد سیبی** ⚔️",
+        "",
+        "🔍 **در حال جستجوی حریف از گروه‌های تلگرام...** 🍏",
+        "",
+        "به‌محض پیدا شدن حریف، نبرد آغاز می‌شود.",
+        "⏳ لطفاً منتظر بمانید...",
+    ]
+    kb = _kb(
+        [
+            [InlineKeyboardButton(text="✖️ لغو جستجو", callback_data="ab_cancel")],
+            [InlineKeyboardButton(text="🔄 بروزرسانی", callback_data="ab_status")],
+            _back_row(origin),
+        ]
     )
-    return "\n".join(lines), _kb(buttons)
+    return "\n".join(lines), kb
+
+
+async def battle_entry_view(user_id: int, origin: str | None = None) -> tuple[str, InlineKeyboardMarkup]:
+    """Entry screen used by the games menu button (select or ready)."""
+    async with get_session() as session:
+        loadout = await AppleBattleService.get_loadout(session, user_id)
+    if loadout:
+        return await _ready_view(user_id, origin=origin)
+    return await _select_view(user_id, origin=origin)
+
+
+async def _ensure_battle_party(session, group_id: int, user_id: int):
+    """Reuse the user's solo battle party in this group, or create one."""
+    from types import SimpleNamespace
+
+    from sib.services.group import GroupService
+    from sib.services.party import PartyService
+
+    await GroupService.get_or_create_group(
+        session, SimpleNamespace(id=group_id, title=None, type="supergroup", username=None)
+    )
+    parties = await PartyService.get_active_parties_for_group(session, group_id)
+    for p in parties:
+        if p.game and p.game.code == "apple_battle" and p.mode == "solo":
+            if any(m.user_id == user_id for m in p.members):
+                return p
+    return await PartyService.create_party(
+        session, group_id, user_id, "apple_battle", "solo"
+    )
+
+
+async def _find_my_battle_party(session, group_id: int, user_id: int):
+    """Find the user's apple_battle party in this group IN ANY live status.
+
+    Includes IN_QUEUE/IN_MATCH (which the generic active-parties listing
+    deliberately excludes) so cancel/status can always reach the party.
+    """
+    from sqlalchemy import select as sa_select
+
+    from sib.database.models import Party, PartyMember
+
+    rows = await session.scalars(
+        sa_select(Party)
+        .join(PartyMember, PartyMember.party_id == Party.id)
+        .where(PartyMember.user_id == user_id)
+        .where(Party.group_id == group_id)
+        .where(Party.status.in_((PartyStatus.OPEN, PartyStatus.FULL, PartyStatus.IN_QUEUE, PartyStatus.IN_MATCH)))
+        .options(selectinload(Party.members), selectinload(Party.game))
+    )
+    for p in rows.all():
+        if p.game and p.game.code == "apple_battle":
+            return p
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Commands / screens
+# ---------------------------------------------------------------------------
 
 
 @router.message(Command("battle"))
@@ -89,7 +217,7 @@ async def cmd_battle(message: Message, bot: Bot):
     user = message.from_user
     if not user:
         return
-    text, kb = await _queue_view(user.id)
+    text, kb = await battle_entry_view(user.id)
     await message.reply(text, reply_markup=kb, parse_mode="Markdown")
 
 
@@ -99,13 +227,18 @@ async def handle_ab_refresh(callback: CallbackQuery, bot: Bot):
     if not user:
         return
     _base, origin = parse_callback(callback.data)
-    text, kb = await _queue_view(user.id, origin=origin)
+    text, kb = await battle_entry_view(user.id, origin=origin)
     await safe_answer_callback(callback, "بروزرسانی شد ⚔️")
     await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
 
-@router.callback_query(F.data.startswith("ab_join:"))
-async def handle_ab_join(callback: CallbackQuery, bot: Bot):
+# ---------------------------------------------------------------------------
+# Flow: pick card → find opponent → queue / match
+# ---------------------------------------------------------------------------
+
+
+@router.callback_query(F.data.startswith("ab_pick:"))
+async def handle_ab_pick(callback: CallbackQuery, bot: Bot):
     base, origin = parse_callback(callback.data)
     card_id = int(base.split(":")[1])
     user = callback.from_user
@@ -113,30 +246,151 @@ async def handle_ab_join(callback: CallbackQuery, bot: Bot):
         return
 
     async with get_session() as session:
+        card = await session.get(PlayerCard, card_id)
+        if not card or card.user_id != user.id:
+            await safe_answer_callback(callback, "این کارت متعلق به شما نیست 🍏", show_alert=True)
+            return
+        await AppleBattleService.set_loadout(session, user.id, card.id)
+
+    text, kb = await _ready_view(user.id, origin=origin)
+    await safe_answer_callback(callback, "کارت انتخاب شد ⚔️")
+    await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("ab_change"))
+async def handle_ab_change(callback: CallbackQuery, bot: Bot):
+    user = callback.from_user
+    if not user:
+        return
+    _base, origin = parse_callback(callback.data)
+    async with get_session() as session:
+        await AppleBattleService.dequeue(session, user.id)
+    text, kb = await _select_view(user.id, origin=origin)
+    await safe_answer_callback(callback, "کارت جدید را انتخاب کنید ⚔️")
+    await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
+
+
+@router.callback_query(F.data == "ab_find")
+async def handle_ab_find(callback: CallbackQuery, bot: Bot):
+    """Enter the REAL shared matchmaking queue (solo party)."""
+    user = callback.from_user
+    chat = callback.message.chat if callback.message else None
+    if not user or not chat:
+        return
+
+    from sib.handlers.matchmaking.renderer import render_match_found_for_group
+    from sib.keyboards.matchmaking import get_acceptance_keyboard
+    from sib.matchmaking.matcher import MatchmakingService
+
+    async with get_session() as session:
         try:
-            await AppleBattleService.enqueue(session, user.id, card_id)
+            party = await _ensure_battle_party(session, chat.id, user.id)
+            await MatchmakingService.enqueue_party(session, party.id, user.id)
+            match = await MatchmakingService.find_and_create_match(session, party.id)
+        except (InvalidActionException, PartyNotFoundException, ActiveSessionExistsException) as e:
+            await safe_answer_callback(callback, getattr(e, "message", str(e)), show_alert=True)
+            return
         except BattleError as e:
             await safe_answer_callback(callback, str(e), show_alert=True)
             return
-        battle = await AppleBattleService.try_match(session)
-        if battle is not None:
-            battle = await AppleBattleService.compute_and_persist_result(session, battle.id)
-            battle = await AppleBattleService.complete(session, battle.id)
-            story = await AppleBattleService.narrate(session, battle.id)
-            winner_id = battle.winner_id
-            text = (
-                "🍎 **نبرد سیبی — نتیجه** ⚔️\n\n"
-                f"{story}\n\n"
-                f"🏆 برنده: `{winner_id}` | 🌱 یک نهال به برنده تعلق گرفت!"
-            )
-            await safe_answer_callback(callback, "نبرد انجام شد!")
-            await safe_edit_callback_message(callback, bot, text, parse_mode="Markdown")
+
+        if not match:
+            await safe_answer_callback(callback, "وارد صف نبرد شدی! ⚔️")
+            if callback.message:
+                text, kb = _searching_view(party.id)
+                await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
             return
 
-    await safe_answer_callback(
-        callback, "در صف نبرد قرار گرفتید! به‌محض پیدا شدن حریف هم‌سطح، نبرد آغاز می‌شود. ⚔️",
-        show_alert=True,
-    )
+        # Match found immediately — precompute the battle BEFORE narration.
+        state = await AppleBattleService.build_match_state(session, match)
+        if state is None:
+            await safe_answer_callback(
+                callback, "کارت یکی از بازیکنان در دسترس نیست؛ دوباره تلاش کنید 🍏", show_alert=True
+            )
+            return
+        import json as _json
+
+        match.game_state = _json.dumps(state, ensure_ascii=False)
+        await session.flush()
+
+        await safe_answer_callback(callback, "حریف پیدا شد! ⚔️✨")
+
+        # 1. Group 1 message
+        text_g1 = render_match_found_for_group(match, match.group1_id)
+        kb_g1 = get_acceptance_keyboard(match.id, has_accepted=False)
+        if callback.message and callback.message.chat.id == match.group1_id:
+            msg1 = await callback.message.edit_text(text_g1, reply_markup=kb_g1, parse_mode="Markdown")
+            match.group1_message_id = msg1.message_id
+        else:
+            msg1 = await bot.send_message(match.group1_id, text_g1, reply_markup=kb_g1, parse_mode="Markdown")
+            match.group1_message_id = msg1.message_id
+
+        # 2. Group 2 message
+        text_g2 = render_match_found_for_group(match, match.group2_id)
+        kb_g2 = get_acceptance_keyboard(match.id, has_accepted=False)
+        msg2 = await bot.send_message(match.group2_id, text_g2, reply_markup=kb_g2, parse_mode="Markdown")
+        match.group2_message_id = msg2.message_id
+
+        await session.flush()
+
+
+@router.callback_query(F.data == "ab_cancel")
+async def handle_ab_cancel(callback: CallbackQuery, bot: Bot):
+    """EXPLICIT cancel: the only action that dequeues (locked decision)."""
+    user = callback.from_user
+    if not user:
+        return
+
+    from sib.matchmaking.matcher import MatchmakingService
+
+    async with get_session() as session:
+        try:
+            party = await _find_my_battle_party(
+                session, callback.message.chat.id if callback.message else 0, user.id
+            )
+            if party and party.status == PartyStatus.IN_QUEUE:
+                await MatchmakingService.cancel_matchmaking(session, party.id, user.id)
+            await AppleBattleService.dequeue(session, user.id)
+        except (InvalidActionException, PartyNotFoundException) as e:
+            await safe_answer_callback(callback, e.message, show_alert=True)
+            return
+
+    text, kb = await _select_view(user.id)
+    await safe_answer_callback(callback, "جستجوی حریف لغو شد 🍏")
+    await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
+
+
+@router.callback_query(F.data == "ab_status")
+async def handle_ab_status(callback: CallbackQuery, bot: Bot):
+    """Refresh the searching screen (queue is untouched)."""
+    user = callback.from_user
+    if not user:
+        return
+
+    async with get_session() as session:
+        party = await _find_my_battle_party(
+            session, callback.message.chat.id if callback.message else 0, user.id
+        )
+
+    if party and party.status == PartyStatus.IN_QUEUE:
+        text, kb = _searching_view(party.id)
+        await safe_answer_callback(callback, "هنوز در جستجو هستید ⏳")
+    else:
+        loadout = None
+        async with get_session() as session:
+            loadout = await AppleBattleService.get_loadout(session, user.id)
+        if loadout:
+            text, kb = await _ready_view(user.id)
+            await safe_answer_callback(callback, "آماده‌ی نبرد ⚔️")
+        else:
+            text, kb = await _select_view(user.id)
+            await safe_answer_callback(callback, "کارت خود را انتخاب کنید ⚔️")
+    await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
+
+
+# ---------------------------------------------------------------------------
+# Leaderboard
+# ---------------------------------------------------------------------------
 
 
 @router.callback_query(F.data == "ab_board")

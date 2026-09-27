@@ -1,18 +1,29 @@
-"""Apple Battle service (Phase 14) — «نبرد سیبی».
+"""Apple Battle (نبرد سیبی) — staged narrative battles on SHARED matchmaking.
 
-Separate matchmaking: a FIFO queue pairs players at the SAME card level.
-Battle resolution is fully controlled:
-- deterministic inputs (card stats, character hidden modifiers, passives),
-- one round,
-- seeded RNG with the seed DOCUMENTED in the battle record,
-- the result is PRECOMPUTED and persisted (with the balance versions of
-  the cards/characters used) BEFORE the narration is generated,
-- the winner receives exactly +1 seedling (idempotent).
+Audit finding (2026-09-27): the original implementation built its OWN queue
+(``AppleBattleQueueEntry``) and its OWN pairing (``try_match``/``_create_battle``),
+duplicating the matchmaking service. Per the redesign decision Apple Battle now
+uses the REAL shared matchmaking pipeline end to end:
 
-Narration is generated from the persisted result only — the story can
-never change the outcome.
+    pick card (loadout) → solo Party → MatchmakingService.enqueue_party
+    → find_and_create_match (cross-group, atomic) → shared Match + acceptance
+    → precomputed battle plan in match.game_state → staged narrative
+    → MatchResultService.apply_match_result (seedling/stats/parties)
+    → +5 apples for the winner → cleanup
+
+The win formula is UNCHANGED (locked decision):
+
+    effective = (Power + 1.05*Speed + 0.95*Intelligence)
+                * product(1 + hidden_param*0.1)      [hidden character mods]
+    p(player1 wins) = 1 / (1 + 10 ** ((score2 - score1) / 60))
+    winner = seeded persisted RNG draw against p
+
+The outcome is computed and persisted (in ``match.game_state``) BEFORE any
+narration and never changes after the fact. Narration only advances the plan
+cursor; the result is fixed.
 """
 
+import asyncio
 import json
 import random
 import uuid
@@ -21,6 +32,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from sib.core.logging import Events, log_event, logger
 from sib.database.models import (
@@ -28,53 +40,69 @@ from sib.database.models import (
     AppleBattleQueueEntry,
     AppleBattleStatus,
     Character,
+    Match,
+    MatchPlayer,
+    MatchState,
     PlayerCard,
     SeedlingAward,
     SeedlingInventory,
 )
-from sib.services.config_store import ConfigService
-from sib.services.player_cards import PlayerCardService
-from sib.services.seedling import SeedlingService
+from sib.database.connection import get_session
 
 
 class BattleError(ValueError):
-    """Raised for invalid apple battle operations."""
+    """Apple Battle domain error (kept for compatibility)."""
 
 
 class AppleBattleService:
-    """Queue matchmaking, controlled result computation, narration."""
+    """Precomputed Apple Battle logic + shared-match presentation."""
 
     # ------------------------------------------------------------------
-    # Queue
+    # Card loadout ("queue entry" table reused as a persistent selection)
     # ------------------------------------------------------------------
     @classmethod
-    async def enqueue(cls, session: AsyncSession, user_id: int, card_id: int) -> AppleBattleQueueEntry:
-        card = await session.get(PlayerCard, card_id)
-        if not card or card.user_id != user_id:
-            raise BattleError("کارت موردنظر متعلق به شما نیست.")
+    async def set_loadout(
+        cls,
+        session,
+        user_id: int,
+        card_id: int,
+    ) -> AppleBattleQueueEntry:
+        """Select the battle card (exactly one loadout per user).
 
-        existing = await session.scalar(
+        Ownership is enforced here (root cause): a user can never load
+        someone else's card. Re-selecting replaces the loadout (upsert).
+        """
+        card = await session.get(PlayerCard, card_id)
+        if card is None or card.user_id != user_id:
+            raise BattleError("کارت موردنظر متعلق به شما نیست.")
+        entry = await session.scalar(
             select(AppleBattleQueueEntry).where(AppleBattleQueueEntry.user_id == user_id)
         )
-        if existing:
-            raise BattleError("شما همین حالا در صف نبرد هستید!")
-
         now = datetime.now(timezone.utc)
-        timeout = int(await ConfigService.get(session, "apple_battle_queue_timeout_seconds"))
-        entry = AppleBattleQueueEntry(
-            user_id=user_id,
-            card_id=card_id,
-            level=card.level,
-            queued_at=now,
-            expires_at=now + timedelta(seconds=timeout),
-        )
-        session.add(entry)
+        if entry:
+            entry.card_id = card.id
+            entry.level = card.level
+            entry.queued_at = now
+        else:
+            entry = AppleBattleQueueEntry(
+                user_id=user_id, card_id=card.id, level=card.level, queued_at=now
+            )
+            session.add(entry)
         await session.flush()
-        log_event(Events.APPLE_BATTLE_EVENT, {"action": "enqueued", "user_id": user_id, "level": card.level})
         return entry
 
+    # Kept name for compatibility; this is now the loadout setter.
+    enqueue = set_loadout
+
     @classmethod
-    async def dequeue(cls, session: AsyncSession, user_id: int) -> bool:
+    async def get_loadout(cls, session, user_id: int) -> Optional[AppleBattleQueueEntry]:
+        return await session.scalar(
+            select(AppleBattleQueueEntry).where(AppleBattleQueueEntry.user_id == user_id)
+        )
+
+    @classmethod
+    async def dequeue(cls, session, user_id: int) -> bool:
+        """Clear the selected card (explicit user action only)."""
         entry = await session.scalar(
             select(AppleBattleQueueEntry).where(AppleBattleQueueEntry.user_id == user_id)
         )
@@ -82,78 +110,403 @@ class AppleBattleService:
             return False
         await session.delete(entry)
         await session.flush()
-        log_event(Events.APPLE_BATTLE_EVENT, {"action": "dequeued", "user_id": user_id})
         return True
 
     # ------------------------------------------------------------------
-    # Matchmaking (separate system, same-level only, FIFO)
+    # Precomputed plan (formula UNCHANGED)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _effective_score(card: PlayerCard, character: Optional[Character]) -> float:
+        base = card.power * 1.0 + card.speed * 1.05 + card.intelligence * 0.95
+        if character:
+            hidden = character.hidden_modifier_params
+            for key, value in hidden.items():
+                if isinstance(value, (int, float)):
+                    base *= 1.0 + float(value) * 0.1  # controlled, small effects
+        return round(base, 2)
+
+    @classmethod
+    def _compose_plan(
+        cls,
+        *,
+        player1_id: int,
+        player2_id: int,
+        name1: str,
+        name2: str,
+        card_name1: str,
+        card_name2: str,
+        level: int,
+        winner_id: int,
+        seed: str,
+    ) -> List[Dict[str, Any]]:
+        """Deterministic staged narrative beats (seeded, never changes outcome)."""
+        rng = random.Random(f"plan:{seed}")
+        winner_name = name1 if winner_id == player1_id else name2
+        winner_card = card_name1 if winner_id == player1_id else card_name2
+        loser_name = name2 if winner_id == player1_id else name1
+
+        intros = [
+            "در دل باغ‌های افسانه‌ای سیب، دو جنگجو رودرروی هم ایستادند...",
+            "هوا سنگین بود و برگ‌ها در سکوت به تماشا ایستاده بودند...",
+            "شیپور نبرد نواخته شد و زمین لرزید...",
+        ]
+        rounds_a = [
+            f"{name1} با تمام قدرت حمله کرد و {name2} با هوشمندی ضربه را دفع کرد؛ اما طوفان ادامه یافت.",
+            f"ضربه‌ای مهیب میان {name1} و {name2} رد و بدل شد؛ شکوفه‌های سیب در هوا پرپر شدند.",
+            f"لحظه‌ای نفس‌گیر فرا رسید؛ {name1} و {name2} هیچ‌کدام کوتاه نیامدند...",
+        ]
+        rounds_b = [
+            f"{name2} موضع گرفت و {name1} با چرخشی سریع از کنار ضربه گذشت؛ تماشاگران میخکوب شدند.",
+            f"صدای برخورد دو کارت پیچید؛ {name1} و {name2} همچنان ایستاده بودند.",
+            f"نفس‌ها در سینه حبس شد؛ {name1} و {name2} برای آخرین فرصت آماده می‌شدند...",
+        ]
+        rounds_c = [
+            f"زمین نبرد لرزید؛ {name1} و {name2} آخرین نیروی خود را جمع کردند.",
+            f"برگ‌های سیب باران شد؛ {name1} و {name2} در میان طوفان جنگیدند.",
+            f"لحظه‌ی سرنوشت نزدیک می‌شد؛ {name1} در برابر {name2}...",
+        ]
+        endings = [
+            f"و سرانجام، {winner_name} با یک ضربه‌ی نهایی، پیروز میدان شد! 🍎",
+            f"در آخرین ثانیه، {winner_name} بر {loser_name} غلبه کرد و کلاه‌پیروزی را بر سر گذاشت! 🏆",
+            f"پیروزی از آنِ {winner_name} شد؛ تماشاگران با شور و شادی فریاد زدند! 🎉",
+        ]
+
+        intro_text = (
+            "🍎 **نبرد سیبی آغاز شد!** 🍎\n\n"
+            f"⚔️ {name1} با **{card_name1}** (سطح {level})\n"
+            f"⚔️ {name2} با **{card_name2}** (سطح {level})\n\n"
+            f"{rng.choice(intros)}"
+        )
+        finale_text = (
+            f"{rng.choice(endings)}\n\n"
+            f"🏆 **برنده: {winner_name}** با **{winner_card}**\n"
+            "🎁 پاداش پیروزی: ۱ نهال 🌱 + ۵ سیب 🍏"
+        )
+        return [
+            {"phase": "intro", "text": intro_text},
+            {"phase": "round", "round": 1, "text": rng.choice(rounds_a)},
+            {"phase": "round", "round": 2, "text": rng.choice(rounds_b)},
+            {"phase": "round", "round": 3, "text": rng.choice(rounds_c)},
+            {"phase": "finale", "text": finale_text},
+        ]
+
+    @classmethod
+    async def build_match_state(cls, session, match: Match) -> Optional[Dict[str, Any]]:
+        """Build the FULL precomputed engine state for a freshly found match.
+
+        Cards come from both players' loadouts. The outcome is computed with
+        the UNCHANGED formula and seeded RNG, and returned as ``match.game_state``
+        content — persisted at match-found time, BEFORE any narration.
+        Returns None when a loadout/card is missing.
+        """
+        players = list(match.players)
+        if len(players) != 2:
+            return None
+
+        players_map: Dict[str, Any] = {}
+        cards_map: Dict[str, Any] = {}
+        loadouts: Dict[int, Optional[AppleBattleQueueEntry]] = {}
+        card_objs: Dict[int, Optional[PlayerCard]] = {}
+        char_objs: Dict[int, Optional[Character]] = {}
+
+        for p in players:
+            name = (
+                p.user.display_name
+                if getattr(p, "user", None) and p.user.display_name
+                else f"بازیکن {p.user_id}"
+            )
+            players_map[str(p.user_id)] = {
+                "name": name,
+                "group_id": p.group_id,
+                "team": p.team,
+            }
+            loadout = await cls.get_loadout(session, p.user_id)
+            loadouts[p.user_id] = loadout
+            card = await session.get(PlayerCard, loadout.card_id) if loadout else None
+            card_objs[p.user_id] = card
+            char_objs[p.user_id] = (
+                await session.get(Character, card.character_id) if card else None
+            )
+            if not card:
+                return None
+            cards_map[str(p.user_id)] = {
+                "card_id": card.id,
+                "name": char_objs[p.user_id].name_fa
+                if char_objs[p.user_id]
+                else "جنگجوی ناشناس",
+                "power": card.power,
+                "speed": card.speed,
+                "intelligence": card.intelligence,
+                "level": card.level,
+            }
+
+        p1 = min(players, key=lambda p: p.team)
+        p2 = max(players, key=lambda p: p.team)
+        c1, ch1 = card_objs[p1.user_id], char_objs[p1.user_id]
+        c2, ch2 = card_objs[p2.user_id], char_objs[p2.user_id]
+
+        score1 = cls._effective_score(c1, ch1)
+        score2 = cls._effective_score(c2, ch2)
+
+        # Controlled RNG: documented seed, persisted with the result.
+        seed = uuid.uuid4().hex
+        rng = random.Random(seed)
+        p1_win = 1.0 / (1.0 + 10 ** ((score2 - score1) / 60.0))
+        roll = rng.random()
+        winner_is_p1 = roll < p1_win
+        winner_id = p1.user_id if winner_is_p1 else p2.user_id
+        loser_id = p2.user_id if winner_is_p1 else p1.user_id
+
+        balance_version = (ch1.balance_version if ch1 else 1) + (
+            ch2.balance_version if ch2 else 1
+        )
+
+        result = {
+            "result_version": 1,
+            "winner_id": winner_id,
+            "scores": {"player1": score1, "player2": score2},
+            "p1_win_probability": round(p1_win, 4),
+            "roll": round(roll, 6),
+            "rng_seed": seed,
+            "balance_version": balance_version,
+            "computed_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        plan = cls._compose_plan(
+            player1_id=p1.user_id,
+            player2_id=p2.user_id,
+            name1=players_map[str(p1.user_id)]["name"],
+            name2=players_map[str(p2.user_id)]["name"],
+            card_name1=cards_map[str(p1.user_id)]["name"],
+            card_name2=cards_map[str(p2.user_id)]["name"],
+            level=c1.level,
+            winner_id=winner_id,
+            seed=seed,
+        )
+
+        state = {
+            "players": players_map,
+            "cards": cards_map,
+            "battle": {
+                "winner_id": winner_id,
+                "loser_id": loser_id,
+                "win_probability": round(p1_win, 4),
+                "seed": seed,
+                "balance_version": balance_version,
+                "summary": f"نبرد سیبی با پیروزی {players_map[str(winner_id)]['name']} پایان یافت.",
+                "result": result,
+            },
+            "plan": plan,
+            "cursor": 1,  # intro is visible from the very first render
+            "current_player_id": None,
+        }
+
+        # Loadouts are consumed by this battle.
+        for uid in loadouts:
+            if loadouts[uid] is not None:
+                await session.delete(loadouts[uid])
+        await session.flush()
+        return state
+
+    # ------------------------------------------------------------------
+    # Battle record (leaderboard history) + match finalization
     # ------------------------------------------------------------------
     @classmethod
-    async def try_match(cls, session: AsyncSession) -> Optional[AppleBattle]:
-        now = datetime.now(timezone.utc)
-        # Drop expired entries first.
-        expired = (
-            await session.scalars(
-                select(AppleBattleQueueEntry).where(AppleBattleQueueEntry.expires_at <= now)
-            )
-        ).all()
-        for entry in expired:
-            await session.delete(entry)
-        if expired:
+    async def record_battle(cls, session, match: Match, state: Dict[str, Any]) -> AppleBattle:
+        """Create (idempotent per match) the AppleBattle history row."""
+        existing = await session.scalar(
+            select(AppleBattle).where(AppleBattle.match_id == match.id)
+        )
+        if existing:
+            return existing
+
+        battle = state["battle"]
+        cards = state["cards"]
+        team_ids = sorted(
+            state["players"].keys(), key=lambda k: state["players"][k]["team"]
+        )
+        p1_id, p2_id = int(team_ids[0]), int(team_ids[1])
+        level = int(cards[str(p1_id)]["level"])
+
+        row = AppleBattle(
+            player1_id=p1_id,
+            player2_id=p2_id,
+            player1_card_id=int(cards[str(p1_id)]["card_id"]),
+            player2_card_id=int(cards[str(p2_id)]["card_id"]),
+            level=level,
+            match_id=match.id,
+            status=AppleBattleStatus.RESULT_READY,
+            winner_id=battle["winner_id"],
+            result_json=json.dumps(battle["result"], ensure_ascii=False),
+            rng_seed=battle["seed"],
+            balance_version=battle["balance_version"],
+            matched_at=datetime.now(timezone.utc),
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        )
+        session.add(row)
+        await session.flush()
+        return row
+
+    @classmethod
+    async def finalize_match(
+        cls,
+        session,
+        match: Match,
+        battle_id: int,
+    ) -> None:
+        """Finish the shared match + award the winner (idempotent).
+
+        - Outcome/statistics/seedling/party release go through the SHARED
+          ``MatchResultService.apply_match_result`` (exactly ONE seedling via
+          the normal match-win ledger).
+        - Winner additionally receives +5 apples (idempotent per battle).
+        - Loser receives nothing (locked decision).
+        """
+        from sib.games.apple_battle.engine import AppleBattleEngine
+        from sib.services.apple_wallet import AppleWalletService
+        from sib.services.match_result import MatchResultService
+
+        state = json.loads(match.game_state or "{}")
+        engine = AppleBattleEngine()
+        result = engine.get_result(state)
+
+        await MatchResultService.apply_match_result(session, match, result)
+
+        battle = await session.get(AppleBattle, battle_id)
+        if battle and battle.status != AppleBattleStatus.COMPLETED:
+            battle.status = AppleBattleStatus.COMPLETED
+            battle.completed_at = datetime.now(timezone.utc)
+            battle.seedlings_awarded = 1
             await session.flush()
 
-        entries = (
-            await session.scalars(
-                select(AppleBattleQueueEntry).order_by(
-                    AppleBattleQueueEntry.level.asc(),
-                    AppleBattleQueueEntry.id.asc(),
-                )
+        winner_id = state.get("battle", {}).get("winner_id")
+        if winner_id:
+            await AppleWalletService.earn(
+                session,
+                user_id=int(winner_id),
+                amount=5,
+                reason="apple_battle_win",
+                ref_type="apple_battle",
+                ref_id=battle_id,
+                idempotency_key=f"apple_battle_win:{battle_id}",
             )
-        ).all()
-
-        seen_levels: Dict[int, AppleBattleQueueEntry] = {}
-        for entry in entries:
-            if entry.level in seen_levels:
-                first = seen_levels.pop(entry.level)
-                await session.delete(first)
-                await session.delete(entry)
-                await session.flush()
-                battle = await cls._create_battle(session, first, entry, now)
-                return battle
-            seen_levels[entry.level] = entry
-        return None
-
-    @classmethod
-    async def _create_battle(
-        cls,
-        session: AsyncSession,
-        first: AppleBattleQueueEntry,
-        second: AppleBattleQueueEntry,
-        now: datetime,
-    ) -> AppleBattle:
-        battle = AppleBattle(
-            player1_id=first.user_id,
-            player2_id=second.user_id,
-            player1_card_id=first.card_id,
-            player2_card_id=second.card_id,
-            level=first.level,
-            status=AppleBattleStatus.PENDING,
-            matched_at=now,
-            expires_at=now + timedelta(hours=1),
-        )
-        session.add(battle)
-        await session.flush()
-        log_event(
-            Events.APPLE_BATTLE_EVENT,
-            {"action": "matched", "battle_id": battle.id, "p1": first.user_id, "p2": second.user_id},
-        )
-        return battle
+            log_event(
+                Events.APPLE_BATTLE_EVENT,
+                {
+                    "action": "match_completed",
+                    "battle_id": battle_id,
+                    "match_id": match.id,
+                    "winner_id": winner_id,
+                },
+            )
 
     # ------------------------------------------------------------------
-    # Controlled result computation (precomputed + persisted)
+    # Staged narration runner (asyncio task; never blocks handlers)
     # ------------------------------------------------------------------
     @classmethod
-    async def compute_and_persist_result(cls, session: AsyncSession, battle_id: int) -> AppleBattle:
+    async def run_narration(cls, bot, match_id: int) -> None:
+        """Advance the battle plan beat by beat (~3s), then finalize."""
+        from sib.games.apple_battle.engine import BEAT_DELAY_SECONDS
+
+        try:
+            await cls._narration_loop(bot, match_id, BEAT_DELAY_SECONDS)
+        except Exception as e:  # pragma: no cover - defensive
+            logger.exception(f"Apple battle narration failed for match {match_id}: {e}")
+
+    @classmethod
+    async def _narration_loop(cls, bot, match_id: int, beat_delay: float) -> None:
+        from sib.games.apple_battle.engine import AppleBattleEngine
+
+        engine = AppleBattleEngine()
+        battle_id: Optional[int] = None
+
+        while True:
+            await asyncio.sleep(beat_delay)
+
+            edit_targets: List[Tuple[int, int]] = []
+            texts: Dict[int, str] = {}
+            finished = False
+
+            async with get_session() as session:
+                match = await session.scalar(
+                    select(Match)
+                    .where(Match.id == match_id)
+                    .options(selectinload(Match.players).selectinload(MatchPlayer.user))
+                    .execution_options(populate_existing=True)
+                    .with_for_update()
+                )
+                if (
+                    not match
+                    or match.state != MatchState.ACTIVE
+                    or not match.game_state
+                ):
+                    return
+
+                state = json.loads(match.game_state)
+                if battle_id is None:
+                    battle = await cls.record_battle(session, match, state)
+                    battle_id = battle.id
+
+                if engine.is_finished(state):
+                    await cls.finalize_match(session, match, battle_id)
+                    finished = True
+                else:
+                    state = engine.apply_action(state, 0, {"type": "advance"})
+                    match.game_state = json.dumps(state, ensure_ascii=False)
+                    if engine.is_finished(state):
+                        # Last beat just became visible; finalize next round
+                        # so viewers see the finale first.
+                        pass
+                    await session.flush()
+
+                for group_id, msg_id in (
+                    (match.group1_id, match.group1_message_id),
+                    (match.group2_id, match.group2_message_id),
+                ):
+                    if group_id and msg_id:
+                        edit_targets.append((group_id, msg_id))
+                        texts[group_id] = engine.render_for_group(
+                            state, group_id, None
+                        )
+
+            await cls._edit_boards(bot, edit_targets, texts, engine, match_id, finished)
+
+            if finished:
+                return
+
+    @staticmethod
+    async def _edit_boards(
+        bot,
+        edit_targets: List[Tuple[int, int]],
+        texts: Dict[int, str],
+        engine,
+        match_id: int,
+        finished: bool,
+    ) -> None:
+        from sib.services.game_sync import final_keyboard
+
+        for group_id, msg_id in edit_targets:
+            kb = final_keyboard() if finished else engine.get_keyboard(
+                {}, match_id, 0
+            )
+            try:
+                await bot.edit_message_text(
+                    texts[group_id],
+                    chat_id=group_id,
+                    message_id=msg_id,
+                    reply_markup=kb,
+                    parse_mode="Markdown",
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Apple battle board edit failed for group {group_id}: {e}"
+                )
+
+    # ------------------------------------------------------------------
+    # Legacy precompute + narration + completion (kept, idempotent)
+    # ------------------------------------------------------------------
+    @classmethod
+    async def compute_and_persist_result(cls, session, battle_id: int) -> AppleBattle:
         battle = await session.get(AppleBattle, battle_id)
         if not battle:
             raise BattleError("نبرد پیدا نشد.")
@@ -215,16 +568,6 @@ class AppleBattleService:
         )
         return battle
 
-    @staticmethod
-    def _effective_score(card: PlayerCard, character: Optional[Character]) -> float:
-        base = card.power * 1.0 + card.speed * 1.05 + card.intelligence * 0.95
-        if character:
-            hidden = character.hidden_modifier_params
-            for key, value in hidden.items():
-                if isinstance(value, (int, float)):
-                    base *= 1.0 + float(value) * 0.1  # controlled, small effects
-        return round(base, 2)
-
     # ------------------------------------------------------------------
     # Persian narration (10-15 seconds of reading)
     # ------------------------------------------------------------------
@@ -272,7 +615,7 @@ class AppleBattleService:
         return story + stats_line
 
     # ------------------------------------------------------------------
-    # Completion + seedling award (idempotent)
+    # Completion + rewards (idempotent)
     # ------------------------------------------------------------------
     @classmethod
     async def complete(cls, session: AsyncSession, battle_id: int) -> AppleBattle:
@@ -292,6 +635,19 @@ class AppleBattleService:
         if battle.seedlings_awarded == 0:
             awarded = await cls._award_seedling(session, battle.id, winner_id)
             battle.seedlings_awarded = 1
+
+        # Winner reward: +5 apples (idempotent per battle). Loser: nothing.
+        from sib.services.apple_wallet import AppleWalletService
+
+        await AppleWalletService.earn(
+            session,
+            user_id=winner_id,
+            amount=5,
+            reason="apple_battle_win",
+            ref_type="apple_battle",
+            ref_id=battle.id,
+            idempotency_key=f"apple_battle_win:{battle.id}",
+        )
 
         battle.status = AppleBattleStatus.COMPLETED
         battle.completed_at = datetime.now(timezone.utc)
@@ -360,26 +716,32 @@ class AppleBattleService:
                 .limit(limit)
             )
         ).all()
-        battles = dict(
-            (
-                await session.execute(
-                    select(AppleBattle.player1_id, func.count(AppleBattle.id))
-                    .where(AppleBattle.status == AppleBattleStatus.COMPLETED)
-                    .group_by(AppleBattle.player1_id)
+
+        battles = (
+            await session.execute(
+                select(
+                    AppleBattle.player1_id,
+                    func.count(AppleBattle.id).label("battles"),
                 )
-            ).all()
-        )
-        battles2 = dict(
-            (
-                await session.execute(
-                    select(AppleBattle.player2_id, func.count(AppleBattle.id))
-                    .where(AppleBattle.status == AppleBattleStatus.COMPLETED)
-                    .group_by(AppleBattle.player2_id)
+                .where(AppleBattle.status == AppleBattleStatus.COMPLETED)
+                .group_by(AppleBattle.player1_id)
+            )
+        ).all()
+        battles2 = (
+            await session.execute(
+                select(
+                    AppleBattle.player2_id,
+                    func.count(AppleBattle.id).label("battles"),
                 )
-            ).all()
-        )
-        result = []
-        for user_id, win_count in wins:
-            total = battles.get(user_id, 0) + battles2.get(user_id, 0)
-            result.append((user_id, int(win_count), int(total)))
-        return result
+                .where(AppleBattle.status == AppleBattleStatus.COMPLETED)
+                .group_by(AppleBattle.player2_id)
+            )
+        ).all()
+
+        battle_count: Dict[int, int] = {}
+        for uid, cnt in battles:
+            battle_count[uid] = battle_count.get(uid, 0) + cnt
+        for uid, cnt in battles2:
+            battle_count[uid] = battle_count.get(uid, 0) + cnt
+
+        return [(uid, w, battle_count.get(uid, 0)) for uid, w in wins]

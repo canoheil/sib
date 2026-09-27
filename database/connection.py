@@ -109,6 +109,13 @@ async def seed_default_data(
             "supports_solo": True, "supports_2v2": True, "supports_4v4": True,
             "turn_timeout_seconds": settings.BATTLESHIP_TIMEOUT,
         },
+        {
+            "code": "apple_battle",
+            "name_fa": "نبرد سیبی",
+            "description_fa": "نبرد روایی کارت‌ها با حریف واقعی از گروه‌های دیگر!",
+            "supports_solo": True, "supports_2v2": False, "supports_4v4": False,
+            "turn_timeout_seconds": 600,
+        },
     ]
 
     for g_data in default_games:

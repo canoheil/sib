@@ -7,6 +7,7 @@ from sib.games.high_card.engine import HighCardEngine
 from sib.games.tic_tac_toe.engine import TicTacToeEngine
 from sib.games.connect_four.engine import ConnectFourEngine
 from sib.games.battleship.engine import BattleshipEngine
+from sib.games.apple_battle.engine import AppleBattleEngine
 
 _GAME_ENGINES: Dict[str, BaseGameEngine] = {
     "rock_paper_scissors": RockPaperScissorsEngine(),
@@ -14,6 +15,7 @@ _GAME_ENGINES: Dict[str, BaseGameEngine] = {
     "tic_tac_toe": TicTacToeEngine(),
     "connect_four": ConnectFourEngine(),
     "battleship": BattleshipEngine(),
+    "apple_battle": AppleBattleEngine(),
 }
 
 

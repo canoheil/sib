@@ -119,7 +119,12 @@ async def handle_accept_match(callback: CallbackQuery, bot: Bot):
             from sib.games.registry import get_game_engine
             
             engine = get_game_engine(match.game.code)
-            initial_state = engine.create_initial_state(match.players, match.mode)
+            # Preserve a pre-seeded game state (e.g. Apple Battle's precomputed
+            # plan) exactly like process_game_action does; otherwise build it.
+            if match.game_state:
+                initial_state = json.loads(match.game_state)
+            else:
+                initial_state = engine.create_initial_state(match.players, match.mode)
             match.game_state = json.dumps(initial_state)
 
             # Start the first gameplay timeout immediately.
@@ -149,6 +154,12 @@ async def handle_accept_match(callback: CallbackQuery, bot: Bot):
                         await bot.edit_message_text(board_text, chat_id=group_id, message_id=msg_id, reply_markup=kb, parse_mode="Markdown")
                     except Exception as e:
                         logger.warning(f"Failed to edit board message in group {group_id}: {e}")
+
+            # Optional per-game hook (e.g. Apple Battle schedules its staged
+            # narration). Default engines implement this as a no-op.
+            after_start = getattr(engine, "after_start", None)
+            if after_start is not None:
+                await after_start(bot, match.id)
         else:
             # This side accepted, waiting for other side
             await callback.answer("مسابقه توسط شما پذیرفته شد! در انتظار تایید حریف... 🍏")

@@ -209,6 +209,7 @@ def _group_message(user, text_str):
     msg.chat.id = -6001
     msg.chat.title = "گروه سیبی"
     msg.from_user = user
+    msg.text = text_str
     msg.reply = AsyncMock()
     return msg
 
@@ -268,3 +269,51 @@ async def test_wake_word_is_silent_in_private_chats(db_session):
     bot = MagicMock()
     await handle_sib_wake_word(msg, bot)
     assert not msg.reply.called
+
+
+@pytest.mark.asyncio
+async def test_sibam_shows_apple_balance_group_and_private(db_session):
+    """'سیبام' / 'سیب من' -> the SENDER's apple balance (never the claim)."""
+    from sib.handlers.start import handle_sib_balance_word
+    from sib.services.apple_wallet import AppleWalletService
+
+    tg_user = _tg_user(770100, "موجودی‌دار")
+
+    async with get_session() as session:
+        from sib.services.user import UserService
+
+        await UserService.get_or_create_user(session, tg_user)
+        await AppleWalletService.earn(session, tg_user.id, 7, reason="test")
+        await session.commit()
+
+    # GROUP
+    msg = _group_message(tg_user, "سیبام")
+    await handle_sib_balance_word(msg, MagicMock())
+    assert msg.reply.called
+    reply_text = msg.reply.call_args.args[0]
+    assert "موجودی سیب شما" in reply_text
+    assert "7" in reply_text
+
+    # PRIVATE + second wording
+    msg2 = _group_message(tg_user, "سیب من")
+    msg2.chat.type = "private"
+    await handle_sib_balance_word(msg2, MagicMock())
+    reply_text2 = msg2.reply.call_args.args[0]
+    assert "موجودی سیب شما" in reply_text2
+    assert "7" in reply_text2
+
+
+@pytest.mark.asyncio
+async def test_sibam_never_falls_through_to_claim(db_session):
+    """The claim handler must not handle these wake words (distinct regexes)."""
+    from aiogram.types import Message
+
+    from sib.handlers.start import handle_sib_balance_word, router
+
+    tg_user = _tg_user(770101, "بدون‌ادعا")
+    msg = _group_message(tg_user, "سیبام")
+    await handle_sib_balance_word(msg, MagicMock())
+    # Balance reply only — no claim confirmation text.
+    reply_text = msg.reply.call_args.args[0]
+    assert "موجودی سیب شما" in reply_text
+    assert "ثبت شد" not in reply_text

@@ -2,6 +2,7 @@
 
 from aiogram import Router, F
 from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy import select, func
 from sib.admin.auth import IsAdminFilter
@@ -32,8 +33,10 @@ async def handle_admin_command(message: Message):
 
 
 @router.callback_query(F.data == "admin_main")
-async def handle_admin_main_menu(callback: CallbackQuery):
-    """Return to admin main menu."""
+async def handle_admin_main_menu(callback: CallbackQuery, state: FSMContext = None):
+    """Return to admin main menu. Always EXITS any admin FSM flow."""
+    if state is not None:
+        await state.clear()
     admin_text = (
         "🍏 **پنل مدیریت ربات سیب (Admin Panel)**\n\n"
         "به بخش مدیریت خوش آمدید. لطفاً گزینه مورد نظر خود را انتخاب نمایید:"

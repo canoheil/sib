@@ -2,6 +2,7 @@
 
 from aiogram import Router, F, Bot
 from aiogram.filters import CommandStart
+from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from sib.core.config import settings
 from sib.core.errors import MESSAGES
@@ -304,14 +305,14 @@ async def handle_apple_shop(callback: CallbackQuery, bot: Bot):
 
 @router.callback_query(F.data.startswith("apple_battle"))
 async def handle_apple_battle(callback: CallbackQuery, bot: Bot):
-    from sib.handlers.apple_battle import _queue_view
+    from sib.handlers.apple_battle import battle_entry_view
 
     user = callback.from_user
     if not user:
         return
     _base, origin = parse_callback(callback.data)
 
-    text, kb = await _queue_view(user.id, origin=origin)
+    text, kb = await battle_entry_view(user.id, origin=origin)
 
     await callback.answer()
     if callback.message:
@@ -413,8 +414,13 @@ async def _reply_main_menu(message: Message) -> None:
 
 
 @router.callback_query(F.data == "main_menu")
-async def handle_main_menu(callback: CallbackQuery, bot: Bot):
-    """Context-aware main menu: one button works everywhere."""
+async def handle_main_menu(callback: CallbackQuery, bot: Bot, state: FSMContext = None):
+    """Context-aware main menu: one button works everywhere.
+
+    Navigating home ALWAYS exits any active FSM flow (admin flows etc.).
+    """
+    if state is not None:
+        await state.clear()
     text, kb = _main_menu_text_and_kb(
         callback.from_user, callback.message.chat if callback.message else None
     )
@@ -439,18 +445,37 @@ async def handle_sib_games_word(message: Message, bot: Bot):
     """'سیب بازی' / 'سیب منو' routing.
 
     PRIVATE:   سیب منو -> Main Menu | سیب بازی -> Games Menu
-    GROUP:     سیب منو -> Games Menu | سیب بازی -> Games Menu
+    GROUP:     سیب منو -> GROUP Main Menu | سیب بازی -> Games Menu
 
     Distinct regexes: these NEVER fall through to the 'سیب' claim action.
     """
     text_lower = (message.text or "").strip()
-    if message.chat.type in ("group", "supergroup"):
-        await _reply_games_menu(message)
-        return
     if text_lower.endswith("منو"):
         await _reply_main_menu(message)
     else:
         await _reply_games_menu(message)
+
+
+@router.message(F.text.regexp(r"^\s*(سیبام|سیب\s+من)\s*$"))
+async def handle_sib_balance_word(message: Message, bot: Bot):
+    """'سیبام' / 'سیب من' -> show the SENDER's apple balance.
+
+    Uses the authoritative AppleWalletService balance (group + private).
+    Never falls through to the 'سیب' claim action.
+    """
+    user = message.from_user
+    if not user:
+        return
+
+    from sib.services.apple_wallet import AppleWalletService
+
+    async with get_session() as session:
+        from sib.services.user import UserService
+
+        await UserService.get_or_create_user(session, user)
+        balance = await AppleWalletService.get_balance(session, user.id)
+
+    await message.reply(f"🍏 موجودی سیب شما: {balance}", parse_mode="Markdown")
 
 
 @router.message(F.text.regexp(r"^\s*سیب\s+پروفایل\s*$"))

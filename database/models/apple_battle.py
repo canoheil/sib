@@ -9,7 +9,7 @@ changes after the fact.
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import BigInteger, DateTime, Integer, String, Text
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from sib.database.base import Base, TimestampMixin
@@ -31,6 +31,10 @@ class AppleBattle(Base, TimestampMixin):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     player1_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
     player2_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
+    # Shared matchmaking link (nullable for legacy rows).
+    match_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey("matches.id", ondelete="SET NULL"), index=True, nullable=True
+    )
     player1_card_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     player2_card_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     level: Mapped[int] = mapped_column(Integer, nullable=False)
