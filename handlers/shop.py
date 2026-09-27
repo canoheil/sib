@@ -60,8 +60,10 @@ async def cmd_shop(message: Message, bot: Bot):
     user = message.from_user
     if not user:
         return
+    from sib.services.banner import send_screen_reply
+
     text, kb = await _shop_view(user.id)
-    await message.reply(text, reply_markup=kb, parse_mode="Markdown")
+    await send_screen_reply(message, "shop", text, kb)
 
 
 @router.callback_query(F.data == "shop_refresh")

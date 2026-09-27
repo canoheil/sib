@@ -409,8 +409,10 @@ def _main_menu_text_and_kb(user, chat) -> tuple:
 
 
 async def _reply_main_menu(message: Message) -> None:
+    from sib.services.banner import send_screen_reply
+
     text, kb = _main_menu_text_and_kb(message.from_user, message.chat)
-    await message.reply(text, reply_markup=kb, parse_mode="Markdown")
+    await send_screen_reply(message, "main_menu", text, kb)
 
 
 @router.callback_query(F.data == "main_menu")
@@ -430,6 +432,7 @@ async def handle_main_menu(callback: CallbackQuery, bot: Bot, state: FSMContext 
 
 async def _reply_games_menu(message: Message) -> None:
     from sib.handlers.party.handlers import build_games_menu
+    from sib.services.banner import send_screen_reply
 
     async with get_session() as session:
         if message.from_user:
@@ -437,7 +440,7 @@ async def _reply_games_menu(message: Message) -> None:
         await GroupService.get_or_create_group(session, message.chat)
         text, kb = await build_games_menu(session, message.chat.id)
 
-    await message.reply(text, reply_markup=kb, parse_mode="Markdown")
+    await send_screen_reply(message, "games", text, kb)
 
 
 @router.message(F.text.regexp(r"^\s*سیب\s+(بازی|منو)\s*$"))
@@ -560,11 +563,12 @@ async def _open_sender_garden(message: Message) -> None:
         return
 
     from sib.handlers.garden import _render_garden
+    from sib.services.banner import send_screen_reply
 
     async with get_session() as session:
         await UserService.get_or_create_user(session, user)
         text, kb = await _render_garden(user.id, session)
-        sent = await message.reply(text, reply_markup=kb, parse_mode="Markdown")
+        sent = await send_screen_reply(message, "garden", text, kb)
         if sent is not None and sent.message_id:
             await PanelOwnershipService.claim(
                 session,

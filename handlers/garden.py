@@ -115,8 +115,10 @@ async def cmd_garden(message: Message, bot: Bot):
         return
 
     async with get_session() as session:
+        from sib.services.banner import send_screen_reply
+
         text, kb = await _render_garden(user.id, session)
-        sent = await message.reply(text, reply_markup=kb, parse_mode="Markdown")
+        sent = await send_screen_reply(message, "garden", text, kb)
         if sent is not None and sent.message_id:
             await PanelOwnershipService.claim(
                 session,

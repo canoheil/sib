@@ -42,10 +42,14 @@ def format_leaderboard_text(top_groups: list) -> str:
 async def cmd_leaderboard(message: Message):
     """Show global group leaderboard."""
     async with get_session() as session:
+        from sib.services.banner import send_screen_reply
+
         top_groups = await LeaderboardService.get_top_groups(session, limit=10)
         text = format_leaderboard_text(top_groups)
         is_group = message.chat.type in ("group", "supergroup")
-        await message.reply(text, reply_markup=get_leaderboard_keyboard(is_group=is_group), parse_mode="Markdown")
+        await send_screen_reply(
+            message, "leaderboard", text, get_leaderboard_keyboard(is_group=is_group)
+        )
 
 
 @router.callback_query(F.data == "show_leaderboard")

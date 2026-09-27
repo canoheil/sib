@@ -155,6 +155,36 @@ async def safe_edit_message_text(
     )
 
 
+async def safe_edit_message_caption(
+    bot: Bot,
+    chat_id: int,
+    message_id: int,
+    text: str,
+    reply_markup: Optional[InlineKeyboardMarkup] = None,
+    parse_mode: Optional[str] = "Markdown",
+    max_attempts: int = 3,
+) -> bool:
+    """Edit a PHOTO message's caption (the art itself is kept)."""
+    return await _run_edit_attempts(
+        lambda: bot.edit_message_caption(
+            caption=text,
+            chat_id=chat_id,
+            message_id=message_id,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+        ),
+        fallback_factory=lambda: bot.edit_message_caption(
+            caption=text,
+            chat_id=chat_id,
+            message_id=message_id,
+            reply_markup=reply_markup,
+            parse_mode=None,
+        ),
+        max_attempts=max_attempts,
+        context=f"caption of message {message_id} in chat {chat_id}",
+    )
+
+
 async def safe_answer_callback(
     callback: CallbackQuery,
     text: Optional[str] = None,
@@ -189,7 +219,20 @@ async def safe_edit_callback_message(
     if chat is not None:
         chat_id = getattr(chat, "id", None)
 
+    # Photo screens (banner messages) are edited via their CAPTION; the
+    # illustration itself is kept. Plain text screens use edit_message_text.
+    is_photo = getattr(message, "content_type", None) == "photo"
+
     if message_id and chat_id:
+        if is_photo:
+            return await safe_edit_message_caption(
+                bot,
+                chat_id=chat_id,
+                message_id=message_id,
+                text=text,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+            )
         return await safe_edit_message_text(
             bot,
             chat_id=chat_id,
