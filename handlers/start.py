@@ -2,7 +2,7 @@
 
 from aiogram import Router, F, Bot
 from aiogram.filters import CommandStart
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from sib.core.config import settings
 from sib.core.errors import MESSAGES
 from sib.core.logging import logger, log_event, Events
@@ -127,6 +127,205 @@ async def handle_help_menu(callback: CallbackQuery):
     await callback.answer()
     if callback.message:
         await callback.message.answer(help_text, parse_mode="Markdown")
+
+
+# ---------------------------------------------------------------------------
+# Apple Ecosystem main-menu navigation
+# ---------------------------------------------------------------------------
+
+@router.callback_query(F.data == "apple_garden")
+async def handle_apple_garden(callback: CallbackQuery, bot: Bot):
+    if callback.message and callback.message.chat.type != "private":
+        await callback.answer(
+            "🌳 باغ شخصی فقط در چت خصوصی قابل مدیریت است؛ به پیوی سیب بیایید!",
+            show_alert=True,
+        )
+        return
+
+    from sib.handlers.garden import _render_garden
+
+    user = callback.from_user
+    if not user:
+        return
+
+    async with get_session() as session:
+        text, kb = await _render_garden(user.id, session)
+
+    await callback.answer()
+    if callback.message:
+        await callback.message.edit_text(
+            text,
+            reply_markup=kb,
+            parse_mode="Markdown",
+        )
+
+
+@router.callback_query(F.data == "apple_cards")
+async def handle_apple_cards(callback: CallbackQuery, bot: Bot):
+    from sib.services.wiki import CollectionService
+
+    user = callback.from_user
+    if not user:
+        return
+
+    async with get_session() as session:
+        text = await CollectionService.render_collection(session, user.id)
+
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="📚 ویکی کاراکترها",
+                    callback_data="apple_wiki",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🛒 فروشگاه",
+                    callback_data="apple_shop",
+                )
+            ],
+        ]
+    )
+
+    await callback.answer()
+    if callback.message:
+        await callback.message.edit_text(
+            text,
+            reply_markup=kb,
+            parse_mode="Markdown",
+        )
+
+
+@router.callback_query(F.data == "apple_shop")
+async def handle_apple_shop(callback: CallbackQuery, bot: Bot):
+    from sib.handlers.shop import _shop_view
+
+    user = callback.from_user
+    if not user:
+        return
+
+    text, kb = await _shop_view(user.id)
+
+    await callback.answer()
+    if callback.message:
+        await callback.message.edit_text(
+            text,
+            reply_markup=kb,
+            parse_mode="Markdown",
+        )
+
+
+@router.callback_query(F.data == "apple_battle")
+async def handle_apple_battle(callback: CallbackQuery, bot: Bot):
+    from sib.handlers.apple_battle import _queue_view
+
+    user = callback.from_user
+    if not user:
+        return
+
+    text, kb = await _queue_view(user.id)
+
+    await callback.answer()
+    if callback.message:
+        await callback.message.edit_text(
+            text,
+            reply_markup=kb,
+            parse_mode="Markdown",
+        )
+
+
+@router.callback_query(F.data == "apple_profile")
+async def handle_apple_profile(callback: CallbackQuery, bot: Bot):
+    from sqlalchemy import func, select
+
+    from sib.database.models import AppleBattle, AppleBattleStatus
+    from sib.services.apple_wallet import AppleWalletService
+    from sib.services.seedling import SeedlingService
+    from sib.services.player_cards import PlayerCardService
+
+    user = callback.from_user
+    if not user:
+        return
+
+    async with get_session() as session:
+        cards = await PlayerCardService.list_cards(session, user.id)
+        seedlings = await SeedlingService.get_total(session, user.id)
+        apples = await AppleWalletService.get_balance(session, user.id)
+
+        wins = await session.scalar(
+            select(func.count(AppleBattle.id))
+            .where(AppleBattle.winner_id == user.id)
+            .where(AppleBattle.status == AppleBattleStatus.COMPLETED)
+        )
+
+        battles = await session.scalar(
+            select(func.count(AppleBattle.id)).where(
+                (
+                    (AppleBattle.player1_id == user.id)
+                    | (AppleBattle.player2_id == user.id)
+                )
+                & (AppleBattle.status == AppleBattleStatus.COMPLETED)
+            )
+        )
+
+        fav_text = None
+        for card in cards:
+            if getattr(card, "is_favorite", False):
+                character = await session.get(
+                    __import__("sib.database.models", fromlist=["Character"]).Character,
+                    card.character_id,
+                )
+                if character:
+                    fav_text = character.name_fa
+                break
+
+    lines = [
+        f"👤 **پروفایل سیبی {user.first_name or 'شما'}** 🍏",
+        "",
+        f"🍎 سیب: `{apples}`",
+        f"🌱 نهال: `{seedlings}`",
+        f"🎴 تعداد کارت‌ها: `{len(cards)}`",
+        fav_text.strip() if fav_text else "⭐ کارت اصلی: انتخاب نشده",
+        f"⚔️ نبردهای سیبی: `{battles or 0}` | برد: `{wins or 0}`",
+    ]
+
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🎴 کارت‌های من",
+                    callback_data="apple_cards",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🌳 باغ من",
+                    callback_data="apple_garden",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🛒 فروشگاه",
+                    callback_data="apple_shop",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⚔️ نبرد سیبی",
+                    callback_data="apple_battle",
+                )
+            ],
+        ]
+    )
+
+    await callback.answer()
+    if callback.message:
+        await callback.message.edit_text(
+            "\n".join(lines),
+            reply_markup=kb,
+            parse_mode="Markdown",
+        )
 
 
 @router.message(F.text.regexp(r"^\s*سیب\s*$"))

@@ -25,10 +25,47 @@ def get_membership_keyboard(channel_link: str) -> InlineKeyboardMarkup:
 
 
 def get_private_welcome_keyboard(bot_username: str) -> InlineKeyboardMarkup:
-    """Keyboard for private chat /start."""
+    """Main Apple Ecosystem keyboard for private chat."""
     add_group_url = f"https://t.me/{bot_username}?startgroup=true"
+
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🌳 باغ من",
+                    callback_data="apple_garden",
+                ),
+                InlineKeyboardButton(
+                    text="🎴 کارت‌های من",
+                    callback_data="apple_cards",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🛒 فروشگاه",
+                    callback_data="apple_shop",
+                ),
+                InlineKeyboardButton(
+                    text="📚 ویکی کاراکترها",
+                    callback_data="apple_wiki",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⚔️ نبرد سیبی",
+                    callback_data="apple_battle",
+                ),
+                InlineKeyboardButton(
+                    text="🔄 مبادله کارت",
+                    callback_data="apple_trade",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="👤 پروفایل من",
+                    callback_data="apple_profile",
+                ),
+            ],
             [
                 InlineKeyboardButton(
                     text="➕ افزودن سیب به گروه",
@@ -37,7 +74,7 @@ def get_private_welcome_keyboard(bot_username: str) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text="🎮 مشاهده بازی‌ها و راهنما",
+                    text="🎮 بازی‌ها و راهنما",
                     callback_data="help_menu",
                 )
             ],
@@ -47,7 +84,7 @@ def get_private_welcome_keyboard(bot_username: str) -> InlineKeyboardMarkup:
 
 
 def get_group_welcome_keyboard() -> InlineKeyboardMarkup:
-    """Keyboard for group chat /start."""
+    """Main keyboard for group chat /start."""
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -58,9 +95,29 @@ def get_group_welcome_keyboard() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text="🏆 رتبه و ریتینگ گروه",
+                    text="🏆 رتبه و آمار گروه",
                     callback_data="group_rating_stats",
                 )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🎴 کارت‌های من",
+                    callback_data="apple_cards",
+                ),
+                InlineKeyboardButton(
+                    text="🛒 فروشگاه",
+                    callback_data="apple_shop",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⚔️ نبرد سیبی",
+                    callback_data="apple_battle",
+                ),
+                InlineKeyboardButton(
+                    text="👤 پروفایل من",
+                    callback_data="apple_profile",
+                ),
             ],
         ]
     )

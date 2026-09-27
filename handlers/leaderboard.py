@@ -96,7 +96,7 @@ async def callback_group_rating_stats(callback: CallbackQuery):
                     raise
 
 
-@router.message(Command("stats", "profile"))
+@router.message(Command("stats"))
 async def cmd_stats(message: Message):
     """Show stats: group stats if in group, or personal player stats if in private."""
     user = message.from_user

@@ -67,6 +67,18 @@ async def cmd_wiki(message: Message, bot: Bot):
     await message.reply(text, reply_markup=kb, parse_mode="Markdown")
 
 
+@router.callback_query(F.data == "apple_wiki")
+async def handle_apple_wiki(callback: CallbackQuery, bot: Bot):
+    text, kb = await _wiki_text_and_kb(0)
+    await safe_answer_callback(callback)
+    await safe_edit_callback_message(
+        callback,
+        bot,
+        text,
+        reply_markup=kb,
+    )
+
+
 @router.callback_query(F.data.startswith("wiki_page:"))
 async def handle_wiki_page(callback: CallbackQuery, bot: Bot):
     page = int(callback.data.split(":")[1])

@@ -70,6 +70,22 @@ async def cmd_trade(message: Message, bot: Bot):
     await message.reply(text, reply_markup=kb, parse_mode="Markdown")
 
 
+@router.callback_query(F.data == "apple_trade")
+async def handle_apple_trade(callback: CallbackQuery, bot: Bot):
+    user = callback.from_user
+    if not user:
+        return
+
+    text, kb = await _pending_view(user.id)
+    await safe_answer_callback(callback)
+    await safe_edit_callback_message(
+        callback,
+        bot,
+        text,
+        reply_markup=kb,
+    )
+
+
 @router.callback_query(F.data == "trade_refresh")
 async def handle_trade_refresh(callback: CallbackQuery, bot: Bot):
     user = callback.from_user

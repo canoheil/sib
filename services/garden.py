@@ -43,6 +43,19 @@ class PlotView:
 class GardenService:
     """Planting, growth, harvest and expansion of personal gardens."""
 
+    @staticmethod
+    def _as_utc(value: Optional[datetime]) -> Optional[datetime]:
+        """Normalize DB timestamps to timezone-aware UTC datetimes.
+
+        MariaDB DATETIME values may be returned as naive datetimes even when
+        the SQLAlchemy column is declared with timezone=True.
+        """
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
     # ------------------------------------------------------------------
     # Basics
     # ------------------------------------------------------------------
@@ -69,13 +82,18 @@ class GardenService:
         log_event(Events.GARDEN_EVENT, {"user_id": user_id, "action": "created", "plots": capacity})
         return garden
 
-    @staticmethod
-    def _derive_state(plot: GardenPlot, now: datetime) -> str:
-        if plot.planted_at is None:
+    @classmethod
+    def _derive_state(cls, plot: GardenPlot, now: datetime) -> str:
+        now = cls._as_utc(now) or datetime.now(timezone.utc)
+        planted_at = cls._as_utc(plot.planted_at)
+        mature_at = cls._as_utc(plot.mature_at)
+        fruit_ready_at = cls._as_utc(plot.fruit_ready_at)
+
+        if planted_at is None:
             return PlotState.EMPTY
-        if plot.fruit_ready_at is not None and now >= plot.fruit_ready_at:
+        if fruit_ready_at is not None and now >= fruit_ready_at:
             return PlotState.FRUIT_READY
-        if plot.mature_at is not None and now >= plot.mature_at:
+        if mature_at is not None and now >= mature_at:
             return PlotState.MATURE
         return PlotState.GROWING
 
@@ -87,9 +105,9 @@ class GardenService:
             state = cls._derive_state(plot, now)
             next_dt: Optional[datetime] = None
             if state == PlotState.GROWING:
-                next_dt = plot.mature_at
+                next_dt = cls._as_utc(plot.mature_at)
             elif state == PlotState.MATURE:
-                next_dt = plot.fruit_ready_at
+                next_dt = cls._as_utc(plot.fruit_ready_at)
             seconds = 0
             if next_dt is not None:
                 seconds = max(0, int((next_dt - now).total_seconds()))
