@@ -15,6 +15,8 @@ from sib.keyboards.common import (
     get_profile_keyboard,
     nav_back_row,
 )
+from sib.services.nav import back_label_for, back_target, parse_callback, with_origin
+from sib.services.panel import PanelOwnershipService
 from sib.services.telegram_ui import safe_answer_callback, safe_edit_callback_message
 from sib.services.membership.checker import MembershipService
 from sib.services.user import UserService
@@ -115,37 +117,128 @@ async def handle_check_membership(callback: CallbackQuery, bot: Bot):
             )
 
 
+HELP_TOPICS = {
+    "rps": (
+        "🎯 سنگ، کاغذ، قیچی",
+        "🎯 **سنگ، کاغذ، قیچی**\n\n"
+        "یکی از بازی‌های سریع سیب! دو گروه در برابر هم قرار می‌گیرند؛ "
+        "هر بازیکن مخفیانه انتخابش را می‌زند و نتیجه لحظه‌ای اعلام می‌شود. "
+        "برنده‌ی بیشترین دور، قهرمان مسابقه است.",
+    ),
+    "c4": (
+        "🔴 چهار در یک ردیف",
+        "🔴 **چهار در یک ردیف (Connect Four)**\n\n"
+        "مهره‌ات را در یک ستون بنداز و قبل از حریف چهار مهره در یک ردیف (افقی، عمودی یا مورب) جور کن. "
+        "حالت‌های انفرادی، ۲ به ۲ و ۴ به ۴ دارد.",
+    ),
+    "ttt": (
+        "❌ دوز",
+        "❌ **دوز (Tic-Tac-Toe)**\n\n"
+        "کلاسیک و سریع! در یک جدول ۳ در ۳ سه نشانه در یک ردیف جور کن. "
+        "بازی انفرادی (۱ به ۱) است.",
+    ),
+    "battleship": (
+        "🚢 کشتی جنگی",
+        "🚢 **کشتی جنگی (Battleship)**\n\n"
+        "ناوگان دشمن را در مه دریا پیدا کن! به مختصات روی رادار شلیک کن؛ "
+        "آبی = شلیک به آب، 💥 = اصابت، 🔥 = غرق شدن کشتی. "
+        "حالت‌های انفرادی و تیمی دارد.",
+    ),
+    "high_card": (
+        "🃏 کارت بالا",
+        "🃏 **کارت بالا (High Card)**\n\n"
+        "سریع‌ترین بازی سیب! هر بازیکن یک کارت می‌کشد؛ کارت بالاتر می‌برد. "
+        "برای گرم‌کردن عالی است.",
+    ),
+    "apple_battle": (
+        "⚔️ نبرد سیبی",
+        "⚔️ **نبرد سیبی**\n\n"
+        "با یکی از کارت‌هایت وارد صف نبرد شو؛ سیب یک حریف هم‌سطح پیدا می‌کند و "
+        "نبرد به‌صورت خودکار انجام و روایت می‌شود. برنده نهال جایزه می‌گیرد! "
+        "لیدربورد نبرد هم همان‌جاست.",
+    ),
+    "cards": (
+        "🃏 کارت‌ها",
+        "🃏 **کارت‌های من**\n\n"
+        "کارت‌های شخصیتت را جمع کن، به‌روزرسانی‌شان کن و کارت اصلی‌ات را انتخاب کن. "
+        "از فروشگاه کارت جدید بخر یا با دوستانت مبادله کن.",
+    ),
+    "garden": (
+        "🌳 باغ",
+        "🌳 **باغ سیب**\n\n"
+        "در قطعه‌های باغت نهال بکار، صبر کن تا درخت شود و میوه‌اش را برداشت کن. "
+        "هنگام برداشت شانسِ افتادن سیب‌های کمیاب را هم داری: "
+        "🍎 معمولی، 🥇 طلایی و 🖤 ابسیدینی! "
+        "باغت را همه می‌بینند ولی فقط خودت کنترلش می‌کنی.",
+    ),
+}
+
+
+def _help_keyboard() -> InlineKeyboardMarkup:
+    buttons = []
+    row: list = []
+    for topic, (label, _text) in HELP_TOPICS.items():
+        row.append(
+            InlineKeyboardButton(text=label, callback_data=f"help_page:{topic}")
+        )
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    buttons.append([InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="main_menu")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 @router.callback_query(F.data == "help_menu")
 async def handle_help_menu(callback: CallbackQuery, bot: Bot):
-    """Show help menu in private chat."""
-    help_text = (
-        "🍏 **راهنمای بازی‌های سیب**\n\n"
-        "۱. سیب رو به گروه تلگرامی خودت اضافه کن.\n"
-        "۲. توی گروه دکمه «بازی‌های فعال گروه» رو بزن یا بازی مورد علاقه‌ت رو انتخاب کن.\n"
-        "۳. بازی‌های انفرادی (Solo) یا تیمی (2v2 و 4v4) وجود داره.\n"
-        "۴. بعد از تکمیل شدن اعضای تیم، دکمه «پیدا کردن حریف» رو بزن.\n"
-        "۵. سیب یک گروه حریف هم‌سطح از گروه‌های دیگه تلگرام پیدا می‌کنه!\n"
-        "۶. بازی مستقیماً داخل گروه خودتون انجام می‌شه و نیازی به رفتن به گروه دیگه نیست.\n\n"
-        "🏆 با برد مسابقه، تعداد بردهای گروه‌تون در جدول برترین گروه‌ها بالا می‌ره!"
+    """Paged help index (spec #13): short pages, button navigation."""
+    text = (
+        "🎮 **راهنمای بازی‌های سیب** 🍏\n\n"
+        "بخش مورد نظرت را انتخاب کن تا کوتاه و ساده توضیحش را ببینی:"
     )
-    kb = InlineKeyboardMarkup(inline_keyboard=nav_back_row("↩️ بازگشت به منوی اصلی", "main_menu"))
     await safe_answer_callback(callback)
-    await safe_edit_callback_message(callback, bot, help_text, reply_markup=kb)
+    await safe_edit_callback_message(callback, bot, text, reply_markup=_help_keyboard())
 
 
-# ---------------------------------------------------------------------------
-# Apple Ecosystem main-menu navigation
-# ---------------------------------------------------------------------------
+@router.callback_query(F.data.startswith("help_page:"))
+async def handle_help_page(callback: CallbackQuery, bot: Bot):
+    topic = callback.data.split(":")[1]
+    entry = HELP_TOPICS.get(topic)
+    if not entry:
+        await safe_answer_callback(callback, "این بخش پیدا نشد 🍏", show_alert=True)
+        return
+    _label, text = entry
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📚 بازگشت به راهنما", callback_data="help_menu")],
+            [InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="main_menu")],
+        ]
+    )
+    await safe_answer_callback(callback)
+    await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
+
+
+async def _claim_panel(callback: CallbackQuery, panel_type: str) -> None:
+    """Bind a personal panel message to its opener (DB, authoritative)."""
+    chat = getattr(callback.message, "chat", None)
+    msg_id = getattr(callback.message, "message_id", None)
+    if chat is None or not msg_id or not callback.from_user:
+        return
+    async with get_session() as session:
+        await PanelOwnershipService.claim(
+            session,
+            chat_id=chat.id,
+            message_id=msg_id,
+            user_id=callback.from_user.id,
+            panel_type=panel_type,
+        )
+        await session.commit()
+
 
 @router.callback_query(F.data == "apple_garden")
 async def handle_apple_garden(callback: CallbackQuery, bot: Bot):
-    if callback.message and callback.message.chat.type != "private":
-        await callback.answer(
-            "🌳 باغ شخصی فقط در چت خصوصی قابل مدیریت است؛ به پیوی سیب بیایید!",
-            show_alert=True,
-        )
-        return
-
+    """Open the sender's garden anywhere (public view + private control)."""
     from sib.handlers.garden import _render_garden
 
     user = callback.from_user
@@ -162,20 +255,22 @@ async def handle_apple_garden(callback: CallbackQuery, bot: Bot):
             reply_markup=kb,
             parse_mode="Markdown",
         )
+    await _claim_panel(callback, "garden")
 
 
-@router.callback_query(F.data == "apple_cards")
+@router.callback_query(F.data.startswith("apple_cards"))
 async def handle_apple_cards(callback: CallbackQuery, bot: Bot):
     from sib.services.wiki import CollectionService
 
     user = callback.from_user
     if not user:
         return
+    _base, origin = parse_callback(callback.data)
 
     async with get_session() as session:
         text = await CollectionService.render_collection(session, user.id)
 
-    kb = get_cards_keyboard()
+    kb = get_cards_keyboard(origin=origin)
 
     await callback.answer()
     if callback.message:
@@ -184,6 +279,7 @@ async def handle_apple_cards(callback: CallbackQuery, bot: Bot):
             reply_markup=kb,
             parse_mode="Markdown",
         )
+    await _claim_panel(callback, "cards")
 
 
 @router.callback_query(F.data == "apple_shop")
@@ -203,17 +299,19 @@ async def handle_apple_shop(callback: CallbackQuery, bot: Bot):
             reply_markup=kb,
             parse_mode="Markdown",
         )
+    await _claim_panel(callback, "shop")
 
 
-@router.callback_query(F.data == "apple_battle")
+@router.callback_query(F.data.startswith("apple_battle"))
 async def handle_apple_battle(callback: CallbackQuery, bot: Bot):
     from sib.handlers.apple_battle import _queue_view
 
     user = callback.from_user
     if not user:
         return
+    _base, origin = parse_callback(callback.data)
 
-    text, kb = await _queue_view(user.id)
+    text, kb = await _queue_view(user.id, origin=origin)
 
     await callback.answer()
     if callback.message:
@@ -288,6 +386,7 @@ async def handle_apple_profile(callback: CallbackQuery, bot: Bot):
             reply_markup=kb,
             parse_mode="Markdown",
         )
+    await _claim_panel(callback, "profile")
 
 
 @router.callback_query(F.data == "main_menu")
@@ -311,12 +410,7 @@ async def handle_main_menu(callback: CallbackQuery, bot: Bot):
     await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
 
-@router.message(F.text.regexp(r"^\s*سیب\s+بازی\s*$"))
-async def handle_sib_games_word(message: Message, bot: Bot):
-    """'سیب بازی' in groups opens the games menu (task #3)."""
-    if message.chat.type not in ("group", "supergroup"):
-        return
-
+async def _reply_games_menu(message: Message) -> None:
     from sib.handlers.party.handlers import build_games_menu
 
     async with get_session() as session:
@@ -326,6 +420,119 @@ async def handle_sib_games_word(message: Message, bot: Bot):
         text, kb = await build_games_menu(session, message.chat.id)
 
     await message.reply(text, reply_markup=kb, parse_mode="Markdown")
+
+
+@router.message(F.text.regexp(r"^\s*سیب\s+(بازی|منو)\s*$"))
+async def handle_sib_games_word(message: Message, bot: Bot):
+    """'سیب بازی' / 'سیب منو' (spec #3).
+
+    Distinct regexes: these NEVER fall through to the 'سیب' claim action.
+    - 'سیب بازی' (groups): the games menu.
+    - 'سیب منو': the games menu in groups, the sib main menu in PM.
+    """
+    text_lower = (message.text or "").strip()
+    if message.chat.type in ("group", "supergroup"):
+        await _reply_games_menu(message)
+        return
+    if text_lower.endswith("منو"):
+        await cmd_main_menu(message, bot)
+
+
+@router.message(F.text.regexp(r"^\s*سیب\s+پروفایل\s*$"))
+async def handle_sib_profile_word(message: Message, bot: Bot):
+    """'سیب پروفایل' opens the PROFILE OF THE SENDER (spec #4).
+
+    The subject is the message sender - never previous panel state.
+    """
+    user = message.from_user
+    if not user:
+        return
+
+    from sqlalchemy import func, select as sa_select
+
+    from sib.database.models import AppleBattle, AppleBattleStatus
+    from sib.services.apple_wallet import AppleWalletService
+    from sib.services.player_cards import PlayerCardService
+    from sib.services.seedling import SeedlingService
+
+    async with get_session() as session:
+        await UserService.get_or_create_user(session, user)
+        cards = await PlayerCardService.list_cards(session, user.id)
+        seedlings = await SeedlingService.get_total(session, user.id)
+        apples = await AppleWalletService.get_balance(session, user.id)
+        wins = await session.scalar(
+            sa_select(func.count(AppleBattle.id))
+            .where(AppleBattle.winner_id == user.id)
+            .where(AppleBattle.status == AppleBattleStatus.COMPLETED)
+        )
+        battles = await session.scalar(
+            sa_select(func.count(AppleBattle.id)).where(
+                (
+                    (AppleBattle.player1_id == user.id)
+                    | (AppleBattle.player2_id == user.id)
+                )
+                & (AppleBattle.status == AppleBattleStatus.COMPLETED)
+            )
+        )
+        fav_text = None
+        for card in cards:
+            if getattr(card, "is_favorite", False):
+                from sib.database.models import Character
+
+                character = await session.get(Character, card.character_id)
+                if character:
+                    fav_text = character.name_fa
+                break
+
+    lines = [
+        f"👤 **پروفایل سیبی {user.first_name or 'شما'}** 🍏",
+        "",
+        f"🍎 سیب: `{apples}`",
+        f"🌱 نهال: `{seedlings}`",
+        f"🎴 تعداد کارت‌ها: `{len(cards)}`",
+        fav_text.strip() if fav_text else "⭐ کارت اصلی: انتخاب نشده",
+        f"⚔️ نبردهای سیبی: `{battles or 0}` | برد: `{wins or 0}`",
+    ]
+    sent = await message.reply(
+        "\n".join(lines), reply_markup=get_profile_keyboard(), parse_mode="Markdown"
+    )
+    if sent is not None and sent.message_id:
+        async with get_session() as session:
+            await PanelOwnershipService.claim(
+                session,
+                chat_id=sent.chat.id,
+                message_id=sent.message_id,
+                user_id=user.id,
+                panel_type="profile",
+            )
+            await session.commit()
+
+
+@router.message(F.text.regexp(r"^\s*سیب\s+باغ\s*$"))
+async def handle_sib_garden_word(message: Message, bot: Bot):
+    """'سیب باغ' opens the SENDER's garden in the current chat (spec #7/#8).
+
+    Public view + private control: everyone sees it, only the owner
+    (the sender) can press its buttons.
+    """
+    user = message.from_user
+    if not user:
+        return
+
+    from sib.handlers.garden import _render_garden
+
+    async with get_session() as session:
+        await UserService.get_or_create_user(session, user)
+        text, kb = await _render_garden(user.id, session)
+        sent = await message.reply(text, reply_markup=kb, parse_mode="Markdown")
+        if sent is not None and sent.message_id:
+            await PanelOwnershipService.claim(
+                session,
+                chat_id=sent.chat.id,
+                message_id=sent.message_id,
+                user_id=user.id,
+                panel_type="garden",
+            )
 
 
 @router.message(F.text.regexp(r"^\s*سیب\s*$"))

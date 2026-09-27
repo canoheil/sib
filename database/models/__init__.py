@@ -14,6 +14,7 @@ from sib.database.models.player_stats import PlayerStats
 from sib.database.models.ad_campaign import AdCampaign, FrequencyMode
 from sib.database.models.panel import PanelOwner
 from sib.database.models.seedling import SeedlingInventory, SeedlingAward
+from sib.database.models.asset import BotAsset, UserItem
 from sib.database.models.apple import AppleWallet, AppleTransaction
 from sib.database.models.garden import Garden, GardenPlot, PlotState
 from sib.database.models.system_config import SystemConfig
@@ -54,6 +55,8 @@ __all__ = [
     "PanelOwner",
     "SeedlingInventory",
     "SeedlingAward",
+    "BotAsset",
+    "UserItem",
     "AppleWallet",
     "AppleTransaction",
     "Garden",

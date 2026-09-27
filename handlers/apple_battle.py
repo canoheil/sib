@@ -12,6 +12,7 @@ from sib.database.connection import get_session
 from sib.database.models import AppleBattle, AppleBattleStatus, Character, PlayerCard
 from sib.services.apple_battle import AppleBattleService, BattleError
 from sib.services.player_cards import PlayerCardService
+from sib.services.nav import back_label_for, back_target, parse_callback, with_origin
 from sib.services.telegram_ui import safe_answer_callback, safe_edit_callback_message
 
 router = Router(name="apple_battle")
@@ -21,7 +22,7 @@ def _kb(rows: list[list[InlineKeyboardButton]]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def _queue_view(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
+async def _queue_view(user_id: int, origin: str = None) -> tuple[str, InlineKeyboardMarkup]:
     async with get_session() as session:
         cards = await PlayerCardService.list_cards(session, user_id)
         battle_count = await session.scalar(
@@ -39,7 +40,11 @@ async def _queue_view(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
             _kb(
                 [
                     [InlineKeyboardButton(text="🏪 فروشگاه", callback_data="shop_refresh")],
-                    [InlineKeyboardButton(text="↩️ بازگشت به منوی اصلی", callback_data="main_menu")],
+                    [
+                        InlineKeyboardButton(
+                            text=back_label_for(origin), callback_data=back_target(origin)
+                        )
+                    ],
                 ]
             ),
         )
@@ -65,8 +70,17 @@ async def _queue_view(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
     buttons.append(
         [InlineKeyboardButton(text="🏆 لیدربورد نبرد", callback_data="ab_board")]
     )
-    buttons.append([InlineKeyboardButton(text="🔄 بروزرسانی", callback_data="ab_refresh")])
-    buttons.append([InlineKeyboardButton(text="↩️ بازگشت به منوی اصلی", callback_data="main_menu")])
+    buttons.append(
+        [
+            InlineKeyboardButton(
+                text="🔄 بروزرسانی",
+                callback_data=with_origin("ab_refresh", origin),
+            )
+        ]
+    )
+    buttons.append(
+        [InlineKeyboardButton(text=back_label_for(origin), callback_data=back_target(origin))]
+    )
     return "\n".join(lines), _kb(buttons)
 
 
@@ -79,19 +93,21 @@ async def cmd_battle(message: Message, bot: Bot):
     await message.reply(text, reply_markup=kb, parse_mode="Markdown")
 
 
-@router.callback_query(F.data == "ab_refresh")
+@router.callback_query(F.data.startswith("ab_refresh"))
 async def handle_ab_refresh(callback: CallbackQuery, bot: Bot):
     user = callback.from_user
     if not user:
         return
-    text, kb = await _queue_view(user.id)
+    _base, origin = parse_callback(callback.data)
+    text, kb = await _queue_view(user.id, origin=origin)
     await safe_answer_callback(callback, "بروزرسانی شد ⚔️")
     await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
 
 @router.callback_query(F.data.startswith("ab_join:"))
 async def handle_ab_join(callback: CallbackQuery, bot: Bot):
-    card_id = int(callback.data.split(":")[1])
+    base, origin = parse_callback(callback.data)
+    card_id = int(base.split(":")[1])
     user = callback.from_user
     if not user:
         return
@@ -136,7 +152,7 @@ async def handle_ab_board(callback: CallbackQuery, bot: Bot):
     kb = _kb(
         [
             [InlineKeyboardButton(text="🔄 بروزرسانی", callback_data="ab_board")],
-            [InlineKeyboardButton(text="↩️ بازگشت به منوی اصلی", callback_data="main_menu")],
+            [InlineKeyboardButton(text="↩️ بازگشت به نبرد سیبی", callback_data="apple_battle")],
         ]
     )
     await safe_answer_callback(callback)

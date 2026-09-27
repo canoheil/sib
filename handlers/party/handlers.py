@@ -197,6 +197,9 @@ async def handle_create_party(callback: CallbackQuery):
         text = render_party_card(party)
         kb = get_party_action_keyboard(party, is_member=True)
 
+        # The party card stays claimed to its CREATOR (cancel is a
+        # creator-right). Joins/views are public and pass the shared
+        # two-tier gate without any ownership (spec #6).
         await callback.answer("پارتی با موفقیت ایجاد شد! 🍏")
         if callback.message:
             await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")

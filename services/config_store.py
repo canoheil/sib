@@ -41,6 +41,28 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     # "سیب" group wake-word claim (spec: 5 apples every 5 minutes)
     "sib_claim_amount": 5,
     "sib_claim_cooldown_seconds": 5 * 60,
+    # Garden harvest drop table (spec #9/#12). Weights are RELATIVE and
+    # normalized - adding an item is a config change only. Optional
+    # "asset" references a bot_assets key for decorative media.
+    "garden_harvest_drops": [
+        {
+            "key": "apple_normal",
+            "weight": 94,
+            "message": "🍎 یک سیب معمولی از درخت افتاد.",
+        },
+        {
+            "key": "apple_gold",
+            "weight": 5,
+            "message": "✨ شانست گرفت!\n🥇 یک سیب طلایی پیدا کردی!",
+            "asset": "golden_apple",
+        },
+        {
+            "key": "apple_obsidian",
+            "weight": 1,
+            "message": "🖤 باورکردنی نیست...\nیک سیب ابسیدینی پیدا کردی!",
+            "asset": "obsidian_apple",
+        },
+    ],
 }
 
 

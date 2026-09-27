@@ -151,6 +151,17 @@ async def handle_card_panel(callback: CallbackQuery, bot: Bot):
     await safe_answer_callback(callback)
     await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
+    from sib.services.panel import PanelOwnershipService
+
+    chat = getattr(callback.message, "chat", None)
+    msg_id = getattr(callback.message, "message_id", None)
+    if chat is not None and msg_id:
+        async with get_session() as session:
+            await PanelOwnershipService.claim(
+                session, chat.id, msg_id, user.id, panel_type="card_panel"
+            )
+            await session.commit()
+
 
 @router.callback_query(F.data.startswith("card_up:"))
 async def handle_card_upgrade(callback: CallbackQuery, bot: Bot):

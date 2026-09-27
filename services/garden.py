@@ -237,6 +237,27 @@ class GardenService:
         )
         return amount
 
+    @classmethod
+    async def harvest_with_drop(
+        cls,
+        session: AsyncSession,
+        user_id: int,
+        plot_index: int,
+        rng=None,
+    ) -> tuple:
+        """Harvest (existing system) + one roll on the drop table.
+
+        Returns (apples, drop_entry). The drop is persisted as a real
+        inventory item in the SAME transaction as the harvest, so a
+        restart can never lose it. The drop table is config-driven -
+        adding items never touches this logic (spec #9/#12).
+        """
+        from sib.services.items import DropService
+
+        apples = await cls.harvest(session, user_id, plot_index)
+        drop = await DropService.roll_harvest_drop(session, user_id, rng=rng)
+        return apples, drop
+
     # ------------------------------------------------------------------
     # Expansion
     # ------------------------------------------------------------------

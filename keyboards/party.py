@@ -66,8 +66,27 @@ def get_game_selection_keyboard(
 def get_games_menu_keyboard(
     games: List[Game], active_count: int = 0
 ) -> InlineKeyboardMarkup:
-    """Screen: the games menu (parent of the active-games screen)."""
+    """Screen: the games menu (parent of the active-games screen).
+
+    Contains the DB game grid plus the extended game sections (Apple
+    Battle, Cards) with the same navigation convention as every game:
+    entered from here, Back returns here (spec #2).
+    """
+    from sib.services.nav import with_origin
+
     keyboard = _game_grid(games)
+    keyboard.append(
+        [
+            InlineKeyboardButton(
+                text="⚔️ نبرد سیبی",
+                callback_data=with_origin("apple_battle", "group_games_panel"),
+            ),
+            InlineKeyboardButton(
+                text="🃏 کارت‌ها",
+                callback_data=with_origin("apple_cards", "group_games_panel"),
+            ),
+        ]
+    )
     label = "🎮 بازی‌های فعال گروه"
     if active_count:
         label += f" ({active_count})"

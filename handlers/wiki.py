@@ -10,6 +10,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from sib.database.connection import get_session
 from sib.services.telegram_ui import safe_answer_callback, safe_edit_callback_message
+from sib.services.nav import back_label_for, back_target, parse_callback
 from sib.services.wiki import CollectionService, WikiService
 
 router = Router(name="wiki")
@@ -17,7 +18,7 @@ router = Router(name="wiki")
 WIKI_PAGE_SIZE = 6
 
 
-def _wiki_keyboard(characters, page: int, origin: str = "main_menu") -> InlineKeyboardMarkup:
+def _wiki_keyboard(characters, page: int, origin: str = None) -> InlineKeyboardMarkup:
     buttons: list[list[InlineKeyboardButton]] = []
     row: list[InlineKeyboardButton] = []
     start = page * WIKI_PAGE_SIZE
@@ -25,7 +26,7 @@ def _wiki_keyboard(characters, page: int, origin: str = "main_menu") -> InlineKe
         row.append(
             InlineKeyboardButton(
                 text=f"🍎 {character.name_fa}",
-                callback_data=f"wiki_char:{character.id}:{origin}",
+                callback_data=f"wiki_char:{character.id}" + (f":{origin}" if origin else ""),
             )
         )
         if len(row) == 2:
@@ -36,32 +37,53 @@ def _wiki_keyboard(characters, page: int, origin: str = "main_menu") -> InlineKe
 
     nav: list[InlineKeyboardButton] = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text="▶️ قبلی", callback_data=f"wiki_page:{page - 1}:{origin}"))
+        nav.append(
+            InlineKeyboardButton(
+                text="▶️ قبلی",
+                callback_data=f"wiki_page:{page - 1}" + (f":{origin}" if origin else ""),
+            )
+        )
     if start + WIKI_PAGE_SIZE < len(characters):
-        nav.append(InlineKeyboardButton(text="◀️ بعدی", callback_data=f"wiki_page:{page + 1}:{origin}"))
+        nav.append(
+            InlineKeyboardButton(
+                text="◀️ بعدی",
+                callback_data=f"wiki_page:{page + 1}" + (f":{origin}" if origin else ""),
+            )
+        )
     if nav:
         buttons.append(nav)
-    buttons.append([InlineKeyboardButton(text="🔄 بروزرسانی", callback_data=f"wiki_page:{page}:{origin}")])
-    back_label = (
-        "↩️ بازگشت به کارت‌های من" if origin == "apple_cards" else "↩️ بازگشت به منوی اصلی"
+    buttons.append(
+        [
+            InlineKeyboardButton(
+                text="🔄 بروزرسانی",
+                callback_data=f"wiki_page:{page}" + (f":{origin}" if origin else ""),
+            )
+        ]
     )
-    buttons.append([InlineKeyboardButton(text=back_label, callback_data=origin)])
+    # Shared navigation: Back goes to the screen this wiki was opened from.
+    buttons.append(
+        [InlineKeyboardButton(text=back_label_for(origin), callback_data=back_target(origin))]
+    )
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 async def _wiki_text_and_kb(
-    page: int = 0, origin: str = "main_menu"
+    page: int = 0, origin: str = None
 ) -> tuple[str, InlineKeyboardMarkup]:
     async with get_session() as session:
         characters = await WikiService.list_wiki(session)
-    back_label = (
-        "↩️ بازگشت به کارت‌های من" if origin == "apple_cards" else "↩️ بازگشت به منوی اصلی"
-    )
     if not characters:
         return (
             "📚 **ویکی شخصیت‌ها**\n\nهنوز شخصیتی منتشر نشده است.",
             InlineKeyboardMarkup(
-                inline_keyboard=[[InlineKeyboardButton(text=back_label, callback_data=origin)]]
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text=back_label_for(origin),
+                            callback_data=back_target(origin),
+                        )
+                    ]
+                ]
             ),
         )
     page = max(0, min(page, (len(characters) - 1) // WIKI_PAGE_SIZE))
@@ -80,8 +102,7 @@ async def cmd_wiki(message: Message, bot: Bot):
 
 @router.callback_query(F.data.startswith("apple_wiki"))
 async def handle_apple_wiki(callback: CallbackQuery, bot: Bot):
-    parts = callback.data.split(":")
-    origin = parts[1] if len(parts) > 1 and parts[1] else "main_menu"
+    _base, origin = parse_callback(callback.data)
     text, kb = await _wiki_text_and_kb(0, origin)
     await safe_answer_callback(callback)
     await safe_edit_callback_message(
@@ -94,9 +115,8 @@ async def handle_apple_wiki(callback: CallbackQuery, bot: Bot):
 
 @router.callback_query(F.data.startswith("wiki_page:"))
 async def handle_wiki_page(callback: CallbackQuery, bot: Bot):
-    parts = callback.data.split(":")
-    page = int(parts[1])
-    origin = parts[2] if len(parts) > 2 and parts[2] else "main_menu"
+    base, origin = parse_callback(callback.data)
+    page = int(base.split(":")[1])
     text, kb = await _wiki_text_and_kb(page, origin)
     await safe_answer_callback(callback)
     await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
@@ -104,9 +124,8 @@ async def handle_wiki_page(callback: CallbackQuery, bot: Bot):
 
 @router.callback_query(F.data.startswith("wiki_char:"))
 async def handle_wiki_char(callback: CallbackQuery, bot: Bot):
-    parts = callback.data.split(":")
-    character_id = int(parts[1])
-    origin = parts[2] if len(parts) > 2 and parts[2] else "main_menu"
+    base, origin = parse_callback(callback.data)
+    character_id = int(base.split(":")[1])
     async with get_session() as session:
         page_text = await WikiService.wiki_page(session, character_id)
     if not page_text:
@@ -115,7 +134,12 @@ async def handle_wiki_char(callback: CallbackQuery, bot: Bot):
 
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="📚 بازگشت به ویکی", callback_data=f"wiki_page:0:{origin}")]
+            [
+                InlineKeyboardButton(
+                    text="📚 بازگشت به ویکی",
+                    callback_data="wiki_page:0" + (f":{origin}" if origin else ""),
+                )
+            ]
         ]
     )
     await safe_answer_callback(callback)

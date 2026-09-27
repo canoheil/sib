@@ -1,5 +1,7 @@
 """Inline keyboards for common bot interactions."""
 
+from typing import Optional
+
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 
@@ -192,14 +194,16 @@ def nav_refresh_row(text: str, callback_data: str) -> list:
 BACK_TO_MAIN_LABEL = "↩️ بازگشت به منوی اصلی"
 
 
-def get_cards_keyboard() -> InlineKeyboardMarkup:
-    """'کارت‌های من' panel keyboard (contextual Back to main menu)."""
+def get_cards_keyboard(origin: Optional[str] = None) -> InlineKeyboardMarkup:
+    """'کارت‌های من' panel keyboard (contextual Back)."""
+    from sib.services.nav import back_label_for, back_target
+
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text="📚 ویکی کاراکترها",
-                    callback_data="apple_wiki:cards",
+                    callback_data="apple_wiki:apple_cards",
                 )
             ],
             [
@@ -210,18 +214,20 @@ def get_cards_keyboard() -> InlineKeyboardMarkup:
             ],
         ]
     )
-    keyboard.inline_keyboard.extend(nav_back_row(BACK_TO_MAIN_LABEL, "main_menu"))
+    keyboard.inline_keyboard.extend(nav_back_row(back_label_for(origin), back_target(origin)))
     return keyboard
 
 
-def get_profile_keyboard() -> InlineKeyboardMarkup:
-    """'پروفایل من' panel keyboard (contextual Back to main menu)."""
+def get_profile_keyboard(origin: Optional[str] = None) -> InlineKeyboardMarkup:
+    """'پروفایل من' panel keyboard (contextual Back)."""
+    from sib.services.nav import back_label_for, back_target, with_origin
+
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text="🎴 کارت‌های من",
-                    callback_data="apple_cards",
+                    callback_data=with_origin("apple_cards", "apple_profile"),
                 )
             ],
             [
@@ -239,10 +245,10 @@ def get_profile_keyboard() -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(
                     text="⚔️ نبرد سیبی",
-                    callback_data="apple_battle",
+                    callback_data=with_origin("apple_battle", "apple_profile"),
                 )
             ],
         ]
     )
-    keyboard.inline_keyboard.extend(nav_back_row(BACK_TO_MAIN_LABEL, "main_menu"))
+    keyboard.inline_keyboard.extend(nav_back_row(back_label_for(origin), back_target(origin)))
     return keyboard

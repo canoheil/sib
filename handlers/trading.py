@@ -85,6 +85,16 @@ async def handle_apple_trade(callback: CallbackQuery, bot: Bot):
         text,
         reply_markup=kb,
     )
+    from sib.services.panel import PanelOwnershipService
+
+    chat = getattr(callback.message, "chat", None)
+    msg_id = getattr(callback.message, "message_id", None)
+    if chat is not None and msg_id and callback.from_user:
+        async with get_session() as session:
+            await PanelOwnershipService.claim(
+                session, chat.id, msg_id, callback.from_user.id, panel_type="trade"
+            )
+            await session.commit()
 
 
 @router.callback_query(F.data == "trade_refresh")

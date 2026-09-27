@@ -44,6 +44,21 @@ REJECT_MESSAGE = (
     "🍏 این پنل مال شما نیست؛ فقط صاحب پنل می‌تواند آن را تغییر دهد یا ببندد."
 )
 
+# Short, friendly lock message for personal panels (spec: cross-user
+# state must never leak through someone else's panel message).
+LOCKED_MESSAGE = "🔒 این پنل برای کاربر دیگری باز شده."
+
+# Panel types that are PERSONAL: the opener is the subject and only the
+# owner may press ANY button (including navigation). Everything else
+# (party flows, game boards) follows the game's own public rules.
+PERSONAL_PANEL_TYPES = frozenset(
+    {"profile", "garden", "cards", "shop", "trade", "card_panel", "panel_guard_personal"}
+)
+
+
+def is_personal_panel(panel_type: Optional[str]) -> bool:
+    return panel_type in PERSONAL_PANEL_TYPES
+
 
 def is_owner_scoped_callback(data: Optional[str]) -> bool:
     """Return True when the callback mutates/closes a personal panel."""
@@ -105,6 +120,24 @@ class PanelOwnershipService:
         if row is not None:
             await session.delete(row)
             await session.flush()
+
+    @staticmethod
+    async def get_panel_context(
+        session: AsyncSession,
+        chat_id: int,
+        message_id: int,
+        fallback_user_id: int,
+    ) -> Tuple[int, Optional[str]]:
+        """(subject_user_id, panel_type) for a panel message.
+
+        The SUBJECT of a personal panel is the DB-recorded owner - never
+        the pressing user - so a shared message can never switch identity.
+        Falls back to the pressing user on unowned (public) messages.
+        """
+        row = await session.get(PanelOwner, (chat_id, message_id))
+        if row is not None:
+            return row.owner_user_id, row.panel_type
+        return fallback_user_id, None
 
     @staticmethod
     async def ensure_control(

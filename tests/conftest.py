@@ -58,6 +58,8 @@ async def db_session():
         from sqlalchemy import text
         await session.execute(text("DELETE FROM apple_battle_queue"))
         await session.execute(text("DELETE FROM apple_battles"))
+        await session.execute(text("DELETE FROM user_items"))
+        await session.execute(text("DELETE FROM bot_assets"))
         await session.execute(text("DELETE FROM trades"))
         await session.execute(text("DELETE FROM shop_entries"))
         await session.execute(text("DELETE FROM shop_rotations"))
