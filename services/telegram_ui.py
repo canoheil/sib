@@ -197,17 +197,45 @@ async def safe_answer_callback(
         logger.warning(f"Failed to answer callback query: {e}")
 
 
+async def _send_fallback(bot, chat_id, text, reply_markup=None, parse_mode="Markdown"):
+    """Send a plain text message (retrying without parse_mode on failure)."""
+    try:
+        return await bot.send_message(
+            chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode
+        )
+    except Exception:
+        return await bot.send_message(
+            chat_id, text, reply_markup=reply_markup, parse_mode=None
+        )
+
+
+async def safe_edit_message_media(bot, chat_id, message_id, photo, text, reply_markup=None, parse_mode="Markdown"):
+    """Swap a message's media (photo→photo) with an updated caption."""
+    from aiogram.types import InputMediaPhoto
+
+    media = InputMediaPhoto(media=photo, caption=text or "", parse_mode=parse_mode)
+    return await bot.edit_message_media(
+        media=media,
+        chat_id=chat_id,
+        message_id=message_id,
+        reply_markup=reply_markup,
+    )
+
+
 async def safe_edit_callback_message(
     callback: CallbackQuery,
     bot: Bot,
     text: str,
     reply_markup: Optional[InlineKeyboardMarkup] = None,
     parse_mode: Optional[str] = "Markdown",
+    photo=None,
 ) -> bool:
     """Edit the message behind a callback query via the robust editor.
 
     Falls back to the ``Message.edit_text`` API when the message handle
-    does not expose chat/message identifiers.
+    does not expose chat/message identifiers. When ``photo`` is given the
+    message media is swapped first (photo→photo); on failure the edit
+    degrades to the regular caption/text edit so the flow never breaks.
     """
     message = callback.message
     if message is None:
@@ -224,6 +252,15 @@ async def safe_edit_callback_message(
     is_photo = getattr(message, "content_type", None) == "photo"
 
     if message_id and chat_id:
+        if photo is not None:
+            try:
+                await safe_edit_message_media(
+                    bot, chat_id, message_id, photo, text,
+                    reply_markup=reply_markup, parse_mode=parse_mode,
+                )
+                return True
+            except Exception:
+                pass  # degrade to caption/text edit below
         if is_photo:
             return await safe_edit_message_caption(
                 bot,
@@ -253,3 +290,80 @@ async def safe_edit_callback_message(
         fallback_factory=_direct_edit_plain,
         context="callback message",
     )
+
+
+async def safe_edit_screen(
+    bot: Bot,
+    chat_id: int,
+    message_id: int,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+    parse_mode: str | None = "Markdown",
+    photo=None,
+):
+    """Edit a screen message without knowing whether it holds text or a photo.
+
+    With ``photo``: swap media (photo→photo) first. Otherwise — or on
+    failure — try caption edit, then text edit. Exactly one succeeds.
+    No fallback messages are sent (callers own the message lifecycle).
+    """
+    if photo is not None:
+        try:
+            await safe_edit_message_media(
+                bot, chat_id, message_id, photo, text,
+                reply_markup=reply_markup, parse_mode=parse_mode,
+            )
+            return True
+        except Exception:
+            pass
+    try:
+        await bot.edit_message_caption(
+            chat_id=chat_id,
+            message_id=message_id,
+            caption=text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+        )
+        return True
+    except Exception:
+        pass
+    try:
+        await bot.edit_message_text(
+            text,
+            chat_id=chat_id,
+            message_id=message_id,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+        )
+        return True
+    except Exception as exc:
+        if "not modified" not in str(exc).lower():
+            logger.debug("safe_edit_screen failed: %s", exc)
+        return False
+
+
+async def safe_send_screen(
+    bot: Bot,
+    chat_id: int,
+    text: str,
+    photo=None,
+    reply_markup: InlineKeyboardMarkup | None = None,
+    parse_mode: str | None = "Markdown",
+):
+    """Send a photo+caption screen, falling back to text only.
+
+    Used where a text→photo transition is impossible on edit: callers send
+    a fresh message instead. Returns the sent Message (or None).
+    """
+    if photo is not None:
+        try:
+            return await bot.send_photo(
+                chat_id,
+                photo,
+                caption=text,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+            )
+        except Exception as exc:
+            logger.debug("send photo screen failed: %s", exc)
+    return await _send_fallback(bot, chat_id, text, reply_markup, parse_mode)

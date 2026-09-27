@@ -475,7 +475,33 @@ class AppleBattleService:
                 return
 
     @staticmethod
+    async def _winner_photo(match_id: int):
+        """Winner's framed card art for the finale swap (None when unavailable)."""
+        try:
+            from sib.database.connection import get_session
+            from sib.services.character_art import photo_arg, artwork_path
+
+            async with get_session() as session:
+                battle = await session.get(AppleBattle, match_id)
+                if not battle or battle.status != AppleBattleStatus.COMPLETED:
+                    return None
+                winner_card_id = None
+                if battle.winner_id == battle.player1_id:
+                    winner_card_id = battle.player1_card_id
+                elif battle.winner_id == battle.player2_id:
+                    winner_card_id = battle.player2_card_id
+                card = await session.get(PlayerCard, winner_card_id) if winner_card_id else None
+                character = await session.get(Character, card.character_id) if card else None
+                if character is None:
+                    return None
+                path = artwork_path(character)
+                return photo_arg(None, path)
+        except Exception:
+            return None
+
+    @classmethod
     async def _edit_boards(
+        cls,
         bot,
         edit_targets: List[Tuple[int, int]],
         texts: Dict[int, str],
@@ -484,22 +510,25 @@ class AppleBattleService:
         finished: bool,
     ) -> None:
         from sib.services.game_sync import final_keyboard
+        from sib.services.telegram_ui import safe_edit_screen
 
+        winner_photo = await cls._winner_photo(match_id) if finished else None
         for group_id, msg_id in edit_targets:
             kb = final_keyboard() if finished else engine.get_keyboard(
                 {}, match_id, 0
             )
-            try:
-                await bot.edit_message_text(
-                    texts[group_id],
-                    chat_id=group_id,
-                    message_id=msg_id,
-                    reply_markup=kb,
-                    parse_mode="Markdown",
-                )
-            except Exception as e:
+            ok = await safe_edit_screen(
+                bot,
+                group_id,
+                msg_id,
+                texts[group_id],
+                kb,
+                parse_mode="Markdown",
+                photo=winner_photo,
+            )
+            if not ok:
                 logger.warning(
-                    f"Apple battle board edit failed for group {group_id}: {e}"
+                    f"Apple battle board edit failed for group {group_id}"
                 )
 
     # ------------------------------------------------------------------

@@ -315,20 +315,48 @@ async def handle_ab_find(callback: CallbackQuery, bot: Bot):
 
         await safe_answer_callback(callback, "حریف پیدا شد! ⚔️✨")
 
+        # Match-found screens show each side's OWN card art (photo+caption;
+        # falls back to text when art is unavailable).
+        from sib.services.character_art import photo_arg, resolve_character_photo
+        from sib.services.telegram_ui import safe_send_screen
+
+        async def _group_art(group_id):
+            loadout_id = (
+                match.group1_loadout_id
+                if group_id == match.group1_id
+                else match.group2_loadout_id
+            )
+            loadout = await session.get(PlayerCard, loadout_id) if loadout_id else None
+            character = (
+                await session.get(Character, loadout.character_id) if loadout else None
+            )
+            if character is None:
+                return None
+            file_id, fs_path = await resolve_character_photo(session, character)
+            return photo_arg(file_id, fs_path)
+
         # 1. Group 1 message
         text_g1 = render_match_found_for_group(match, match.group1_id)
         kb_g1 = get_acceptance_keyboard(match.id, has_accepted=False)
+        msg1 = await safe_send_screen(
+            bot, match.group1_id, text_g1,
+            photo=await _group_art(match.group1_id), reply_markup=kb_g1,
+        )
+        match.group1_message_id = msg1.message_id
         if callback.message and callback.message.chat.id == match.group1_id:
-            msg1 = await callback.message.edit_text(text_g1, reply_markup=kb_g1, parse_mode="Markdown")
-            match.group1_message_id = msg1.message_id
-        else:
-            msg1 = await bot.send_message(match.group1_id, text_g1, reply_markup=kb_g1, parse_mode="Markdown")
-            match.group1_message_id = msg1.message_id
+            # The old searching screen cannot turn into a photo — remove it.
+            try:
+                await bot.delete_message(match.group1_id, callback.message.message_id)
+            except Exception:
+                pass
 
         # 2. Group 2 message
         text_g2 = render_match_found_for_group(match, match.group2_id)
         kb_g2 = get_acceptance_keyboard(match.id, has_accepted=False)
-        msg2 = await bot.send_message(match.group2_id, text_g2, reply_markup=kb_g2, parse_mode="Markdown")
+        msg2 = await safe_send_screen(
+            bot, match.group2_id, text_g2,
+            photo=await _group_art(match.group2_id), reply_markup=kb_g2,
+        )
         match.group2_message_id = msg2.message_id
 
         await session.flush()
@@ -461,6 +489,23 @@ async def cmd_profile(message: Message, bot: Bot):
     ]
     from sib.keyboards.common import get_profile_keyboard
 
-    await message.reply(
-        "\n".join(lines), reply_markup=get_profile_keyboard(), parse_mode="Markdown"
-    )
+    fav_photo = None
+    if favorite:
+        async with get_session() as session:
+            character = await session.get(Character, favorite.character_id)
+            if character is not None:
+                from sib.services.character_art import photo_arg, resolve_character_photo
+
+                file_id, fs_path = await resolve_character_photo(session, character)
+                fav_photo = photo_arg(file_id, fs_path)
+    text = "\n".join(lines)
+    kb = get_profile_keyboard()
+    if fav_photo is not None:
+        try:
+            await message.reply_photo(
+                fav_photo, caption=text, reply_markup=kb, parse_mode="Markdown"
+            )
+            return
+        except Exception:
+            pass
+    await message.reply(text, reply_markup=kb, parse_mode="Markdown")

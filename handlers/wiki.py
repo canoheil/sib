@@ -12,6 +12,8 @@ from sib.database.connection import get_session
 from sib.services.telegram_ui import safe_answer_callback, safe_edit_callback_message
 from sib.services.nav import back_label_for, back_target, parse_callback
 from sib.services.wiki import CollectionService, WikiService
+from sib.database.models import Character
+from sib.services.character_art import photo_arg, resolve_character_photo
 
 router = Router(name="wiki")
 
@@ -128,6 +130,12 @@ async def handle_wiki_char(callback: CallbackQuery, bot: Bot):
     character_id = int(base.split(":")[1])
     async with get_session() as session:
         page_text = await WikiService.wiki_page(session, character_id)
+        art_photo = None
+        if page_text:
+            character = await session.get(Character, character_id)
+            if character is not None:
+                file_id, fs_path = await resolve_character_photo(session, character)
+                art_photo = photo_arg(file_id, fs_path)
     if not page_text:
         await safe_answer_callback(callback, "این شخصیت در دسترس نیست.", show_alert=True)
         return
@@ -143,7 +151,7 @@ async def handle_wiki_char(callback: CallbackQuery, bot: Bot):
         ]
     )
     await safe_answer_callback(callback)
-    await safe_edit_callback_message(callback, bot, page_text, reply_markup=kb)
+    await safe_edit_callback_message(callback, bot, page_text, reply_markup=kb, photo=art_photo)
 
 
 @router.message(Command("cards"))

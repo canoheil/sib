@@ -43,7 +43,7 @@ async def _shop_view(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
                 [
                     InlineKeyboardButton(
                         text=f"🛒 خرید {character.name_fa} ({price} 🍎){badge}",
-                        callback_data=f"shop_buy:{entry.id}",
+                        callback_data=f"shop_item:{entry.id}",
                     )
                 ]
             )
@@ -74,6 +74,64 @@ async def handle_shop_refresh(callback: CallbackQuery, bot: Bot):
     text, kb = await _shop_view(user.id)
     await safe_answer_callback(callback, "بروزرسانی شد 🍏")
     await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
+
+
+async def _shop_item_view(user_id: int, entry_id: int):
+    """Full card detail: art + wiki description + stats + price + actions."""
+    from sib.services.character_art import photo_arg, resolve_character_photo
+    from sib.services.characters import render_character_card
+
+    async with get_session() as session:
+        entries = await ShopService.list_entries(session, user_id=user_id)
+        balance = await AppleWalletService.get_balance(session, user_id)
+        found = next((t for t in entries if t[0].id == entry_id), None)
+        art_photo = None
+        entry = character = None
+        owned = False
+        if found:
+            entry, character, owned = found
+            file_id, fs_path = await resolve_character_photo(session, character)
+            art_photo = photo_arg(file_id, fs_path)
+
+    if not found:
+        text = "کالای مورد نظر در فروشگاه این هفته نیست."
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="↩️ بازگشت به فروشگاه", callback_data="shop_refresh")]]
+        )
+        return text, kb, None
+
+    price = ShopService.entry_price(entry, character)
+    badge = f" {entry.badge}" if entry.badge else ""
+    lines = [render_character_card(character), "", f"💰 سیب‌های شما: `{balance}`{badge}"]
+    if owned:
+        action = [
+            InlineKeyboardButton(text="✅ خریداری‌شده", callback_data=f"shop_owned:{entry.id}")
+        ]
+    else:
+        action = [
+            InlineKeyboardButton(
+                text=f"✅ تأیید خرید ({price} 🍎)",
+                callback_data=f"shop_buy:{entry.id}",
+            )
+        ]
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            action,
+            [InlineKeyboardButton(text="↩️ بازگشت به فروشگاه", callback_data="shop_refresh")],
+        ]
+    )
+    return "\n".join(lines), kb, art_photo
+
+
+@router.callback_query(F.data.startswith("shop_item:"))
+async def handle_shop_item(callback: CallbackQuery, bot: Bot):
+    entry_id = int(callback.data.split(":")[1])
+    user = callback.from_user
+    if not user:
+        return
+    text, kb, art_photo = await _shop_item_view(user.id, entry_id)
+    await safe_answer_callback(callback)
+    await safe_edit_callback_message(callback, bot, text, reply_markup=kb, photo=art_photo)
 
 
 @router.callback_query(F.data.startswith("shop_owned:"))
@@ -150,8 +208,19 @@ async def handle_card_panel(callback: CallbackQuery, bot: Bot):
     if not user:
         return
     text, kb = await _card_panel_view(user.id, card_id)
+    art_photo = None
+    async with get_session() as session:
+        card = await PlayerCardService.get_card(session, card_id)
+        if card and card.user_id == user.id:
+            from sib.database.models import Character
+            from sib.services.character_art import photo_arg, resolve_character_photo
+
+            character = await session.get(Character, card.character_id)
+            if character is not None:
+                file_id, fs_path = await resolve_character_photo(session, character)
+                art_photo = photo_arg(file_id, fs_path)
     await safe_answer_callback(callback)
-    await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
+    await safe_edit_callback_message(callback, bot, text, reply_markup=kb, photo=art_photo)
 
     from sib.services.panel import PanelOwnershipService
 

@@ -358,6 +358,7 @@ async def handle_apple_profile(callback: CallbackQuery, bot: Bot):
         )
 
         fav_text = None
+        fav_photo = None
         for card in cards:
             if getattr(card, "is_favorite", False):
                 character = await session.get(
@@ -366,6 +367,13 @@ async def handle_apple_profile(callback: CallbackQuery, bot: Bot):
                 )
                 if character:
                     fav_text = character.name_fa
+                    from sib.services.character_art import (
+                        photo_arg,
+                        resolve_character_photo,
+                    )
+
+                    file_id, fs_path = await resolve_character_photo(session, character)
+                    fav_photo = photo_arg(file_id, fs_path)
                 break
 
     lines = [
@@ -382,10 +390,12 @@ async def handle_apple_profile(callback: CallbackQuery, bot: Bot):
 
     await callback.answer()
     if callback.message:
-        await callback.message.edit_text(
+        await safe_edit_callback_message(
+            callback,
+            bot,
             "\n".join(lines),
             reply_markup=kb,
-            parse_mode="Markdown",
+            photo=fav_photo,
         )
     await _claim_panel(callback, "profile")
 
@@ -518,6 +528,7 @@ async def handle_sib_profile_word(message: Message, bot: Bot):
             )
         )
         fav_text = None
+        fav_photo = None
         for card in cards:
             if getattr(card, "is_favorite", False):
                 from sib.database.models import Character
@@ -525,6 +536,13 @@ async def handle_sib_profile_word(message: Message, bot: Bot):
                 character = await session.get(Character, card.character_id)
                 if character:
                     fav_text = character.name_fa
+                    from sib.services.character_art import (
+                        photo_arg,
+                        resolve_character_photo,
+                    )
+
+                    file_id, fs_path = await resolve_character_photo(session, character)
+                    fav_photo = photo_arg(file_id, fs_path)
                 break
 
     lines = [
@@ -536,9 +554,20 @@ async def handle_sib_profile_word(message: Message, bot: Bot):
         fav_text.strip() if fav_text else "⭐ کارت اصلی: انتخاب نشده",
         f"⚔️ نبردهای سیبی: `{battles or 0}` | برد: `{wins or 0}`",
     ]
-    sent = await message.reply(
-        "\n".join(lines), reply_markup=get_profile_keyboard(), parse_mode="Markdown"
-    )
+    profile_text = "\n".join(lines)
+    profile_kb = get_profile_keyboard()
+    sent = None
+    if fav_photo is not None:
+        try:
+            sent = await message.reply_photo(
+                fav_photo, caption=profile_text, reply_markup=profile_kb, parse_mode="Markdown"
+            )
+        except Exception:
+            sent = None
+    if sent is None:
+        sent = await message.reply(
+            profile_text, reply_markup=profile_kb, parse_mode="Markdown"
+        )
     if sent is not None and sent.message_id:
         async with get_session() as session:
             await PanelOwnershipService.claim(
