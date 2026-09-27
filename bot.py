@@ -54,7 +54,7 @@ async def main():
 
     maintenance_stop = asyncio.Event()
     maintenance_task = asyncio.create_task(
-        MaintenanceService.run_forever(maintenance_stop)
+        MaintenanceService.run_forever(maintenance_stop, bot=bot)
     )
 
     logger.info("sib bot is ready. Starting polling...")

@@ -228,7 +228,12 @@ class ConnectFourEngine(BaseGameEngine):
         is_my_turn = (current_pid == for_player_id)
 
         if is_my_turn:
-            turn_msg = "🟢 **نوبت شماست!** یک ستون را برای انداختن مهره انتخاب کنید."
+            from sib.games.base import turn_line
+            turn_msg = turn_line(
+                game_state, for_group_id, for_player_id,
+                "یک ستون را برای انداختن مهره انتخاب کنید.",
+                "یک ستون را برای انداختن مهره انتخاب کنید.",
+            )
         else:
             turn_msg = f"⏳ **نوبت بازیکن:** {current_p.get('name', 'حریف')} ({current_p.get('symbol', '')})"
 

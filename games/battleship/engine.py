@@ -222,6 +222,37 @@ class BattleshipEngine(BaseGameEngine):
             details={"winner_team": winner_team},
         )
 
+
+    # Visual language of the board (rendered text AND keyboard buttons
+    # always agree - the state lives in the button itself):
+    #   unselected  -> ░  (glassy/transparent pane)
+    #   shot/water  -> 🟦 (the button itself turns blue)
+    #   hit         -> 💥
+    #   sunk        -> 🔥
+    GLASS = "░"
+    BLUE = "🟦"
+    HIT = "💥"
+    SUNK = "🔥"
+
+    def radar_labels(self, game_state: Dict[str, Any], team_code: str) -> Dict[str, str]:
+        """Labels for this team's radar (their shots at the enemy fleet)."""
+        opp = "B" if team_code == "A" else "A"
+        shots = game_state["teams"][team_code]["shots_taken"]
+        sunk_cells = set()
+        for ship in game_state["teams"][opp]["ships"]:
+            if ship.get("sunk"):
+                for cell in ship["cells"]:
+                    sunk_cells.add(f"{cell[0]},{cell[1]}")
+        labels: Dict[str, str] = {}
+        for key, val in shots.items():
+            if key in sunk_cells:
+                labels[key] = self.SUNK
+            elif val == "hit":
+                labels[key] = self.HIT
+            else:
+                labels[key] = self.BLUE
+        return labels
+
     def render_for_group(
         self,
         game_state: Dict[str, Any],
@@ -234,19 +265,13 @@ class BattleshipEngine(BaseGameEngine):
 
         my_remaining = game_state["teams"][team_code]["remaining_cells"]
         opp_remaining = game_state["teams"][opp_team_code]["remaining_cells"]
-        my_shots = game_state["teams"][team_code]["shots_taken"]
+        labels = self.radar_labels(game_state, team_code)
 
         grid_rows = []
         for r in range(self.GRID_SIZE):
             row_symbols = []
             for c in range(self.GRID_SIZE):
-                state = my_shots.get(f"{r},{c}")
-                if state == "hit":
-                    row_symbols.append("💥")
-                elif state == "miss":
-                    row_symbols.append("🌊")
-                else:
-                    row_symbols.append("🟦")
+                row_symbols.append(labels.get(f"{r},{c}", self.GLASS))
             grid_rows.append("".join(row_symbols))
         radar_art = "\n".join(grid_rows)
 
@@ -269,7 +294,15 @@ class BattleshipEngine(BaseGameEngine):
         curr_p = game_state["players"].get(str(curr_pid), {})
         is_my_turn = (curr_pid == for_player_id)
 
-        turn_msg = "🟢 **نوبت شلیک شماست!** یک مختصات روی رادار زیر را هدف بگیرید:" if is_my_turn else f"⏳ در انتظار شلیک {curr_p.get('name', 'بازیکن')}..."
+        if is_my_turn:
+            from sib.games.base import turn_line
+            turn_msg = turn_line(
+                game_state, for_group_id, for_player_id,
+                "یک مختصات روی رادار زیر را هدف بگیرید:",
+                "یک مختصات روی رادار زیر را هدف بگیرید:",
+            )
+        else:
+            turn_msg = f"⏳ در انتظار شلیک {curr_p.get('name', 'بازیکن')}..."
 
         return (
             "🚢 **جنگ کشتی‌ها (Battleship)** 🍏\n\n"
@@ -296,24 +329,23 @@ class BattleshipEngine(BaseGameEngine):
             return InlineKeyboardMarkup(inline_keyboard=[])
 
         team_code = player_info.get("team_code", "A")
-        my_shots = game_state["teams"][team_code]["shots_taken"]
+        labels = self.radar_labels(game_state, team_code)
         is_my_turn = (game_state.get("current_player_id") == for_player_id)
 
         buttons = []
         for r in range(self.GRID_SIZE):
             row = []
             for c in range(self.GRID_SIZE):
-                state = my_shots.get(f"{r},{c}")
-                if state == "hit":
-                    label = "💥"
-                    cb = "noop"
-                elif state == "miss":
-                    label = "🌊"
-                    cb = "noop"
+                key = f"{r},{c}"
+                if key in labels:
+                    # Shot cells: the button itself shows the outcome.
+                    row.append(
+                        InlineKeyboardButton(text=labels[key], callback_data="noop")
+                    )
                 else:
-                    label = "🟦"
+                    # Unselected cells look glassy; actionable only on your turn.
                     cb = f"bs_action:{match_id}:{r}:{c}" if is_my_turn else "noop"
-                row.append(InlineKeyboardButton(text=label, callback_data=cb))
+                    row.append(InlineKeyboardButton(text=self.GLASS, callback_data=cb))
             buttons.append(row)
 
         return InlineKeyboardMarkup(inline_keyboard=buttons)

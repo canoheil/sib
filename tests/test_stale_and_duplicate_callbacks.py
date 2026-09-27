@@ -57,7 +57,7 @@ async def test_stale_callback_on_finished_or_cancelled_match(db_session):
     await handle_rps_action(mock_cb, mock_bot)
 
     mock_cb.answer.assert_called_once()
-    assert "این مسابقه در جریان نیست یا قبلاً به پایان رسیده" in mock_cb.answer.call_args[0][0]
+    assert "دیگر در جریان نیست" in mock_cb.answer.call_args[0][0]
 
 
 @pytest.mark.asyncio

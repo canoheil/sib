@@ -3,7 +3,13 @@
 from typing import List
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from sib.database.models import Game, Party
-from sib.keyboards.common import primary_button, success_button, danger_button
+from sib.keyboards.common import (
+    primary_button,
+    success_button,
+    danger_button,
+    nav_back_row,
+    nav_refresh_row,
+)
 
 
 def get_game_selection_keyboard(games: List[Game]) -> InlineKeyboardMarkup:
@@ -31,7 +37,7 @@ def get_game_selection_keyboard(games: List[Game]) -> InlineKeyboardMarkup:
     if row:
         keyboard.append(row)
 
-    keyboard.append([InlineKeyboardButton(text="🔙 بستن منو", callback_data="close_panel")])
+    keyboard.extend(nav_back_row("🔙 بازگشت به منوی بازی‌ها", "group_games_panel"))
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
@@ -61,12 +67,7 @@ def get_game_mode_keyboard(game: Game) -> InlineKeyboardMarkup:
             )
         ])
 
-    buttons.append([
-        InlineKeyboardButton(
-            text="🔙 بازگشت به لیست بازی‌ها",
-            callback_data="group_games_panel",
-        )
-    ])
+    buttons.extend(nav_back_row("🔙 بازگشت به منوی بازی‌ها", "group_games_panel"))
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -121,12 +122,7 @@ def get_party_action_keyboard(party: Party, is_member: bool = False) -> InlineKe
         )
         buttons.append(row)
 
-    buttons.append([
-        InlineKeyboardButton(
-            text="🔄 بروزرسانی",
-            callback_data=f"view_party:{party.id}",
-        )
-    ])
+    buttons.extend(nav_refresh_row("🔄 بروزرسانی", f"view_party:{party.id}"))
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -150,9 +146,6 @@ def get_active_parties_keyboard(parties: List[Party]) -> InlineKeyboardMarkup:
             text="➕ ساخت بازی جدید",
             callback_data="create_new_party_menu",
         ),
-        InlineKeyboardButton(
-            text="🔄 بروزرسانی",
-            callback_data="group_games_panel",
-        ),
     ])
+    buttons.extend(nav_refresh_row("🔄 بروزرسانی", "group_games_panel"))
     return InlineKeyboardMarkup(inline_keyboard=buttons)

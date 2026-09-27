@@ -146,7 +146,7 @@ async def test_battleship_refresh_recovers_stale_board(db_session):
     kb = kwargs.get("reply_markup")
     assert kb is not None
     label = _cell_label(kb, 0, 0)
-    assert label in ("💥", "🌊")  # never the stale white cell "◽"
+    assert label in ("💥", "🟦", "🔥")  # the button itself shows the shot outcome
 
 
 @pytest.mark.asyncio
@@ -247,7 +247,7 @@ async def test_battleship_keyboard_marks_hits_and_misses(db_session):
     kb = shooter_group_calls[-1].kwargs.get("reply_markup")
     assert kb is not None
     label = _cell_label(kb, 0, 0)
-    assert label in ("💥", "🌊")
+    assert label in ("💥", "🟦", "🔥")
     # Refresh button present as the recovery path.
     last_row = kb.inline_keyboard[-1]
     assert last_row[0].callback_data == f"game_refresh:{match.id}"

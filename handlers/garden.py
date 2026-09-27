@@ -136,13 +136,19 @@ async def handle_garden_plant(callback: CallbackQuery, bot: Bot):
     if not user:
         return
 
+    # State first, presentation second: the re-render runs AFTER the
+    # service transaction is closed (never hold FOR UPDATE locks while
+    # opening another session - that self-deadlocks).
+    error = None
     async with get_session() as session:
         try:
             await GardenService.plant(session, user.id, plot_index)
         except ValueError as e:
-            await safe_answer_callback(callback, str(e), show_alert=True)
-            return
+            error = str(e)
 
+    if error:
+        await _rerender(callback, bot, answer=error)
+        return
     await _rerender(callback, bot, answer="نهال کاشته شد! 🌱")
 
 
@@ -153,13 +159,17 @@ async def handle_garden_harvest(callback: CallbackQuery, bot: Bot):
     if not user:
         return
 
+    error = None
+    apples = 0
     async with get_session() as session:
         try:
             apples = await GardenService.harvest(session, user.id, plot_index)
         except ValueError as e:
-            await safe_answer_callback(callback, str(e), show_alert=True)
-            return
+            error = str(e)
 
+    if error:
+        await _rerender(callback, bot, answer=error)
+        return
     await _rerender(callback, bot, answer=f"{apples} سیب برداشت شد! 🍎")
 
 
@@ -169,11 +179,15 @@ async def handle_garden_expand(callback: CallbackQuery, bot: Bot):
     if not user:
         return
 
+    error = None
+    capacity = 0
     async with get_session() as session:
         try:
             capacity = await GardenService.expand(session, user.id)
         except ValueError as e:
-            await safe_answer_callback(callback, str(e), show_alert=True)
-            return
+            error = str(e)
 
+    if error:
+        await _rerender(callback, bot, answer=error)
+        return
     await _rerender(callback, bot, answer=f"باغ گسترش یافت! ظرفیت جدید: {capacity} قطعه 🌳")

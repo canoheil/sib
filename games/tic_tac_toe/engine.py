@@ -164,7 +164,11 @@ class TicTacToeEngine(BaseGameEngine):
             )
 
         current_pid = game_state.get("current_player_id")
-        turn_text = "🟢 **نوبت شماست!** یک خانه خالی را لمس کنید." if current_pid == for_player_id else f"⏳ در انتظار حرکت {opp_p['name']}..."
+        from sib.games.base import turn_line
+        turn_text = turn_line(
+            game_state, for_group_id, for_player_id,
+            "یک خانه خالی را لمس کنید.", "یک خانه خالی را لمس کنید.",
+        )
 
         return (
             "🍎🍏 **بازی دوز (Tic-Tac-Toe)** 🍏\n\n"

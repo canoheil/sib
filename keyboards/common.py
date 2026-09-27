@@ -163,3 +163,27 @@ def danger_button(text: str, callback_data: str) -> InlineKeyboardButton:
         callback_data=callback_data,
         style="danger",
     )
+
+
+def nav_back_row(text: str, callback_data: str) -> list:
+    """Standard 'Back' navigation row (never cancels active matches)."""
+    return [
+        [
+            InlineKeyboardButton(
+                text=text,
+                callback_data=callback_data,
+            )
+        ]
+    ]
+
+
+def nav_refresh_row(text: str, callback_data: str) -> list:
+    """Standard 'Refresh' row re-rendering from the authoritative state."""
+    return [
+        [
+            InlineKeyboardButton(
+                text=text,
+                callback_data=callback_data,
+            )
+        ]
+    ]

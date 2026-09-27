@@ -2,6 +2,7 @@
 
 from aiogram import Router, F
 from aiogram.filters import Command
+from aiogram import Bot
 from aiogram.types import Message, CallbackQuery
 from sqlalchemy import select
 from sib.core.errors import (
@@ -54,7 +55,7 @@ async def cmd_group_games(message: Message):
 
 
 @router.callback_query(F.data == "group_games_panel")
-async def handle_games_panel(callback: CallbackQuery):
+async def handle_games_panel(callback: CallbackQuery, bot: Bot):
     """Handle opening or refreshing the active parties/games panel."""
     chat = callback.message.chat if callback.message else None
     if not chat or chat.type not in ("group", "supergroup"):
@@ -80,23 +81,23 @@ async def handle_games_panel(callback: CallbackQuery):
             kb = get_game_selection_keyboard(games)
 
         await safe_answer_callback(callback)
-        if callback.message:
-            await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+        await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
 
 @router.callback_query(F.data == "create_new_party_menu")
-async def handle_create_new_party_menu(callback: CallbackQuery):
+async def handle_create_new_party_menu(callback: CallbackQuery, bot: Bot):
     """Show game selection list to start a new party."""
     async with get_session() as session:
         games = list((await session.scalars(select(Game).where(Game.is_active == True))).all())
         text = "🎮 **یک بازی برای ایجاد مسابقه انتخاب کنید:**"
         await callback.answer()
-        if callback.message:
-            await callback.message.edit_text(text, reply_markup=get_game_selection_keyboard(games), parse_mode="Markdown")
+        await safe_edit_callback_message(
+            callback, bot, text, reply_markup=get_game_selection_keyboard(games)
+        )
 
 
 @router.callback_query(F.data.startswith("select_game:"))
-async def handle_select_game(callback: CallbackQuery):
+async def handle_select_game(callback: CallbackQuery, bot: Bot):
     """Show modes (solo, 2v2, 4v4) for the selected game."""
     game_code = callback.data.split(":")[1]
 
@@ -112,8 +113,7 @@ async def handle_select_game(callback: CallbackQuery):
             f"حالت بازی مورد نظرتان را انتخاب کنید:"
         )
         await callback.answer()
-        if callback.message:
-            await callback.message.edit_text(text, reply_markup=get_game_mode_keyboard(game), parse_mode="Markdown")
+        await safe_edit_callback_message(callback, bot, text, reply_markup=get_game_mode_keyboard(game))
 
 
 @router.callback_query(F.data.startswith("create_party:"))

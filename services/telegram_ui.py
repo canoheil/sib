@@ -29,7 +29,11 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from sib.core.logging import logger
 
 REFRESH_CALLBACK_PREFIX = "game_refresh:"
-NOT_MODIFIED_MARKERS = ("message is not modified", "message can't be edited")
+# "message is not modified" == content already current (success).
+# "message can't be edited" is NOT in here on purpose: the edit failed and
+# the visible content may be stale - it degrades gracefully below instead
+# of being masked as a success.
+NOT_MODIFIED_MARKERS = ("message is not modified",)
 PARSE_ERROR_MARKERS = ("can't parse entities", "unsupported start tag")
 
 

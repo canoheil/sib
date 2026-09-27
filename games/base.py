@@ -16,6 +16,32 @@ class GameResult:
     details: Dict[str, Any]
 
 
+def turn_line(
+    game_state: Dict[str, Any],
+    for_group_id: Optional[int],
+    for_player_id: Optional[int],
+    your_verb: str,
+    name_verb: str,
+) -> str:
+    """Honest turn indicator for a possibly-shared group message.
+
+    The phrase "نوبت شماست" is only used when the message audience is
+    exactly the current player (solo/private boards). In team modes the
+    message is shared, so the current player is always NAMED - never
+    claim "your turn" to someone who cannot act.
+    """
+    current_pid = game_state.get("current_player_id")
+    players = game_state.get("players", {})
+    curr = players.get(str(current_pid), {}) if current_pid is not None else {}
+    curr_name = curr.get("name", "بازیکن")
+    members = [
+        p for p in players.values() if p.get("group_id") == for_group_id
+    ] if for_group_id is not None else []
+    if current_pid is not None and current_pid == for_player_id and len(members) <= 1:
+        return f"🟢 **نوبت شماست!** {your_verb}"
+    return f"🟢 **نوبت {curr_name} است!** {name_verb}"
+
+
 class BaseGameEngine(ABC):
     """Abstract base class for all sib game engines."""
 

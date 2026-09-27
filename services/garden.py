@@ -99,15 +99,21 @@ class GardenService:
 
     @classmethod
     def view(cls, garden: Garden, now: Optional[datetime] = None) -> List[PlotView]:
-        now = now or datetime.now(timezone.utc)
+        # Normalize once: DB timestamps may be naive (MariaDB DATETIME) and
+        # callers may pass naive values. Every comparison/subtraction below
+        # uses timezone-aware UTC only.
+        now = cls._as_utc(now) or datetime.now(timezone.utc)
         views = []
         for plot in sorted(garden.plots, key=lambda p: p.plot_index):
+            planted_at = cls._as_utc(plot.planted_at)
+            mature_at = cls._as_utc(plot.mature_at)
+            fruit_ready_at = cls._as_utc(plot.fruit_ready_at)
             state = cls._derive_state(plot, now)
             next_dt: Optional[datetime] = None
             if state == PlotState.GROWING:
-                next_dt = cls._as_utc(plot.mature_at)
+                next_dt = mature_at
             elif state == PlotState.MATURE:
-                next_dt = cls._as_utc(plot.fruit_ready_at)
+                next_dt = fruit_ready_at
             seconds = 0
             if next_dt is not None:
                 seconds = max(0, int((next_dt - now).total_seconds()))
@@ -115,9 +121,9 @@ class GardenService:
                 PlotView(
                     plot_index=plot.plot_index,
                     state=state,
-                    planted_at=plot.planted_at,
-                    mature_at=plot.mature_at,
-                    fruit_ready_at=plot.fruit_ready_at,
+                    planted_at=planted_at,
+                    mature_at=mature_at,
+                    fruit_ready_at=fruit_ready_at,
                     cycle_count=plot.cycle_count,
                     seconds_to_next_stage=seconds,
                 )

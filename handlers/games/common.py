@@ -62,6 +62,45 @@ def get_rematch_keyboard(ad: Optional[AdCampaign] = None) -> InlineKeyboardMarku
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+
+async def render_board_for(
+    callback: CallbackQuery,
+    bot: Bot,
+    match: Match,
+    state: Dict[str, Any],
+    for_player_id: int,
+    *,
+    final: bool = False,
+    selected_ad: Optional[AdCampaign] = None,
+) -> None:
+    """Best-effort board render for one viewer (used for self-healing too).
+
+    When ``final`` is True the board is rendered as a finished match with
+    the rematch keyboard, otherwise with the live playable keyboard.
+    """
+    engine = get_game_engine(match.game.code)
+    message = callback.message
+    chat = getattr(message, "chat", None) if message is not None else None
+    chat_id = getattr(chat, "id", None) if chat is not None else None
+    group_id = chat_id or match.group1_id or for_player_id
+
+    text = engine.render_for_group(state, group_id, for_player_id)
+    if final:
+        outcome = ""
+        if match.is_draw:
+            outcome = "🤝 این مسابقه مساوی شد."
+        elif match.winner_group_id:
+            outcome = (
+                "🎉 گروه شما پیروز شد!"
+                if match.winner_group_id == group_id
+                else "💔 گروه حریف پیروز شد."
+            )
+        text += f"\n\n⏱ **این مسابقه به پایان رسید.** {outcome}"
+        kb = get_rematch_keyboard(selected_ad)
+    else:
+        kb = with_refresh_button(engine.get_keyboard(state, match.id, for_player_id), match.id)
+    await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
+
 async def process_game_action(
     callback: CallbackQuery,
     bot: Bot,
@@ -99,9 +138,22 @@ async def process_game_action(
             return
 
         if match.state != MatchState.ACTIVE:
+            # Self-heal: the visible keyboard is stale (e.g. the match was
+            # resolved by a turn timeout in the background). Reload the
+            # authoritative state and render the true final board.
             await safe_answer_callback(
-                callback, "این مسابقه در جریان نیست یا قبلاً به پایان رسیده 🍏", show_alert=True
+                callback,
+                "این مسابقه دیگر در جریان نیست؛ آخرین وضعیت بازی بارگذاری شد. 🍏",
+                show_alert=True,
             )
+            if match.game_state:
+                try:
+                    state = json.loads(match.game_state)
+                    await render_board_for(
+                        callback, bot, match, state, user.id, final=True
+                    )
+                except Exception as render_err:
+                    logger.warning(f"Stale-board recovery render failed: {render_err}")
             return
 
         engine = get_game_engine(match.game.code)
@@ -115,7 +167,18 @@ async def process_game_action(
         # Validate action
         is_valid, reason = engine.validate_action(state, user.id, action)
         if not is_valid:
-            await safe_answer_callback(callback, reason or "حرکت نامعتبر است 🍏", show_alert=True)
+            # Self-heal: whatever the rejection (stale keyboard, wrong
+            # player, repeated cell), the viewer immediately receives the
+            # LATEST authoritative board - manual refresh is never required.
+            await safe_answer_callback(
+                callback,
+                (reason or "حرکت نامعتبر است 🍏") + "\nآخرین وضعیت بازی بارگذاری شد.",
+                show_alert=True,
+            )
+            try:
+                await render_board_for(callback, bot, match, state, user.id)
+            except Exception as render_err:
+                logger.warning(f"Rejected-action recovery render failed: {render_err}")
             return
 
         # Apply action

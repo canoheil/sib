@@ -130,7 +130,7 @@ def test_battleship_rendering_and_keyboard(solo_players):
     text = engine.render_for_group(state, -4001, 401)
     assert "جنگ کشتی‌ها" in text
     assert "رادار شلیک‌های شما" in text
-    assert "نوبت شلیک شماست" in text
+    assert "نوبت شماست" in text
 
     kb = engine.get_keyboard(state, 1, 401)
     assert len(kb.inline_keyboard) == 8
