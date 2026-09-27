@@ -389,23 +389,35 @@ async def handle_apple_profile(callback: CallbackQuery, bot: Bot):
     await _claim_panel(callback, "profile")
 
 
-@router.callback_query(F.data == "main_menu")
-async def handle_main_menu(callback: CallbackQuery, bot: Bot):
-    """Context-aware main menu: group chats get the group menu, private
-    chats get the private menu - one button works everywhere."""
-    chat = callback.message.chat if callback.message else None
+def _main_menu_text_and_kb(user, chat) -> tuple:
+    """Shared main-menu builder (context-aware): groups get the group menu,
+    private chats get the private menu. Used by both the 'main_menu'
+    callback and the 'سیب منو' wake word - one source of truth."""
     is_group = bool(chat and chat.type in ("group", "supergroup"))
     if is_group:
         text = "🍏 **منوی اصلی سیب**\nاز منوی زیر بخش مورد نظرت رو انتخاب کن 👇"
         kb = get_group_welcome_keyboard()
     else:
-        name = callback.from_user.first_name if callback.from_user else "دوست"
+        name = user.first_name if user else "دوست"
         text = (
             f"🍏 **منوی اصلی سیب**\n\n"
             f"سلام {name}! از منوی زیر بخش مورد نظرت رو انتخاب کن 👇"
         )
         kb = get_private_welcome_keyboard(settings.BOT_USERNAME)
+    return text, kb
 
+
+async def _reply_main_menu(message: Message) -> None:
+    text, kb = _main_menu_text_and_kb(message.from_user, message.chat)
+    await message.reply(text, reply_markup=kb, parse_mode="Markdown")
+
+
+@router.callback_query(F.data == "main_menu")
+async def handle_main_menu(callback: CallbackQuery, bot: Bot):
+    """Context-aware main menu: one button works everywhere."""
+    text, kb = _main_menu_text_and_kb(
+        callback.from_user, callback.message.chat if callback.message else None
+    )
     await safe_answer_callback(callback)
     await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
@@ -424,18 +436,21 @@ async def _reply_games_menu(message: Message) -> None:
 
 @router.message(F.text.regexp(r"^\s*سیب\s+(بازی|منو)\s*$"))
 async def handle_sib_games_word(message: Message, bot: Bot):
-    """'سیب بازی' / 'سیب منو' (spec #3).
+    """'سیب بازی' / 'سیب منو' routing.
+
+    PRIVATE:   سیب منو -> Main Menu | سیب بازی -> Games Menu
+    GROUP:     سیب منو -> Games Menu | سیب بازی -> Games Menu
 
     Distinct regexes: these NEVER fall through to the 'سیب' claim action.
-    - 'سیب بازی' (groups): the games menu.
-    - 'سیب منو': the games menu in groups, the sib main menu in PM.
     """
     text_lower = (message.text or "").strip()
     if message.chat.type in ("group", "supergroup"):
         await _reply_games_menu(message)
         return
     if text_lower.endswith("منو"):
-        await cmd_main_menu(message, bot)
+        await _reply_main_menu(message)
+    else:
+        await _reply_games_menu(message)
 
 
 @router.message(F.text.regexp(r"^\s*سیب\s+پروفایل\s*$"))
@@ -508,12 +523,12 @@ async def handle_sib_profile_word(message: Message, bot: Bot):
             await session.commit()
 
 
-@router.message(F.text.regexp(r"^\s*سیب\s+باغ\s*$"))
-async def handle_sib_garden_word(message: Message, bot: Bot):
-    """'سیب باغ' opens the SENDER's garden in the current chat (spec #7/#8).
+async def _open_sender_garden(message: Message) -> None:
+    """Open the SENDER's garden in the current chat (public view + private
+    control). Single shared path for 'سیب باغ' and 'باغ من'.
 
-    Public view + private control: everyone sees it, only the owner
-    (the sender) can press its buttons.
+    The subject is always the message sender - never callback/memory
+    state - and the opened panel is claimed to the sender in the DB.
     """
     user = message.from_user
     if not user:
@@ -533,6 +548,18 @@ async def handle_sib_garden_word(message: Message, bot: Bot):
                 user_id=user.id,
                 panel_type="garden",
             )
+
+
+@router.message(F.text.regexp(r"^\s*سیب\s+باغ\s*$"))
+async def handle_sib_garden_word(message: Message, bot: Bot):
+    """'سیب باغ' -> the sender's garden in the current chat."""
+    await _open_sender_garden(message)
+
+
+@router.message(F.text.regexp(r"^\s*باغ\s+من\s*$"))
+async def handle_my_garden_word(message: Message, bot: Bot):
+    """'باغ من' behaves exactly like 'سیب باغ' (sender's own garden)."""
+    await _open_sender_garden(message)
 
 
 @router.message(F.text.regexp(r"^\s*سیب\s*$"))

@@ -11,6 +11,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from sib.database.connection import get_session
 from sib.database.models import PlotState
 from sib.services.apple_wallet import AppleWalletService
+from sib.services.config_store import ConfigService
 from sib.services.garden import GardenService
 from sib.services.panel import PanelOwnershipService
 from sib.services.seedling import SeedlingService
@@ -91,7 +92,15 @@ async def _render_garden(user_id: int, session) -> tuple[str, InlineKeyboardMark
         buttons.append(row)
 
     buttons.append(
-        [InlineKeyboardButton(text="➕ خرید ۵ قطعه جدید (با سیب)", callback_data="garden_expand")]
+        [
+            InlineKeyboardButton(
+                text=(
+                    f"➕ خرید {await ConfigService.get_int(session, 'garden_expansion_step')} قطعه جدید"
+                    f" — 🍎 {await ConfigService.get_int(session, 'garden_expansion_cost_apples')} سیب"
+                ),
+                callback_data="garden_expand",
+            )
+        ]
     )
     buttons.append([InlineKeyboardButton(text="🔄 بروزرسانی", callback_data="garden_refresh")])
     buttons.append([InlineKeyboardButton(text="↩️ بازگشت به منوی اصلی", callback_data="main_menu")])

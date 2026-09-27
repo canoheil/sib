@@ -1,5 +1,7 @@
 """Party and game panel handlers."""
 
+import asyncio
+
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram import Bot
@@ -252,6 +254,47 @@ async def handle_join_party(callback: CallbackQuery):
             await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
 
 
+
+# How long the cancellation state stays visible before the same message
+# is restored to the games menu (tests set this to 0).
+PARTY_CANCEL_RESTORE_DELAY = 1.2
+
+
+async def _cancel_and_restore_menu(callback: CallbackQuery, cancel_text: str) -> None:
+    """Party cancellation UX (solo / 2v2 / 4v4): show the cancellation
+    state, then edit the SAME message back into the appropriate menu.
+
+    Shared helper so every party mode behaves identically. The caller
+    keeps its established cancellation wording. Authorization, queue and
+    party cleanup happen BEFORE this (in the service) - this only edits
+    the message after the cancellation is safely persisted.
+    """
+    message = callback.message
+    if message is None:
+        return
+    chat = getattr(message, "chat", None)
+    chat_id = getattr(chat, "id", None)
+
+    # 1) transient cancellation state (established wording preserved).
+    try:
+        await message.edit_text(cancel_text, reply_markup=None, parse_mode="Markdown")
+    except Exception:  # pragma: no cover - defensive
+        pass
+
+    if PARTY_CANCEL_RESTORE_DELAY > 0:
+        await asyncio.sleep(PARTY_CANCEL_RESTORE_DELAY)
+
+    # 2) restore the games menu on the same message - never a dead end.
+    if not chat_id:
+        return
+    async with get_session() as session:
+        text, kb = await build_games_menu(session, chat_id)
+    try:
+        await message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    except Exception:  # pragma: no cover - defensive
+        pass
+
+
 @router.callback_query(F.data.startswith("leave_party:"))
 async def handle_leave_party(callback: CallbackQuery):
     """Leave a party."""
@@ -270,8 +313,7 @@ async def handle_leave_party(callback: CallbackQuery):
 
         if was_cancelled:
             await callback.answer("شما خارج شدید و چون کسی نمانده بود، پارتی لغو شد 🍏")
-            if callback.message:
-                await callback.message.edit_text("❌ **این پارتی لغو شد.**", reply_markup=None, parse_mode="Markdown")
+            await _cancel_and_restore_menu(callback, "❌ **این پارتی لغو شد.**")
         else:
             await callback.answer("از پارتی خارج شدی 🍏")
             text = render_party_card(party)
@@ -297,8 +339,9 @@ async def handle_cancel_party(callback: CallbackQuery):
             return
 
         await callback.answer("پارتی لغو شد 🍏")
-        if callback.message:
-            await callback.message.edit_text("❌ **این پارتی توسط کاربر لغو گردید.**", reply_markup=None, parse_mode="Markdown")
+        await _cancel_and_restore_menu(
+            callback, "❌ **این پارتی توسط کاربر لغو گردید.**"
+        )
 
 
 @router.callback_query(F.data == "close_panel")

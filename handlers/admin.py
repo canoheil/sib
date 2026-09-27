@@ -169,51 +169,6 @@ async def handle_admin_ad_toggle(callback: CallbackQuery):
     await handle_admin_ad_view(callback)
 
 
-@router.callback_query(F.data == "admin_channels")
-async def handle_admin_channels(callback: CallbackQuery):
-    """Sponsor and Official channels configuration."""
-    async with get_session() as session:
-        channels = await SponsorService.get_all_channels(session)
-
-    text = (
-        "🤝 **مدیریت کانال‌های رسمی و اسپانسر (Sponsor Channels)** 🍏\n\n"
-        "در این بخش می‌توانید کانال‌های دروازه عضویت اجباری یا اختیاری را مدیریت کنید:\n\n"
-    )
-
-    buttons = []
-    for ch in channels:
-        status_icon = "🟢" if ch.is_active else "🔴"
-        req_icon = "🔒 اجباری" if ch.is_required else "🔓 اختیاری"
-        type_icon = "⭐ رسمی" if ch.channel_type == "OFFICIAL" else "📢 اسپانسر"
-
-        label = f"{status_icon} {ch.title} ({type_icon} | {req_icon})"
-        buttons.append([InlineKeyboardButton(text=label, callback_data=f"admin_ch_toggle:{ch.channel_id}")])
-
-    buttons.append([InlineKeyboardButton(text="🔙 بازگشت به منوی اصلی", callback_data="admin_main")])
-    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-
-    await callback.answer()
-    if callback.message:
-        await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
-
-
-@router.callback_query(F.data.startswith("admin_ch_toggle:"))
-async def handle_admin_channel_toggle(callback: CallbackQuery):
-    """Toggle channel active status."""
-    ch_id = callback.data.split(":", 1)[1]
-
-    async with get_session() as session:
-        ch = await SponsorService.toggle_active(session, ch_id)
-        await session.commit()
-
-        if ch:
-            state_str = "فعال" if ch.is_active else "غیرفعال"
-            await callback.answer(f"وضعیت کانال {ch.title} به {state_str} تغییر یافت! 🍏")
-        else:
-            await callback.answer("کانال پیدا نشد 🍏", show_alert=True)
-
-    await handle_admin_channels(callback)
-
 @router.callback_query(F.data == "admin_matches")
 async def handle_admin_matches(callback: CallbackQuery):
     """Display match monitoring dashboard."""

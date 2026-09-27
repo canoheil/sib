@@ -54,10 +54,6 @@ def get_private_welcome_keyboard(bot_username: str) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text="⚔️ نبرد سیبی",
-                    callback_data="apple_battle",
-                ),
-                InlineKeyboardButton(
                     text="🔄 مبادله کارت",
                     callback_data="apple_trade",
                 ),
@@ -113,10 +109,6 @@ def get_group_welcome_keyboard() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text="⚔️ نبرد سیبی",
-                    callback_data="apple_battle",
-                ),
-                InlineKeyboardButton(
                     text="👤 پروفایل من",
                     callback_data="apple_profile",
                 ),
@@ -137,6 +129,9 @@ def get_admin_main_keyboard() -> InlineKeyboardMarkup:
             [
                 success_button("🤝 کانال‌ها و گیت اسپانسر", "admin_channels"),
                 primary_button("⚔️ وضعیت مسابقات", "admin_matches"),
+            ],
+            [
+                primary_button("👤 مدیریت کاربران", "admin_users"),
             ],
         ]
     )
@@ -240,12 +235,6 @@ def get_profile_keyboard(origin: Optional[str] = None) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text="🛒 فروشگاه",
                     callback_data="apple_shop",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="⚔️ نبرد سیبی",
-                    callback_data=with_origin("apple_battle", "apple_profile"),
                 )
             ],
         ]

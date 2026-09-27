@@ -22,6 +22,8 @@ from sib.handlers.admin import (
     handle_admin_ads,
     handle_admin_ad_view,
     handle_admin_ad_toggle,
+)
+from sib.handlers.admin_center import (
     handle_admin_channels,
     handle_admin_channel_toggle,
 )

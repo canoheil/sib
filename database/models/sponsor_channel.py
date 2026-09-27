@@ -8,8 +8,39 @@ from sib.database.base import Base, TimestampMixin
 
 
 class ChannelType:
+    """Channel categories (stored as plain strings).
+
+    Legacy values (OFFICIAL, SPONSOR) stay valid for existing rows.
+    The expanded set covers every monetization/gate placement the admin
+    control center must represent (spec: creator, main sponsor, sponsor,
+    advertising, monetization) - no schema change required because the
+    column is a String(20).
+    """
+
+    # Legacy values (existing rows keep working).
     OFFICIAL = "OFFICIAL"
     SPONSOR = "SPONSOR"
+    # Expanded control-center categories.
+    CREATOR = "CREATOR"                # creator channel (the official Sib channel)
+    MAIN_SPONSOR = "MAIN_SPONSOR"      # main sponsor
+    SPONSOR_CHANNEL = "SPONSOR"        # sponsor channels (same as legacy SPONSOR)
+    ADVERTISING = "ADVERTISING"        # advertising placement
+    MONETIZATION = "MONETIZATION"      # monetization placement
+
+    ALL = (OFFICIAL, SPONSOR, CREATOR, MAIN_SPONSOR, ADVERTISING, MONETIZATION)
+
+    LABELS = {
+        OFFICIAL: "⭐ رسمی",
+        SPONSOR: "📢 اسپانسر",
+        CREATOR: "🌟 کانال سازنده",
+        MAIN_SPONSOR: "🤝 اسپانسر اصلی",
+        ADVERTISING: "📺 تبلیغات",
+        MONETIZATION: "💰 مانیتایزیشن",
+    }
+
+    @classmethod
+    def label(cls, value: str) -> str:
+        return cls.LABELS.get(value, value)
 
 
 class SponsorChannel(Base, TimestampMixin):
