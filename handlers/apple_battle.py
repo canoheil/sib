@@ -318,18 +318,16 @@ async def handle_ab_find(callback: CallbackQuery, bot: Bot):
         # Match-found screens show each side's OWN card art (photo+caption;
         # falls back to text when art is unavailable).
         from sib.services.character_art import photo_arg, resolve_character_photo
-        from sib.services.telegram_ui import safe_send_screen
+        from sib.services.telegram_ui import render_callback_screen, safe_send_screen
 
         async def _group_art(group_id):
-            loadout_id = (
-                match.group1_loadout_id
-                if group_id == match.group1_id
-                else match.group2_loadout_id
-            )
-            loadout = await session.get(PlayerCard, loadout_id) if loadout_id else None
-            character = (
-                await session.get(Character, loadout.character_id) if loadout else None
-            )
+            # build_match_state consumed both loadouts. The authoritative card
+            # ids are in the precomputed state, keyed by MatchPlayer.user_id;
+            # Match has no group*_loadout_id columns.
+            player = next((p for p in match.players if p.group_id == group_id), None)
+            card_data = state["cards"].get(str(player.user_id)) if player else None
+            card = await session.get(PlayerCard, card_data["card_id"]) if card_data else None
+            character = await session.get(Character, card.character_id) if card else None
             if character is None:
                 return None
             file_id, fs_path = await resolve_character_photo(session, character)
@@ -338,18 +336,17 @@ async def handle_ab_find(callback: CallbackQuery, bot: Bot):
         # 1. Group 1 message
         text_g1 = render_match_found_for_group(match, match.group1_id)
         kb_g1 = get_acceptance_keyboard(match.id, has_accepted=False)
-        msg1 = await safe_send_screen(
-            bot, match.group1_id, text_g1,
-            photo=await _group_art(match.group1_id), reply_markup=kb_g1,
-        )
+        art_g1 = await _group_art(match.group1_id)
+        if callback.message and callback.message.chat.id == match.group1_id:
+            msg1 = await render_callback_screen(
+                callback, bot, text_g1, photo=art_g1, reply_markup=kb_g1,
+            )
+        else:
+            msg1 = await safe_send_screen(
+                bot, match.group1_id, text_g1, photo=art_g1, reply_markup=kb_g1,
+            )
         if msg1 is not None:
             match.group1_message_id = msg1.message_id
-        if callback.message and callback.message.chat.id == match.group1_id:
-            # The old searching screen cannot turn into a photo — remove it.
-            try:
-                await bot.delete_message(match.group1_id, callback.message.message_id)
-            except Exception:
-                pass
 
         # 2. Group 2 message
         text_g2 = render_match_found_for_group(match, match.group2_id)

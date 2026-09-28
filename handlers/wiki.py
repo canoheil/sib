@@ -9,7 +9,9 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from sib.database.connection import get_session
-from sib.services.telegram_ui import safe_answer_callback, safe_edit_callback_message
+from sib.services.telegram_ui import (
+    CAPTION_LIMIT, caption_length, safe_answer_callback, safe_edit_callback_message,
+)
 from sib.services.nav import back_label_for, back_target, parse_callback
 from sib.services.wiki import CollectionService, WikiService
 from sib.database.models import Character
@@ -131,27 +133,71 @@ async def handle_wiki_char(callback: CallbackQuery, bot: Bot):
     async with get_session() as session:
         page_text = await WikiService.wiki_page(session, character_id)
         art_photo = None
+        characters = []
         if page_text:
             character = await session.get(Character, character_id)
-            if character is not None:
-                file_id, fs_path = await resolve_character_photo(session, character)
-                art_photo = photo_arg(file_id, fs_path)
+            file_id, fs_path = await resolve_character_photo(session, character)
+            art_photo = photo_arg(file_id, fs_path)
+            characters = await WikiService.list_wiki(session)
     if not page_text:
         await safe_answer_callback(callback, "این شخصیت در دسترس نیست.", show_alert=True)
         return
 
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="📚 بازگشت به ویکی",
-                    callback_data="wiki_page:0" + (f":{origin}" if origin else ""),
-                )
-            ]
-        ]
-    )
+    # Move between actual card screens directly: returning to the text-only
+    # index and selecting another card would force PHOTO -> TEXT -> PHOTO.
+    index = next((i for i, char in enumerate(characters) if char.id == character_id), None)
+    if index is None:
+        await safe_answer_callback(callback, "این شخصیت در دسترس نیست.", show_alert=True)
+        return
+    nav = []
+    if index > 0:
+        nav.append(InlineKeyboardButton(
+            text="▶️ قبلی",
+            callback_data=f"wiki_char:{characters[index - 1].id}" + (f":{origin}" if origin else ""),
+        ))
+    if index + 1 < len(characters):
+        nav.append(InlineKeyboardButton(
+            text="◀️ بعدی",
+            callback_data=f"wiki_char:{characters[index + 1].id}" + (f":{origin}" if origin else ""),
+        ))
+    rows = [nav] if nav else []
+    if art_photo is not None and caption_length(page_text) > CAPTION_LIMIT:
+        # Telegram cannot display the entire lore in a photo caption. Keep
+        # the card in place for navigation, but don't make its full text
+        # inaccessible behind the shortened preview.
+        rows.append([InlineKeyboardButton(
+            text="📖 متن کامل کارت",
+            callback_data=f"wiki_char_full:{character_id}" + (f":{origin}" if origin else ""),
+        )])
+    rows.append([
+        InlineKeyboardButton(
+            text="📚 بازگشت به ویکی",
+            callback_data=f"wiki_page:{index // WIKI_PAGE_SIZE}" + (f":{origin}" if origin else ""),
+        )
+    ])
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
     await safe_answer_callback(callback)
     await safe_edit_callback_message(callback, bot, page_text, reply_markup=kb, photo=art_photo)
+
+
+@router.callback_query(F.data.startswith("wiki_char_full:"))
+async def handle_wiki_char_full(callback: CallbackQuery, bot: Bot):
+    """Opt in to the unabridged lore when it will not fit in a photo."""
+    base, origin = parse_callback(callback.data)
+    character_id = int(base.split(":")[1])
+    async with get_session() as session:
+        text = await WikiService.wiki_page(session, character_id)
+    if text is None:
+        await safe_answer_callback(callback, "این شخصیت در دسترس نیست.", show_alert=True)
+        return
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="↩️ بازگشت به کارت",
+            callback_data=f"wiki_char:{character_id}" + (f":{origin}" if origin else ""),
+        )
+    ]])
+    await safe_answer_callback(callback)
+    await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
 
 @router.message(Command("cards"))

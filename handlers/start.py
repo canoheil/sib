@@ -470,7 +470,7 @@ async def handle_main_menu(callback: CallbackQuery, bot: Bot, state: FSMContext 
     )
     await safe_answer_callback(callback)
     if callback.message:
-        await render_banner(callback, bot, "main_menu", text, kb)
+        return await render_banner(callback, bot, "main_menu", text, kb)
 
 
 async def _reply_games_menu(message: Message) -> None:

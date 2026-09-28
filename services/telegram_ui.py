@@ -49,9 +49,55 @@ REFRESH_CALLBACK_PREFIX = "game_refresh:"
 # of being masked as a success.
 NOT_MODIFIED_MARKERS = ("message is not modified",)
 PARSE_ERROR_MARKERS = ("can't parse entities", "unsupported start tag")
+# Only an explicit type mismatch justifies replacing an unknown-type message.
+# A permission/error/expired message is NOT evidence of a type change.
+TYPE_MISMATCH_MARKERS = (
+    "there is no text in the message to edit",
+    "there is no media in the message to edit",
+    "message is not a media message",
+)
 
-# Telegram caption hard limit (photo screens cannot show more text).
+# Telegram counts caption length in UTF-16 code units (not Python characters).
 CAPTION_LIMIT = 1024
+_CAPTION_SHORTENED = "\n… (متن برای زیرنویس تلگرام کوتاه شد) …\n"
+
+
+def caption_length(text: str) -> int:
+    """Length as counted by Telegram for photo captions."""
+    return len(text.encode("utf-16-le")) // 2
+
+
+def _caption_slice(text: str, max_units: int, *, from_end: bool = False) -> str:
+    """Take a prefix/suffix without cutting a UTF-16 surrogate pair."""
+    chars = reversed(text) if from_end else iter(text)
+    result = []
+    units = 0
+    for char in chars:
+        size = 2 if ord(char) > 0xFFFF else 1
+        if units + size > max_units:
+            break
+        result.append(char)
+        units += size
+    return "".join(reversed(result) if from_end else result)
+
+
+def photo_caption(text: str) -> str:
+    """Fit a PHOTO target into a Telegram caption without changing its type.
+
+    Keep both the beginning (title/context) and end (usually stats/actions),
+    visibly marking the omitted middle. A photo cannot display more than
+    1024 UTF-16 units in one caption; silently treating it as a text target
+    would delete/reopen the panel on every long-card navigation.
+    """
+    if caption_length(text) <= CAPTION_LIMIT:
+        return text
+    available = CAPTION_LIMIT - caption_length(_CAPTION_SHORTENED)
+    head_units = available * 2 // 3
+    return (
+        _caption_slice(text, head_units)
+        + _CAPTION_SHORTENED
+        + _caption_slice(text, available - head_units, from_end=True)
+    )
 
 
 def with_refresh_button(
@@ -82,6 +128,8 @@ async def _run_edit_attempts(
     fallback_factory: Optional[Callable[[], Awaitable]] = None,
     max_attempts: int = 3,
     context: str = "message",
+    on_type_mismatch: Optional[Callable[[], None]] = None,
+    on_edited: Optional[Callable[[Any], None]] = None,
 ) -> bool:
     """Execute an edit coroutine with retries and graceful degradation.
 
@@ -93,7 +141,9 @@ async def _run_edit_attempts(
 
     for attempt in range(max_attempts):
         try:
-            await edit_factory()
+            edited = await edit_factory()
+            if on_edited is not None:
+                on_edited(edited)
             return True
         except TelegramRetryAfter as e:
             last_error = e
@@ -110,7 +160,9 @@ async def _run_edit_attempts(
                 logger.warning(f"Markdown parse failure for {context}: {e}")
                 if fallback_factory is not None:
                     try:
-                        await fallback_factory()
+                        edited = await fallback_factory()
+                        if on_edited is not None:
+                            on_edited(edited)
                         return True
                     except Exception as fallback_error:
                         last_error = fallback_error
@@ -119,6 +171,8 @@ async def _run_edit_attempts(
                             f"{fallback_error}"
                         )
                 break
+            if on_type_mismatch and any(marker in message for marker in TYPE_MISMATCH_MARKERS):
+                on_type_mismatch()
             logger.warning(f"Non-retryable edit failure for {context}: {e}")
             return False
         except (TelegramForbiddenError, TelegramNotFound) as e:
@@ -149,6 +203,8 @@ async def safe_edit_message_text(
     reply_markup: Optional[InlineKeyboardMarkup] = None,
     parse_mode: Optional[str] = "Markdown",
     max_attempts: int = 3,
+    on_type_mismatch: Optional[Callable[[], None]] = None,
+    on_edited: Optional[Callable[[Any], None]] = None,
 ) -> bool:
     """Edit a message with retries and graceful degradation.
 
@@ -174,6 +230,8 @@ async def safe_edit_message_text(
         ),
         max_attempts=max_attempts,
         context=f"message {message_id} in chat {chat_id}",
+        on_type_mismatch=on_type_mismatch,
+        on_edited=on_edited,
     )
 
 
@@ -185,6 +243,7 @@ async def safe_edit_message_caption(
     reply_markup: Optional[InlineKeyboardMarkup] = None,
     parse_mode: Optional[str] = "Markdown",
     max_attempts: int = 3,
+    on_edited: Optional[Callable[[Any], None]] = None,
 ) -> bool:
     """Edit a PHOTO message's caption (the art itself is kept)."""
     return await _run_edit_attempts(
@@ -204,6 +263,7 @@ async def safe_edit_message_caption(
         ),
         max_attempts=max_attempts,
         context=f"caption of message {message_id} in chat {chat_id}",
+        on_edited=on_edited,
     )
 
 
@@ -240,6 +300,8 @@ async def safe_edit_message_media(
     reply_markup: Optional[InlineKeyboardMarkup] = None,
     parse_mode: Optional[str] = "Markdown",
     max_attempts: int = 3,
+    on_type_mismatch: Optional[Callable[[], None]] = None,
+    on_edited: Optional[Callable[[Any], None]] = None,
 ) -> bool:
     """Swap a message's media (photo→photo) with an updated caption."""
     from aiogram.types import InputMediaPhoto
@@ -267,6 +329,8 @@ async def safe_edit_message_media(
         fallback_factory=_fallback,
         max_attempts=max_attempts,
         context=f"media of message {message_id} in chat {chat_id}",
+        on_type_mismatch=on_type_mismatch,
+        on_edited=on_edited,
     )
 
 
@@ -277,23 +341,38 @@ async def safe_send_screen(
     photo=None,
     reply_markup: InlineKeyboardMarkup | None = None,
     parse_mode: str | None = "Markdown",
+    photo_fallback_to_text: bool = True,
 ):
-    """Send a photo+caption screen, falling back to text only.
+    """Send a screen; optionally fall back to text when photo send fails.
 
-    Used where a text→photo transition is impossible on edit: callers send
-    a fresh message instead. Returns the sent Message (or None).
+    A new chat/remote group needs a text fallback. When REPLACING a text
+    message, however, a failed photo send should instead edit that existing
+    text message in place (not delete it and send another text message).
     """
     if photo is not None:
+        caption = photo_caption(text)
         try:
             return await bot.send_photo(
-                chat_id,
-                photo,
-                caption=text,
-                reply_markup=reply_markup,
-                parse_mode=parse_mode,
+                chat_id, photo, caption=caption,
+                reply_markup=reply_markup, parse_mode=parse_mode,
             )
+        except TelegramBadRequest as exc:
+            if parse_mode and any(marker in str(exc).lower() for marker in PARSE_ERROR_MARKERS):
+                # Shortening a long caption can split Markdown entities.
+                # Retry the PHOTO without formatting before degrading to TEXT.
+                try:
+                    return await bot.send_photo(
+                        chat_id, photo, caption=caption,
+                        reply_markup=reply_markup, parse_mode=None,
+                    )
+                except Exception as plain_exc:
+                    logger.warning("photo screen without Markdown failed: %s", plain_exc)
+            else:
+                logger.warning("send photo screen failed: %s", exc)
         except Exception as exc:
-            logger.debug("send photo screen failed: %s", exc)
+            logger.warning("send photo screen failed: %s", exc)
+        if not photo_fallback_to_text:
+            return None
     try:
         return await _send_fallback(bot, chat_id, text, reply_markup, parse_mode)
     except Exception as exc:  # pragma: no cover - defensive
@@ -345,6 +424,7 @@ async def _replace_message(
         photo=photo,
         reply_markup=reply_markup,
         parse_mode=parse_mode,
+        photo_fallback_to_text=False,
     )
     if sent is None:
         return None
@@ -369,6 +449,7 @@ async def render_screen(
     reply_markup: Optional[InlineKeyboardMarkup] = None,
     parse_mode: Optional[str] = "Markdown",
     current_is_photo: Optional[bool] = None,
+    on_edited: Optional[Callable[[Any], None]] = None,
 ) -> Tuple[bool, Optional[Message]]:
     """The single message-transition engine.
 
@@ -377,10 +458,9 @@ async def render_screen(
     currently TEXT or PHOTO.
 
     * PHOTO → PHOTO and TEXT → TEXT are edited in place. When
-      ``current_is_photo`` is unknown, the natural in-place edit for the
-      TARGET type is attempted first: it can only succeed on the matching
-      message type (Telegram enforces this), so a failure means either a
-      type change or a dead message — both are handled by replacing.
+      ``current_is_photo`` is unknown, the target type is edited first;
+      only an explicit Telegram type-mismatch response warrants replacing.
+      Other edit failures leave the live message untouched for retry.
     * TEXT → PHOTO / PHOTO → TEXT replace the message (Telegram cannot
       convert types in place): send the new screen, delete the old one.
 
@@ -388,10 +468,18 @@ async def render_screen(
     when the message was replaced (callers MUST move their live reference
     to it), or None when the original message still shows the screen.
 
-    ``photo`` that does not fit a Telegram caption degrades the target to
-    a text screen (presentation must never break the flow).
+    A PHOTO target stays a PHOTO target even if the full text exceeds the
+    caption limit; only its displayed caption is visibly shortened.
     """
-    target_photo = photo if (photo is not None and len(text) <= CAPTION_LIMIT) else None
+    target_photo = photo
+    caption = photo_caption(text) if photo is not None else text
+    type_mismatch = False
+
+    def _mark_type_mismatch() -> None:
+        nonlocal type_mismatch
+        type_mismatch = True
+
+    on_type_mismatch = _mark_type_mismatch if current_is_photo is None else None
 
     async def _in_place_edit() -> bool:
         if target_photo is not None:
@@ -400,9 +488,11 @@ async def render_screen(
                 chat_id,
                 message_id,
                 target_photo,
-                text,
+                caption,
                 reply_markup=reply_markup,
                 parse_mode=parse_mode,
+                on_type_mismatch=on_type_mismatch,
+                on_edited=on_edited,
             )
         return await safe_edit_message_text(
             bot,
@@ -411,6 +501,8 @@ async def render_screen(
             text,
             reply_markup=reply_markup,
             parse_mode=parse_mode,
+            on_type_mismatch=on_type_mismatch,
+            on_edited=on_edited,
         )
 
     if current_is_photo is not None:
@@ -421,10 +513,12 @@ async def render_screen(
             return (True, None) if ok else (False, None)
         # Type change: the in-place edit is impossible - replace directly.
     else:
-        # Unknown current type: the in-place edit can only succeed on the
-        # matching type; anything else falls through to replacement.
+        # Unknown current type: a failed edit is not proof of a type change.
+        # Do not replace on a transient failure, permissions issue or stale id.
         if await _in_place_edit():
             return True, None
+        if not type_mismatch:
+            return False, None
 
     # Replace: send the new screen, delete the old message, move on.
     sent = await _replace_message(
@@ -449,6 +543,7 @@ async def render_screen(
         text,
         reply_markup=reply_markup,
         parse_mode=parse_mode,
+        on_edited=on_edited,
     )
     if not ok:
         ok = await safe_edit_message_text(
@@ -458,6 +553,7 @@ async def render_screen(
             text,
             reply_markup=reply_markup,
             parse_mode=parse_mode,
+            on_edited=on_edited,
         )
     return (True, None) if ok else (False, None)
 
@@ -472,10 +568,10 @@ async def render_callback_screen(
 ) -> Optional[Message]:
     """Render a screen onto the message behind a callback query.
 
-    Returns the Message now displaying the screen. When a replacement
-    happened, ``callback.message`` is retargeted to the new message BEFORE
-    returning, so anything the handler does afterwards (panel claiming,
-    follow-up edits) references the live message.
+    Returns the Message now displaying the screen. ``callback.message`` is
+    refreshed with Telegram's edit result even for an in-place media swap;
+    on replacement it is retargeted to the NEW message id before returning.
+    Panel claiming, banner caching and follow-up edits see the live screen.
     """
     message = callback.message
     if message is None:
@@ -486,6 +582,18 @@ async def render_callback_screen(
     chat_id = getattr(chat, "id", None) if chat is not None else None
 
     if message_id and chat_id:
+        def _retarget_edited(edited: Any) -> None:
+            # Telegram returns the updated Message for an in-place edit,
+            # but the callback's immutable snapshot still has the OLD photo
+            # file_id. Banner caching and subsequent renders need the new one.
+            edited_chat = getattr(edited, "chat", None)
+            if (
+                isinstance(getattr(edited, "message_id", None), int)
+                and edited.message_id == message_id
+                and getattr(edited_chat, "id", None) == chat_id
+            ):
+                _retarget_message_reference(callback, edited)
+
         ok, replacement = await render_screen(
             bot,
             chat_id,
@@ -495,13 +603,13 @@ async def render_callback_screen(
             reply_markup=reply_markup,
             parse_mode=parse_mode,
             current_is_photo=_is_photo_message(message),
+            on_edited=_retarget_edited,
         )
         if not ok:
             return None
         if replacement is not None:
             _retarget_message_reference(callback, replacement)
-            return replacement
-        return message
+        return callback.message
 
     # Legacy fallback: the handle has no chat/message identifiers.
     async def _direct_edit():

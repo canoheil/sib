@@ -8,7 +8,9 @@ from sib.database.connection import get_session
 from sib.services.apple_wallet import AppleWalletService
 from sib.services.player_cards import CardError, PlayerCardService
 from sib.services.shop import ShopError, ShopService
-from sib.services.telegram_ui import safe_answer_callback, safe_edit_callback_message
+from sib.services.telegram_ui import (
+    CAPTION_LIMIT, caption_length, safe_answer_callback, safe_edit_callback_message,
+)
 
 router = Router(name="shop")
 
@@ -133,8 +135,34 @@ async def handle_shop_item(callback: CallbackQuery, bot: Bot):
     if not user:
         return
     text, kb, art_photo = await _shop_item_view(user.id, entry_id)
+    if art_photo is not None and caption_length(text) > CAPTION_LIMIT:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="📖 متن کامل کارت", callback_data=f"shop_item_full:{entry_id}",
+            )],
+            *kb.inline_keyboard,
+        ])
     await safe_answer_callback(callback)
     await safe_edit_callback_message(callback, bot, text, reply_markup=kb, photo=art_photo)
+
+
+@router.callback_query(F.data.startswith("shop_item_full:"))
+async def handle_shop_item_full(callback: CallbackQuery, bot: Bot):
+    """Unabridged shop description, shown only when the caption is too long."""
+    user = callback.from_user
+    if not user:
+        return
+    entry_id = int(callback.data.split(":")[1])
+    text, kb, art_photo = await _shop_item_view(user.id, entry_id)
+    if art_photo is not None:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="↩️ بازگشت به کارت", callback_data=f"shop_item:{entry_id}",
+            )],
+            *kb.inline_keyboard,
+        ])
+    await safe_answer_callback(callback)
+    await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
 
 @router.callback_query(F.data.startswith("shop_owned:"))
