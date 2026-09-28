@@ -3,7 +3,7 @@
 One cohesive illustration per screen, stored under ``assets/banners/`` and
 committed to the repo. Sends use photo+caption (Telegram shows the art above
 the Persian text and inline keyboard); edits of such messages go through the
-caption path in ``safe_edit_callback_message``.
+central photo/media transition path in ``render_callback_screen``.
 
 Design rules (art direction):
 - art is TEXT-FREE; every word stays in the Persian caption/keyboard
@@ -22,6 +22,7 @@ from typing import Optional
 from aiogram.types import FSInputFile, Message
 
 from sib.core.logging import logger
+from sib.services.telegram_ui import CAPTION_LIMIT, caption_length
 
 _BANNER_DIR = Path(__file__).resolve().parent.parent / "assets" / "banners"
 
@@ -32,9 +33,6 @@ BANNERS = {
     "shop": "shop.jpg",
     "leaderboard": "leaderboard.jpg",
 }
-
-# Telegram caption hard limit.
-CAPTION_LIMIT = 1024
 
 # Per-process file_id cache: after the first upload Telegram returns a
 # file_id that makes later sends fast (no re-upload).
@@ -88,7 +86,7 @@ async def send_screen_reply(
     the flow.
     """
     path = banner_path(key)
-    if path is None or len(text) > CAPTION_LIMIT:
+    if path is None or caption_length(text) > CAPTION_LIMIT:
         return await message.reply(text, reply_markup=reply_markup, parse_mode=parse_mode)
 
     media = banner_photo(key)

@@ -44,6 +44,48 @@ class PanelGuardMiddleware(BaseMiddleware):
         if not chat_id or not message_id or not event.from_user:
             return await handler(event, data)
 
+        async def handle_and_move_claim():
+            handled = False
+            try:
+                result = await handler(event, data)
+                handled = True
+                return result
+            finally:
+                # Back to the public main menu ends a personal panel, even
+                # when PHOTO -> PHOTO kept the same message id. Do not carry
+                # its owner lock onto a public menu (or leave a deleted id).
+                if (
+                    event.data == "main_menu"
+                    and panel_type is not None
+                    and handled
+                    and result is True
+                ):
+                    async with get_session() as session:
+                        await PanelOwnershipService.release(session, chat_id, message_id)
+                else:
+                    # The central renderer retargets callback.message on a
+                    # real TEXT <-> PHOTO replacement. Transfer an EXISTING
+                    # claim too, including wiki navigation handlers that do
+                    # not claim a new panel themselves. Never claim a public
+                    # message on behalf of the person who pressed its button.
+                    current = event.message
+                    current_id = getattr(current, "message_id", None)
+                    current_chat = getattr(current, "chat", None)
+                    if (
+                        isinstance(current_id, int)
+                        and current_id != message_id
+                        and getattr(current_chat, "id", None) == chat_id
+                    ):
+                        async with get_session() as session:
+                            claim_owner, claim_type = await PanelOwnershipService.get_panel_context(
+                                session, chat_id, message_id, event.from_user.id
+                            )
+                            if claim_type is not None:
+                                await PanelOwnershipService.move_claim(
+                                    session, chat_id, message_id, current_id,
+                                    claim_owner, claim_type,
+                                )
+
         async with get_session() as session:
             owner_id, panel_type = await PanelOwnershipService.get_panel_context(
                 session, chat_id, message_id, event.from_user.id
@@ -64,13 +106,13 @@ class PanelGuardMiddleware(BaseMiddleware):
                     except Exception:  # pragma: no cover - defensive
                         pass
                     return None
-                return await handler(event, data)
+                return await handle_and_move_claim()
 
             # Public/game surfaces (party cards, boards, shared menus) and
             # legacy messages: only owner-scoped MUTATIONS are guarded,
             # with first-writer-claims semantics (unchanged behavior).
             if not is_owner_scoped_callback(event.data):
-                return await handler(event, data)
+                return await handle_and_move_claim()
 
             allowed = await PanelOwnershipService.ensure_control(
                 session,
@@ -91,4 +133,4 @@ class PanelGuardMiddleware(BaseMiddleware):
                 pass
             return None
 
-        return await handler(event, data)
+        return await handle_and_move_claim()
