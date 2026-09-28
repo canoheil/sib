@@ -1,8 +1,7 @@
 """Telegram handlers for Leaderboard and Statistics."""
 
-from aiogram import Router, F
+from aiogram import Bot, Router, F
 from aiogram.filters import Command
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import Message, CallbackQuery
 
 from sib.database.connection import get_session
@@ -53,19 +52,24 @@ async def cmd_leaderboard(message: Message):
 
 
 @router.callback_query(F.data == "show_leaderboard")
-async def callback_show_leaderboard(callback: CallbackQuery):
-    """Callback to display global leaderboard."""
+async def callback_show_leaderboard(callback: CallbackQuery, bot: Bot):
+    """Callback to display global leaderboard (own banner screen)."""
+    from sib.services.banner import render_banner
+
     async with get_session() as session:
         top_groups = await LeaderboardService.get_top_groups(session, limit=10)
         text = format_leaderboard_text(top_groups)
         is_group = bool(callback.message and callback.message.chat.type in ("group", "supergroup"))
         await callback.answer()
         if callback.message:
-            await callback.message.edit_text(text, reply_markup=get_leaderboard_keyboard(is_group=is_group), parse_mode="Markdown")
+            await render_banner(
+                callback, bot, "leaderboard", text,
+                get_leaderboard_keyboard(is_group=is_group),
+            )
 
 
 @router.callback_query(F.data.in_(("group_rating_stats", "group_win_stats")))
-async def callback_group_rating_stats(callback: CallbackQuery):
+async def callback_group_rating_stats(callback: CallbackQuery, bot: Bot):
     """Show group win-based stats (legacy callback kept for old messages)."""
     chat = callback.message.chat if callback.message else None
     if not chat or chat.type not in ("group", "supergroup"):
@@ -89,15 +93,14 @@ async def callback_group_rating_stats(callback: CallbackQuery):
         )
         await callback.answer()
         if callback.message:
-            try:
-                await callback.message.edit_text(
-                    text,
-                    reply_markup=get_group_stats_keyboard(),
-                    parse_mode="Markdown",
-                )
-            except TelegramBadRequest as exc:
-                if "message is not modified" not in str(exc).lower():
-                    raise
+            from sib.services.telegram_ui import safe_edit_callback_message
+
+            await safe_edit_callback_message(
+                callback,
+                bot,
+                text,
+                reply_markup=get_group_stats_keyboard(),
+            )
 
 
 @router.message(Command("stats"))

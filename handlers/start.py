@@ -1,5 +1,7 @@
 """Start command and basic navigation handlers."""
 
+from typing import Optional
+
 from aiogram import Router, F, Bot
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
@@ -111,10 +113,11 @@ async def handle_check_membership(callback: CallbackQuery, bot: Bot):
             "سیب رو به گروه‌تون اضافه کن و چالش بازی‌های تیمی رو آغاز کنید 👇"
         )
         if callback.message:
-            await callback.message.edit_text(
+            await safe_edit_callback_message(
+                callback,
+                bot,
                 welcome_text,
                 reply_markup=get_private_welcome_keyboard(settings.BOT_USERNAME),
-                parse_mode="Markdown",
             )
 
 
@@ -220,20 +223,45 @@ async def handle_help_page(callback: CallbackQuery, bot: Bot):
     await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
 
-async def _claim_panel(callback: CallbackQuery, panel_type: str) -> None:
-    """Bind a personal panel message to its opener (DB, authoritative)."""
+async def _claim_panel(
+    callback: CallbackQuery,
+    panel_type: str,
+    previous_message_id: Optional[int] = None,
+) -> None:
+    """Bind a personal panel message to its opener (DB, authoritative).
+
+    ``previous_message_id`` is the message id BEFORE the screen render: when
+    the render replaced the message (text↔photo transition), the claim is
+    MOVED to the new message — a deleted message_id must never linger in
+    the panel registry.
+    """
     chat = getattr(callback.message, "chat", None)
     msg_id = getattr(callback.message, "message_id", None)
     if chat is None or not msg_id or not callback.from_user:
         return
+    if not isinstance(msg_id, int):
+        return
     async with get_session() as session:
-        await PanelOwnershipService.claim(
-            session,
-            chat_id=chat.id,
-            message_id=msg_id,
-            user_id=callback.from_user.id,
-            panel_type=panel_type,
-        )
+        if (
+            isinstance(previous_message_id, int)
+            and previous_message_id != msg_id
+        ):
+            await PanelOwnershipService.move_claim(
+                session,
+                chat_id=chat.id,
+                old_message_id=previous_message_id,
+                new_message_id=msg_id,
+                user_id=callback.from_user.id,
+                panel_type=panel_type,
+            )
+        else:
+            await PanelOwnershipService.claim(
+                session,
+                chat_id=chat.id,
+                message_id=msg_id,
+                user_id=callback.from_user.id,
+                panel_type=panel_type,
+            )
         await session.commit()
 
 
@@ -241,22 +269,20 @@ async def _claim_panel(callback: CallbackQuery, panel_type: str) -> None:
 async def handle_apple_garden(callback: CallbackQuery, bot: Bot):
     """Open the sender's garden anywhere (public view + private control)."""
     from sib.handlers.garden import _render_garden
+    from sib.services.banner import render_banner
 
     user = callback.from_user
     if not user:
         return
 
+    prev_message_id = getattr(callback.message, "message_id", None)
     async with get_session() as session:
         text, kb = await _render_garden(user.id, session)
 
     await callback.answer()
     if callback.message:
-        await callback.message.edit_text(
-            text,
-            reply_markup=kb,
-            parse_mode="Markdown",
-        )
-    await _claim_panel(callback, "garden")
+        await render_banner(callback, bot, "garden", text, kb)
+    await _claim_panel(callback, "garden", prev_message_id)
 
 
 @router.callback_query(F.data.startswith("apple_cards"))
@@ -268,6 +294,7 @@ async def handle_apple_cards(callback: CallbackQuery, bot: Bot):
         return
     _base, origin = parse_callback(callback.data)
 
+    prev_message_id = getattr(callback.message, "message_id", None)
     async with get_session() as session:
         text = await CollectionService.render_collection(session, user.id)
 
@@ -275,32 +302,31 @@ async def handle_apple_cards(callback: CallbackQuery, bot: Bot):
 
     await callback.answer()
     if callback.message:
-        await callback.message.edit_text(
+        await safe_edit_callback_message(
+            callback,
+            bot,
             text,
             reply_markup=kb,
-            parse_mode="Markdown",
         )
-    await _claim_panel(callback, "cards")
+    await _claim_panel(callback, "cards", prev_message_id)
 
 
 @router.callback_query(F.data == "apple_shop")
 async def handle_apple_shop(callback: CallbackQuery, bot: Bot):
     from sib.handlers.shop import _shop_view
+    from sib.services.banner import render_banner
 
     user = callback.from_user
     if not user:
         return
 
+    prev_message_id = getattr(callback.message, "message_id", None)
     text, kb = await _shop_view(user.id)
 
     await callback.answer()
     if callback.message:
-        await callback.message.edit_text(
-            text,
-            reply_markup=kb,
-            parse_mode="Markdown",
-        )
-    await _claim_panel(callback, "shop")
+        await render_banner(callback, bot, "shop", text, kb)
+    await _claim_panel(callback, "shop", prev_message_id)
 
 
 @router.callback_query(F.data.startswith("apple_battle"))
@@ -316,10 +342,11 @@ async def handle_apple_battle(callback: CallbackQuery, bot: Bot):
 
     await callback.answer()
     if callback.message:
-        await callback.message.edit_text(
+        await safe_edit_callback_message(
+            callback,
+            bot,
             text,
             reply_markup=kb,
-            parse_mode="Markdown",
         )
 
 
@@ -336,6 +363,7 @@ async def handle_apple_profile(callback: CallbackQuery, bot: Bot):
     if not user:
         return
 
+    prev_message_id = getattr(callback.message, "message_id", None)
     async with get_session() as session:
         cards = await PlayerCardService.list_cards(session, user.id)
         seedlings = await SeedlingService.get_total(session, user.id)
@@ -397,7 +425,7 @@ async def handle_apple_profile(callback: CallbackQuery, bot: Bot):
             reply_markup=kb,
             photo=fav_photo,
         )
-    await _claim_panel(callback, "profile")
+    await _claim_panel(callback, "profile", prev_message_id)
 
 
 def _main_menu_text_and_kb(user, chat) -> tuple:
@@ -430,14 +458,19 @@ async def handle_main_menu(callback: CallbackQuery, bot: Bot, state: FSMContext 
     """Context-aware main menu: one button works everywhere.
 
     Navigating home ALWAYS exits any active FSM flow (admin flows etc.).
+    The screen is rendered by the same canonical path as the 'سیب منو'
+    wake word (banner + caption + keyboard).
     """
+    from sib.services.banner import render_banner
+
     if state is not None:
         await state.clear()
     text, kb = _main_menu_text_and_kb(
         callback.from_user, callback.message.chat if callback.message else None
     )
     await safe_answer_callback(callback)
-    await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
+    if callback.message:
+        await render_banner(callback, bot, "main_menu", text, kb)
 
 
 async def _reply_games_menu(message: Message) -> None:

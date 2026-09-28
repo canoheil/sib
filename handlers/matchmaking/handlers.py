@@ -1,5 +1,7 @@
 """Telegram handlers for Matchmaking and Acceptance."""
 
+from typing import Optional
+
 from aiogram import Router, F, Bot
 from aiogram.types import CallbackQuery
 from sib.core.errors import InvalidActionException, MatchNotFoundException, PartyNotFoundException
@@ -12,6 +14,12 @@ from sib.handlers.matchmaking.renderer import render_match_found_for_group
 from sib.matchmaking.matcher import MatchmakingService
 from sib.matchmaking.acceptance import AcceptanceService
 from sib.services.party import PartyService
+from sib.services.telegram_ui import (
+    render_callback_screen,
+    safe_edit_callback_message,
+    safe_edit_screen,
+    safe_send_screen,
+)
 
 router = Router(name="matchmaking")
 
@@ -44,37 +52,47 @@ async def handle_find_match(callback: CallbackQuery, bot: Bot):
             )
             await callback.answer("وارد صف مسابقات شدی! 🍏")
             if callback.message:
-                await callback.message.edit_text(
+                await safe_edit_callback_message(
+                    callback,
+                    bot,
                     queue_text,
                     reply_markup=get_queue_keyboard(party_id),
-                    parse_mode="Markdown",
                 )
             return
 
         # Match was found immediately!
         await callback.answer("حریف پیدا شد! 🍏✨")
 
-        # 1. Update/Send to Group 1
+        # 1. Update/Send to Group 1 (via the central renderer: the queue
+        #    message may be text or photo; the match-found screen always
+        #    renders as its own message and the stored id follows it).
         text_g1 = render_match_found_for_group(match, match.group1_id)
         kb_g1 = get_acceptance_keyboard(match.id, has_accepted=False)
         if callback.message and callback.message.chat.id == match.group1_id:
-            msg1 = await callback.message.edit_text(text_g1, reply_markup=kb_g1, parse_mode="Markdown")
-            match.group1_message_id = msg1.message_id
+            msg1 = await render_callback_screen(
+                callback, bot, text_g1, reply_markup=kb_g1
+            )
         else:
-            msg1 = await bot.send_message(match.group1_id, text_g1, reply_markup=kb_g1, parse_mode="Markdown")
+            msg1 = await safe_send_screen(
+                bot, match.group1_id, text_g1, reply_markup=kb_g1
+            )
+        if msg1 is not None:
             match.group1_message_id = msg1.message_id
 
         # 2. Send to Group 2
         text_g2 = render_match_found_for_group(match, match.group2_id)
         kb_g2 = get_acceptance_keyboard(match.id, has_accepted=False)
-        msg2 = await bot.send_message(match.group2_id, text_g2, reply_markup=kb_g2, parse_mode="Markdown")
-        match.group2_message_id = msg2.message_id
+        msg2 = await safe_send_screen(
+            bot, match.group2_id, text_g2, reply_markup=kb_g2
+        )
+        if msg2 is not None:
+            match.group2_message_id = msg2.message_id
 
         await session.flush()
 
 
 @router.callback_query(F.data.startswith("cancel_matchmaking:"))
-async def handle_cancel_matchmaking(callback: CallbackQuery):
+async def handle_cancel_matchmaking(callback: CallbackQuery, bot: Optional[Bot] = None):
     """Cancel waiting in matchmaking queue."""
     party_id = int(callback.data.split(":")[1])
     user = callback.from_user
@@ -94,7 +112,7 @@ async def handle_cancel_matchmaking(callback: CallbackQuery):
         if party and callback.message:
             text = render_party_card(party)
             kb = get_party_action_keyboard(party, is_member=True)
-            await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+            await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
 
 @router.callback_query(F.data.startswith("accept_match:"))
@@ -143,17 +161,34 @@ async def handle_accept_match(callback: CallbackQuery, bot: Bot):
 
             await callback.answer("مسابقه آغاز شد! 🍏🎉")
 
-            # Render interactive board for both groups
-            for group_id, msg_id in ((match.group1_id, match.group1_message_id), (match.group2_id, match.group2_message_id)):
+            # Render interactive board for both groups. The message behind
+            # a match-found screen can be a photo (e.g. Apple Battle card
+            # art); the central renderer converts/replaces as needed and
+            # the stored message ids always follow the live message.
+            for group_id, msg_id, which in (
+                (match.group1_id, match.group1_message_id, 1),
+                (match.group2_id, match.group2_message_id, 2),
+            ):
                 if group_id and msg_id:
                     player = next((p for p in match.players if p.group_id == group_id), None)
                     p_id = player.user_id if player else 0
                     board_text = engine.render_for_group(initial_state, group_id, p_id)
                     kb = engine.get_keyboard(initial_state, match.id, p_id)
-                    try:
-                        await bot.edit_message_text(board_text, chat_id=group_id, message_id=msg_id, reply_markup=kb, parse_mode="Markdown")
-                    except Exception as e:
-                        logger.warning(f"Failed to edit board message in group {group_id}: {e}")
+                    new_msg_id = await safe_edit_screen(
+                        bot,
+                        group_id,
+                        msg_id,
+                        board_text,
+                        kb,
+                        parse_mode="Markdown",
+                    )
+                    if new_msg_id is None:
+                        logger.warning(f"Failed to edit board message in group {group_id}")
+                    elif new_msg_id != msg_id:
+                        if which == 1:
+                            match.group1_message_id = new_msg_id
+                        else:
+                            match.group2_message_id = new_msg_id
 
             # Optional per-game hook (e.g. Apple Battle schedules its staged
             # narration). Default engines implement this as a no-op.
@@ -189,9 +224,16 @@ async def handle_reject_match(callback: CallbackQuery, bot: Bot):
         )
         await callback.answer("مسابقه لغو شد 🍏")
 
-        for group_id, msg_id in ((match.group1_id, match.group1_message_id), (match.group2_id, match.group2_message_id)):
+        for group_id, msg_id, which in (
+            (match.group1_id, match.group1_message_id, 1),
+            (match.group2_id, match.group2_message_id, 2),
+        ):
             if group_id and msg_id:
-                try:
-                    await bot.edit_message_text(reject_text, chat_id=group_id, message_id=msg_id, parse_mode="Markdown")
-                except Exception:
-                    pass
+                new_msg_id = await safe_edit_screen(
+                    bot, group_id, msg_id, reject_text, None, parse_mode="Markdown"
+                )
+                if new_msg_id and new_msg_id != msg_id:
+                    if which == 1:
+                        match.group1_message_id = new_msg_id
+                    else:
+                        match.group2_message_id = new_msg_id

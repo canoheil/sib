@@ -4,6 +4,8 @@ import os
 import asyncio
 import uuid
 import pytest
+
+from sib.tests.conftest import requires_row_locks
 from sqlalchemy import select
 from sib.core.config import settings
 from sib.core.errors import (
@@ -214,6 +216,7 @@ async def test_unsupported_mode_rejection(db_session):
 
 
 @pytest.mark.asyncio
+@requires_row_locks
 async def test_concurrent_party_join_atomic(db_session):
     """Simulate two concurrent users attempting to fill the last party slot."""
     from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession

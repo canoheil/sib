@@ -513,11 +513,12 @@ class AppleBattleService:
         from sib.services.telegram_ui import safe_edit_screen
 
         winner_photo = await cls._winner_photo(match_id) if finished else None
+        replaced: List[Tuple[int, int]] = []
         for group_id, msg_id in edit_targets:
             kb = final_keyboard() if finished else engine.get_keyboard(
                 {}, match_id, 0
             )
-            ok = await safe_edit_screen(
+            new_msg_id = await safe_edit_screen(
                 bot,
                 group_id,
                 msg_id,
@@ -526,9 +527,30 @@ class AppleBattleService:
                 parse_mode="Markdown",
                 photo=winner_photo,
             )
-            if not ok:
+            if new_msg_id is None:
                 logger.warning(
                     f"Apple battle board edit failed for group {group_id}"
+                )
+            elif new_msg_id != msg_id:
+                # The renderer replaced the message (text↔photo): persist
+                # the LIVE message id so no stale id lingers in the match.
+                replaced.append((group_id, new_msg_id))
+        if replaced:
+            try:
+                from sib.database.connection import get_session
+                from sib.database.models import Match
+
+                async with get_session() as session:
+                    match = await session.get(Match, match_id)
+                    if match is not None:
+                        for group_id, new_msg_id in replaced:
+                            if group_id == match.group1_id:
+                                match.group1_message_id = new_msg_id
+                            elif group_id == match.group2_id:
+                                match.group2_message_id = new_msg_id
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning(
+                    f"Could not persist replaced board ids for match {match_id}: {exc}"
                 )
 
     # ------------------------------------------------------------------

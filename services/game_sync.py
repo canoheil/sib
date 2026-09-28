@@ -16,7 +16,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from sib.core.logging import logger
 from sib.database.models import Match, MatchState
 from sib.games.registry import get_game_engine
-from sib.services.telegram_ui import safe_edit_message_text, with_refresh_button
+from sib.services.telegram_ui import safe_edit_screen, with_refresh_button
 
 
 def final_keyboard() -> InlineKeyboardMarkup:
@@ -62,9 +62,9 @@ async def sync_match_messages(
     match_over = match.state != MatchState.ACTIVE
     players_by_group = {p.group_id: p.user_id for p in match.players}
 
-    for group_id, msg_id in (
-        (match.group1_id, match.group1_message_id),
-        (match.group2_id, match.group2_message_id),
+    for group_id, msg_id, which in (
+        (match.group1_id, match.group1_message_id, 1),
+        (match.group2_id, match.group2_message_id, 2),
     ):
         if not group_id or not msg_id:
             continue
@@ -94,9 +94,16 @@ async def sync_match_messages(
                 kb = with_refresh_button(
                     engine.get_keyboard(state, match.id, viewer_id), match.id
                 )
-            await safe_edit_message_text(
+            new_msg_id = await safe_edit_screen(
                 bot, chat_id=group_id, message_id=msg_id, text=text, reply_markup=kb
             )
+            if new_msg_id and new_msg_id != msg_id:
+                # The renderer replaced the message: keep the match's stored
+                # board id pointing at the live message (never a stale one).
+                if which == 1:
+                    match.group1_message_id = new_msg_id
+                else:
+                    match.group2_message_id = new_msg_id
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning(
                 f"Failed to sync board message {msg_id} in {group_id} "

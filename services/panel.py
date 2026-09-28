@@ -122,6 +122,52 @@ class PanelOwnershipService:
             await session.flush()
 
     @staticmethod
+    async def move_claim(
+        session: AsyncSession,
+        chat_id: int,
+        old_message_id: Optional[int],
+        new_message_id: Optional[int],
+        user_id: int,
+        panel_type: str = "generic",
+    ) -> bool:
+        """Transfer a panel claim to a REPLACEMENT message.
+
+        When a screen transition replaces the message (Telegram cannot
+        convert text↔photo in place), the live panel is the new message —
+        its claim must move with it, otherwise the old (deleted) message_id
+        would linger in the registry forever and the next press would find
+        an unowned panel. Ownership (owner_user_id) is preserved.
+        """
+        if (
+            not old_message_id
+            or not new_message_id
+            or old_message_id == new_message_id
+        ):
+            return await PanelOwnershipService.claim(
+                session, chat_id, new_message_id or 0, user_id, panel_type
+            )
+        row = await session.get(PanelOwner, (chat_id, old_message_id))
+        if row is None:
+            return await PanelOwnershipService.claim(
+                session, chat_id, new_message_id, user_id, panel_type
+            )
+        owner = row.owner_user_id
+        moved_type = row.panel_type or panel_type
+        await session.delete(row)
+        existing = await session.get(PanelOwner, (chat_id, new_message_id))
+        if existing is None:
+            session.add(
+                PanelOwner(
+                    chat_id=chat_id,
+                    message_id=new_message_id,
+                    owner_user_id=owner,
+                    panel_type=moved_type,
+                )
+            )
+        await session.flush()
+        return owner == user_id
+
+    @staticmethod
     async def get_panel_context(
         session: AsyncSession,
         chat_id: int,

@@ -68,12 +68,15 @@ async def cmd_shop(message: Message, bot: Bot):
 
 @router.callback_query(F.data == "shop_refresh")
 async def handle_shop_refresh(callback: CallbackQuery, bot: Bot):
+    from sib.services.banner import render_banner
+
     user = callback.from_user
     if not user:
         return
     text, kb = await _shop_view(user.id)
     await safe_answer_callback(callback, "بروزرسانی شد 🍏")
-    await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
+    if callback.message:
+        await render_banner(callback, bot, "shop", text, kb)
 
 
 async def _shop_item_view(user_id: int, entry_id: int):
@@ -153,9 +156,12 @@ async def handle_shop_buy(callback: CallbackQuery, bot: Bot):
             await safe_answer_callback(callback, str(e), show_alert=True)
             return
 
+    from sib.services.banner import render_banner
+
     text, kb = await _shop_view(user.id)
     await safe_answer_callback(callback, "خرید انجام شد! کارت به مجموعه شما اضافه شد 🎉")
-    await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
+    if callback.message:
+        await render_banner(callback, bot, "shop", text, kb)
 
 
 # ---------------------------------------------------------------------------
@@ -207,6 +213,7 @@ async def handle_card_panel(callback: CallbackQuery, bot: Bot):
     user = callback.from_user
     if not user:
         return
+    prev_message_id = getattr(callback.message, "message_id", None)
     text, kb = await _card_panel_view(user.id, card_id)
     art_photo = None
     async with get_session() as session:
@@ -228,9 +235,15 @@ async def handle_card_panel(callback: CallbackQuery, bot: Bot):
     msg_id = getattr(callback.message, "message_id", None)
     if chat is not None and msg_id:
         async with get_session() as session:
-            await PanelOwnershipService.claim(
-                session, chat.id, msg_id, user.id, panel_type="card_panel"
-            )
+            if prev_message_id and prev_message_id != msg_id:
+                await PanelOwnershipService.move_claim(
+                    session, chat.id, prev_message_id, msg_id, user.id,
+                    panel_type="card_panel",
+                )
+            else:
+                await PanelOwnershipService.claim(
+                    session, chat.id, msg_id, user.id, panel_type="card_panel"
+                )
             await session.commit()
 
 
@@ -241,6 +254,7 @@ async def handle_card_upgrade(callback: CallbackQuery, bot: Bot):
     user = callback.from_user
     if not user:
         return
+    prev_card_msg_id = getattr(callback.message, "message_id", None)
 
     # Simple suggested allocations: the gained points split per plan.
     async with get_session() as session:
@@ -274,5 +288,29 @@ async def handle_card_upgrade(callback: CallbackQuery, bot: Bot):
             return
 
     text, kb = await _card_panel_view(user.id, card_id)
+    art_photo = None
+    async with get_session() as session:
+        card = await PlayerCardService.get_card(session, card_id)
+        if card and card.user_id == user.id:
+            from sib.database.models import Character
+            from sib.services.character_art import photo_arg, resolve_character_photo
+
+            character = await session.get(Character, card.character_id)
+            if character is not None:
+                file_id, fs_path = await resolve_character_photo(session, character)
+                art_photo = photo_arg(file_id, fs_path)
     await safe_answer_callback(callback, "کارت ارتقا یافت! 🎉")
-    await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
+    await safe_edit_callback_message(
+        callback, bot, text, reply_markup=kb, photo=art_photo
+    )
+    chat = getattr(callback.message, "chat", None)
+    msg_id = getattr(callback.message, "message_id", None)
+    if chat is not None and msg_id and prev_card_msg_id and prev_card_msg_id != msg_id:
+        from sib.services.panel import PanelOwnershipService
+
+        async with get_session() as session:
+            await PanelOwnershipService.move_claim(
+                session, chat.id, prev_card_msg_id, msg_id, user.id,
+                panel_type="card_panel",
+            )
+            await session.commit()

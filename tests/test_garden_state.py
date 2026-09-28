@@ -266,24 +266,65 @@ async def test_garden_actions_rerender_panel(db_session):
     bot = AsyncMock()
     bot.edit_message_text = AsyncMock(return_value=True)
 
+    def rendered_text():
+        """Last screen text rendered through ANY transition path.
+
+        The garden screen is a banner screen: depending on the message it
+        may be re-rendered by edit_message_text, edit_message_caption,
+        edit_message_media (caption=...) or a replaced send_photo/send_message.
+        The invariant under test is: the panel is ALWAYS re-rendered after
+        every action, with the garden screen's own content.
+        """
+        calls = []
+        for name in ("edit_message_text", "edit_message_caption"):
+            mock = getattr(bot, name, None)
+            if mock is not None and getattr(mock, "await_count", 0):
+                args = mock.await_args
+                text = args.args[0] if args.args else args.kwargs.get("caption") or args.kwargs.get("text")
+                calls.append(text)
+        for name in ("edit_message_media",):
+            mock = getattr(bot, name, None)
+            if mock is not None and getattr(mock, "await_count", 0):
+                media = mock.await_args.kwargs.get("media")
+                calls.append(getattr(media, "caption", None))
+        for name in ("send_photo", "send_message"):
+            mock = getattr(bot, name, None)
+            if mock is not None and getattr(mock, "await_count", 0):
+                args = mock.await_args
+                if name == "send_photo":
+                    calls.append(args.kwargs.get("caption") or (args.args[1] if len(args.args) > 1 else None))
+                else:
+                    calls.append(args.args[1] if len(args.args) > 1 else args.args[0])
+        assert calls, "the panel must be re-rendered through some path"
+        return calls[-1]
+
+    def rerendered():
+        return (
+            bot.edit_message_text.called
+            or bot.edit_message_caption.called
+            or bot.edit_message_media.called
+            or bot.send_photo.called
+            or bot.send_message.called
+        )
+
     # Plant -> rerender.
     cb = make_cb()
     cb.data = f"garden_plant:{plot_index}"
     await handle_garden_plant(cb, bot)
-    assert bot.edit_message_text.called, "plant must re-render the panel"
+    assert rerendered(), "plant must re-render the panel"
 
     # Refresh -> rerender.
-    bot.edit_message_text.reset_mock()
+    bot.reset_mock()
     cb = make_cb()
     await handle_garden_refresh(cb, bot)
-    assert bot.edit_message_text.called, "refresh must re-render the panel"
+    assert rerendered(), "refresh must re-render the panel"
 
     # Expand -> rerender even when the action is rejected.
-    bot.edit_message_text.reset_mock()
+    bot.reset_mock()
     cb = make_cb()
     await handle_garden_expand(cb, bot)
-    assert bot.edit_message_text.called, "expand must re-render the panel"
+    assert rerendered(), "expand must re-render the panel"
 
     # The rendered panel text contains the plot state machine vocabulary.
-    text = bot.edit_message_text.call_args.args[0]
+    text = rendered_text()
     assert any(word in text for word in ("رشد", "میوه", "برداشت", "خالی", "باغ"))

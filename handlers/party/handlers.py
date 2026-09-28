@@ -5,6 +5,7 @@ import asyncio
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram import Bot
+from typing import Optional
 from aiogram.types import Message, CallbackQuery
 from sqlalchemy import select
 from sib.core.errors import (
@@ -71,7 +72,9 @@ async def cmd_group_games(message: Message):
         await GroupService.get_or_create_group(session, message.chat)
         text, kb = await build_games_menu(session, message.chat.id)
 
-        await message.reply(text, reply_markup=kb, parse_mode="Markdown")
+        from sib.services.banner import send_screen_reply
+
+        await send_screen_reply(message, "games", text, kb)
 
 
 @router.callback_query(F.data == "group_games_panel")
@@ -93,8 +96,11 @@ async def handle_games_panel(callback: CallbackQuery, bot: Bot):
 
         text, kb = await build_games_menu(session, chat.id)
 
+        from sib.services.banner import render_banner
+
         await safe_answer_callback(callback)
-        await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
+        if callback.message:
+            await render_banner(callback, bot, "games", text, kb)
 
 
 @router.callback_query(F.data == "group_active_games")
@@ -165,7 +171,7 @@ async def handle_select_game(callback: CallbackQuery, bot: Bot):
 
 
 @router.callback_query(F.data.startswith("create_party:"))
-async def handle_create_party(callback: CallbackQuery):
+async def handle_create_party(callback: CallbackQuery, bot: Optional[Bot] = None):
     """Create a new party for the chosen game and mode."""
     parts = callback.data.split(":")
     game_code = parts[1]
@@ -204,11 +210,11 @@ async def handle_create_party(callback: CallbackQuery):
         # two-tier gate without any ownership (spec #6).
         await callback.answer("پارتی با موفقیت ایجاد شد! 🍏")
         if callback.message:
-            await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+            await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
 
 @router.callback_query(F.data.startswith("view_party:"))
-async def handle_view_party(callback: CallbackQuery):
+async def handle_view_party(callback: CallbackQuery, bot: Optional[Bot] = None):
     """View details of a specific party."""
     party_id = int(callback.data.split(":")[1])
     user = callback.from_user
@@ -225,11 +231,11 @@ async def handle_view_party(callback: CallbackQuery):
 
         await callback.answer()
         if callback.message:
-            await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+            await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
 
 @router.callback_query(F.data.startswith("join_party:"))
-async def handle_join_party(callback: CallbackQuery):
+async def handle_join_party(callback: CallbackQuery, bot: Optional[Bot] = None):
     """Join an open party slot."""
     party_id = int(callback.data.split(":")[1])
     user = callback.from_user
@@ -251,7 +257,7 @@ async def handle_join_party(callback: CallbackQuery):
 
         await callback.answer("به پارتی اضافه شدی! 🍏✨")
         if callback.message:
-            await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+            await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
 
 
@@ -260,14 +266,21 @@ async def handle_join_party(callback: CallbackQuery):
 PARTY_CANCEL_RESTORE_DELAY = 1.2
 
 
-async def _cancel_and_restore_menu(callback: CallbackQuery, cancel_text: str) -> None:
+async def _cancel_and_restore_menu(
+    callback: CallbackQuery, cancel_text: str, bot: Optional[Bot] = None
+) -> None:
     """Party cancellation UX (solo / 2v2 / 4v4): show the cancellation
-    state, then edit the SAME message back into the appropriate menu.
+    state, then render the games menu screen back over it.
 
     Shared helper so every party mode behaves identically. The caller
     keeps its established cancellation wording. Authorization, queue and
-    party cleanup happen BEFORE this (in the service) - this only edits
+    party cleanup happen BEFORE this (in the service) - this only shows
     the message after the cancellation is safely persisted.
+
+    Both steps go through the central screen renderer: whatever the
+    current message is (text or photo), the games menu ends up rendered
+    as its own screen (banner + caption + keyboard) and the live message
+    reference follows any replacement. Never a dead end.
     """
     message = callback.message
     if message is None:
@@ -277,26 +290,30 @@ async def _cancel_and_restore_menu(callback: CallbackQuery, cancel_text: str) ->
 
     # 1) transient cancellation state (established wording preserved).
     try:
-        await message.edit_text(cancel_text, reply_markup=None, parse_mode="Markdown")
+        await safe_edit_callback_message(callback, bot, cancel_text, reply_markup=None)
     except Exception:  # pragma: no cover - defensive
         pass
 
     if PARTY_CANCEL_RESTORE_DELAY > 0:
         await asyncio.sleep(PARTY_CANCEL_RESTORE_DELAY)
 
-    # 2) restore the games menu on the same message - never a dead end.
+    # 2) restore the games menu screen - never a dead end.
     if not chat_id:
         return
     async with get_session() as session:
         text, kb = await build_games_menu(session, chat_id)
     try:
-        await message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+        from sib.services.banner import banner_photo
+
+        await safe_edit_callback_message(
+            callback, bot, text, reply_markup=kb, photo=banner_photo("games")
+        )
     except Exception:  # pragma: no cover - defensive
         pass
 
 
 @router.callback_query(F.data.startswith("leave_party:"))
-async def handle_leave_party(callback: CallbackQuery):
+async def handle_leave_party(callback: CallbackQuery, bot: Optional[Bot] = None):
     """Leave a party."""
     party_id = int(callback.data.split(":")[1])
     user = callback.from_user
@@ -313,17 +330,17 @@ async def handle_leave_party(callback: CallbackQuery):
 
         if was_cancelled:
             await callback.answer("شما خارج شدید و چون کسی نمانده بود، پارتی لغو شد 🍏")
-            await _cancel_and_restore_menu(callback, "❌ **این پارتی لغو شد.**")
+            await _cancel_and_restore_menu(callback, "❌ **این پارتی لغو شد.**", bot)
         else:
             await callback.answer("از پارتی خارج شدی 🍏")
             text = render_party_card(party)
             kb = get_party_action_keyboard(party, is_member=False)
             if callback.message:
-                await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+                await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
 
 @router.callback_query(F.data.startswith("cancel_party:"))
-async def handle_cancel_party(callback: CallbackQuery):
+async def handle_cancel_party(callback: CallbackQuery, bot: Optional[Bot] = None):
     """Cancel a party."""
     party_id = int(callback.data.split(":")[1])
     user = callback.from_user
@@ -340,7 +357,7 @@ async def handle_cancel_party(callback: CallbackQuery):
 
         await callback.answer("پارتی لغو شد 🍏")
         await _cancel_and_restore_menu(
-            callback, "❌ **این پارتی توسط کاربر لغو گردید.**"
+            callback, "❌ **این پارتی توسط کاربر لغو گردید.**", bot
         )
 
 
@@ -411,11 +428,14 @@ async def handle_play_bot(callback: CallbackQuery, bot):
         )
 
         if callback.message:
-            await callback.message.edit_text(
+            await safe_edit_callback_message(
+                callback,
+                bot,
                 "🤖 **بازی با Bot شروع شد!**\n\n" + text,
                 reply_markup=keyboard,
-                parse_mode="Markdown",
             )
+            # The renderer may replace the message (text↔photo): always
+            # persist the LIVE message id, never a stale one.
             match.group1_message_id = callback.message.message_id
 
         await callback.answer("🤖 بازی با Bot شروع شد!")

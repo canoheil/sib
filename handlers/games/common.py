@@ -28,9 +28,31 @@ from sib.services.telegram_ui import (
     REFRESH_CALLBACK_PREFIX,
     safe_answer_callback,
     safe_edit_callback_message,
-    safe_edit_message_text,
+    safe_edit_screen,
     with_refresh_button,
 )
+
+
+async def _persist_board_message_id(match_id: int, group_id: int, message_id: int) -> None:
+    """Store a REPLACED board message id (best-effort, presentation-only).
+
+    When the transition engine replaces a board message (text↔photo), the
+    match's stored id must follow the live message - a stale id must never
+    outlive the replacement.
+    """
+    try:
+        async with get_session() as session:
+            match = await session.get(Match, match_id)
+            if match is None:
+                return
+            if group_id == match.group1_id:
+                match.group1_message_id = message_id
+            elif group_id == match.group2_id:
+                match.group2_message_id = message_id
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning(
+            f"Could not persist replaced board id for match {match_id}: {exc}"
+        )
 from sib.bots.runner import run_bot_turns
 
 
@@ -99,7 +121,14 @@ async def render_board_for(
         kb = get_rematch_keyboard(selected_ad)
     else:
         kb = with_refresh_button(engine.get_keyboard(state, match.id, for_player_id), match.id)
+    before_id = getattr(message, "message_id", None)
     await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
+    after_id = getattr(callback.message, "message_id", None)
+    if before_id and after_id and after_id != before_id:
+        if group_id == match.group1_id and match.group1_message_id == before_id:
+            match.group1_message_id = after_id
+        elif group_id == match.group2_id and match.group2_message_id == before_id:
+            match.group2_message_id = after_id
 
 async def process_game_action(
     callback: CallbackQuery,
@@ -305,14 +334,16 @@ async def process_game_action(
                     kb = with_refresh_button(
                         engine.get_keyboard(state, match_id, target_pid), match_id
                     )
-                    edited = await safe_edit_message_text(
+                    new_msg_id = await safe_edit_screen(
                         bot, chat_id=group_id, message_id=msg_id, text=text, reply_markup=kb
                     )
-                    if not edited:
+                    if new_msg_id is None:
                         logger.warning(
                             f"Game board refresh failed for match {match_id} "
                             f"in group {group_id}; refresh button remains available."
                         )
+                    elif new_msg_id != msg_id:
+                        await _persist_board_message_id(match_id, group_id, new_msg_id)
         else:
             target_pid = user.id
             message = callback.message
@@ -368,13 +399,15 @@ async def process_game_action(
         ):
             if group_id and msg_id:
                 text = build_post_match_text(group_id)
-                await safe_edit_message_text(
+                new_msg_id = await safe_edit_screen(
                     bot,
                     chat_id=group_id,
                     message_id=msg_id,
                     text=text,
                     reply_markup=rematch_kb,
                 )
+                if new_msg_id and new_msg_id != msg_id:
+                    await _persist_board_message_id(match_id, group_id, new_msg_id)
     else:
         message = callback.message
         chat = getattr(message, "chat", None) if message is not None else None
@@ -441,7 +474,13 @@ async def handle_game_refresh(callback: CallbackQuery, bot: Bot) -> None:
             kb = None
 
     await safe_answer_callback(callback, "صفحه از وضعیت رسمی بازی بروزرسانی شد. 🍏")
+    before_id = getattr(message, "message_id", None)
     await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
+    after_id = getattr(callback.message, "message_id", None)
+    if before_id and after_id and after_id != before_id:
+        group_id = getattr(chat, "id", None) if chat is not None else None
+        if group_id:
+            await _persist_board_message_id(match_id, group_id, after_id)
 
 
 router = Router(name="game_common")

@@ -10,6 +10,8 @@ import asyncio
 import re
 
 import pytest
+
+from sib.tests.conftest import requires_row_locks
 from sqlalchemy import text
 from unittest.mock import AsyncMock, MagicMock
 
@@ -129,14 +131,23 @@ async def test_claim_available_again_after_cooldown(db_session):
     await db_session.commit()
     assert awarded1 is True
 
-    # Simulate the cooldown passing (DB clock on both sides).
-    await db_session.execute(
-        text(
-            "UPDATE apple_transactions SET created_at = NOW() - INTERVAL 360 SECOND "
-            "WHERE user_id = :uid AND reason = :reason"
-        ),
-        {"uid": user.id, "reason": CLAIM_REASON},
+    # Simulate the cooldown passing (dialect-neutral: set the timestamp via
+    # the ORM instead of dialect-specific SQL date math).
+    from datetime import datetime, timedelta, timezone
+
+    rows = (
+        (
+            await db_session.execute(
+                select(AppleTransaction).where(
+                    AppleTransaction.user_id == user.id
+                ).where(AppleTransaction.reason == CLAIM_REASON)
+            )
+        )
+        .scalars()
+        .all()
     )
+    for row in rows:
+        row.created_at = datetime.now(timezone.utc) - timedelta(seconds=360)
     await db_session.commit()
 
     msg2, awarded2 = await SibClaimService.claim(db_session, user.id)
@@ -168,6 +179,7 @@ async def test_cooldown_is_per_user(db_session):
 
 
 @pytest.mark.asyncio
+@requires_row_locks
 async def test_concurrent_claims_award_exactly_once():
     from sib.tests.test_parties import create_test_user
 
@@ -208,6 +220,7 @@ def _group_message(user, text_str):
     msg.chat.type = "supergroup"
     msg.chat.id = -6001
     msg.chat.title = "گروه سیبی"
+    msg.chat.username = None  # mock hygiene: never leak MagicMock into DB columns
     msg.from_user = user
     msg.text = text_str
     msg.reply = AsyncMock()
