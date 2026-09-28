@@ -9,13 +9,27 @@ state. These helpers provide:
 - ``safe_answer_callback``: never-raising callback acknowledgement.
 - ``with_refresh_button``: recovery button that re-renders a board from
   the authoritative DB state when the on-screen board went stale.
+- ``render_screen`` / ``render_callback_screen``: the ONE message
+  transition engine. Every screen transition (TEXT↔TEXT, TEXT↔PHOTO,
+  PHOTO↔PHOTO) goes through here so that each screen always ends up with
+  exactly its own media + caption + keyboard — a previous screen's photo
+  can never leak into the next screen.
+
+Transition rules (the whole point of this module):
+
+* same message type → in-place edit (``edit_message_text`` /
+  ``edit_message_media``);
+* different message type (Telegram cannot convert text↔photo in place)
+  → **replace**: send the new screen, delete the old message, and hand
+  the caller the NEW message so the live message reference always points
+  at the message that is actually on screen (never a stale message_id).
 
 Supported games and every interactive panel should render through these
 helpers instead of calling ``bot.edit_message_text`` directly.
 """
 
 import asyncio
-from typing import Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional, Tuple
 
 from aiogram import Bot
 from aiogram.exceptions import (
@@ -35,6 +49,9 @@ REFRESH_CALLBACK_PREFIX = "game_refresh:"
 # of being masked as a success.
 NOT_MODIFIED_MARKERS = ("message is not modified",)
 PARSE_ERROR_MARKERS = ("can't parse entities", "unsupported start tag")
+
+# Telegram caption hard limit (photo screens cannot show more text).
+CAPTION_LIMIT = 1024
 
 
 def with_refresh_button(
@@ -106,6 +123,11 @@ async def _run_edit_attempts(
             return False
         except (TelegramForbiddenError, TelegramNotFound) as e:
             logger.warning(f"Cannot edit {context}: {e}")
+            return False
+        except (TypeError, AttributeError) as e:
+            # Programming-level error (bad call signature / dead handle):
+            # retrying can never help - fail fast so callers can degrade.
+            logger.warning(f"Edit of {context} failed outright: {e}")
             return False
         except Exception as e:
             last_error = e
@@ -209,137 +231,43 @@ async def _send_fallback(bot, chat_id, text, reply_markup=None, parse_mode="Mark
         )
 
 
-async def safe_edit_message_media(bot, chat_id, message_id, photo, text, reply_markup=None, parse_mode="Markdown"):
-    """Swap a message's media (photo→photo) with an updated caption."""
-    from aiogram.types import InputMediaPhoto
-
-    media = InputMediaPhoto(media=photo, caption=text or "", parse_mode=parse_mode)
-    return await bot.edit_message_media(
-        media=media,
-        chat_id=chat_id,
-        message_id=message_id,
-        reply_markup=reply_markup,
-    )
-
-
-async def safe_edit_callback_message(
-    callback: CallbackQuery,
-    bot: Bot,
-    text: str,
-    reply_markup: Optional[InlineKeyboardMarkup] = None,
-    parse_mode: Optional[str] = "Markdown",
-    photo=None,
-) -> bool:
-    """Edit the message behind a callback query via the robust editor.
-
-    Falls back to the ``Message.edit_text`` API when the message handle
-    does not expose chat/message identifiers. When ``photo`` is given the
-    message media is swapped first (photo→photo); on failure the edit
-    degrades to the regular caption/text edit so the flow never breaks.
-    """
-    message = callback.message
-    if message is None:
-        return False
-
-    message_id = getattr(message, "message_id", None)
-    chat_id = None
-    chat = getattr(message, "chat", None)
-    if chat is not None:
-        chat_id = getattr(chat, "id", None)
-
-    # Photo screens (banner messages) are edited via their CAPTION; the
-    # illustration itself is kept. Plain text screens use edit_message_text.
-    is_photo = getattr(message, "content_type", None) == "photo"
-
-    if message_id and chat_id:
-        if photo is not None:
-            try:
-                await safe_edit_message_media(
-                    bot, chat_id, message_id, photo, text,
-                    reply_markup=reply_markup, parse_mode=parse_mode,
-                )
-                return True
-            except Exception:
-                pass  # degrade to caption/text edit below
-        if is_photo:
-            return await safe_edit_message_caption(
-                bot,
-                chat_id=chat_id,
-                message_id=message_id,
-                text=text,
-                reply_markup=reply_markup,
-                parse_mode=parse_mode,
-            )
-        return await safe_edit_message_text(
-            bot,
-            chat_id=chat_id,
-            message_id=message_id,
-            text=text,
-            reply_markup=reply_markup,
-            parse_mode=parse_mode,
-        )
-
-    async def _direct_edit():
-        await message.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
-
-    async def _direct_edit_plain():
-        await message.edit_text(text, reply_markup=reply_markup, parse_mode=None)
-
-    return await _run_edit_attempts(
-        _direct_edit,
-        fallback_factory=_direct_edit_plain,
-        context="callback message",
-    )
-
-
-async def safe_edit_screen(
+async def safe_edit_message_media(
     bot: Bot,
     chat_id: int,
     message_id: int,
+    photo: Any,
     text: str,
-    reply_markup: InlineKeyboardMarkup | None = None,
-    parse_mode: str | None = "Markdown",
-    photo=None,
-):
-    """Edit a screen message without knowing whether it holds text or a photo.
+    reply_markup: Optional[InlineKeyboardMarkup] = None,
+    parse_mode: Optional[str] = "Markdown",
+    max_attempts: int = 3,
+) -> bool:
+    """Swap a message's media (photo→photo) with an updated caption."""
+    from aiogram.types import InputMediaPhoto
 
-    With ``photo``: swap media (photo→photo) first. Otherwise — or on
-    failure — try caption edit, then text edit. Exactly one succeeds.
-    No fallback messages are sent (callers own the message lifecycle).
-    """
-    if photo is not None:
-        try:
-            await safe_edit_message_media(
-                bot, chat_id, message_id, photo, text,
-                reply_markup=reply_markup, parse_mode=parse_mode,
-            )
-            return True
-        except Exception:
-            pass
-    try:
-        await bot.edit_message_caption(
-            chat_id=chat_id,
-            message_id=message_id,
-            caption=text,
-            reply_markup=reply_markup,
-            parse_mode=parse_mode,
-        )
-        return True
-    except Exception:
-        pass
-    try:
-        await bot.edit_message_text(
-            text,
+    def _factory():
+        media = InputMediaPhoto(media=photo, caption=text or "", parse_mode=parse_mode)
+        return bot.edit_message_media(
+            media=media,
             chat_id=chat_id,
             message_id=message_id,
             reply_markup=reply_markup,
-            parse_mode=parse_mode,
         )
-        return True
-    except Exception as exc:
-        if "not modified" not in str(exc).lower():
-            logger.debug("safe_edit_screen failed: %s", exc)
-        return False
+
+    def _fallback():
+        media = InputMediaPhoto(media=photo, caption=text or "", parse_mode=None)
+        return bot.edit_message_media(
+            media=media,
+            chat_id=chat_id,
+            message_id=message_id,
+            reply_markup=reply_markup,
+        )
+
+    return await _run_edit_attempts(
+        _factory,
+        fallback_factory=_fallback,
+        max_attempts=max_attempts,
+        context=f"media of message {message_id} in chat {chat_id}",
+    )
 
 
 async def safe_send_screen(
@@ -366,4 +294,290 @@ async def safe_send_screen(
             )
         except Exception as exc:
             logger.debug("send photo screen failed: %s", exc)
-    return await _send_fallback(bot, chat_id, text, reply_markup, parse_mode)
+    try:
+        return await _send_fallback(bot, chat_id, text, reply_markup, parse_mode)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("send screen failed entirely: %s", exc)
+        return None
+
+
+def _is_photo_message(message: Any) -> bool:
+    """True when the message on screen is a PHOTO message."""
+    content_type = getattr(message, "content_type", None)
+    content_type = getattr(content_type, "value", content_type)
+    return content_type == "photo"
+
+
+def _retarget_message_reference(holder: Any, new_message: Message) -> None:
+    """Move a live message reference (e.g. ``callback.message``) to the
+    replacement message, in place.
+
+    Telegram cannot convert a text message into a photo message (or vice
+    versa) in place, so the renderer replaces the message. Everything the
+    handler does afterwards (panel claiming, further edits) must see the
+    NEW message_id — a stale id must never outlive the replacement.
+    """
+    try:
+        holder.message = new_message
+    except Exception:  # frozen aiogram models
+        object.__setattr__(holder, "message", new_message)
+
+
+async def _replace_message(
+    bot: Bot,
+    chat_id: int,
+    old_message_id: Optional[int],
+    text: str,
+    photo: Optional[Any],
+    reply_markup: Optional[InlineKeyboardMarkup],
+    parse_mode: Optional[str],
+) -> Optional[Message]:
+    """Replace a message with a freshly sent screen.
+
+    Sends the new message first (never leave the chat empty), then deletes
+    the old one (never leave orphan messages behind). Returns the new
+    message, or None when sending failed.
+    """
+    sent = await safe_send_screen(
+        bot,
+        chat_id,
+        text,
+        photo=photo,
+        reply_markup=reply_markup,
+        parse_mode=parse_mode,
+    )
+    if sent is None:
+        return None
+    new_id = getattr(sent, "message_id", None)
+    if old_message_id and new_id and new_id != old_message_id:
+        try:
+            await bot.delete_message(chat_id, old_message_id)
+        except Exception as exc:
+            logger.warning(
+                f"Could not delete replaced message {old_message_id} "
+                f"in chat {chat_id}: {exc}"
+            )
+    return sent
+
+
+async def render_screen(
+    bot: Bot,
+    chat_id: int,
+    message_id: int,
+    text: str,
+    photo: Optional[Any] = None,
+    reply_markup: Optional[InlineKeyboardMarkup] = None,
+    parse_mode: Optional[str] = "Markdown",
+    current_is_photo: Optional[bool] = None,
+) -> Tuple[bool, Optional[Message]]:
+    """The single message-transition engine.
+
+    Renders ``(text, keyboard, photo)`` onto the message at
+    ``(chat_id, message_id)`` — regardless of whether that message is
+    currently TEXT or PHOTO.
+
+    * PHOTO → PHOTO and TEXT → TEXT are edited in place. When
+      ``current_is_photo`` is unknown, the natural in-place edit for the
+      TARGET type is attempted first: it can only succeed on the matching
+      message type (Telegram enforces this), so a failure means either a
+      type change or a dead message — both are handled by replacing.
+    * TEXT → PHOTO / PHOTO → TEXT replace the message (Telegram cannot
+      convert types in place): send the new screen, delete the old one.
+
+    Returns ``(ok, replacement)`` where ``replacement`` is the new Message
+    when the message was replaced (callers MUST move their live reference
+    to it), or None when the original message still shows the screen.
+
+    ``photo`` that does not fit a Telegram caption degrades the target to
+    a text screen (presentation must never break the flow).
+    """
+    target_photo = photo if (photo is not None and len(text) <= CAPTION_LIMIT) else None
+
+    async def _in_place_edit() -> bool:
+        if target_photo is not None:
+            return await safe_edit_message_media(
+                bot,
+                chat_id,
+                message_id,
+                target_photo,
+                text,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+            )
+        return await safe_edit_message_text(
+            bot,
+            chat_id,
+            message_id,
+            text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+        )
+
+    if current_is_photo is not None:
+        target_is_photo = target_photo is not None
+        if current_is_photo == target_is_photo:
+            # Same type: pure in-place edit (no orphans, id stays stable).
+            ok = await _in_place_edit()
+            return (True, None) if ok else (False, None)
+        # Type change: the in-place edit is impossible - replace directly.
+    else:
+        # Unknown current type: the in-place edit can only succeed on the
+        # matching type; anything else falls through to replacement.
+        if await _in_place_edit():
+            return True, None
+
+    # Replace: send the new screen, delete the old message, move on.
+    sent = await _replace_message(
+        bot,
+        chat_id,
+        message_id,
+        text,
+        target_photo,
+        reply_markup,
+        parse_mode,
+    )
+    if sent is not None:
+        return True, sent
+
+    # Degraded in-place edit so the message is never left dead. This can
+    # keep the wrong media (only when replacing failed entirely) but the
+    # text/keyboard always end up current.
+    ok = await safe_edit_message_caption(
+        bot,
+        chat_id,
+        message_id,
+        text,
+        reply_markup=reply_markup,
+        parse_mode=parse_mode,
+    )
+    if not ok:
+        ok = await safe_edit_message_text(
+            bot,
+            chat_id,
+            message_id,
+            text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+        )
+    return (True, None) if ok else (False, None)
+
+
+async def render_callback_screen(
+    callback: CallbackQuery,
+    bot: Bot,
+    text: str,
+    reply_markup: Optional[InlineKeyboardMarkup] = None,
+    parse_mode: Optional[str] = "Markdown",
+    photo: Optional[Any] = None,
+) -> Optional[Message]:
+    """Render a screen onto the message behind a callback query.
+
+    Returns the Message now displaying the screen. When a replacement
+    happened, ``callback.message`` is retargeted to the new message BEFORE
+    returning, so anything the handler does afterwards (panel claiming,
+    follow-up edits) references the live message.
+    """
+    message = callback.message
+    if message is None:
+        return None
+
+    message_id = getattr(message, "message_id", None)
+    chat = getattr(message, "chat", None)
+    chat_id = getattr(chat, "id", None) if chat is not None else None
+
+    if message_id and chat_id:
+        ok, replacement = await render_screen(
+            bot,
+            chat_id,
+            message_id,
+            text,
+            photo=photo,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+            current_is_photo=_is_photo_message(message),
+        )
+        if not ok:
+            return None
+        if replacement is not None:
+            _retarget_message_reference(callback, replacement)
+            return replacement
+        return message
+
+    # Legacy fallback: the handle has no chat/message identifiers.
+    async def _direct_edit():
+        await message.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+
+    async def _direct_edit_plain():
+        await message.edit_text(text, reply_markup=reply_markup, parse_mode=None)
+
+    ok = await _run_edit_attempts(
+        _direct_edit,
+        fallback_factory=_direct_edit_plain,
+        context="callback message",
+    )
+    return message if ok else None
+
+
+async def safe_edit_callback_message(
+    callback: CallbackQuery,
+    bot: Bot,
+    text: str,
+    reply_markup: Optional[InlineKeyboardMarkup] = None,
+    parse_mode: Optional[str] = "Markdown",
+    photo=None,
+) -> bool:
+    """Show a screen on the message behind a callback query.
+
+    Works no matter whether the current message is TEXT or PHOTO and no
+    matter whether the target screen carries media: the transition engine
+    edits, swaps media, or replaces the message as needed. With ``photo``
+    the target is a photo screen (its own media + caption); without it the
+    target is a text screen — a stale photo from a previous screen never
+    survives into it.
+
+    Returns True when the screen is current on the live message. After a
+    replacement ``callback.message`` points at the new message.
+    """
+    return (
+        await render_callback_screen(
+            callback,
+            bot,
+            text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+            photo=photo,
+        )
+        is not None
+    )
+
+
+async def safe_edit_screen(
+    bot: Bot,
+    chat_id: int,
+    message_id: int,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+    parse_mode: str | None = "Markdown",
+    photo=None,
+    current_is_photo: Optional[bool] = None,
+) -> Optional[int]:
+    """Render a screen onto a (chat_id, message_id) pair of unknown type.
+
+    Same transition rules as ``render_screen``. Returns the message_id
+    that now displays the screen (a replacement changes it!), or None on
+    failure. Callers that store message ids (match boards) MUST persist
+    the returned id.
+    """
+    ok, replacement = await render_screen(
+        bot,
+        chat_id,
+        message_id,
+        text,
+        photo=photo,
+        reply_markup=reply_markup,
+        parse_mode=parse_mode,
+        current_is_photo=current_is_photo,
+    )
+    if not ok:
+        return None
+    return getattr(replacement, "message_id", None) or message_id

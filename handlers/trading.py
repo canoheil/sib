@@ -77,6 +77,7 @@ async def handle_apple_trade(callback: CallbackQuery, bot: Bot):
     if not user:
         return
 
+    prev_message_id = getattr(callback.message, "message_id", None)
     text, kb = await _pending_view(user.id)
     await safe_answer_callback(callback)
     await safe_edit_callback_message(
@@ -91,9 +92,19 @@ async def handle_apple_trade(callback: CallbackQuery, bot: Bot):
     msg_id = getattr(callback.message, "message_id", None)
     if chat is not None and msg_id and callback.from_user:
         async with get_session() as session:
-            await PanelOwnershipService.claim(
-                session, chat.id, msg_id, callback.from_user.id, panel_type="trade"
-            )
+            if prev_message_id and prev_message_id != msg_id:
+                await PanelOwnershipService.move_claim(
+                    session,
+                    chat.id,
+                    prev_message_id,
+                    msg_id,
+                    callback.from_user.id,
+                    panel_type="trade",
+                )
+            else:
+                await PanelOwnershipService.claim(
+                    session, chat.id, msg_id, callback.from_user.id, panel_type="trade"
+                )
             await session.commit()
 
 

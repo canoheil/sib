@@ -298,7 +298,7 @@ async def handle_ab_find(callback: CallbackQuery, bot: Bot):
             await safe_answer_callback(callback, "وارد صف نبرد شدی! ⚔️")
             if callback.message:
                 text, kb = _searching_view(party.id)
-                await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+                await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
             return
 
         # Match found immediately — precompute the battle BEFORE narration.
@@ -342,7 +342,8 @@ async def handle_ab_find(callback: CallbackQuery, bot: Bot):
             bot, match.group1_id, text_g1,
             photo=await _group_art(match.group1_id), reply_markup=kb_g1,
         )
-        match.group1_message_id = msg1.message_id
+        if msg1 is not None:
+            match.group1_message_id = msg1.message_id
         if callback.message and callback.message.chat.id == match.group1_id:
             # The old searching screen cannot turn into a photo — remove it.
             try:
@@ -357,7 +358,8 @@ async def handle_ab_find(callback: CallbackQuery, bot: Bot):
             bot, match.group2_id, text_g2,
             photo=await _group_art(match.group2_id), reply_markup=kb_g2,
         )
-        match.group2_message_id = msg2.message_id
+        if msg2 is not None:
+            match.group2_message_id = msg2.message_id
 
         await session.flush()
 

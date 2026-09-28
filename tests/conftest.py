@@ -12,10 +12,48 @@ from sib.database.connection import seed_default_data
 
 from sqlalchemy.pool import NullPool
 
+
+def _using_sqlite() -> bool:
+    """True when the test database is SQLite (no real row-level locks)."""
+    return "sqlite" in (os.getenv("sib_TEST_DATABASE_URL") or "")
+
+
+# ``SELECT ... FOR UPDATE`` row locking is a MySQL/MariaDB feature that
+# SQLite silently ignores - concurrency race tests need a row-lock engine
+# to be meaningful. On MySQL/MariaDB these tests always run.
+requires_row_locks = pytest.mark.skipif(
+    _using_sqlite(),
+    reason="SELECT ... FOR UPDATE row locking requires MySQL/MariaDB; "
+    "SQLite cannot exercise this race",
+)
+
 @pytest.fixture(scope="session")
 def test_settings():
     """Fixture providing settings configured for testing."""
     return settings
+
+
+def _create_all_compatible(connection) -> None:
+    """``Base.metadata.create_all`` with a SQLite-only compatibility shim.
+
+    Production runs on MySQL/MariaDB where a BIGINT primary key is created
+    with AUTO_INCREMENT automatically. SQLite only autoincrements plain
+    INTEGER primary keys, so wallet/ledger-style inserts would fail there.
+    When the test database is SQLite we narrow those PK column types to
+    INTEGER *for DDL purposes only*; MySQL/MariaDB runs are untouched.
+    """
+    from sqlalchemy import Integer
+    from sqlalchemy.dialects.sqlite.base import SQLiteDialect
+
+    if isinstance(connection.dialect, SQLiteDialect):
+        for table in Base.metadata.tables.values():
+            for col in table.columns:
+                if (
+                    col.primary_key
+                    and type(col.type).__name__ == "BigInteger"
+                ):
+                    col.type = Integer()
+    Base.metadata.create_all(connection)
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -40,9 +78,8 @@ async def db_session():
     )
 
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_create_all_compatible)
 
-    
     session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
     # Make get_session() use the isolated test database.

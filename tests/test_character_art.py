@@ -1,9 +1,11 @@
 """Character card art — resolution, wiki/shop/collection/profile/battle wiring."""
 
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from PIL import Image, ImageFilter
 
 
 async def _shop_character(db_session, code: str, price: int = 100):
@@ -69,6 +71,12 @@ async def test_artwork_path_and_fallback(db_session):
 
 @pytest.mark.asyncio
 async def test_wiki_char_page_shows_art(db_session):
+    """A text message showing a photo screen is REPLACED by a photo message.
+
+    Telegram cannot convert text→photo in place: the old message is removed
+    and the art + description are sent as the new screen (the description
+    travels as the caption). No stale/missing art, no orphan messages.
+    """
     from aiogram.types import CallbackQuery
 
     from sib.handlers.wiki import handle_wiki_char
@@ -88,13 +96,21 @@ async def test_wiki_char_page_shows_art(db_session):
     bot.edit_message_media = AsyncMock()
     bot.edit_message_caption = AsyncMock()
     bot.edit_message_text = AsyncMock()
+    bot.send_photo = AsyncMock(return_value=MagicMock(message_id=77, photo=None))
+    bot.delete_message = AsyncMock()
 
     await handle_wiki_char(cb, bot)
 
-    # Photo message swap is attempted first (art exists for seeded cards).
-    assert bot.edit_message_media.await_count == 1
-    media = bot.edit_message_media.await_args.kwargs["media"]
-    assert media.caption  # description travels as caption
+    # The photo screen is sent as a NEW photo message ...
+    assert bot.send_photo.await_count == 1
+    media = bot.send_photo.await_args.args[1] if len(bot.send_photo.await_args.args) > 1 else bot.send_photo.await_args.kwargs["photo"]
+    caption = bot.send_photo.await_args.kwargs.get("caption")
+    assert caption  # description travels as caption
+    # ... and the old text message is deleted (no orphans, no stale media).
+    bot.delete_message.assert_awaited_once()
+    assert bot.delete_message.await_args.args[1] == 10 or bot.delete_message.await_args.kwargs.get("message_id") == 10
+    # The live reference now points at the new message.
+    assert cb.message.message_id == 77
 
 
 @pytest.mark.asyncio
@@ -140,22 +156,52 @@ async def test_shop_list_buttons_open_detail_not_purchase(db_session):
 
 
 @pytest.mark.asyncio
-async def test_safe_edit_screen_caption_first_then_text():
+async def test_safe_edit_screen_transitions_leave_no_stale_media():
+    """safe_edit_screen renders the target screen's OWN media — never keeps
+    a previous screen's photo.
+
+    The old caption-first behavior edited the caption of a photo message
+    and silently KEPT its art on text screens (the "photos follow the
+    user" bug). The transition contract now is:
+
+    - text→text / photo→photo: edited in place (stable message id);
+    - text↔photo: replaced (new message + old deleted) and the returned
+      message id moves to the new message.
+    """
     from sib.services.telegram_ui import safe_edit_screen
 
+    # TEXT → TEXT: plain text edit, id stays.
     bot = MagicMock()
-    bot.edit_message_caption = AsyncMock()
     bot.edit_message_text = AsyncMock()
+    new_id = await safe_edit_screen(bot, 1, 2, "متن", None, current_is_photo=False)
+    assert new_id == 2
+    assert bot.edit_message_text.await_count == 1
+    assert not getattr(bot, "send_message").called and not getattr(bot, "send_photo").called
 
-    ok = await safe_edit_screen(bot, 1, 2, "متن", None)
-    assert ok and bot.edit_message_caption.await_count == 1
-    assert bot.edit_message_text.await_count == 0
+    # PHOTO → TEXT: the photo must NOT survive — replace with a text message.
+    bot = MagicMock()
+    bot.send_message = AsyncMock(return_value=MagicMock(message_id=9))
+    bot.delete_message = AsyncMock()
+    new_id = await safe_edit_screen(bot, 1, 2, "متن", None, current_is_photo=True)
+    assert new_id == 9  # reference moved to the replacement
+    assert bot.send_message.await_count == 1
+    assert bot.delete_message.await_count == 1
 
-    bot2 = MagicMock()
-    bot2.edit_message_caption = AsyncMock(side_effect=Exception("no caption"))
-    bot2.edit_message_text = AsyncMock()
-    ok = await safe_edit_screen(bot2, 1, 2, "متن", None)
-    assert ok and bot2.edit_message_text.await_count == 1
+    # PHOTO → PHOTO: media swap in place, id stays.
+    bot = MagicMock()
+    bot.edit_message_media = AsyncMock()
+    new_id = await safe_edit_screen(bot, 1, 2, "متن", photo="photo-1", current_is_photo=True)
+    assert new_id == 2
+    assert bot.edit_message_media.await_count == 1
+
+    # TEXT → PHOTO: replace with a photo message.
+    bot = MagicMock()
+    bot.send_photo = AsyncMock(return_value=MagicMock(message_id=11))
+    bot.delete_message = AsyncMock()
+    new_id = await safe_edit_screen(bot, 1, 2, "متن", photo="photo-2", current_is_photo=False)
+    assert new_id == 11
+    assert bot.send_photo.await_count == 1
+    assert bot.delete_message.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -186,3 +232,103 @@ async def test_profile_shows_favorite_card_art(db_session):
     assert msg.reply_photo.await_count == 1
     caption = msg.reply_photo.await_args.kwargs["caption"]
     assert "کارت اصلی" in caption
+
+
+# ---------------------------------------------------------------------------
+# Framed card assets: ONE cohesive frame for the whole collection
+# ---------------------------------------------------------------------------
+
+CARD_NAMES = ("sib_sorkh", "sib_sabz", "sib_talayi", "sib_mahi")
+
+
+def _openings():
+    """The frame's true opening geometry, from the pipeline itself."""
+    from scripts.frame_card import FRAME_PATH, opening_mask
+
+    frame = Image.open(FRAME_PATH).convert("RGB")
+    mask = opening_mask(frame)
+    return frame, mask
+
+
+def test_all_character_cards_exist_with_same_dimensions():
+    from sib.services.character_art import artwork_path
+
+    for name in CARD_NAMES:
+        path = artwork_path(SimpleNamespace(code=name, artwork=None))
+        assert path is not None and Path(path).is_file(), f"missing card art for {name}"
+        assert Image.open(path).size == (896, 1200), f"{name}: card must be 896x1200"
+
+
+def test_character_cards_share_one_frame_no_double_frame():
+    """Every card keeps the SAME outer frame pixels (the frame asset
+    itself) outside the opening — a second inner frame, pasted-image
+    borders or white deckle margins inside the opening are regressions."""
+    from sib.services.character_art import artwork_path
+
+    frame, mask = _openings()
+    # Region outside the opening, plus a 3px seam tolerance ring.
+    ring = mask.filter(ImageFilter.MaxFilter(7))  # dilate ~3px
+    fp = frame.load()
+
+    cards = []
+    for name in CARD_NAMES:
+        path = artwork_path(SimpleNamespace(code=name, artwork=None))
+        cards.append(Image.open(path).convert("RGB"))
+
+    for name, card in zip(CARD_NAMES, cards):
+        assert card.size == frame.size
+        cp = card.load()
+        diff_sum = 0
+        count = 0
+        for y in range(0, card.height, 3):
+            for x in range(0, card.width, 3):
+                if ring.getpixel((x, y)) == 0:  # outside opening + seam
+                    a, b = fp[x, y], cp[x, y]
+                    diff_sum += abs(a[0] - b[0]) + abs(a[1] - b[1]) + abs(a[2] - b[2])
+                    count += 1
+        mean_diff = diff_sum / max(count, 1)
+        assert mean_diff < 12, f"{name}: outer frame altered (mean diff {mean_diff:.1f})"
+
+
+def test_character_cards_fill_the_opening_without_margins():
+    """The art must reach the opening's lip: no paper/white margin band
+    between the art and the frame (the 'pasted-in-image' look)."""
+    from sib.services.character_art import artwork_path
+
+    frame, mask = _openings()
+    ox0, oy0, ox1, oy1 = mask.getbbox()
+    matte = frame.convert("RGB").getpixel((frame.width // 2, frame.height // 2))
+    inner_ring = mask.filter(ImageFilter.MinFilter(13)).filter(
+        ImageFilter.MaxFilter(7)
+    )  # a band just inside the opening lip
+
+    for name in CARD_NAMES:
+        path = artwork_path(SimpleNamespace(code=name, artwork=None))
+        card = Image.open(path).convert("RGB")
+        cp = card.load()
+        far = 0
+        total = 0
+        for y in range(oy0, oy1):
+            for x in range(ox0, ox1):
+                if inner_ring.getpixel((x, y)):
+                    c = cp[x, y]
+                    total += 1
+                    if abs(c[0] - matte[0]) + abs(c[1] - matte[1]) + abs(c[2] - matte[2]) > 40:
+                        far += 1
+        assert total > 0
+        assert far / total > 0.95, (
+            f"{name}: art does not reach the frame lip ({far}/{total})"
+        )
+
+
+def test_frame_card_pipeline_reproduces_the_collection(tmp_path):
+    """The pipeline itself rebuilds a coherent card from raw art: exact
+    frame size, untouched outer frame, art filled into the opening."""
+    from scripts.frame_card import RAW_DIR, FRAME_PATH, frame_card, opening_mask
+
+    out = tmp_path / "rebuilt.jpg"
+    raws = sorted(RAW_DIR.glob("*.jpg"))
+    assert raws
+    frame_card(raws[0], out)
+    rebuilt = Image.open(out).convert("RGB")
+    assert rebuilt.size == (896, 1200)

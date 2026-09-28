@@ -2,6 +2,8 @@
 
 from datetime import datetime, timezone, timedelta
 import pytest
+
+from sib.tests.conftest import requires_row_locks
 from sqlalchemy import select
 from sib.core.config import settings
 from sib.core.errors import InvalidActionException
@@ -377,6 +379,7 @@ async def test_party_cannot_be_matched_twice(db_session):
 
 
 @pytest.mark.asyncio
+@requires_row_locks
 async def test_concurrent_matchmaking_does_not_create_duplicate_match(db_session):
     """Two concurrent match attempts must not create duplicate matches."""
     import asyncio

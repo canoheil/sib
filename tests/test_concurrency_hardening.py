@@ -2,6 +2,8 @@
 
 import asyncio
 import pytest
+
+from sib.tests.conftest import requires_row_locks
 from sib.core.errors import PartyFullException
 from sib.services.party import PartyService
 from sib.tests.test_parties import create_test_user, create_test_group
@@ -9,6 +11,7 @@ from sib.database.connection import get_session
 
 
 @pytest.mark.asyncio
+@requires_row_locks
 async def test_high_concurrency_party_join_atomic(db_session):
     """
     Stress test: 10 concurrent users race to join the last remaining slot in a 2v2 party.

@@ -247,8 +247,12 @@ async def test_apple_battle_games_entry_still_opens_queue(db_session):
     cb.answer = AsyncMock()
 
     await handle_apple_battle(cb, bot)
-    text = cb.message.edit_text.call_args.args[0]
+    # The screen renders through the central transition engine: read the
+    # edit from whichever edit path carried it (message- or bot-level).
+    call = cb.message.edit_text.call_args or bot.edit_message_text.call_args
+    assert call is not None, "the battle entry screen must be rendered"
+    text = call.args[0] if call.args else call.kwargs["text"]
     assert "نبرد سیبی" in text
-    kb = cb.message.edit_text.call_args.kwargs["reply_markup"]
+    kb = call.kwargs["reply_markup"]
     backs = [b for b in _all_buttons(kb) if "بازگشت" in b.text]
     assert backs[0].callback_data == "group_games_panel"

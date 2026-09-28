@@ -134,8 +134,10 @@ async def _rerender(callback: CallbackQuery, bot: Bot, *, answer: str = "برو�
 
     The garden SUBJECT is resolved from the DB panel owner (authoritative
     state), never from callback/memory state - the shared message can
-    never switch identity to whoever pressed a button.
+    never switch identity to whoever pressed a button. The screen renders
+    through the canonical banner path (its own banner + caption + keyboard).
     """
+    from sib.services.banner import render_banner
     from sib.services.panel import PanelOwnershipService
 
     user = callback.from_user
@@ -152,7 +154,26 @@ async def _rerender(callback: CallbackQuery, bot: Bot, *, answer: str = "برو�
             subject_id = user.id
         text, kb = await _render_garden(subject_id, session)
     await safe_answer_callback(callback, answer)
-    await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
+    if callback.message:
+        await render_banner(callback, bot, "garden", text, kb)
+        new_msg_id = getattr(callback.message, "message_id", None)
+        if (
+            isinstance(msg_id, int)
+            and isinstance(new_msg_id, int)
+            and new_msg_id != msg_id
+            and chat is not None
+        ):
+            # The render replaced the message (text↔photo): the panel claim
+            # must follow the live message, never linger on the deleted id.
+            async with get_session() as session:
+                await PanelOwnershipService.move_claim(
+                    session,
+                    chat_id=chat.id,
+                    old_message_id=msg_id,
+                    new_message_id=new_msg_id,
+                    user_id=subject_id,
+                    panel_type="garden",
+                )
 
 
 @router.callback_query(F.data == "garden_refresh")

@@ -9,6 +9,11 @@ Design rules (art direction):
 - art is TEXT-FREE; every word stays in the Persian caption/keyboard
 - one warm painterly language across all banners (honey gold / cream /
   sage green / apple red, gouache-watercolor brushwork)
+
+Screen rule (media lifecycle): a banner screen OWNS its banner. Whether the
+screen is opened by a wake word/command (``send_screen_reply``) or reached
+by an inline button (``render_banner``), it always renders as its own
+banner + caption + keyboard — one canonical rendering per screen.
 """
 
 from pathlib import Path
@@ -43,6 +48,32 @@ def banner_path(key: str) -> Optional[Path]:
     return None
 
 
+def remember_banner_file_id(key: str, message: Optional[Message]) -> None:
+    """Cache the uploaded file_id from a sent/edited photo message."""
+    if not key or message is None:
+        return
+    photos = getattr(message, "photo", None)
+    if isinstance(photos, (list, tuple)) and photos:
+        file_id = getattr(photos[-1], "file_id", None)
+        if isinstance(file_id, str) and file_id:
+            _file_id_cache[key] = file_id
+
+
+def banner_photo(key: str):
+    """Photo argument for the banner: cached file_id, else the file itself.
+
+    Returns None when the banner asset is missing (screens then render as
+    text — presentation must never break the flow).
+    """
+    path = banner_path(key)
+    if path is None:
+        return None
+    cached = _file_id_cache.get(key)
+    if cached:
+        return cached
+    return FSInputFile(path)
+
+
 async def send_screen_reply(
     message: Message,
     key: str,
@@ -60,24 +91,45 @@ async def send_screen_reply(
     if path is None or len(text) > CAPTION_LIMIT:
         return await message.reply(text, reply_markup=reply_markup, parse_mode=parse_mode)
 
-    media = _file_id_cache.get(key)
+    media = banner_photo(key)
     try:
-        if media:
-            sent = await message.reply_photo(
-                media, caption=text, reply_markup=reply_markup, parse_mode=parse_mode
-            )
-        else:
-            sent = await message.reply_photo(
-                FSInputFile(path),
-                caption=text,
-                reply_markup=reply_markup,
-                parse_mode=parse_mode,
-            )
-            photos = getattr(sent, "photo", None)
-            if photos:
-                _file_id_cache[key] = photos[-1].file_id
+        sent = await message.reply_photo(
+            media, caption=text, reply_markup=reply_markup, parse_mode=parse_mode
+        )
+        remember_banner_file_id(key, sent)
         return sent
     except Exception as e:
         # Degrade gracefully to a text screen; never break navigation.
         logger.warning(f"Banner send failed for '{key}': {e}")
         return await message.reply(text, reply_markup=reply_markup, parse_mode=parse_mode)
+
+
+async def render_banner(
+    callback,
+    bot,
+    key: str,
+    text: str,
+    reply_markup=None,
+    parse_mode: Optional[str] = "Markdown",
+) -> bool:
+    """Show a banner screen on a callback's message (canonical path).
+
+    The message behind the button may be text or photo; the shared
+    transition engine picks the right move (media swap / edit / replace)
+    so the screen always ends up with exactly its own banner. Used by ALL
+    banner screens (main menu, games, garden, shop, leaderboard) so that
+    wake-word entries and button navigation render identically.
+    """
+    from sib.services.telegram_ui import render_callback_screen
+
+    message = await render_callback_screen(
+        callback,
+        bot,
+        text,
+        reply_markup=reply_markup,
+        parse_mode=parse_mode,
+        photo=banner_photo(key),
+    )
+    if message is not None:
+        remember_banner_file_id(key, message)
+    return message is not None
