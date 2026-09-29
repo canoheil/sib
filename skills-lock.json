@@ -1,0 +1,209 @@
+{
+  "version": 1,
+  "skills": {
+    "bfl-api": {
+      "source": "black-forest-labs/skills",
+      "sourceType": "github",
+      "skillPath": "skills/bfl-api/SKILL.md",
+      "computedHash": "70882da6f233d97f887f13338fc50e466002019149072d6788e59e6715b4ec24"
+    },
+    "flux-3-archival-formats": {
+      "source": "black-forest-labs/skills",
+      "sourceType": "github",
+      "skillPath": "skills/flux-3-archival-formats/SKILL.md",
+      "computedHash": "9957eb5177ae540004e32b518bc9c583947ae23d6cd7d6682c18fd11746b2be0"
+    },
+    "flux-3-audio-dialogue": {
+      "source": "black-forest-labs/skills",
+      "sourceType": "github",
+      "skillPath": "skills/flux-3-audio-dialogue/SKILL.md",
+      "computedHash": "5597c5173d22471cb0b4281940f46b12d26ca03c4b2a7124af59d633f0e78dba"
+    },
+    "flux-3-cinematic-inserts": {
+      "source": "black-forest-labs/skills",
+      "sourceType": "github",
+      "skillPath": "skills/flux-3-cinematic-inserts/SKILL.md",
+      "computedHash": "9b1d5abaf44b816ac887cd42b51c48415c5d52927c75463dc89d8f816bcd8e11"
+    },
+    "flux-3-generate": {
+      "source": "black-forest-labs/skills",
+      "sourceType": "github",
+      "skillPath": "skills/flux-3-generate/SKILL.md",
+      "computedHash": "77e035a1796efd757bc06781a59a8131b224ac3ba552b53ed2f139307d53fb35"
+    },
+    "flux-3-keyframes-continuation": {
+      "source": "black-forest-labs/skills",
+      "sourceType": "github",
+      "skillPath": "skills/flux-3-keyframes-continuation/SKILL.md",
+      "computedHash": "dbd805cf73d0d4d60948520ed7a9d9cc614f45fe445d9b5095af1a6aaece0053"
+    },
+    "flux-3-product-ads": {
+      "source": "black-forest-labs/skills",
+      "sourceType": "github",
+      "skillPath": "skills/flux-3-product-ads/SKILL.md",
+      "computedHash": "b272fdfcdc43b555c1bafb57608e66922bb75dbd977cd2df73f008bc42591e8d"
+    },
+    "flux-3-prompt-doctor": {
+      "source": "black-forest-labs/skills",
+      "sourceType": "github",
+      "skillPath": "skills/flux-3-prompt-doctor/SKILL.md",
+      "computedHash": "6c5551608f28de142cb3c0588c73abd646a8a2177a00ed1ee10635eb39683403"
+    },
+    "flux-3-video": {
+      "source": "black-forest-labs/skills",
+      "sourceType": "github",
+      "skillPath": "skills/flux-3-video/SKILL.md",
+      "computedHash": "e49d3dc1008b9b022ed7bb720af25a078249e98ea136f533a256bc3f47f8758d"
+    },
+    "flux-image-best-practices": {
+      "source": "black-forest-labs/skills",
+      "sourceType": "github",
+      "skillPath": "skills/flux-image-best-practices/SKILL.md",
+      "computedHash": "b7cd334c93138e0eb9991b0e53aead77c1b7dacc1dfa264c021af063831ccad3"
+    },
+    "task-decomposition": {
+      "source": "DevelopersGlobal/ai-agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/task-decomposition/SKILL.md",
+      "computedHash": "6d63c60a26de812797a316d2dbda9fc4e176bc2c601baa15a65274e67dfa46a3"
+    },
+    "tasks": {
+      "source": "taoeffect/tasks",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "ed142a31043ea530133fd328510f9cdea7aa44704fc3e0e2812276d06f93d1f2"
+    },
+    "telegram": {
+      "source": "itechmeat/llm-code",
+      "sourceType": "github",
+      "skillPath": "skills/telegram/SKILL.md",
+      "computedHash": "6b5abd6bca192ec1c9771ad0c9f4dc471f625319ba647889678121225233002e"
+    },
+    "telegram-bot-api-admin-moderation-and-permissions": {
+      "source": "nzhulikov/telegram-bot-skills",
+      "sourceType": "github",
+      "skillPath": "skills/telegram-bot-api/08-admin-moderation-and-permissions/SKILL.md",
+      "computedHash": "bf81dd3ed3f5636323592ad415c0983ecb2475cfdefe3f58053162aee172b117"
+    },
+    "telegram-bot-api-business-connections-and-suggested-posts": {
+      "source": "nzhulikov/telegram-bot-skills",
+      "sourceType": "github",
+      "skillPath": "skills/telegram-bot-api/10-business-connections-and-suggested-posts/SKILL.md",
+      "computedHash": "56a3187a1676ba013d70d90c23585e7a7011e896d92ac96bea7e5a4e9b358d00"
+    },
+    "telegram-bot-api-chat-types-membership-and-invites": {
+      "source": "nzhulikov/telegram-bot-skills",
+      "sourceType": "github",
+      "skillPath": "skills/telegram-bot-api/07-chat-types-membership-and-invites/SKILL.md",
+      "computedHash": "631b002a9610b8919c457828ff9690934b63d8d90eabd43ad203b7363405c8c3"
+    },
+    "telegram-bot-api-commands-keyboards-and-input": {
+      "source": "nzhulikov/telegram-bot-skills",
+      "sourceType": "github",
+      "skillPath": "skills/telegram-bot-api/05-commands-keyboards-and-input/SKILL.md",
+      "computedHash": "75da0d1340c6db9af9e6538a9ddc87e30367e3e8628cc951429921f08b3587d7"
+    },
+    "telegram-bot-api-games": {
+      "source": "nzhulikov/telegram-bot-skills",
+      "sourceType": "github",
+      "skillPath": "skills/telegram-bot-api/18-games/SKILL.md",
+      "computedHash": "2068c517fbe644c797a7c46bd25632ff7350c73d318aa183a7015037b8d212c5"
+    },
+    "telegram-bot-api-getting-started": {
+      "source": "nzhulikov/telegram-bot-skills",
+      "sourceType": "github",
+      "skillPath": "skills/telegram-bot-api/01-getting-started/SKILL.md",
+      "computedHash": "08479758fbaca1d3a96e9df871d35d9aa538cd062e03d691f6f94acef45aebc0"
+    },
+    "telegram-bot-api-getting-updates": {
+      "source": "nzhulikov/telegram-bot-skills",
+      "sourceType": "github",
+      "skillPath": "skills/telegram-bot-api/02-getting-updates/SKILL.md",
+      "computedHash": "0b9334e5a5cb07cfe75183da57a5d545337afe455d91de6bdbdb9c84735096da"
+    },
+    "telegram-bot-api-gifts-collectibles-and-star-economy": {
+      "source": "nzhulikov/telegram-bot-skills",
+      "sourceType": "github",
+      "skillPath": "skills/telegram-bot-api/12-gifts-collectibles-and-star-economy/SKILL.md",
+      "computedHash": "a49ef5ee34ec95f0438d25c3ce442e2d52aa4ea668473fae798401c973fd8a36"
+    },
+    "telegram-bot-api-inline-mode-and-callbacks": {
+      "source": "nzhulikov/telegram-bot-skills",
+      "sourceType": "github",
+      "skillPath": "skills/telegram-bot-api/06-inline-mode-and-callbacks/SKILL.md",
+      "computedHash": "69eb320e723f4158b57988f908c5b346e9b34f61aaf6af3b82fafbf631c683b7"
+    },
+    "telegram-bot-api-localization-testing-and-local-bot-api": {
+      "source": "nzhulikov/telegram-bot-skills",
+      "sourceType": "github",
+      "skillPath": "skills/telegram-bot-api/20-localization-testing-and-local-bot-api/SKILL.md",
+      "computedHash": "41857df651260f9da3d3d3e332cda57a212991f84df6132396ac2eb7bd5e18d6"
+    },
+    "telegram-bot-api-media-and-files": {
+      "source": "nzhulikov/telegram-bot-skills",
+      "sourceType": "github",
+      "skillPath": "skills/telegram-bot-api/04-media-and-files/SKILL.md",
+      "computedHash": "e1a09c1e08f104f30acf3688396f9cf253504f171bba836429e199f632c8751d"
+    },
+    "telegram-bot-api-messages-and-formatting": {
+      "source": "nzhulikov/telegram-bot-skills",
+      "sourceType": "github",
+      "skillPath": "skills/telegram-bot-api/03-messages-and-formatting/SKILL.md",
+      "computedHash": "9f3d7c1e4ac1f150f161a0360ae498ad6b056cc5a2f7b7861e5af1363306daf8"
+    },
+    "telegram-bot-api-mini-apps-and-attachment-menu": {
+      "source": "nzhulikov/telegram-bot-skills",
+      "sourceType": "github",
+      "skillPath": "skills/telegram-bot-api/14-mini-apps-and-attachment-menu/SKILL.md",
+      "computedHash": "07e5ac9b9560fe7c458f2e619a833ddb29cde0cc72c6937aafcd4ee79494d6d4"
+    },
+    "telegram-bot-api-payments-stars-and-broadcasting": {
+      "source": "nzhulikov/telegram-bot-skills",
+      "sourceType": "github",
+      "skillPath": "skills/telegram-bot-api/11-payments-stars-and-broadcasting/SKILL.md",
+      "computedHash": "0cd71967731989e84785c244bd53ddbe11b883e177de8297ba486e8d9e760926"
+    },
+    "telegram-bot-api-polls-checklists-dice-and-user-selection": {
+      "source": "nzhulikov/telegram-bot-skills",
+      "sourceType": "github",
+      "skillPath": "skills/telegram-bot-api/17-polls-checklists-dice-and-user-selection/SKILL.md",
+      "computedHash": "f3aa6d8b3bf0800e1475675879f8ac0b43d4e23250b1942e1695fc8f703c9292"
+    },
+    "telegram-bot-api-schema-and-type-modeling": {
+      "source": "nzhulikov/telegram-bot-skills",
+      "sourceType": "github",
+      "skillPath": "skills/telegram-bot-api/21-schema-and-type-modeling/SKILL.md",
+      "computedHash": "8af7aba4c1da2e6be02011d40cd4b5c814759bc869ca459bfde415181f3ddd45"
+    },
+    "telegram-bot-api-security-privacy-and-identity": {
+      "source": "nzhulikov/telegram-bot-skills",
+      "sourceType": "github",
+      "skillPath": "skills/telegram-bot-api/19-security-privacy-and-identity/SKILL.md",
+      "computedHash": "ac1cd2c25c89f46b27127355f7efe60307ae96110c482c6fb78bde6611222cf5"
+    },
+    "telegram-bot-api-stickers-custom-emoji-and-reactions": {
+      "source": "nzhulikov/telegram-bot-skills",
+      "sourceType": "github",
+      "skillPath": "skills/telegram-bot-api/13-stickers-custom-emoji-and-reactions/SKILL.md",
+      "computedHash": "9852fdd9c32656c99b073d3d03d89f099571063b9439dbb96fe452858853cdb4"
+    },
+    "telegram-bot-api-stories-profile-and-engagement": {
+      "source": "nzhulikov/telegram-bot-skills",
+      "sourceType": "github",
+      "skillPath": "skills/telegram-bot-api/16-stories-profile-and-engagement/SKILL.md",
+      "computedHash": "420c9828da9c4ac363af0b238d7784c6d827d78eb2fd7919db4901f2dd8dc58e"
+    },
+    "telegram-bot-api-topics-forums-and-threading": {
+      "source": "nzhulikov/telegram-bot-skills",
+      "sourceType": "github",
+      "skillPath": "skills/telegram-bot-api/09-topics-forums-and-threading/SKILL.md",
+      "computedHash": "70a2a0c658bfd097ff115e779eee26fbdd95b1c0449639b25627672ef93ab341"
+    },
+    "telegram-bot-api-web-login-and-deep-linking": {
+      "source": "nzhulikov/telegram-bot-skills",
+      "sourceType": "github",
+      "skillPath": "skills/telegram-bot-api/15-web-login-and-deep-linking/SKILL.md",
+      "computedHash": "416349ac328bfa7b653105520b8bd16145fb60016d4381bed0880b8e2565df1a"
+    }
+  }
+}
