@@ -19,6 +19,7 @@ from sib.handlers.leaderboard import router as leaderboard_router
 from sib.handlers.garden import router as garden_router
 from sib.handlers.wiki import router as wiki_router
 from sib.handlers.shop import router as shop_router
+from sib.handlers.cards import router as cards_router
 from sib.handlers.trading import router as trading_router
 from sib.handlers.apple_battle import router as apple_battle_router
 from sib.handlers.admin_meta import router as admin_meta_router
@@ -42,6 +43,7 @@ def register_all_handlers(dp: Dispatcher) -> None:
     dp.include_router(garden_router)
     dp.include_router(wiki_router)
     dp.include_router(shop_router)
+    dp.include_router(cards_router)
     dp.include_router(trading_router)
     dp.include_router(apple_battle_router)
     dp.include_router(admin_meta_router)

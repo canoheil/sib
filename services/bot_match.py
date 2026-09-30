@@ -226,9 +226,6 @@ class BotMatchService:
                 user_id=bot_user.id,
                 character_id=character.id,
                 level=1,
-                power=20,
-                speed=20,
-                intelligence=20,
             )
             session.add(card)
             await session.flush()

@@ -31,15 +31,8 @@ async def test_trade_requires_same_level(db_session):
     card_a = await _card_for(db_session, alice, "trade_a")
     card_b = await _card_for(db_session, bob, "trade_b")
 
-    # Upgrade Alice's card to level 2.
-    from sib.services.apple_wallet import AppleWalletService
-
-    await AppleWalletService.earn(db_session, alice.id, 200, reason="test_grant")
-    await db_session.commit()
-    await PlayerCardService.upgrade(
-        db_session, alice.id, card_a.id,
-        boost_power=20, boost_speed=20, boost_intelligence=20,
-    )
+    # Alice's card is at level 2 (Bob's stays at level 1).
+    card_a.level = 2
     await db_session.commit()
 
     with pytest.raises(TradeError):

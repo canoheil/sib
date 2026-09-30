@@ -233,7 +233,7 @@ def get_cards_keyboard(
 
     ``card_rows`` is a list of (card_id, label) pairs shown on the current
     page (built by the handler from the player's cards); each opens the
-    card's upgrade panel directly.
+    card's view screen (which carries the ⬆️ Card Upgrade action).
     """
     from sib.services.nav import back_label_for, back_target, with_origin
 

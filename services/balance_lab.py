@@ -35,18 +35,20 @@ class BalanceLabService:
         if rounds <= 0:
             raise ValueError("rounds must be positive")
 
-        class _CardShim:
-            def __init__(self, stats):
-                self.power = stats.get("power", 20)
-                self.speed = stats.get("speed", 20)
-                self.intelligence = stats.get("intelligence", 20)
-
         class _CharShim:
             def __init__(self, hidden):
                 self.hidden_modifier_params = hidden or {}
 
-        score_a = AppleBattleService._effective_score(_CardShim(stats_a), _CharShim(hidden_a))
-        score_b = AppleBattleService._effective_score(_CardShim(stats_b), _CharShim(hidden_b))
+        def _score(stats, hidden):
+            return AppleBattleService._score_for_stats(
+                stats.get("power", 20),
+                stats.get("speed", 20),
+                stats.get("intelligence", 20),
+                _CharShim(hidden),
+            )
+
+        score_a = _score(stats_a, hidden_a)
+        score_b = _score(stats_b, hidden_b)
 
         p_a = 1.0 / (1.0 + 10 ** ((score_b - score_a) / 60.0))
         rng = random.Random(seed)

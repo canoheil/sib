@@ -196,3 +196,75 @@ async def test_get_entry_rejects_inactive_entry(db_session):
 
     got, _character, _owned = await ShopService.get_entry(db_session, entry_id)
     assert got is None
+
+
+# ---------------------------------------------------------------------------
+# Sell-all handler: one sale, one toast, refreshed SELL view, no crash
+# (regression: a copy-pasted purchase tail used undefined render_banner/text/kb)
+# ---------------------------------------------------------------------------
+
+
+def _sell_callback(user_id: int, data: str):
+    from unittest.mock import AsyncMock, MagicMock
+
+    cb = MagicMock()
+    cb.data = data
+    cb.from_user = MagicMock()
+    cb.from_user.id = user_id
+    cb.message = MagicMock()
+    cb.answer = AsyncMock()
+    return cb
+
+
+@pytest.mark.asyncio
+async def test_sell_all_handler_sells_everything_and_refreshes_the_sell_view(db_session):
+    from unittest.mock import AsyncMock, patch
+
+    from sib.handlers import shop as shop_handlers
+
+    user = await create_test_user(db_session, "فروشنده دکمه")
+    uid = user.id
+    await ItemService.grant(db_session, uid, "apple_gold", 3)
+    await db_session.commit()
+
+    cb = _sell_callback(uid, "shop_sell_all:apple_gold")
+    with patch.object(shop_handlers, "safe_edit_callback_message", new=AsyncMock()) as edit, patch(
+        "sib.services.banner.render_banner", new=AsyncMock()
+    ) as banner:
+        await shop_handlers.handle_shop_sell_all(cb, bot=AsyncMock())  # must not raise
+
+    # Sale happened exactly once.
+    assert await AppleWalletService.get_balance(db_session, uid) == 3 * 50
+    assert await ItemService.list_items(db_session, uid) == {}
+
+    # ONE acknowledgement: the sale toast (not the old card-purchase text).
+    cb.answer.assert_awaited_once()
+    toast = cb.answer.await_args.args[0]
+    assert "فروش انجام شد" in toast and "150" in toast
+    assert "کارت" not in toast
+
+    # The sell screen is refreshed in place (same as sell-one); the shop root
+    # banner is not re-rendered.
+    edit.assert_awaited_once()
+    text = edit.await_args.args[2]
+    assert "فروش آیتم‌ها" in text and "`150`" in text
+    banner.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_sell_all_handler_with_nothing_to_sell_alerts_and_changes_nothing(db_session):
+    from unittest.mock import AsyncMock, patch
+
+    from sib.handlers import shop as shop_handlers
+
+    user = await create_test_user(db_session, "دست خالی")
+    uid = user.id
+
+    cb = _sell_callback(uid, "shop_sell_all:apple_gold")
+    with patch.object(shop_handlers, "safe_edit_callback_message", new=AsyncMock()) as edit:
+        await shop_handlers.handle_shop_sell_all(cb, bot=AsyncMock())
+
+    cb.answer.assert_awaited_once()
+    assert cb.answer.await_args.kwargs.get("show_alert") is True
+    edit.assert_not_awaited()
+    assert await AppleWalletService.get_balance(db_session, uid) == 0

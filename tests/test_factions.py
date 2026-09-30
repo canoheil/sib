@@ -223,8 +223,11 @@ async def test_faction_does_not_touch_stats_or_balance(db_session):
 
     card_a = await PlayerCardService.acquire(db_session, user.id, a.id)
     await db_session.commit()
-    assert card_a.power == a.power == 22
-    assert card_a.speed == b.speed == 20
+    from sib.services.card_progression import card_attributes
+
+    stats = card_attributes(card_a, a)
+    assert stats.power == a.power == 22
+    assert stats.speed == b.speed == 20
 
 
 @pytest.mark.asyncio
@@ -246,7 +249,7 @@ async def test_owned_card_detail_shows_faction_lore(db_session):
     assert "ملکه ماه" in detail          # role
     assert "فرزندان ماه" in detail      # faction name
     # Stats stay untouched by faction metadata.
-    assert f"💪 قدرت: `{card.power}`" in detail
+    assert f"💪 قدرت: `{character.power}`" in detail
 
 
 def test_gameplay_modules_never_read_faction_metadata():
