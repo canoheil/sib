@@ -86,8 +86,10 @@ class HarvestOutcome:
     # Special-Apple outcome: the inventory item granted.
     item_key: Optional[str] = None
     item_label: Optional[str] = None
-    # Presentation (message may be configured per outcome key).
+    # Presentation (message + caption may be configured per outcome key).
     message: Optional[str] = None
+    # Caption for the celebration image (escalates with the drop rarity).
+    caption: Optional[str] = None
     asset: Optional[str] = None
 
     @property
@@ -318,6 +320,7 @@ class GardenService:
                 item_key=key,
                 item_label=item_label(key),
                 message=entry.get("message"),
+                caption=entry.get("caption") or entry.get("message"),
                 asset=entry.get("asset"),
             )
 

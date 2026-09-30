@@ -41,8 +41,11 @@ OWNER_SCOPED_CALLBACKS: Tuple[str, ...] = (
     "shop_sell_all:",
     "card_panel:",
     "card_up:",
-    "trade_ok:",
-    "trade_cancel:",
+    # NOTE: trade confirm/cancel are deliberately NOT owner-scoped: a trade is
+    # a SHARED group message that BOTH participants must be able to press.
+    # Authorization is enforced server-side by TradeService (participants
+    # only, state-guarded, atomic) - the middleware is a UX nicety, not the
+    # security boundary.
     # Apple battle
     "ab_join:",
 )

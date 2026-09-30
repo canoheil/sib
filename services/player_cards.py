@@ -17,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sib.core.logging import Events, log_event, logger
-from sib.database.models import Character, PlayerCard, Rarity
+from sib.database.models import Character, PlayerCard
 from sib.services.apple_wallet import AppleWalletService, InsufficientFundsException
 from sib.services.config_store import ConfigService
 

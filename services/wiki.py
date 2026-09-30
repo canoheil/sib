@@ -8,11 +8,12 @@
 
 from typing import List, Optional, Tuple
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sib.database.models import Character, PlayerCard, ReleaseStatus
+from sib.database.models import Character, Faction, PlayerCard, ReleaseStatus
 from sib.services.characters import render_character_card
+from sib.services.factions import FactionService
 from sib.services.player_cards import PlayerCardService
 
 
@@ -21,11 +22,18 @@ class WikiService:
 
     @staticmethod
     async def list_wiki(session: AsyncSession) -> List[Character]:
+        # Faction display order first (unaffiliated characters last),
+        # then stable insertion order. Data-driven: no faction is named
+        # in code.
         stmt = (
             select(Character)
-            .where(Character.is_active == True)
+            .outerjoin(Faction, Character.faction_id == Faction.id)
+            .where(Character.is_active == True)  # noqa: E712
             .where(Character.release_status == ReleaseStatus.RELEASED)
-            .order_by(Character.rarity.desc(), Character.id.asc())
+            .order_by(
+                func.coalesce(Faction.display_order, 999).asc(),
+                Character.id.asc(),
+            )
         )
         return list((await session.scalars(stmt)).all())
 
@@ -36,7 +44,8 @@ class WikiService:
             return None
         if character.release_status != ReleaseStatus.RELEASED:
             return None
-        return render_character_card(character)
+        faction = await FactionService.get_for_character(session, character)
+        return render_character_card(character, faction=faction)
 
     @staticmethod
     def wiki_index_entry(character: Character, index: int) -> str:
@@ -121,6 +130,7 @@ class CollectionService:
         if not character:
             return None
 
+        faction = await FactionService.get_for_character(session, character)
         budget = card.power + card.speed + card.intelligence
         lines = [
             f"🎴 **{character.name_fa}** — سطح `{card.level}`",
@@ -129,6 +139,13 @@ class CollectionService:
             f"⚡ سرعت: `{card.speed}` (+{card.boosted_speed} ارتقا)",
             f"🧠 هوش: `{card.intelligence}` (+{card.boosted_intelligence} ارتقا)",
             f"📊 مجموع ویژگی‌ها: `{budget}` (بودجه سطح {card.level})",
+        ]
+        if faction is not None:
+            lines.append("")
+            lines.append(f"🎖 **{faction.name_fa}** {faction.symbol or ''}".rstrip())
+            if character.faction_role_fa:
+                lines.append(f"نقش: {character.faction_role_fa}")
+        lines += [
             "",
             "برای مشاهده توانایی و داستان، به ویکی شخصیت‌ها مراجعه کنید.",
         ]

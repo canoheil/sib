@@ -5,10 +5,25 @@ Rules (from spec):
 - Both cards must have the same level.
 - Both players must explicitly confirm; double confirmation model.
 - Ownership transfer is atomic (one transaction).
+
+Safety model (hardened):
+- Every read that decides an outcome happens under a row lock
+  (``SELECT ... FOR UPDATE``): the trade row and both player cards.
+- ``_execute`` re-verifies the trade is still PENDING (so a duplicate
+  confirmation/callback can never transfer a card twice) and that both
+  cards still belong to the original owners (a card moved elsewhere fails
+  the trade safely instead of corrupting inventory).
+- Expired trades are refused and marked EXPIRED; ``expire_overdue``
+  sweeps stale offers so the UI never shows a dead trade.
+
+Trading is CARD-to-CARD today. The transfer itself only touches
+``PlayerCard.user_id``, so a future tradable asset type can be added by
+extending the trade payload without changing the confirmation/locking
+model.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import List, Optional
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -61,11 +76,16 @@ class TradeService:
         if proposer_id == recipient_id:
             raise TradeError("نمی‌توانید با خودتان معامله کنید!")
 
+        if proposer_card_id == recipient_card_id:
+            raise TradeError("یک کارت را نمی‌توان با خودش مبادله کرد!")
+
         if not await cls.can_trade_today(session, proposer_id):
             raise TradeError("سهمیه مبادله امروز شما تمام شده است. فردا دوباره تلاش کنید!")
         if not await cls.can_trade_today(session, recipient_id):
             raise TradeError("سهمیه مبادله امروز طرف مقابل تمام شده است.")
 
+        # Locked reads: a card being moved by another trade can never be
+        # claimed twice.
         proposer_card = await cls._card_of(session, proposer_id, proposer_card_id)
         recipient_card = await cls._card_of(session, recipient_id, recipient_card_id)
 
@@ -110,10 +130,13 @@ class TradeService:
     # ------------------------------------------------------------------
     @classmethod
     async def confirm(cls, session: AsyncSession, trade_id: int, user_id: int) -> Trade:
-        trade = await session.get(Trade, trade_id)
+        # Row lock: two simultaneous confirmations (one per side) are
+        # serialized, so the swap runs exactly once.
+        trade = await cls.get_trade(session, trade_id, for_update=True)
         await cls._assert_open(session, trade)
 
         if user_id == trade.proposer_id:
+            # Duplicate callback / double tap: idempotent, never executes twice.
             trade.proposer_confirmed = True
         elif user_id == trade.recipient_id:
             trade.recipient_confirmed = True
@@ -128,7 +151,7 @@ class TradeService:
 
     @classmethod
     async def cancel(cls, session: AsyncSession, trade_id: int, user_id: int) -> Trade:
-        trade = await session.get(Trade, trade_id)
+        trade = await cls.get_trade(session, trade_id, for_update=True)
         await cls._assert_open(session, trade)
         if user_id not in (trade.proposer_id, trade.recipient_id):
             raise TradeError("شما در این معامله نقشی ندارید.")
@@ -142,18 +165,33 @@ class TradeService:
     # ------------------------------------------------------------------
     @staticmethod
     async def _execute(session: AsyncSession, trade: Trade) -> None:
-        proposer_card = await session.get(PlayerCard, trade.proposer_card_id)
-        recipient_card = await session.get(PlayerCard, trade.recipient_card_id)
+        # Exactly-once guard: the trade row is locked by the caller, so a
+        # duplicate confirmation or a retry can never swap a second time.
+        if trade.status != TradeStatus.PENDING:
+            return
+
+        proposer_card = await session.get(
+            PlayerCard, trade.proposer_card_id, with_for_update=True
+        )
+        recipient_card = await session.get(
+            PlayerCard, trade.recipient_card_id, with_for_update=True
+        )
         if not proposer_card or not recipient_card:
             trade.status = TradeStatus.CANCELLED
             await session.flush()
             raise TradeError("کارت یکی از طرفین دیگر موجود نیست؛ معامله لغو شد.")
 
-        # Sanity: cards must still belong to the original owners.
+        # Sanity: cards must still belong to the original owners. If a card
+        # was transferred elsewhere meanwhile, the trade fails SAFELY.
         if proposer_card.user_id != trade.proposer_id or recipient_card.user_id != trade.recipient_id:
             trade.status = TradeStatus.CANCELLED
             await session.flush()
             raise TradeError("مالکیت کارت‌ها تغییر کرده است؛ معامله لغو شد.")
+
+        if proposer_card.id == recipient_card.id:
+            trade.status = TradeStatus.CANCELLED
+            await session.flush()
+            raise TradeError("این معامله معتبر نیست؛ لغو شد.")
 
         # Atomic swap of ownership.
         proposer_card.user_id, recipient_card.user_id = (
@@ -173,11 +211,63 @@ class TradeService:
         )
 
     # ------------------------------------------------------------------
+    # Queries
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def get_trade(
+        session: AsyncSession, trade_id: int, *, for_update: bool = False
+    ) -> Optional[Trade]:
+        """Fetch one trade (optionally row-locked for a state transition)."""
+        if not for_update:
+            return await session.get(Trade, trade_id)
+        return await session.scalar(
+            select(Trade).where(Trade.id == trade_id).with_for_update()
+        )
+
+    @staticmethod
+    async def list_pending(session: AsyncSession, user_id: int) -> List[Trade]:
+        stmt = (
+            select(Trade)
+            .where(
+                ((Trade.proposer_id == user_id) | (Trade.recipient_id == user_id))
+                & (Trade.status == TradeStatus.PENDING)
+            )
+            .order_by(Trade.id.desc())
+        )
+        return list((await session.scalars(stmt)).all())
+
+    @classmethod
+    async def expire_overdue(cls, session: AsyncSession) -> int:
+        """Mark every overdue PENDING trade as EXPIRED (stale-offer sweep)."""
+        now = datetime.now(timezone.utc)
+        stmt = (
+            select(Trade)
+            .where(Trade.status == TradeStatus.PENDING)
+            .with_for_update()
+        )
+        expired = 0
+        for trade in (await session.scalars(stmt)).all():
+            expires = trade.expires_at
+            if expires is None:
+                continue
+            if expires.tzinfo is None:
+                expires = expires.replace(tzinfo=timezone.utc)
+            if expires <= now:
+                trade.status = TradeStatus.EXPIRED
+                expired += 1
+        if expired:
+            await session.flush()
+            log_event(Events.TRADE_EVENT, {"action": "expired_sweep", "count": expired})
+            logger.info(f"Expired {expired} stale trade(s)")
+        return expired
+
+    # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
     @staticmethod
     async def _card_of(session: AsyncSession, user_id: int, card_id: int) -> PlayerCard:
-        card = await session.get(PlayerCard, card_id)
+        """Owned card, row-locked (ownership is verified under the lock)."""
+        card = await session.get(PlayerCard, card_id, with_for_update=True)
         if not card or card.user_id != user_id:
             raise TradeError("کارت موردنظر متعلق به شما نیست.")
         return card
@@ -197,15 +287,3 @@ class TradeService:
                 await session.flush()
                 raise TradeError("این معامله منقضی شده است.")
         return trade
-
-    @staticmethod
-    async def list_pending(session: AsyncSession, user_id: int) -> list:
-        stmt = (
-            select(Trade)
-            .where(
-                ((Trade.proposer_id == user_id) | (Trade.recipient_id == user_id))
-                & (Trade.status == TradeStatus.PENDING)
-            )
-            .order_by(Trade.id.desc())
-        )
-        return list((await session.scalars(stmt)).all())

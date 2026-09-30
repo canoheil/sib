@@ -28,6 +28,13 @@ class RecoveryService:
             "expired_abandoned_matches": 0,
         }
 
+        # 0. Consistency repair FIRST: release parties/matches that block a
+        #    player without a live game behind them ("ghost active game").
+        #    Single source of truth: SessionService.
+        from sib.services.session import SessionService
+
+        stats.update(await SessionService.reconcile_stale_state(session))
+
         # 1. Matches stuck in WAITING_FOR_ACCEPTANCE past deadline
         stmt = (
             select(Match)

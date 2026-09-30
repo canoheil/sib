@@ -139,8 +139,33 @@ def get_game_mode_keyboard(
 def get_party_action_keyboard(
     party: Party, is_member: bool = False
 ) -> InlineKeyboardMarkup:
-    """Screen: one party/game (child of the active-games screen)."""
+    """Screen: one party/game (child of the active-games screen).
+
+    Queue and in-match parties are LIVE (they block a new game) but have
+    no party actions left: the queue screen owns "cancel search" and the
+    board owns the match. They still get Refresh + Back so the Active
+    Games screen can always show and inspect every live game.
+    """
     buttons = []
+
+    from sib.database.models import PartyStatus
+
+    if party.status == PartyStatus.IN_QUEUE:
+        if is_member:
+            buttons.append([
+                danger_button(
+                    text="🚫 لغو جستجوی حریف",
+                    callback_data=f"cancel_matchmaking:{party.id}",
+                )
+            ])
+        buttons.extend(nav_refresh_row("🔄 بروزرسانی", f"view_party:{party.id}"))
+        buttons.extend(nav_back_row(BACK_TO_ACTIVE, "group_active_games"))
+        return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    if party.status == PartyStatus.IN_MATCH:
+        buttons.extend(nav_refresh_row("🔄 بروزرسانی", f"view_party:{party.id}"))
+        buttons.extend(nav_back_row(BACK_TO_ACTIVE, "group_active_games"))
+        return InlineKeyboardMarkup(inline_keyboard=buttons)
 
     if party.is_full:
         # Full party actions
@@ -211,10 +236,20 @@ def get_active_parties_keyboard(parties: List[Party]) -> InlineKeyboardMarkup:
         ]
     ]
 
+    from sib.database.models import PartyStatus
+
     for party in parties:
         mode_text = "انفرادی" if party.mode == "solo" else f"تیمی {party.mode}"
-        status_icon = "✅" if party.is_full else "⏳"
-        label = f"{status_icon} {party.game.name_fa} ({mode_text}) — {party.current_players_count}/{party.max_players}"
+        counter = f"{party.current_players_count}/{party.max_players}"
+        # Every LIVE state is visible: a party that blocks a new game may
+        # never be missing from this list ("ghost active game" fix).
+        if party.status == PartyStatus.IN_QUEUE:
+            label = f"🔍 {party.game.name_fa} ({mode_text}) — در جستجوی حریف"
+        elif party.status == PartyStatus.IN_MATCH:
+            label = f"⚔️ {party.game.name_fa} ({mode_text}) — در حال مسابقه"
+        else:
+            status_icon = "✅" if party.is_full else "⏳"
+            label = f"{status_icon} {party.game.name_fa} ({mode_text}) — {counter}"
         buttons.append([
             primary_button(
                 text=label,

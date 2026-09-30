@@ -68,6 +68,14 @@ class MaintenanceService:
         resolved_ids: list = []
         async with get_session() as session:
             try:
+                # Consistency first: no party/match may keep blocking its
+                # players without a live game behind it ("ghost active game").
+                from sib.services.session import SessionService
+                from sib.services.trading import TradeService
+
+                await SessionService.reconcile_stale_state(session)
+                # Stale trade offers must stop blocking cards/quotas.
+                await TradeService.expire_overdue(session)
                 await TimeoutService.process_acceptance_timeouts(session)
                 resolved_ids = await TimeoutService.process_turn_timeouts(session)
                 await cls.process_expired_queue_entries(session)

@@ -103,6 +103,7 @@ async def db_session():
         await session.execute(text("DELETE FROM player_cards"))
         await session.execute(text("DELETE FROM character_balance_versions"))
         await session.execute(text("DELETE FROM characters"))
+        await session.execute(text("DELETE FROM factions"))
         await session.execute(text("DELETE FROM apple_transactions"))
         await session.execute(text("DELETE FROM apple_wallets"))
         await session.execute(text("DELETE FROM garden_plots"))
