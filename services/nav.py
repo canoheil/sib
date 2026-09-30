@@ -42,17 +42,25 @@ def with_origin(callback: str, origin: Optional[str] = None) -> str:
     return f"{callback}:{origin}"
 
 
-def parse_callback(data: Optional[str]) -> Tuple[str, Optional[str]]:
+def parse_callback(
+    data: Optional[str], *, arg_segments: int = 0
+) -> Tuple[str, Optional[str]]:
     """Split 'screen[:args][:origin]' into (callback_base, origin).
 
     The trailing segment is the origin only when it is a KNOWN screen
-    callback; otherwise it is a normal handler argument.
+    callback; otherwise it is a normal handler argument. ``arg_segments``
+    declares how many handler-argument segments the callback carries —
+    those are NEVER reinterpreted as the origin, even when an argument
+    happens to share its name with a known screen (e.g.
+    ``help_page:apple_battle``: the topic ``apple_battle`` is the Apple
+    Battle screen's own callback name).
     """
     if not data:
         return "", None
     parts = data.split(":")
     origin: Optional[str] = None
-    if len(parts) >= 2 and parts[-1] in KNOWN_SCREENS:
+    fixed = 1 + max(0, arg_segments)
+    if len(parts) > fixed and parts[-1] in KNOWN_SCREENS:
         origin = parts[-1]
         parts = parts[:-1]
     return ":".join(parts), origin

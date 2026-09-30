@@ -197,7 +197,7 @@ async def handle_accept_match(callback: CallbackQuery, bot: Bot):
                 await after_start(bot, match.id)
         else:
             # This side accepted, waiting for other side
-            await callback.answer("مسابقه توسط شما پذیرفته شد! در انتظار تایید حریف... 🍏")
+            await callback.answer("مسابقه رو قبول کردی! منتظر تأیید حریف... 🍏")
             if callback.message:
                 await callback.message.edit_reply_markup(reply_markup=get_acceptance_keyboard(match.id, has_accepted=True))
 

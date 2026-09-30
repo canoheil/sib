@@ -230,7 +230,7 @@ class PlayerCardService:
     async def summary(cls, session: AsyncSession, user_id: int) -> str:
         cards = await cls.list_cards(session, user_id)
         if not cards:
-            return "هنوز کارتی ندارید! از فروشگاه هفتگی شروع کنید. 🍏"
+            return "هنوز کارتی نداری! از فروشگاه هفتگی شروع کن. 🍏"
         lines = [f"🎴 کارت‌های شما ({len(cards)}):\n"]
         for card in cards:
             character = await session.get(Character, card.character_id)

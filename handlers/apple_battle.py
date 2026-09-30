@@ -155,7 +155,7 @@ def _searching_view(party_id: int, origin: str | None = None) -> tuple[str, Inli
         "",
         "🔍 **در حال جستجوی حریف از گروه‌های تلگرام...** 🍏",
         "",
-        "به‌محض پیدا شدن حریف، نبرد آغاز می‌شود.",
+        "همین که حریف پیدا بشه، نبرد شروع می‌شه.",
         "⏳ لطفاً منتظر بمانید...",
     ]
     kb = _kb(
@@ -415,7 +415,7 @@ async def handle_ab_status(callback: CallbackQuery, bot: Bot):
 
     if party and party.status == PartyStatus.IN_QUEUE:
         text, kb = _searching_view(party.id)
-        await safe_answer_callback(callback, "هنوز در جستجو هستید ⏳")
+        await safe_answer_callback(callback, "هنوز دنبال حریف می‌گردی ⏳")
     else:
         loadout = None
         async with get_session() as session:
@@ -443,7 +443,7 @@ async def handle_ab_board(callback: CallbackQuery, bot: Bot):
             names.append(f"🏆 `{user_id}` — {wins} برد از {total} نبرد")
 
     text = "🏆 **لیدربورد نبرد سیبی**\n\n"
-    text += "\n".join(names) if names else "هنوز نبردی ثبت نشده است."
+    text += "\n".join(names) if names else "هنوز نبردی ثبت نشده."
     kb = _kb(
         [
             [primary_button(text="🔄 بروزرسانی", callback_data="ab_board")],

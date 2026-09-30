@@ -86,7 +86,7 @@ async def _pending_view(
         lines.append("")
         lines.append(
             "کارت ↔ کارت، فقط بین کارت‌های **هم‌سطح** و با **تأیید هر دو طرف**. "
-            "هر کارت فقط می‌تواند در یک مبادله‌ی باز باشد."
+            "هر کارت فقط می‌تونه تو یه مبادله‌ی باز باشه."
         )
         lines.append("")
 
@@ -97,7 +97,7 @@ async def _pending_view(
             )
 
         if not trades:
-            lines.append("معامله‌ی بازی ندارید.")
+            lines.append("فعلاً معامله‌ی بازی نداری.")
         else:
             lines.append("**معاملات باز شما:**")
         for trade in trades:
@@ -244,9 +244,9 @@ async def handle_trade_new(callback: CallbackQuery, bot: Bot):
 
     text = (
         "🤝 **پیشنهاد مبادله**\n\n"
-        "کدام کارتت را پیشنهاد می‌کنی؟\n"
-        "بعد از انتخاب، پیام پیشنهاد در همین گروه می‌آید و هر بازیکنی که کارت هم‌سطح دارد "
-        "می‌تواند آن را بپذیرد."
+        "کدوم کارتت رو پیشنهاد می‌کنی؟\n"
+        "بعد از انتخاب، پیام پیشنهاد تو همین گروه می‌آد و هر بازیکنی که کارت هم‌سطح داشته باشه "
+        "می‌تونه قبولش کنه."
     )
     if total_pages > 1:
         text += f"\n\n📖 صفحه {page + 1} از {total_pages}"
@@ -283,10 +283,10 @@ async def handle_trade_offer(callback: CallbackQuery, bot: Bot):
     name = user.first_name or "یک سیبی"
     text = (
         "🤝 **پیشنهاد مبادله کارت**\n\n"
-        f"🍎 {name} کارت **{label}** را برای مبادله گذاشته است.\n"
+        f"🍎 {name} کارت **{label}** رو برای مبادله گذاشته.\n"
         f"📊 {stats}\n\n"
-        f"هر بازیکنی که یک کارت **سطح {level}** دارد می‌تواند این پیشنهاد را بپذیرد. "
-        "مبادله فقط با تأیید هر دو طرف انجام می‌شود."
+        f"هر بازیکنی که کارت **سطح {level}** داشته باشه می‌تونه این پیشنهاد رو قبول کنه. "
+        "مبادله فقط با تأیید هر دو طرف انجام می‌شه."
     )
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -327,7 +327,7 @@ async def handle_trade_close(callback: CallbackQuery, bot: Bot):
             closed = bool(card and card.user_id == user.id)
     if not closed:
         await safe_answer_callback(
-            callback, "فقط صاحب پیشنهاد می‌تواند آن را ببندد 🍏", show_alert=True
+            callback, "فقط صاحب پیشنهاد می‌تونه ببندتش 🍏", show_alert=True
         )
         return
     await safe_answer_callback(callback, "پیشنهاد بسته شد.")
@@ -482,6 +482,7 @@ async def _trade_detail_view(session, trade: Trade, viewer_id: int) -> tuple[str
         TradeStatus.COMPLETED: "✅ انجام شد",
         TradeStatus.CANCELLED: "❌ لغو شد",
         TradeStatus.EXPIRED: "⌛️ منقضی شد",
+        TradeStatus.FAILED: "❌ انجام نشد",
     }.get(trade.status, trade.status)
 
     lines = [
@@ -507,6 +508,8 @@ async def _trade_detail_view(session, trade: Trade, viewer_id: int) -> tuple[str
         )
     elif trade.status == TradeStatus.COMPLETED:
         lines.append("🎉 کارت‌ها جابه‌جا شدند.")
+    elif trade.status == TradeStatus.FAILED:
+        lines.append("این مبادله انجام نشد؛ کارت‌ها دست‌نخورده ماندند و سهمیه امروزتان آزاد است.")
     elif not is_participant:
         lines.append("این معامله بین دو بازیکن دیگر است.")
 

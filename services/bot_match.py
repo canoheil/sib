@@ -50,7 +50,7 @@ class BotMatchService:
         )
 
         if not game or not game.supports_solo:
-            raise InvalidActionException("این بازی از حالت تک‌نفره پشتیبانی نمی‌کند.")
+            raise InvalidActionException("این بازی از حالت تک‌نفره پشتیبانی نمی‌کنه.")
 
         bot_user = await BotService.get_or_create_bot(session)
 

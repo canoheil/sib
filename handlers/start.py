@@ -78,9 +78,9 @@ async def handle_start(message: Message, bot: Bot):
             "• کارت بالا (High Card)\n"
             "• سنگ، کاغذ، قیچی (Rock Paper Scissors)\n"
             "• دوز (Tic-Tac-Toe)\n"
-            "• چهار در یک ردیف (Connect Four - ۱v۱, ۲v۲, ۴v۴)\n"
-            "• کشتی جنگی (Battleship - ۱v۱, ۲v۲, ۴v۴)\n\n"
-            "🏆 هر گروه تلگرام با تعداد بردهاش در جدول برترین‌ها قرار می‌گیره!\n"
+            "• چهار در یک ردیف (Connect Four؛ ۱v۱، ۲v۲، ۴v۴)\n"
+            "• کشتی جنگی (Battleship؛ ۱v۱، ۲v۲، ۴v۴)\n\n"
+            "🏆 هر گروه تلگرام با تعداد برده‌هاش تو جدول برترین‌ها قرار می‌گیره!\n"
             "برای شروع دکمه زیر رو لمس کن:"
         )
         await message.answer(
@@ -108,7 +108,7 @@ async def handle_check_membership(callback: CallbackQuery, bot: Bot):
         
         # Replace gate message with welcome
         welcome_text = (
-            f"🍏 **سلام {user.first_name}! عضویتت تایید شد!**\n\n"
+            f"🍏 **سلام {user.first_name}! عضویتت تأیید شد!**\n\n"
             "به جمع سیب‌ای‌ها خوش اومدی!\n"
             "سیب رو به گروه‌تون اضافه کن و چالش بازی‌های تیمی رو آغاز کنید 👇"
         )
@@ -125,55 +125,55 @@ HELP_TOPICS = {
     "rps": (
         "🎯 سنگ، کاغذ، قیچی",
         "🎯 **سنگ، کاغذ، قیچی**\n\n"
-        "یکی از بازی‌های سریع سیب! دو گروه در برابر هم قرار می‌گیرند؛ "
-        "هر بازیکن مخفیانه انتخابش را می‌زند و نتیجه لحظه‌ای اعلام می‌شود. "
-        "برنده‌ی بیشترین دور، قهرمان مسابقه است.",
+        "یکی از بازی‌های سریع سیب! دو گروه روبه‌روی هم می‌ایستند؛ "
+        "هر بازیکن مخفیانه انتخابش رو می‌زنه و نتیجه همون لحظه اعلام می‌شه. "
+        "هر کی بیشترین دور رو ببره، قهرمان مسابقه‌ست.",
     ),
     "c4": (
         "🔴 چهار در یک ردیف",
         "🔴 **چهار در یک ردیف (Connect Four)**\n\n"
-        "مهره‌ات را در یک ستون بنداز و قبل از حریف چهار مهره در یک ردیف (افقی، عمودی یا مورب) جور کن. "
-        "حالت‌های انفرادی، ۲ به ۲ و ۴ به ۴ دارد.",
+        "مهره‌ات رو تو یه ستون بنداز و قبل از حریف، چهار تا مهره رو در یک ردیف "
+        "(افقی، عمودی یا مورب) جور کن. حالت‌های انفرادی، ۲ به ۲ و ۴ به ۴ هم داره.",
     ),
     "ttt": (
         "❌ دوز",
         "❌ **دوز (Tic-Tac-Toe)**\n\n"
-        "کلاسیک و سریع! در یک جدول ۳ در ۳ سه نشانه در یک ردیف جور کن. "
-        "بازی انفرادی (۱ به ۱) است.",
+        "کلاسیک و سریع! تو یه جدول ۳ در ۳، سه تا نشانه رو در یک ردیف جور کن. "
+        "فقط حالت انفرادی (۱ به ۱) داره.",
     ),
     "battleship": (
         "🚢 کشتی جنگی",
         "🚢 **کشتی جنگی (Battleship)**\n\n"
-        "ناوگان دشمن را در مه دریا پیدا کن! به مختصات روی رادار شلیک کن؛ "
-        "آبی = شلیک به آب، 💥 = اصابت، 🔥 = غرق شدن کشتی. "
-        "حالت‌های انفرادی و تیمی دارد.",
+        "ناوگان دشمن رو تو مه دریا پیدا کن! به مختصات روی رادار شلیک کن؛ "
+        "آبی یعنی شلیک به آب، 💥 یعنی اصابت و 🔥 یعنی کشتی غرق شده. "
+        "حالت انفرادی و تیمی داره.",
     ),
     "high_card": (
         "🃏 کارت بالا",
         "🃏 **کارت بالا (High Card)**\n\n"
-        "سریع‌ترین بازی سیب! هر بازیکن یک کارت می‌کشد؛ کارت بالاتر می‌برد. "
-        "برای گرم‌کردن عالی است.",
+        "سریع‌ترین بازی سیب! هر بازیکن یه کارت می‌کشه و کارت بالاتر می‌بره. "
+        "برای گرم‌کردن عالیه.",
     ),
     "apple_battle": (
         "⚔️ نبرد سیبی",
         "⚔️ **نبرد سیبی**\n\n"
-        "با یکی از کارت‌هایت وارد صف نبرد شو؛ سیب یک حریف هم‌سطح پیدا می‌کند و "
-        "نبرد به‌صورت خودکار انجام و روایت می‌شود. برنده نهال جایزه می‌گیرد! "
-        "لیدربورد نبرد هم همان‌جاست.",
+        "با یکی از کارت‌هات وارد صف نبرد شو؛ سیب یه حریف هم‌سطح برات پیدا می‌کنه و "
+        "نبرد خودکار انجام و روایت می‌شه. برنده نهال جایزه می‌گیره! "
+        "لیدربورد نبرد هم همون‌جاست.",
     ),
     "cards": (
         "🃏 کارت‌ها",
         "🃏 **کارت‌های من**\n\n"
-        "کارت‌های شخصیتت را جمع کن، به‌روزرسانی‌شان کن و کارت اصلی‌ات را انتخاب کن. "
-        "از فروشگاه کارت جدید بخر یا با دوستانت مبادله کن.",
+        "کارت‌های شخصیتت رو جمع کن، ارتقاشون بده و کارت اصلی‌ت رو انتخاب کن. "
+        "از فروشگاه کارت جدید بخر یا با دوستات مبادله کن.",
     ),
     "garden": (
         "🌳 باغ",
         "🌳 **باغ سیب**\n\n"
-        "در قطعه‌های باغت نهال بکار، صبر کن تا درخت شود و میوه‌اش را برداشت کن. "
-        "هنگام برداشت شانسِ افتادن سیب‌های کمیاب را هم داری: "
+        "تو قطعه‌های باغت نهال بکار، صبر کن تا درخت بشه و میوه‌ش رو برداشت کن. "
+        "موقع برداشت شانس افتادن سیب‌های کمیاب رو هم داری: "
         "🍎 معمولی، 🥇 طلایی و 🖤 ابسیدینی! "
-        "باغت را همه می‌بینند ولی فقط خودت کنترلش می‌کنی.",
+        "باغت رو همه می‌بینن ولی فقط خودت کنترلش می‌کنی.",
     ),
 }
 
@@ -226,8 +226,12 @@ async def handle_help_menu(callback: CallbackQuery, bot: Bot):
 async def handle_help_page(callback: CallbackQuery, bot: Bot):
     from sib.services.nav import parse_callback, with_origin
 
-    base, origin = parse_callback(callback.data)
-    topic = base.split(":")[1]
+    # ``help_page:<topic>[:origin]`` — the topic is a HANDLER argument and
+    # must never be eaten as the navigation origin (topics like
+    # ``apple_battle`` share their name with a known screen callback).
+    base, origin = parse_callback(callback.data, arg_segments=1)
+    parts = base.split(":")
+    topic = parts[1] if len(parts) > 1 else None
     entry = HELP_TOPICS.get(topic)
     if not entry:
         await safe_answer_callback(callback, "این بخش پیدا نشد 🍏", show_alert=True)
@@ -559,31 +563,46 @@ async def handle_sib_games_word(message: Message, bot: Bot):
         await _reply_games_menu(message)
 
 
-@router.message(F.text.regexp(r"^\s*(سیبام|سیب\s+من)\s*$"))
+@router.message(F.text.regexp(r"^\s*سیبام\s*$"))
 async def handle_sib_balance_word(message: Message, bot: Bot):
-    """'سیبام' / 'سیب من' -> show the SENDER's apple balance.
+    """'سیبام' -> show the SENDER's apple balance, with the basket artwork.
 
     Uses the authoritative AppleWalletService balance (group + private).
-    Never falls through to the 'سیب' claim action.
+    The artwork is the reusable static asset 'apple_basket'
+    (assets/items/apple_basket.jpg, overridable via /setasset) - no dynamic
+    numbers or user info in the image itself. Never falls through to the
+    'سیب' claim action.
     """
     user = message.from_user
     if not user:
         return
 
     from sib.services.apple_wallet import AppleWalletService
+    from sib.services.assets import AssetService
+    from sib.services.character_art import photo_arg
 
     async with get_session() as session:
         from sib.services.user import UserService
 
         await UserService.get_or_create_user(session, user)
         balance = await AppleWalletService.get_balance(session, user.id)
+        file_id, fs_path = await AssetService.resolve_photo(session, "apple_basket")
 
-    await message.reply(f"🍏 موجودی سیب شما: {balance}", parse_mode="Markdown")
+    text = f"🍏 موجودی سیب شما: {balance}"
+    photo = photo_arg(file_id, fs_path)
+    if photo is not None:
+        try:
+            await message.reply_photo(photo, caption=text, parse_mode="Markdown")
+            return
+        except Exception:  # pragma: no cover - presentation must not break
+            pass
+    # Graceful fallback: the balance text is the real content.
+    await message.reply(text, parse_mode="Markdown")
 
 
-@router.message(F.text.regexp(r"^\s*سیب\s+پروفایل\s*$"))
-async def handle_sib_profile_word(message: Message, bot: Bot):
-    """'سیب پروفایل' opens the PROFILE OF THE SENDER (spec #4).
+async def _open_sender_profile(message: Message) -> None:
+    """Open the SENDER's profile in the current chat (shared flow for the
+    'سیب پروفایل' and 'سیب من' wake words - one profile system).
 
     The subject is the message sender - never previous panel state.
     """
@@ -668,6 +687,16 @@ async def handle_sib_profile_word(message: Message, bot: Bot):
                 panel_type="profile",
             )
             await session.commit()
+
+
+@router.message(F.text.regexp(r"^\s*سیب\s+(پروفایل|من)\s*$"))
+async def handle_sib_profile_word(message: Message, bot: Bot):
+    """'سیب پروفایل' / 'سیب من' -> the PROFILE OF THE SENDER (spec #4).
+
+    Both phrasings reuse the one profile flow. 'سیب من' is NOT a balance
+    alias - 'سیبام' shows the apple balance.
+    """
+    await _open_sender_profile(message)
 
 
 async def _open_sender_garden(message: Message) -> None:

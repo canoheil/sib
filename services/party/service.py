@@ -48,11 +48,11 @@ class PartyService:
             raise InvalidActionException("بازی انتخاب شده معتبر نیست یا غیرفعال است.")
 
         if mode == "solo" and not game.supports_solo:
-            raise InvalidActionException("این بازی از حالت انفرادی پشتیبانی نمی‌کند.")
+            raise InvalidActionException("این بازی از حالت انفرادی پشتیبانی نمی‌کنه.")
         if mode == "2v2" and not game.supports_2v2:
-            raise InvalidActionException("این بازی از حالت تیمی ۲ به ۲ پشتیبانی نمی‌کند.")
+            raise InvalidActionException("این بازی از حالت تیمی ۲ به ۲ پشتیبانی نمی‌کنه.")
         if mode == "4v4" and not game.supports_4v4:
-            raise InvalidActionException("این بازی از حالت تیمی ۴ به ۴ پشتیبانی نمی‌کند.")
+            raise InvalidActionException("این بازی از حالت تیمی ۴ به ۴ پشتیبانی نمی‌کنه.")
 
         max_players = cls.MODE_SLOTS.get(mode, 1)
 

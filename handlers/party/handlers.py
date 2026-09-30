@@ -39,7 +39,7 @@ async def build_games_menu(session, group_id: int) -> tuple:
     games = list(
         (await session.scalars(select(Game).where(Game.is_active == True))).all()
     )
-    text = "🍏 **منوی بازی‌های سیب**\nبازی مورد نظرتون رو برای شروع انتخاب کنید:"
+    text = "🍏 **منوی بازی‌های سیب**\nبازی مورد نظرتون رو برای شروع انتخاب کن:"
     kb = get_games_menu_keyboard(games, active_count=len(active_parties))
     return text, kb
 
@@ -51,7 +51,7 @@ async def build_active_games_menu(session, group_id: int) -> tuple:
         text = (
             "🍏 **بازی‌های فعال گروه:**\n"
             "همه‌ی بازی‌های زنده (در انتظار، کامل، در صف و در حال مسابقه) اینجاست؛ "
-            "برای مشاهده جزئیات انتخاب کنید:"
+            "برای دیدن جزئیات انتخاب کن:"
         )
     else:
         text = (
@@ -134,7 +134,7 @@ async def handle_create_new_party_menu(callback: CallbackQuery, bot: Bot):
     """Show game selection list to start a new party."""
     async with get_session() as session:
         games = list((await session.scalars(select(Game).where(Game.is_active == True))).all())
-        text = "🎮 **یک بازی برای ایجاد مسابقه انتخاب کنید:**"
+        text = "🎮 **یه بازی برای ساخت مسابقه انتخاب کن:**"
         await callback.answer()
         await safe_edit_callback_message(
             callback,
@@ -166,7 +166,7 @@ async def handle_select_game(callback: CallbackQuery, bot: Bot):
         text = (
             f"🎮 **{game.name_fa}**\n\n"
             f"📝 {game.description_fa}\n\n"
-            f"حالت بازی مورد نظرتان را انتخاب کنید:"
+            f"حالت بازی مورد نظرت رو انتخاب کن:"
         )
         await callback.answer()
         await safe_edit_callback_message(

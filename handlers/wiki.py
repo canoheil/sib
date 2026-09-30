@@ -114,7 +114,7 @@ async def _wiki_text_and_kb(
         from sib.keyboards.common import danger_button
 
         return (
-            "📚 **ویکی شخصیت‌ها**\n\nهنوز شخصیتی منتشر نشده است.",
+            "📚 **ویکی شخصیت‌ها**\n\nهنوز شخصیتی منتشر نشده.",
             InlineKeyboardMarkup(
                 inline_keyboard=[
                     [

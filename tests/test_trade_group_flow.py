@@ -239,7 +239,7 @@ async def test_trade_with_stale_card_fails_safely(db_session):
     await db_session.refresh(alice_card)
     await db_session.refresh(bob_card)
 
-    assert trade.status == TradeStatus.CANCELLED
+    assert trade.status == TradeStatus.FAILED
     assert alice_card.user_id == carol.id  # untouched by the failed trade
     assert bob_card.user_id == bob.id
 
@@ -506,3 +506,127 @@ async def test_maintenance_cycle_sweeps_stale_trade_offers(db_session):
     db_session.expunge_all()
     refreshed = await db_session.get(Trade, trade.id)
     assert refreshed.status == TradeStatus.EXPIRED
+
+
+# ---------------------------------------------------------------------------
+# Reported-flow regression: second confirmation crashed the bot
+# (IntegrityError on uq_player_card_user_character) and burned the daily
+# quota. The full handler flow must complete the swap and answer cleanly.
+# ---------------------------------------------------------------------------
+
+
+async def _same_character_cards(db_session, user_a, user_b, code: str):
+    """One character, one card per user (both cards of the SAME character)."""
+    from sib.database.models import ReleaseStatus
+
+    character = await CharacterService.create(
+        db_session,
+        code=code,
+        name_fa=f"قهرمان {code}",
+        power=22,
+        speed=20,
+        intelligence=18,
+    )
+    await CharacterService.set_release_status(db_session, character.id, ReleaseStatus.RELEASED)
+    await db_session.commit()
+    card_a = await PlayerCardService.acquire(db_session, user_a.id, character.id)
+    card_b = await PlayerCardService.acquire(db_session, user_b.id, character.id)
+    await db_session.commit()
+    return card_a, card_b
+
+
+@pytest.mark.asyncio
+async def test_reported_flow_same_character_completes_and_swaps(db_session):
+    """A creates Trade → B joins → both select Cards → A confirms → B confirms.
+
+    With two cards of the SAME character the second confirmation used to die
+    with a raw IntegrityError (the two direct user_id UPDATEs violated
+    uq_player_card_user_character mid-swap). Now the flow must complete the
+    atomic swap, answer both confirmers cleanly and keep quota accounting
+    consistent (the COMPLETED trade uses the day's slot)."""
+    alice = await create_test_user(db_session, "گزارش الف")
+    bob = await create_test_user(db_session, "گزارش ب")
+    alice_card, bob_card = await _same_character_cards(db_session, alice, bob, "report_char")
+
+    bot = _new_bot()
+
+    # 1. Alice publishes the offer, Bob joins and picks his same-level card.
+    await handle_trade_offer(_callback(alice, f"trade_offer:{alice_card.id}"), bot)
+    await handle_trade_join(_callback(bob, f"trade_join:{alice.id}:{alice_card.id}"), bot)
+    pick_cb = _callback(bob, f"trade_pick:{alice.id}:{alice_card.id}:{bob_card.id}")
+    await handle_trade_pick(pick_cb, bot)
+
+    trades = list((await db_session.scalars(select(Trade))).all())
+    assert len(trades) == 1
+    trade = trades[0]
+
+    # 2. A confirms (first side: no swap yet).
+    ok_alice = _callback(alice, f"trade_ok:{trade.id}", message_id=777)
+    await handle_trade_ok(ok_alice, bot)  # must NOT raise
+
+    # 3. B confirms — this press used to error with IntegrityError.
+    ok_bob = _callback(bob, f"trade_ok:{trade.id}", message_id=777)
+    await handle_trade_ok(ok_bob, bot)  # must NOT raise
+
+    # Clean UX: the second confirmer is told the trade went through.
+    assert ok_bob.answer.call_args is not None
+    assert "مبادله انجام شد" in (ok_bob.answer.call_args.args[0] or "")
+
+    db_session.expunge_all()
+    done = await TradeService.get_trade(db_session, trade.id)
+    assert done.status == TradeStatus.COMPLETED
+    a_after = await db_session.get(PlayerCard, alice_card.id)
+    b_after = await db_session.get(PlayerCard, bob_card.id)
+    await db_session.refresh(a_after)
+    await db_session.refresh(b_after)
+    assert a_after.user_id == bob.id
+    assert b_after.user_id == alice.id
+
+    # The COMPLETED trade consumes the day's quota (deterministic accounting).
+    assert not await TradeService.can_trade_today(db_session, alice.id)
+    assert not await TradeService.can_trade_today(db_session, bob.id)
+
+
+@pytest.mark.asyncio
+async def test_failed_confirm_shows_friendly_alert_and_frees_quota(db_session):
+    """When finalization fails, the confirmer gets a FRIENDLY alert (never a
+    raw exception), nothing moves, and the quota is rolled back."""
+    alice = await create_test_user(db_session, "هشدار الف")
+    bob = await create_test_user(db_session, "هشدار ب")
+    carol = await create_test_user(db_session, "هشدار ج")
+    alice_card = await _card_for(db_session, alice, "alert_a")
+    bob_card = await _card_for(db_session, bob, "alert_b")
+
+    trade = await TradeService.create(
+        db_session,
+        proposer_id=alice.id,
+        recipient_id=bob.id,
+        proposer_card_id=alice_card.id,
+        recipient_card_id=bob_card.id,
+    )
+    await db_session.commit()
+
+    ok_alice = _callback(alice, f"trade_ok:{trade.id}")
+    await handle_trade_ok(ok_alice, bot=_new_bot())
+
+    # Ownership changes under the trade's feet before Bob confirms.
+    alice_card.user_id = carol.id
+    await db_session.commit()
+
+    ok_bob = _callback(bob, f"trade_ok:{trade.id}")
+    await handle_trade_ok(ok_bob, bot=_new_bot())  # TradeError -> alert, no raise
+
+    assert ok_bob.answer.call_args.kwargs.get("show_alert") is True
+    alert_text = ok_bob.answer.call_args.args[0]
+    assert "معامله" in alert_text  # friendly Persian alert, not a crash
+
+    db_session.expunge_all()
+    failed = await TradeService.get_trade(db_session, trade.id)
+    assert failed.status == TradeStatus.FAILED
+    a_after = await db_session.get(PlayerCard, alice_card.id)
+    await db_session.refresh(a_after)
+    assert a_after.user_id == carol.id  # untouched
+
+    # Quota rollback/consistency: both users keep today's trade slot.
+    assert await TradeService.can_trade_today(db_session, alice.id)
+    assert await TradeService.can_trade_today(db_session, bob.id)
