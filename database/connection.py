@@ -159,11 +159,18 @@ async def seed_characters(session) -> int:
     from pathlib import Path
     import json as _json
 
-    from sib.database.models import Character, CharacterBalanceVersion, ReleaseStatus, Rarity
+    from sib.database.models import Character, CharacterBalanceVersion, ReleaseStatus
     from sib.services.characters import CharacterService, CharacterValidationError
+    from sib.services.factions import FactionService
+
+    # Faction lore metadata is seeded/backfilled on EVERY startup (also on
+    # installations that already have characters): existing rows are only
+    # filled where the faction is still NULL, never overwritten.
+    await FactionService.seed_from_data(session)
 
     existing = await session.scalar(select(Character.id).limit(1))
     if existing is not None:
+        await FactionService.backfill_characters_from_data(session)
         return 0
 
     seed_path = Path(__file__).resolve().parents[1] / "data" / "characters_seed.json"
@@ -175,6 +182,7 @@ async def seed_characters(session) -> int:
     created = 0
     for entry in entries:
         try:
+            faction = await FactionService.get_by_code(session, entry.get("faction"))
             character = await CharacterService.create(
                 session,
                 code=entry["code"],
@@ -191,7 +199,8 @@ async def seed_characters(session) -> int:
                 strengths=entry.get("strengths"),
                 weaknesses=entry.get("weaknesses"),
                 price=entry.get("price", 100),
-                rarity=entry.get("rarity", Rarity.COMMON),
+                faction_id=faction.id if faction else None,
+                faction_role_fa=entry.get("faction_role_fa"),
                 release_status=entry.get("release_status", ReleaseStatus.DRAFT),
             )
             character.shop_enabled = bool(entry.get("shop_enabled", True))

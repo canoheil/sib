@@ -1,9 +1,9 @@
 """Character and balance-version models (Phase 9).
 
 Characters are DATA, not code: name, lore, artwork, stats, passive,
-price, rarity, release state and hidden combat modifiers all live in the
-database and can be managed through the admin panel without touching
-Python code.
+price, release state, faction metadata and hidden combat modifiers all
+live in the database and can be managed through the admin panel without
+touching Python code.
 
 Visible attributes (Power 💪 / Speed ⚡ / Intelligence 🧠) follow a total
 attribute budget model: their SUM equals the budget of the card level
@@ -13,7 +13,17 @@ attribute budget model: their SUM equals the budget of the card level
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
+from sqlalchemy.orm import relationship
 from sqlalchemy.orm import Mapped, mapped_column
 
 from sib.database.base import Base, TimestampMixin
@@ -25,17 +35,6 @@ class ReleaseStatus:
     DRAFT = "DRAFT"
     RELEASED = "RELEASED"
     RETIRED = "RETIRED"
-
-
-class Rarity:
-    """Character rarity tiers (sidegrade, not power level)."""
-
-    COMMON = "COMMON"
-    RARE = "RARE"
-    EPIC = "EPIC"
-    LEGENDARY = "LEGENDARY"
-
-    ALL = (COMMON, RARE, EPIC, LEGENDARY)
 
 
 class Character(Base, TimestampMixin):
@@ -66,9 +65,21 @@ class Character(Base, TimestampMixin):
     strengths: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON list (fa)
     weaknesses: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON list (fa)
 
+    # Lore faction (nullable: a character may stand outside all factions).
+    # Data-driven - gameplay never reads these fields.
+    faction_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey("factions.id"), nullable=True, index=True
+    )
+    # The character's role inside the faction («بانوی ماه», ...).
+    faction_role_fa: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+
     # Economy / availability.
     price: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
-    rarity: Mapped[str] = mapped_column(String(20), default=Rarity.COMMON, nullable=False)
+    # DEPRECATED: rarity is no longer an active classification (cards are
+    # sidegrades; the faction is the lore metadata now). The column is
+    # kept, with its historical values, so no existing installation loses
+    # data - nothing in the codebase reads or writes it as a category.
+    rarity: Mapped[str] = mapped_column(String(20), default="COMMON", nullable=False)
     release_status: Mapped[str] = mapped_column(
         String(20), default=ReleaseStatus.DRAFT, nullable=False, index=True
     )
@@ -117,6 +128,9 @@ class Character(Base, TimestampMixin):
     def weaknesses_list(self) -> list:
         return self._load(self.weaknesses, []) or []
 
+    # Relationships
+    faction = relationship("Faction", back_populates="characters")
+
     @property
     def total_base_stats(self) -> int:
         return self.power + self.speed + self.intelligence
@@ -139,7 +153,6 @@ class Character(Base, TimestampMixin):
             "passive_data": self.passive_params,
             "hidden_modifiers": self.hidden_modifier_params,
             "price": self.price,
-            "rarity": self.rarity,
             "balance_version": self.balance_version,
         }
 

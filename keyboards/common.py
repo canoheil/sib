@@ -93,20 +93,44 @@ def get_private_welcome_keyboard(bot_username: str) -> InlineKeyboardMarkup:
 
 
 def get_group_welcome_keyboard() -> InlineKeyboardMarkup:
-    """Main keyboard for group chat /start."""
+    """Main keyboard for group chat /start.
+
+    The GROUP menu is the group's front door, so it exposes the group
+    features directly: games, the games menu, card trading, the guide and
+    the group rating. Card trading is a group activity (players trade with
+    each other in the group), never a private-only feature.
+    """
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 primary_button(
-                    text="🎮 بازی‌های فعال گروه",
+                    text="🎮 بازی‌ها",
                     callback_data="group_games_panel",
-                )
+                ),
+                primary_button(
+                    text="📖 راهنما",
+                    callback_data="help_menu",
+                ),
             ],
             [
                 primary_button(
+                    text="🎯 بازی‌های فعال گروه",
+                    callback_data="group_active_games",
+                ),
+                primary_button(
                     text="🏆 رتبه و آمار گروه",
                     callback_data="group_rating_stats",
-                )
+                ),
+            ],
+            [
+                primary_button(
+                    text="🔁 مبادله کارت",
+                    callback_data="apple_trade",
+                ),
+                primary_button(
+                    text="👤 پروفایل من",
+                    callback_data="apple_profile",
+                ),
             ],
             [
                 primary_button(
@@ -116,12 +140,6 @@ def get_group_welcome_keyboard() -> InlineKeyboardMarkup:
                 primary_button(
                     text="🛒 فروشگاه",
                     callback_data="apple_shop",
-                ),
-            ],
-            [
-                primary_button(
-                    text="👤 پروفایل من",
-                    callback_data="apple_profile",
                 ),
             ],
         ]

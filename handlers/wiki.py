@@ -14,6 +14,7 @@ from sib.services.telegram_ui import (
     CAPTION_LIMIT, caption_length, safe_answer_callback, safe_edit_callback_message,
 )
 from sib.services.nav import back_label_for, back_target, parse_callback
+from sib.services.factions import FactionService
 from sib.services.wiki import CollectionService, WikiService
 from sib.database.models import Character
 from sib.services.character_art import photo_arg, resolve_character_photo
@@ -74,25 +75,26 @@ def _wiki_keyboard(characters, page: int, origin: str = None) -> InlineKeyboardM
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-# Rarity section headers for the wiki index (ordered by rarity desc).
-RARITY_SECTION_HEADERS = {
-    "LEGENDARY": "🟡 افسانه‌ای",
-    "EPIC": "🟣 حماسی",
-    "RARE": "🔵 کمیاب",
-    "COMMON": "⚪ معمولی",
-}
+def _wiki_index_lines(characters, faction_by_id=None) -> list[str]:
+    """Numbered index lines grouped by FACTION (lore metadata).
 
-
-def _wiki_index_lines(characters) -> list[str]:
-    """Grouped, numbered index lines for one page of characters."""
+    Grouping is data-driven: the header is whatever the faction row says
+    (name + symbol); characters without a faction fall under a generic
+    "no faction" header. No faction code is referenced in code.
+    """
+    faction_by_id = faction_by_id or {}
     lines: list[str] = []
     number = 1
-    current_rarity = None
+    current_faction_id = object()  # sentinel so the first group always prints
     for character in characters:
-        if character.rarity != current_rarity:
-            current_rarity = character.rarity
-            header = RARITY_SECTION_HEADERS.get(current_rarity, "🍎 سایر")
-            lines.append(f"\n**— {header} —**")
+        if character.faction_id != current_faction_id:
+            current_faction_id = character.faction_id
+            faction = faction_by_id.get(character.faction_id)
+            if faction is not None:
+                symbol = f"{faction.symbol} " if faction.symbol else ""
+                lines.append(f"\n**— {symbol}{faction.name_fa} —**")
+            else:
+                lines.append("\n**— 🍎 بدون دسته —**")
         lines.append(
             f"{number}. 🍎 **{character.name_fa}** — "
             f"💪{character.power} ⚡{character.speed} 🧠{character.intelligence}"
@@ -106,6 +108,8 @@ async def _wiki_text_and_kb(
 ) -> tuple[str, InlineKeyboardMarkup]:
     async with get_session() as session:
         characters = await WikiService.list_wiki(session)
+        factions = await FactionService.list_active(session)
+    faction_by_id = {f.id: f for f in factions}
     if not characters:
         from sib.keyboards.common import danger_button
 
@@ -128,7 +132,7 @@ async def _wiki_text_and_kb(
     counter = f" | صفحه {page + 1} از {total_pages}" if total_pages > 1 else ""
     text = (
         f"📚 **ویکی شخصیت‌ها** ({len(characters)} شخصیت){counter}\n\n"
-        + "\n".join(_wiki_index_lines(page_characters))
+        + "\n".join(_wiki_index_lines(page_characters, faction_by_id))
         + "\n\nتوانایی‌ها و ویژگی‌ها کاملاً شفاف؛ برای دیدن کارت کامل، شخصیت را انتخاب کن."
     )
     return text, _wiki_keyboard(characters, page, origin)

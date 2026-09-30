@@ -18,7 +18,6 @@ from sib.core.logging import logger, log_event, Events
 from sib.database.models import (
     Character,
     CharacterBalanceVersion,
-    Rarity,
     ReleaseStatus,
 )
 from sib.services.config_store import ConfigService
@@ -45,11 +44,6 @@ class CharacterService:
                 f"مجموع قدرت/سرعت/هوش باید دقیقاً {level1_budget} باشد (مدل بودجه ویژگی)."
             )
 
-    @staticmethod
-    def validate_rarity(rarity: str) -> None:
-        if rarity not in Rarity.ALL:
-            raise CharacterValidationError(f"کمیابی نامعتبر: {rarity}")
-
     # ------------------------------------------------------------------
     # Create / update
     # ------------------------------------------------------------------
@@ -72,7 +66,8 @@ class CharacterService:
         strengths: Optional[List[str]] = None,
         weaknesses: Optional[List[str]] = None,
         price: int = 100,
-        rarity: str = Rarity.COMMON,
+        faction_id: Optional[int] = None,
+        faction_role_fa: Optional[str] = None,
         release_status: str = ReleaseStatus.DRAFT,
     ) -> Character:
         existing = await session.scalar(select(Character).where(Character.code == code))
@@ -80,7 +75,6 @@ class CharacterService:
             raise CharacterValidationError(f"شخصیت با کد «{code}» قبلاً ثبت شده است.")
 
         await cls.validate_base_budget(session, power, speed, intelligence)
-        cls.validate_rarity(rarity)
 
         character = Character(
             code=code,
@@ -97,7 +91,8 @@ class CharacterService:
             strengths=Character._dump(strengths or []),
             weaknesses=Character._dump(weaknesses or []),
             price=price,
-            rarity=rarity,
+            faction_id=faction_id,
+            faction_role_fa=faction_role_fa,
             release_status=release_status,
             released_at=datetime.now(timezone.utc) if release_status == ReleaseStatus.RELEASED else None,
             balance_version=1,
@@ -124,7 +119,7 @@ class CharacterService:
             raise CharacterValidationError("شخصیت پیدا نشد.")
 
         stat_keys = {"power", "speed", "intelligence"}
-        balance_keys = stat_keys | {"passive_key", "passive_data", "hidden_modifiers", "price", "rarity"}
+        balance_keys = stat_keys | {"passive_key", "passive_data", "hidden_modifiers", "price"}
 
         new_stats = {
             "power": fields.get("power", character.power),
@@ -133,9 +128,6 @@ class CharacterService:
         }
         if any(k in fields for k in stat_keys):
             await cls.validate_base_budget(session, **new_stats)
-
-        if "rarity" in fields:
-            cls.validate_rarity(fields["rarity"])
 
         balance_touched = balance_keys & set(fields)
         for key, value in fields.items():
@@ -255,23 +247,35 @@ class CharacterService:
         return snap
 
 
-RARITY_LABELS_FA = {
-    Rarity.COMMON: "معمولی",
-    Rarity.RARE: "کمیاب",
-    Rarity.EPIC: "حماسی",
-    Rarity.LEGENDARY: "افسانه‌ای",
-}
-
 STAT_EMOJI = {"power": "💪", "speed": "⚡", "intelligence": "🧠"}
 
 
-def render_character_card(character: Character, *, show_price: bool = True) -> str:
-    """Persian character presentation used by wiki/shop/profile."""
-    rarity_fa = RARITY_LABELS_FA.get(character.rarity, character.rarity)
-    lines = [
-        f"🍎 **{character.name_fa}** ({rarity_fa})",
-        "",
-    ]
+def render_character_card(
+    character: Character,
+    *,
+    show_price: bool = True,
+    faction=None,
+) -> str:
+    """Persian character presentation used by wiki/shop/profile.
+
+    ``faction`` is the character's lore faction (data-driven, optional):
+    when provided it is shown with the character's role inside it. There
+    is no rarity tier any more - cards are sidegrades and the faction is
+    the classify-by-lore metadata.
+    """
+    header = f"🍎 **{character.name_fa}**"
+    if faction is not None:
+        symbol = f"{faction.symbol} " if faction.symbol else ""
+        header += f" — {symbol}**{faction.name_fa}**"
+    lines = [header, ""]
+
+    if character.faction_role_fa:
+        lines.append(f"🎖 نقش: {character.faction_role_fa}")
+    if faction is not None and faction.lore_fa:
+        lines.append(f"📜 {faction.lore_fa}")
+    if character.faction_role_fa or (faction is not None and faction.lore_fa):
+        lines.append("")
+
     if character.lore_fa:
         lines.append(f"_{character.lore_fa}_")
         lines.append("")

@@ -26,10 +26,10 @@ from sib.database.models.apple_battle import (
     AppleBattleQueueEntry,
     AppleBattleStatus,
 )
+from sib.database.models.faction import Faction
 from sib.database.models.character import (
     Character,
     CharacterBalanceVersion,
-    Rarity,
     ReleaseStatus,
 )
 
@@ -63,9 +63,9 @@ __all__ = [
     "GardenPlot",
     "PlotState",
     "SystemConfig",
+    "Faction",
     "Character",
     "CharacterBalanceVersion",
-    "Rarity",
     "ReleaseStatus",
     "PlayerCard",
     "ShopEntry",

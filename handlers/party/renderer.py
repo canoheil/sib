@@ -1,6 +1,13 @@
 """Rendering helpers for party messages in Persian."""
 
-from sib.database.models import Party
+from sib.database.models import Party, PartyStatus
+
+# Live statuses that are not visible as "open/full party" states but still
+# occupy the players; the card must say so instead of looking empty.
+STATUS_LINES = {
+    PartyStatus.IN_QUEUE: "\n🔍 **در جستجوی حریف...**",
+    PartyStatus.IN_MATCH: "\n⚔️ **در حال مسابقه...**",
+}
 
 
 def render_party_card(party: Party) -> str:
@@ -19,7 +26,10 @@ def render_party_card(party: Party) -> str:
 
     members_text = "\n".join(member_lines)
 
-    if party.is_full:
+    status_line = STATUS_LINES.get(party.status)
+    if status_line is not None:
+        header = "🍏 **پارتی بازی گروه**"
+    elif party.is_full:
         header = "✅ **تیم کامل شد!**" if party.mode != "solo" else "✅ **آماده برای رقابت!**"
         status_line = ""
     else:

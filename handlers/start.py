@@ -178,14 +178,18 @@ HELP_TOPICS = {
 }
 
 
-def _help_keyboard() -> InlineKeyboardMarkup:
+def _help_keyboard(origin: Optional[str] = None) -> InlineKeyboardMarkup:
     from sib.keyboards.common import danger_button, primary_button
+    from sib.services.nav import with_origin
 
     buttons = []
     row: list = []
     for topic, (label, _text) in HELP_TOPICS.items():
         row.append(
-            primary_button(text=label, callback_data=f"help_page:{topic}")
+            primary_button(
+                text=label,
+                callback_data=with_origin(f"help_page:{topic}", origin),
+            )
         )
         if len(row) == 2:
             buttons.append(row)
@@ -196,30 +200,49 @@ def _help_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-@router.callback_query(F.data == "help_menu")
+@router.callback_query(F.data.startswith("help_menu"))
 async def handle_help_menu(callback: CallbackQuery, bot: Bot):
-    """Paged help index (spec #13): short pages, button navigation."""
+    """Paged help index (spec #13): short pages, button navigation.
+
+    The Guide is reachable from the group menu and the private menu; the
+    contextual origin is carried through the pages so Back returns to the
+    screen that opened it. Back only navigates - it never touches an
+    active match or party.
+    """
+    from sib.services.nav import parse_callback
+
+    _base, origin = parse_callback(callback.data)
     text = (
         "🎮 **راهنمای بازی‌های سیب** 🍏\n\n"
         "بخش مورد نظرت را انتخاب کن تا کوتاه و ساده توضیحش را ببینی:"
     )
     await safe_answer_callback(callback)
-    await safe_edit_callback_message(callback, bot, text, reply_markup=_help_keyboard())
+    await safe_edit_callback_message(
+        callback, bot, text, reply_markup=_help_keyboard(origin)
+    )
 
 
 @router.callback_query(F.data.startswith("help_page:"))
 async def handle_help_page(callback: CallbackQuery, bot: Bot):
-    topic = callback.data.split(":")[1]
+    from sib.services.nav import parse_callback, with_origin
+
+    base, origin = parse_callback(callback.data)
+    topic = base.split(":")[1]
     entry = HELP_TOPICS.get(topic)
     if not entry:
         await safe_answer_callback(callback, "این بخش پیدا نشد 🍏", show_alert=True)
         return
     _label, text = entry
-    from sib.keyboards.common import danger_button, primary_button
+    from sib.keyboards.common import danger_button
 
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
-            [danger_button(text="📚 بازگشت به راهنما", callback_data="help_menu")],
+            [
+                danger_button(
+                    text="📚 بازگشت به راهنما",
+                    callback_data=with_origin("help_menu", origin),
+                )
+            ],
             [danger_button(text="🏠 منوی اصلی", callback_data="main_menu")],
         ]
     )

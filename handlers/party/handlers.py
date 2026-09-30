@@ -48,7 +48,11 @@ async def build_active_games_menu(session, group_id: int) -> tuple:
     """(text, kb) for the active-games screen - 'بازی‌های فعال گروه'."""
     active_parties = await PartyService.get_active_parties_for_group(session, group_id)
     if active_parties:
-        text = "🍏 **بازی‌های فعال و در حال انتظار گروه:**\nبرای پیوستن یا مشاهده جزئیات انتخاب کنید:"
+        text = (
+            "🍏 **بازی‌های فعال گروه:**\n"
+            "همه‌ی بازی‌های زنده (در انتظار، کامل، در صف و در حال مسابقه) اینجاست؛ "
+            "برای مشاهده جزئیات انتخاب کنید:"
+        )
     else:
         text = (
             "🍏 **در حال حاضر هیچ بازی فعالی در این گروه وجود ندارد!**\n"
@@ -221,7 +225,10 @@ async def handle_view_party(callback: CallbackQuery, bot: Optional[Bot] = None):
 
     async with get_session() as session:
         party = await PartyService.get_party_by_id(session, party_id)
-        if not party or party.status in (PartyStatus.CANCELLED, PartyStatus.IN_MATCH):
+        # LIVE states (including IN_QUEUE / IN_MATCH) are always viewable:
+        # the Active Games screen lists every state that blocks a new game,
+        # so pressing those rows must never dead-end.
+        if not party or party.status == PartyStatus.CANCELLED:
             await callback.answer("این پارتی دیگر در دسترس نیست 🍏", show_alert=True)
             return
 

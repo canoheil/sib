@@ -145,10 +145,16 @@ async def _shop_item_view(user_id: int, entry_id: int):
     """Full card detail: art + wiki description + stats + price + actions."""
     from sib.services.character_art import photo_arg, resolve_character_photo
     from sib.services.characters import render_character_card
+    from sib.services.factions import FactionService
 
     async with get_session() as session:
         entry, character, owned = await ShopService.get_entry(session, entry_id, user_id=user_id)
         balance = await AppleWalletService.get_balance(session, user_id)
+        faction = (
+            await FactionService.get_for_character(session, character)
+            if character is not None
+            else None
+        )
         art_photo = None
         if entry is not None and character is not None:
             file_id, fs_path = await resolve_character_photo(session, character)
@@ -163,7 +169,11 @@ async def _shop_item_view(user_id: int, entry_id: int):
 
     price = ShopService.entry_price(entry, character)
     badge = f" {entry.badge}" if entry.badge else ""
-    lines = [render_character_card(character), "", f"💰 سیب‌های شما: `{balance}`{badge}"]
+    lines = [
+        render_character_card(character, faction=faction),
+        "",
+        f"💰 سیب‌های شما: `{balance}`{badge}",
+    ]
     if owned:
         action = [primary_button(text="✅ خریداری‌شده", callback_data=f"shop_owned:{entry.id}")]
     else:

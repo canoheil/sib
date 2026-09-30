@@ -8,7 +8,7 @@ import json
 
 import pytest
 
-from sib.database.models import Character, CharacterBalanceVersion, Rarity, ReleaseStatus
+from sib.database.models import Character, CharacterBalanceVersion, ReleaseStatus
 from sib.services.characters import (
     CharacterService,
     CharacterValidationError,
@@ -151,33 +151,55 @@ async def test_render_card_is_persian_and_complete(db_session):
         strengths=["سرعت"],
         weaknesses=["قدرت"],
         price=150,
-        rarity=Rarity.RARE,
     )
     await db_session.commit()
 
     card = render_character_card(character)
     assert "قهرمان داستان" in card
     assert "💪" in card and "⚡" in card and "🧠" in card
-    assert "کمیاب" in card
     assert "first_strike" in card
     assert "150" in card
     assert "یک داستان کوتاه." in card
+    # Rarity is no longer an active classification: it must not leak into
+    # the presentation even when the (deprecated) column holds a value.
+    for tier in ("کمیاب", "حماسی", "افسانه‌ای", "معمولی"):
+        assert tier not in card
 
 
 @pytest.mark.asyncio
-async def test_invalid_rarity_and_release_status_rejected(db_session):
-    with pytest.raises(CharacterValidationError):
-        await CharacterService.create(
-            db_session,
-            code="bad_rarity",
-            name_fa="ناقص",
-            power=20,
-            speed=20,
-            intelligence=20,
-            rarity="MYTHIC",
-        )
+async def test_rarity_is_deprecated_but_data_is_preserved(db_session):
+    """Rarity was removed as a classification - without destroying data.
+
+    The service API no longer accepts/validates a rarity, nothing renders
+    it, but the historical column (and existing values) stay in place for
+    every existing installation.
+    """
+    import inspect
+
+    params = inspect.signature(CharacterService.create).parameters
+    assert "rarity" not in params
+
     character = await CharacterService.create(
-        db_session, code="ok_rarity", name_fa="سالم", power=20, speed=20, intelligence=20
+        db_session, code="no_rarity", name_fa="بی‌رتبه", power=20, speed=20, intelligence=20
+    )
+    await db_session.commit()
+
+    # The column still exists and keeps a valid default ...
+    assert character.rarity == "COMMON"
+    # ... and an installation's historical value survives a reload.
+    character.rarity = "LEGENDARY"
+    await db_session.commit()
+    db_session.expunge_all()
+    reloaded = await db_session.get(Character, character.id)
+    assert reloaded.rarity == "LEGENDARY"
+    # Rendering ignores it completely.
+    assert "افسانه‌ای" not in render_character_card(reloaded)
+
+
+@pytest.mark.asyncio
+async def test_invalid_release_status_rejected(db_session):
+    character = await CharacterService.create(
+        db_session, code="ok_status", name_fa="سالم", power=20, speed=20, intelligence=20
     )
     await db_session.commit()
     with pytest.raises(CharacterValidationError):

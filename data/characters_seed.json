@@ -14,7 +14,8 @@
     "strengths": ["نبردهای کوتاه", "ضربه اول"],
     "weaknesses": ["نبردهای طولانی"],
     "price": 100,
-    "rarity": "COMMON",
+    "faction": "empire",
+    "faction_role_fa": "قوی‌ترین جنگجوی امپراتوری",
     "release_status": "RELEASED",
     "shop_enabled": true
   },
@@ -33,7 +34,8 @@
     "strengths": ["نبردهای طولانی", "مقابله با حملات بزرگ"],
     "weaknesses": ["ضربات ناگهانی"],
     "price": 120,
-    "rarity": "COMMON",
+    "faction": "sages",
+    "faction_role_fa": "فرزانگان استراتژیست و راست‌دست پادشاه فرزانگان؛ آموزگار سیب طلایی",
     "release_status": "RELEASED",
     "shop_enabled": true
   },
@@ -52,7 +54,8 @@
     "strengths": ["سرعت", "فرار از حملات"],
     "weaknesses": ["قدرت خالص"],
     "price": 300,
-    "rarity": "RARE",
+    "faction": "sages",
+    "faction_role_fa": "شاهزاده فرزانگان، دختر پادشاه فرزانگان",
     "release_status": "RELEASED",
     "shop_enabled": true
   },
@@ -71,7 +74,8 @@
     "strengths": ["خنثی‌سازی توانایی‌ها", "کنترل میدان"],
     "weaknesses": ["نبرد مستقیم"],
     "price": 250,
-    "rarity": "RARE",
+    "faction": "moon_descendants",
+    "faction_role_fa": "ملکه ماه، رهبر فرزندان ماه",
     "release_status": "RELEASED",
     "shop_enabled": true
   }

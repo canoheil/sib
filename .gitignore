@@ -32,3 +32,6 @@ tmp/
 *.simultaneous-timeout-backup
 *.matchstatus-backup
 *.findmatch-backup
+
+# Virtualenv used for local test runs
+.venv/

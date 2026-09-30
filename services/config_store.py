@@ -59,20 +59,38 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     # Harvest drop model (spec: special-apple drops).
     # Presentation per outcome key. "asset" references a bot_assets key
     # (or a bundled assets/items/<key>.jpg file) for celebration media.
+    # Special-apple drops are a CELEBRATION: the image is sent with an
+    # event-like caption that escalates with the drop's rarity
+    # (Golden 20% < Diamond 9% < Obsidian 1%). Captions live here so they
+    # stay configuration/localization data - never hardcoded in handlers.
     "garden_drop_entries": {
         "apple_normal": {
             "message": "🍎 سیب‌های معمولی برداشت شد.",
         },
         "apple_gold": {
             "message": "✨ شانست گرفت!\n🥇 یک سیب طلایی پیدا کردی!",
+            "caption": (
+                "🥇 **سیب طلایی!**\n"
+                "شانس در باغت را زد؛ یک سیب طلاییِ درخشان برداشت کردی. ✨"
+            ),
             "asset": "golden_apple",
         },
         "apple_diamond": {
             "message": "💎 درخششی عجیب...\nیک سیب الماسی پیدا کردی!",
+            "caption": (
+                "💎 **سیب الماسی!**\n"
+                "این دیگر شانسِ ساده نیست؛ کمیاب است... از هر صد سیب، یکی الماسی "
+                "می‌شود و امروز از باغ تو رویید. ✨"
+            ),
             "asset": "diamond_apple",
         },
         "apple_obsidian": {
             "message": "🖤 باورکردنی نیست...\nیک سیب ابسیدینی پیدا کردی!",
+            "caption": (
+                "🖤 **سیب ابسیدینی!**\n"
+                "افسانه می‌گوید از هر هزار سیب، تنها یکی ابسیدینی می‌شود...\n"
+                "و امروز همان یکی، از باغ تو سر برآورد. این لحظه را نگه دار. 🌑"
+            ),
             "asset": "obsidian_apple",
         },
     },

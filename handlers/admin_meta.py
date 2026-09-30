@@ -94,7 +94,7 @@ async def _characters_text() -> str:
         status = {"DRAFT": "📝", "RELEASED": "✅", "RETIRED": "🗄"}.get(c.release_status, "?")
         active = "" if c.is_active else " (غیرفعال)"
         lines.append(
-            f"{status} `{c.id}` {c.name_fa} — {c.rarity} | "
+            f"{status} `{c.id}` {c.name_fa} | "
             f"💪{c.power} ⚡{c.speed} 🧠{c.intelligence} | {c.price} 🍎 | v{c.balance_version}{active}"
         )
     lines.append(

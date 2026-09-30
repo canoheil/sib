@@ -34,7 +34,10 @@ class PartyService:
         mode: str = "solo",
     ) -> Party:
         """Create a new party in a group with the creator as first member."""
-        # Check One-active-session rule
+        # One-active-session rule. The per-user row lock serializes two
+        # concurrent creations by the same user (double tap / retry), so
+        # only one can observe "no active session".
+        await SessionService.lock_user(session, creator_user_id)
         if await SessionService.has_active_session(session, creator_user_id):
             raise ActiveSessionExistsException()
 
@@ -101,7 +104,9 @@ class PartyService:
         import asyncio
         from sqlalchemy.exc import OperationalError
 
-        # 1. Check one-active-session rule
+        # 1. Check one-active-session rule (per-user lock: same user can
+        #    never pass this check twice concurrently).
+        await SessionService.lock_user(session, user_id)
         if await SessionService.has_active_session(session, user_id):
             raise ActiveSessionExistsException()
 
@@ -278,16 +283,11 @@ class PartyService:
         session: AsyncSession,
         group_id: int,
     ) -> List[Party]:
-        """Get list of active parties (OPEN or FULL) in a group."""
-        stmt = (
-            select(Party)
-            .where(Party.group_id == group_id)
-            .where(Party.status.in_((PartyStatus.OPEN, PartyStatus.FULL)))
-            .options(
-                selectinload(Party.members).selectinload(PartyMember.user),
-                selectinload(Party.game),
-            )
-            .order_by(Party.created_at.desc())
-        )
-        result = await session.scalars(stmt)
-        return list(result.all())
+        """Live parties of a group (OPEN, FULL, IN_QUEUE, IN_MATCH).
+
+        Delegates to ``SessionService`` so the Active Games screen lists
+        exactly the parties that block the One-Active-Session guard - a
+        party waiting in the queue or playing a match is live too and must
+        never be invisible (the "ghost active game" bug).
+        """
+        return await SessionService.get_live_parties_for_group(session, group_id)

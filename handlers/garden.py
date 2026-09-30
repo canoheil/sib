@@ -9,6 +9,8 @@ Screens:
   actions (plant / harvest / magic powder)
 """
 
+from typing import Optional
+
 from aiogram import Bot, Router, F
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -377,6 +379,11 @@ async def handle_garden_harvest(callback: CallbackQuery, bot: Bot):
     if not user:
         return
 
+    # Capture the live chat BEFORE any render: the transition engine may
+    # replace the message (text<->photo), which retargets callback.message.
+    chat = getattr(callback.message, "chat", None)
+    chat_id = getattr(chat, "id", None)
+
     error = None
     outcome = None
     async with get_session() as session:
@@ -392,19 +399,22 @@ async def handle_garden_harvest(callback: CallbackQuery, bot: Bot):
     await _rerender_tree(callback, bot, plot_index, answer=_harvest_answer(outcome))
 
     # Celebration art for special Apples (graceful: missing art never
-    # breaks the flow; the toast above already carried the news).
-    if outcome.is_special and outcome.asset:
-        await _send_asset(callback, bot, outcome.asset)
+    # breaks the flow; the toast above already carried the news). The
+    # caption is the configured, rarity-escalating event text.
+    if outcome.is_special and outcome.asset and chat_id:
+        await _send_asset(chat_id, bot, outcome.asset, caption=outcome.caption)
 
 
-async def _send_asset(callback: CallbackQuery, bot: Bot, asset_key: str) -> None:
+async def _send_asset(
+    chat_id: int,
+    bot: Bot,
+    asset_key: str,
+    caption: Optional[str] = None,
+) -> None:
     from sib.services.assets import AssetService
 
-    chat = getattr(callback.message, "chat", None)
-    if chat is None:
-        return
     async with get_session() as session:
-        await AssetService.send(session, bot, chat.id, asset_key)
+        await AssetService.send(session, bot, chat_id, asset_key, caption=caption)
 
 
 @router.callback_query(F.data == "garden_harvest_all")
@@ -413,6 +423,10 @@ async def handle_garden_harvest_all(callback: CallbackQuery, bot: Bot):
     user = callback.from_user
     if not user:
         return
+
+    # Capture the live chat before the render (see handle_garden_harvest).
+    chat = getattr(callback.message, "chat", None)
+    chat_id = getattr(chat, "id", None)
 
     error = None
     outcomes = []
@@ -437,8 +451,14 @@ async def handle_garden_harvest_all(callback: CallbackQuery, bot: Bot):
     await _rerender(callback, bot, answer=answer)
 
     # One celebration per distinct special Apple (never spam duplicates).
-    for asset in {o.asset for o in outcomes if o.is_special and o.asset}:
-        await _send_asset(callback, bot, asset)
+    # Each asset keeps its own (rarity-escalating) caption.
+    captions: dict[str, Optional[str]] = {}
+    for o in outcomes:
+        if o.is_special and o.asset:
+            captions[o.asset] = o.caption
+    if chat_id:
+        for asset, caption in captions.items():
+            await _send_asset(chat_id, bot, asset, caption=caption)
 
 
 # ---------------------------------------------------------------------------
