@@ -82,7 +82,7 @@ async def test_check_membership_callback(db_session):
     mock_cb.answer.assert_called_once()
     mock_cb.message.edit_text.assert_called_once()
     args, _ = mock_cb.message.edit_text.call_args
-    assert "عضویتت تایید شد!" in args[0]
+    assert "عضویتت تأیید شد!" in args[0]
 
 
 @pytest.mark.asyncio

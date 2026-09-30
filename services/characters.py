@@ -72,7 +72,7 @@ class CharacterService:
     ) -> Character:
         existing = await session.scalar(select(Character).where(Character.code == code))
         if existing:
-            raise CharacterValidationError(f"شخصیت با کد «{code}» قبلاً ثبت شده است.")
+            raise CharacterValidationError(f"شخصیت با کد «{code}» قبلاً ثبت شده.")
 
         await cls.validate_base_budget(session, power, speed, intelligence)
 

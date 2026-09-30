@@ -82,7 +82,7 @@ async def test_collection_shows_only_owned_cards(db_session):
     empty_text, empty_pages = await CollectionService.render_collection(
         db_session, empty_user.id
     )
-    assert "هنوز کارتی ندارید" in empty_text
+    assert "هنوز کارتی نداری" in empty_text
     assert empty_pages == 1
 
 

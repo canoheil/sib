@@ -82,7 +82,7 @@ def get_private_welcome_keyboard(bot_username: str) -> InlineKeyboardMarkup:
                 )
             ],
             [
-                primary_button(
+                success_button(
                     text="🎮 بازی‌ها و راهنما",
                     callback_data="help_menu",
                 )
@@ -103,7 +103,7 @@ def get_group_welcome_keyboard() -> InlineKeyboardMarkup:
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                primary_button(
+                success_button(
                     text="🎮 بازی‌ها",
                     callback_data="group_games_panel",
                 ),

@@ -263,10 +263,20 @@ def test_wake_words_never_match_claim_word():
     # Simpler invariant: the distinct words must not equal the claim word.
     claim = re.compile(r"^\s*سیب\s*$")
     words = re.compile(r"^\s*سیب\s+(بازی|منو)\s*$")
-    profile = re.compile(r"^\s*سیب\s+پروفایل\s*$")
+    balance = re.compile(r"^\s*سیبام\s*$")
+    profile = re.compile(r"^\s*سیب\s+(پروفایل|من)\s*$")
     garden = re.compile(r"^\s*سیب\s+باغ\s*$")
-    for w in ("سیب", "سیب بازی", "سیب منو", "سیب پروفایل", "سیب باغ"):
-        matches = [bool(p.match(w)) for p in (claim, words, profile, garden)]
+    patterns = (claim, words, balance, profile, garden)
+    for w in (
+        "سیب",
+        "سیب بازی",
+        "سیب منو",
+        "سیبام",
+        "سیب من",
+        "سیب پروفایل",
+        "سیب باغ",
+    ):
+        matches = [bool(p.match(w)) for p in patterns]
         assert sum(matches) == 1, f"{w!r} must match exactly one wake-word handler"
     assert claim.match("سیب")
 
@@ -380,3 +390,75 @@ async def test_help_is_paged_not_one_long_text():
     assert "بسیدینی" in text  # introduces the new drop feature
     backs = [b for b in _all_buttons(kb) if b.callback_data == "help_menu"]
     assert backs  # every page returns to the help index
+
+
+# ---------------------------------------------------------------------------
+# Guide → Apple Battle regression (reported: opening it errors the bot)
+# Root cause: parse_callback used to eat the TOPIC 'apple_battle' as the nav
+# origin (it is a KNOWN screen name) -> base.split(":")[1] IndexError.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_guide_every_topic_opens_without_origin(db_session):
+    """Every Guide page opens when the Guide was reached WITHOUT an origin
+    (main menu -> راهنما -> topic) — including 'apple_battle'."""
+    from sib.handlers.start import HELP_TOPICS, handle_help_page
+
+    for topic in HELP_TOPICS:
+        bot = MagicMock()
+        cb = _callback(5, f"help_page:{topic}")
+        await handle_help_page(cb, bot)  # must NOT raise
+        text, kb = _edit_call(cb, bot)
+        assert text.strip(), topic
+        backs = [b for b in _all_buttons(kb) if b.callback_data == "help_menu"]
+        assert backs, topic  # back to the guide index
+
+
+@pytest.mark.asyncio
+async def test_guide_apple_battle_page_opens_and_keeps_content(db_session):
+    """The exact reported path: Guide → Apple Battle shows the topic page."""
+    from sib.handlers.start import handle_help_page
+
+    bot = MagicMock()
+    cb = _callback(5, "help_page:apple_battle")
+    await handle_help_page(cb, bot)
+    text, kb = _edit_call(cb, bot)
+    assert "نبرد سیبی" in text
+    # the page never falls into the 'not found' alert
+    assert cb.answer.call_args.args[0] is None or "پیدا نشد" not in (cb.answer.call_args.args[0] or "")
+
+
+@pytest.mark.asyncio
+async def test_guide_apple_battle_page_keeps_origin(db_session):
+    """With an origin the page still parses the topic and threads the origin."""
+    from sib.handlers.start import handle_help_page
+
+    bot = MagicMock()
+    cb = _callback(5, "help_page:apple_battle:group_games_panel")
+    await handle_help_page(cb, bot)
+    text, kb = _edit_call(cb, bot)
+    assert "نبرد سیبی" in text
+    backs = [b for b in _all_buttons(kb) if b.callback_data.startswith("help_menu")]
+    assert backs[0].callback_data == "help_menu:group_games_panel"
+
+
+def test_parse_callback_keeps_topic_arguments():
+    """arg_segments: declared handler args are never re-parsed as origin."""
+    # Without the hint (old shape) a screen-named arg IS eaten — the reason
+    # help_page needed arg_segments=1.
+    assert parse_callback("help_page:apple_battle") == ("help_page", "apple_battle")
+    # With the hint the topic stays part of the callback base.
+    assert parse_callback("help_page:apple_battle", arg_segments=1) == (
+        "help_page:apple_battle",
+        None,
+    )
+    assert parse_callback("help_page:apple_battle:group_games_panel", arg_segments=1) == (
+        "help_page:apple_battle",
+        "group_games_panel",
+    )
+    assert parse_callback("help_page:garden", arg_segments=1) == ("help_page:garden", None)
+    assert parse_callback("help_page:garden:main_menu", arg_segments=1) == (
+        "help_page:garden",
+        "main_menu",
+    )

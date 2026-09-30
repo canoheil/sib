@@ -422,7 +422,7 @@ async def _sell_view(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
 
     if not buttons:
         lines.append(
-            "شما آیتم قابل‌فروشی ندارید!\n"
+            "آیتم قابل‌فروشی نداری!\n"
             "سیب‌های ویژه 🥇💎🖤 را از برداشت درخت‌های باغ به دست بیاور."
         )
     buttons.append([primary_button(text="🔄 بروزرسانی", callback_data="shop_sell")])
@@ -473,7 +473,7 @@ async def handle_shop_sell_all(callback: CallbackQuery, bot: Bot):
     async with get_session() as session:
         have = await ItemService.get_total(session, user.id, item_key)
     if have <= 0:
-        await safe_answer_callback(callback, "موجودی این آیتم را ندارید!", show_alert=True)
+        await safe_answer_callback(callback, "از این آیتم نداری!", show_alert=True)
         return
     await _sell_items(callback, bot, item_key, have)
 
@@ -534,7 +534,7 @@ async def _card_panel_view(
     text = (
         f"{detail}\n\n"
         f"💰 هزینه ارتقای بعدی: `{cost}` سیب 🍎 (موجودی: `{balance}`)\n"
-        "برای ارتقا، توزیع امتیازهای جدید را انتخاب کنید (بودجه جدید به‌طور مساوی پیشنهاد شده):"
+        "برای ارتقا، پخش امتیازهای جدید رو انتخاب کن (پیشنهاد فعلی: پخش مساوی):"
     )
     return text, _allocation_keyboard(card_id), art_photo
 

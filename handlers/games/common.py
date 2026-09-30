@@ -462,7 +462,7 @@ async def handle_game_refresh(callback: CallbackQuery, bot: Bot) -> None:
         state = json.loads(match.game_state) if match.game_state else None
         if state is None:
             await safe_answer_callback(
-                callback, "این مسابقه هنوز شروع نشده است.", show_alert=True
+                callback, "این مسابقه هنوز شروع نشده.", show_alert=True
             )
             return
 

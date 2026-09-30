@@ -54,6 +54,12 @@
       "sourceType": "github",
       "skillPath": "skills/telegram-bot-api/11-payments-stars-and-broadcasting/SKILL.md",
       "computedHash": "0cd71967731989e84785c244bd53ddbe11b883e177de8297ba486e8d9e760926"
+    },
+    "persian-writing": {
+      "source": "ali2000hos/persian-writing",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "7f973464b7905983447edd920910d6cb1bdd47ebd8e7d1a10f4b91debbf606aa"
     }
   }
 }

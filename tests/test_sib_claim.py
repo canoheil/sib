@@ -224,6 +224,10 @@ def _group_message(user, text_str):
     msg.from_user = user
     msg.text = text_str
     msg.reply = AsyncMock()
+    # Real-looking sent message so panel claiming can persist ints.
+    msg.reply.return_value = MagicMock(message_id=770, chat=MagicMock(id=-6001))
+    msg.reply_photo = AsyncMock()
+    msg.reply_photo.return_value = MagicMock(message_id=771, chat=MagicMock(id=-6001))
     return msg
 
 
@@ -265,10 +269,17 @@ async def test_sib_games_word_opens_games_menu(db_session):
     bot = MagicMock()
     await handle_sib_games_word(msg, bot)
 
-    assert msg.reply.called
-    reply_text = msg.reply.call_args[0][0]
+    # The games screen renders as its banner + caption + keyboard (photo
+    # path) or falls back to a plain text reply — either way the menu opens.
+    assert msg.reply.called or msg.reply_photo.called
+    if msg.reply.called:
+        reply_text = msg.reply.call_args[0][0]
+        reply_markup = msg.reply.call_args.kwargs.get("reply_markup")
+    else:
+        reply_text = msg.reply_photo.call_args.kwargs.get("caption", "")
+        reply_markup = msg.reply_photo.call_args.kwargs.get("reply_markup")
     assert "منوی بازی‌های سیب" in reply_text
-    assert msg.reply.call_args.kwargs.get("reply_markup") is not None
+    assert reply_markup is not None
 
 
 @pytest.mark.asyncio
@@ -285,10 +296,11 @@ async def test_wake_word_is_silent_in_private_chats(db_session):
 
 
 @pytest.mark.asyncio
-async def test_sibam_shows_apple_balance_group_and_private(db_session):
-    """'سیبام' / 'سیب من' -> the SENDER's apple balance (never the claim)."""
+async def test_sibam_shows_apple_balance_with_basket_image(db_session):
+    """'سیبام' -> the SENDER's apple balance (never the claim), shown with the
+    NEW reusable apple-basket artwork (assets/items/apple_basket.jpg)."""
     from sib.handlers.start import handle_sib_balance_word
-    from sib.services.apple_wallet import AppleWalletService
+    from sib.services.assets import AssetService
 
     tg_user = _tg_user(770100, "موجودی‌دار")
 
@@ -298,35 +310,97 @@ async def test_sibam_shows_apple_balance_group_and_private(db_session):
         await UserService.get_or_create_user(session, tg_user)
         await AppleWalletService.earn(session, tg_user.id, 7, reason="test")
         await session.commit()
+        # The asset/loading system serves the bundled basket art.
+        file_id, fs_path = await AssetService.resolve_photo(session, "apple_basket")
+    assert fs_path is not None
+    assert fs_path.name == "apple_basket.jpg"
 
     # GROUP
     msg = _group_message(tg_user, "سیبام")
     await handle_sib_balance_word(msg, MagicMock())
-    assert msg.reply.called
-    reply_text = msg.reply.call_args.args[0]
-    assert "موجودی سیب شما" in reply_text
-    assert "7" in reply_text
+    assert msg.reply_photo.called
+    photo_arg = msg.reply_photo.call_args.args[0]
+    assert "apple_basket" in str(getattr(photo_arg, "path", photo_arg))
+    caption = msg.reply_photo.call_args.kwargs.get("caption", "")
+    assert "موجودی سیب شما" in caption
+    assert "7" in caption
 
-    # PRIVATE + second wording
-    msg2 = _group_message(tg_user, "سیب من")
+    # PRIVATE — same balance, same artwork
+    msg2 = _group_message(tg_user, "سیبام")
     msg2.chat.type = "private"
     await handle_sib_balance_word(msg2, MagicMock())
-    reply_text2 = msg2.reply.call_args.args[0]
-    assert "موجودی سیب شما" in reply_text2
-    assert "7" in reply_text2
+    assert msg2.reply_photo.called
+    caption2 = msg2.reply_photo.call_args.kwargs.get("caption", "")
+    assert "موجودی سیب شما" in caption2
+    assert "7" in caption2
+
+
+@pytest.mark.asyncio
+async def test_my_sib_word_opens_profile_not_balance(db_session):
+    """'سیب من' opens the EXISTING profile flow and is no longer an
+    Apple-balance alias ('سیبام' is the balance word)."""
+    from sib.handlers.start import handle_sib_profile_word
+    from sib.services.panel import PanelOwnershipService
+
+    tg_user = _tg_user(770102, "پروفایلی")
+
+    async with get_session() as session:
+        from sib.services.user import UserService
+
+        await UserService.get_or_create_user(session, tg_user)
+        await session.commit()
+
+    msg = _group_message(tg_user, "سیب من")
+    await handle_sib_profile_word(msg, MagicMock())
+    assert msg.reply.called
+    profile_text = msg.reply.call_args.args[0]
+    assert "پروفایل سیبی" in profile_text
+    # NOT the balance screen.
+    assert "موجودی سیب شما" not in profile_text
+
+    # The profile panel is claimed to the sender (the one profile system).
+    sent = msg.reply.return_value
+    owner = await PanelOwnershipService.get_owner(db_session, sent.chat.id, sent.message_id)
+    assert owner == tg_user.id
+
+
+def test_sibam_and_my_sib_route_distinctly():
+    """Wake-word routing invariants: 'سیبام' -> balance, 'سیب من' -> profile."""
+    balance = re.compile(r"^\s*سیبام\s*$")
+    profile = re.compile(r"^\s*سیب\s+(پروفایل|من)\s*$")
+    claim = re.compile(r"^\s*سیب\s*$")
+    words = re.compile(r"^\s*سیب\s+(بازی|منو)\s*$")
+
+    assert balance.match("سیبام")
+    assert not profile.match("سیبام")
+    assert not claim.match("سیبام")
+
+    assert profile.match("سیب من")
+    assert not balance.match("سیب من")  # no longer a balance alias
+    assert not claim.match("سیب من")
+    assert not words.match("سیب من")
+
+    # 'سیب منو' (menu) and the claim word are untouched by the change.
+    assert words.match("سیب منو")
+    assert not profile.match("سیب منو")
+    assert not balance.match("سیب منو")
+    assert claim.match("سیب")
 
 
 @pytest.mark.asyncio
 async def test_sibam_never_falls_through_to_claim(db_session):
     """The claim handler must not handle these wake words (distinct regexes)."""
-    from aiogram.types import Message
-
-    from sib.handlers.start import handle_sib_balance_word, router
+    from sib.handlers.start import handle_sib_balance_word
 
     tg_user = _tg_user(770101, "بدون‌ادعا")
     msg = _group_message(tg_user, "سیبام")
     await handle_sib_balance_word(msg, MagicMock())
     # Balance reply only — no claim confirmation text.
-    reply_text = msg.reply.call_args.args[0]
+    assert msg.reply_photo.called or msg.reply.called
+    reply_text = (
+        msg.reply_photo.call_args.kwargs.get("caption", "")
+        if msg.reply_photo.called
+        else msg.reply.call_args.args[0]
+    )
     assert "موجودی سیب شما" in reply_text
     assert "ثبت شد" not in reply_text

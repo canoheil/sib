@@ -14,6 +14,14 @@ class TradeStatus:
     COMPLETED = "COMPLETED"
     CANCELLED = "CANCELLED"
     EXPIRED = "EXPIRED"
+    # Terminal state for a trade that could not be finalized (ownership or
+    # card-state validation failed at execution). Unlike CANCELLED (a user's
+    # deliberate cancel) a FAILED trade never consumes the daily quota.
+    # Stored in the existing String(20) column - no migration required.
+    FAILED = "FAILED"
+    # Transient state used by the one-shot execution claim (PENDING ->
+    # COMPLETING -> COMPLETED/FAILED, all inside one transaction).
+    COMPLETING = "COMPLETING"
 
 
 class Trade(Base, TimestampMixin):

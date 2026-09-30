@@ -261,7 +261,7 @@ async def _tree_view(user_id: int, plot_index: int) -> tuple[str, InlineKeyboard
         elif cost is not None:
             lines.append(
                 f"ارتقا به سطح {view.magic_level + 1}: `{cost}` پودر جادویی "
-                f"(شانس سیب‌های ویژه بیشتر می‌شود!)"
+                f"(شانس سیب‌های ویژه بیشتر می‌شه!)"
             )
 
     buttons: list[list[InlineKeyboardButton]] = []

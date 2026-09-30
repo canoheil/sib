@@ -20,7 +20,7 @@ router = Router(name="leaderboard")
 def format_leaderboard_text(top_groups: list) -> str:
     """Format global leaderboard in Persian."""
     if not top_groups:
-        return "🏆 **برترین گروه‌های سیب** 🍏\n\nهنوز مسابقه‌ای ثبت نشده است! اولین گروه قهرمان باشید!"
+        return "🏆 **برترین گروه‌های سیب** 🍏\n\nهنوز مسابقه‌ای ثبت نشده! گروه شما می‌تونه اولین قهرمان باشه!"
 
     medals = {1: "🥇", 2: "🥈", 3: "🥉"}
     lines = ["🏆 **برترین گروه‌های سیب** 🍏\n"]

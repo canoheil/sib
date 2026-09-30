@@ -67,7 +67,7 @@ def render_match_found_for_group(match: Match, for_group_id: int) -> str:
             f"{my_roster}\n\n"
             f"⚔️ **تیم حریف:** {opp_title} (برد‌ها: `{opp_wins}`)\n"
             f"{opp_roster}\n\n"
-            "⏳ یک تایید از هر تیم برای شروع کافی است (مهلت: ۱۲۰ ثانیه)."
+            "⏳ یک تأیید از هر تیم برای شروع کافیه (مهلت: ۱۲۰ ثانیه)."
         )
 
     return text

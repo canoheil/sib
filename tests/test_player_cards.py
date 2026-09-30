@@ -160,7 +160,7 @@ async def test_cards_summary_is_persian(db_session):
     assert "سطح 1" in summary
 
     empty_user = await create_test_user(db_session, "کارت‌باز ۷b")
-    assert "هنوز کارتی ندارید" in await PlayerCardService.summary(db_session, empty_user.id)
+    assert "هنوز کارتی نداری" in await PlayerCardService.summary(db_session, empty_user.id)
 
 
 @pytest.mark.asyncio

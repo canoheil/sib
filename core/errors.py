@@ -19,7 +19,7 @@ class MembershipRequiredException(sibException):
 class ActiveSessionExistsException(sibException):
     def __init__(self):
         super().__init__(
-            "🍏 سیب حواسش هست! شما در حال حاضر یک بازی، صف یا پارتی فعال داری.\n"
+            "🍏 سیب حواسش هست! الان یه بازی، صف یا پارتی فعال داری.\n"
             "اول اون رو تموم کن یا انصراف بده، بعد سراغ بعدی بیا!"
         )
 
@@ -40,31 +40,31 @@ class MatchNotFoundException(sibException):
 
 
 class InvalidActionException(sibException):
-    def __init__(self, detail: str = "حرکت غیرمجاز است!"):
+    def __init__(self, detail: str = "حرکت مجاز نیست!"):
         super().__init__(f"🍏 حرکت نامعتبر: {detail}")
 
 
 class NotYourTurnException(sibException):
     def __init__(self):
-        super().__init__("🍏 هنوز نوبت شما نشده، عجله نکن!")
+        super().__init__("🍏 هنوز نوبتت نشده، عجله نکن!")
 
 
 class StaleCallbackException(sibException):
     def __init__(self):
-        super().__init__("🍏 این دکمه منقضی شده یا وضعیت بازی تغییر کرده است.")
+        super().__init__("🍏 این دکمه منقضی شده یا وضعیت بازی تغییر کرده.")
 
 
 class UnauthorizedAdminException(sibException):
     def __init__(self):
-        super().__init__("🍏 شما دسترسی لازم برای بخش مدیریت سیب را ندارید!")
+        super().__init__("🍏 برای بخش مدیریت سیب، دسترسی لازم رو نداری!")
 
 
 # General Persian error messages
 MESSAGES = {
-    "generic_error": "اوپس! یه خطای غیرمنتظره رخ داد. سیب داره پیگیری می‌کنه 🍏",
+    "generic_error": "اوپس! یه خطای غیرمنتظره پیش اومد. سیب داره رسیدگیش می‌کنه 🍏",
     "bot_not_admin_in_channel": "سیب هنوز دسترسی بررسی عضویت در کانال رو نداره. مدیر کانال باید ربات رو ادمین کنه 🍏",
-    "membership_check_success": "عالیه! عضویتت در کانال تایید شد. خوش اومدی به دنیای سیب 🍏✨",
-    "membership_check_failed": "هنوز در کانال عضو نشدی یا عضویتت تایید نشد! اول عضو شو، بعد دوباره دکمه رو بزن 🍏",
+    "membership_check_success": "عالیه! عضویتت در کانال تأیید شد. خوش اومدی به دنیای سیب 🍏✨",
+    "membership_check_failed": "هنوز عضو کانال نشدی یا عضویتت تأیید نشده! اول عضو شو، بعد دوباره دکمه رو بزن 🍏",
     "private_chat_welcome": (
         "🍏 **سلام! من سیب‌ام!**\n\n"
         "من یه ربات بازی گروهی‌ام که می‌تونی من رو به گروه‌هاتون اضافه کنی و با گروه‌های دیگه مسابقه بدی!\n\n"

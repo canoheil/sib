@@ -235,7 +235,7 @@ class GardenService:
 
         seedlings = await SeedlingService.get_total(session, user_id)
         if seedlings < 1:
-            raise ValueError("نهال کافی ندارید! 🌱")
+            raise ValueError("نهال کافی نداری! 🌱")
 
         now = datetime.now(timezone.utc)
         growth = await ConfigService.get_int(session, "garden_growth_seconds")
@@ -254,7 +254,7 @@ class GardenService:
             .with_for_update()
         )
         if inv is None or inv.total < 1:
-            raise ValueError("نهال کافی ندارید! 🌱")
+            raise ValueError("نهال کافی نداری! 🌱")
         inv.total -= 1
         await session.flush()
 
