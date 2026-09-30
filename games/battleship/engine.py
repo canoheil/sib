@@ -276,6 +276,19 @@ class BattleshipEngine(BaseGameEngine):
         radar_art = "\n".join(grid_rows)
 
         last_ev = game_state.get("last_event") or "هنوز شلیکی انجام نشده است."
+        team_names = game_state.get("team_names", {})
+        roster_a = ", ".join(
+            p["name"] for p in game_state["players"].values()
+            if p.get("team_code") == "A"
+        )
+        roster_b = ", ".join(
+            p["name"] for p in game_state["players"].values()
+            if p.get("team_code") == "B"
+        )
+        teams_line = (
+            f"⚔️ **{team_names.get('1', 'تیم شما')}:** {roster_a}\n"
+            f"🆚 **{team_names.get('2', 'تیم حریف')}:** {roster_b}"
+        )
 
         if self.is_finished(game_state):
             result = self.get_result(game_state)
@@ -283,6 +296,7 @@ class BattleshipEngine(BaseGameEngine):
             outcome = "🎉 **گروه شما پیروز شد!** 🍏🚢" if is_winner else "💔 **گروه حریف پیروز شد!** 🍏"
             return (
                 "🚢 **پایان نبرد دریایی (Battleship)**\n\n"
+                f"{teams_line}\n\n"
                 f"{radar_art}\n\n"
                 f"📊 خانه‌های باقی‌مانده شما: {my_remaining}/14\n"
                 f"📊 خانه‌های باقی‌مانده حریف: {opp_remaining}/14\n\n"
@@ -306,6 +320,7 @@ class BattleshipEngine(BaseGameEngine):
 
         return (
             "🚢 **جنگ کشتی‌ها (Battleship)** 🍏\n\n"
+            f"{teams_line}\n\n"
             f"🎯 **رادار شلیک‌های شما به سمت دشمن:**\n"
             f"{radar_art}\n\n"
             f"🛡️ سلول‌های سالم ناوگان شما: {my_remaining}/14\n"

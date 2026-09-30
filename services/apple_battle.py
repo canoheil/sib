@@ -376,7 +376,7 @@ class AppleBattleService:
         if battle and battle.status != AppleBattleStatus.COMPLETED:
             battle.status = AppleBattleStatus.COMPLETED
             battle.completed_at = datetime.now(timezone.utc)
-            battle.seedlings_awarded = 1
+            battle.seedlings_awarded = 0 if match.is_bot_match else 1
             await session.flush()
 
         winner_id = state.get("battle", {}).get("winner_id")

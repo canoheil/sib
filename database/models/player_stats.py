@@ -14,6 +14,11 @@ class PlayerStats(Base, TimestampMixin):
     wins: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     losses: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     draws: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Practice/bot outcomes never enter the competitive PvP counters above.
+    bot_matches_played: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    bot_wins: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    bot_losses: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    bot_draws: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     # Relationships
     user = relationship("User")

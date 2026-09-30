@@ -200,9 +200,12 @@ class ConnectFourEngine(BaseGameEngine):
         team_a_names = [p["name"] for p in game_state["players"].values() if p.get("team_code") == "A"]
         team_b_names = [p["name"] for p in game_state["players"].values() if p.get("team_code") == "B"]
 
+        team_names = game_state.get("team_names", {})
+        team_a_title = team_names.get("1", "🍎 تیم سیب")
+        team_b_title = team_names.get("2", "🍏 تیم سیب سبز")
         team_info = (
-            f"🍎 **تیم سیب (A):** {', '.join(team_a_names)}\n"
-            f"🍏 **تیم سیب سبز (B):** {', '.join(team_b_names)}"
+            f"⚔️ **{team_a_title}:** {', '.join(team_a_names)}\n"
+            f"🆚 **{team_b_title}:** {', '.join(team_b_names)}"
         )
 
         if self.is_finished(game_state):
