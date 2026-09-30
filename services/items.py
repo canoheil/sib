@@ -104,7 +104,20 @@ class ItemService:
         return row.quantity
 
     @staticmethod
-    async def get_total(session: AsyncSession, user_id: int, item_key: str) -> int:
+    async def get_total(
+        session: AsyncSession, user_id: int, item_key: str, for_update: bool = False
+    ) -> int:
+        """Owned quantity. ``for_update`` row-locks the inventory row so a
+        multi-resource check-then-consume cannot race (card upgrades)."""
+        if for_update:
+            row = await session.scalar(
+                select(UserItem)
+                .where(UserItem.user_id == user_id)
+                .where(UserItem.item_key == item_key)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            return int(row.quantity if row else 0)
         row = await session.scalar(
             select(UserItem.quantity)
             .where(UserItem.user_id == user_id)

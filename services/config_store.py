@@ -30,11 +30,38 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     "magic_powder_level_costs": [1, 2, 3, 5, 8],
     # Magic Powder shop price (normal Apples).
     "magic_powder_buy_price": 40,
-    # Card upgrades (base/step for the scaling formula; data-driven)
-    "card_upgrade_base_cost": 100,
-    "card_upgrade_cost_multiplier": 1.5,
-    # Card level attribute budgets (sum of Power+Speed+Intelligence)
-    "card_level_budgets": [60, 120, 180, 240, 300],
+    # Card attribute budget at Level 1 (Power + Speed + Intelligence of every
+    # card definition). Upgrades add +10 to each attribute per level; that rule
+    # is global and lives in services/card_progression.py, not here.
+    "card_base_attribute_budget": 60,
+    # Card upgrade cost table: ONE row per upgrade step, index 0 = Level 1->2,
+    # ... index 8 = Level 9->10. Every row costs normal Apples (wallet) plus
+    # ONE special-apple material, following the Dark Souls 3 style of tiered
+    # upgrade materials: Golden (early) -> Diamond (middle) -> Obsidian (late),
+    # with the quantity rising inside each tier. Identical for every card.
+    #
+    # Balance basis (audited 2026-09-30 from the drop tables above; one harvest
+    # roll per plot per 12h cycle, so a 5-plot garden rolls 10x/day, a 10-plot
+    # garden 20x/day; a normal roll pays garden_fruit_amount=3 Apples):
+    #   tree magic 1, 5 plots : ~2.5 gold, ~1.3 diamond, ~0.4 obsidian / day
+    #   tree magic 5, 10 plots: ~6.8 gold, ~6.8 diamond, ~3.4 obsidian / day
+    # Totals below (gold 16, diamond 19, obsidian 18, Apples 6200) are roughly
+    # 6 + 15 + 45 days for an average 5-plot garden, and about 2-5 days per
+    # tier for a fully invested garden - Level 10 is a long-term goal.
+    # Sell values (gold 50 / diamond 100 / obsidian 200 Apples) keep the
+    # per-step value strictly increasing, so every step feels bigger.
+    # Rebalancing = edit this list (or override it in system_config); no code.
+    "card_upgrade_costs": [
+        {"apples": 100, "item": "apple_gold", "quantity": 3},       # 1 -> 2
+        {"apples": 150, "item": "apple_gold", "quantity": 5},       # 2 -> 3
+        {"apples": 250, "item": "apple_gold", "quantity": 8},       # 3 -> 4
+        {"apples": 400, "item": "apple_diamond", "quantity": 4},    # 4 -> 5
+        {"apples": 600, "item": "apple_diamond", "quantity": 6},    # 5 -> 6
+        {"apples": 800, "item": "apple_diamond", "quantity": 9},    # 6 -> 7
+        {"apples": 1000, "item": "apple_obsidian", "quantity": 4},  # 7 -> 8
+        {"apples": 1300, "item": "apple_obsidian", "quantity": 6},  # 8 -> 9
+        {"apples": 1600, "item": "apple_obsidian", "quantity": 8},  # 9 -> 10
+    ],
     # Apple Battle
     "apple_battle_winner_seedlings": 1,
     "apple_battle_queue_timeout_seconds": 600,

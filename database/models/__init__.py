@@ -18,7 +18,7 @@ from sib.database.models.asset import BotAsset, UserItem
 from sib.database.models.apple import AppleWallet, AppleTransaction
 from sib.database.models.garden import Garden, GardenPlot, PlotState
 from sib.database.models.system_config import SystemConfig
-from sib.database.models.player_card import PlayerCard
+from sib.database.models.player_card import PlayerCard, PlayerCardLegacyStats
 from sib.database.models.shop import ShopEntry, ShopEntryType, ShopRotation
 from sib.database.models.trade import Trade, TradeStatus
 from sib.database.models.apple_battle import (
@@ -68,6 +68,7 @@ __all__ = [
     "CharacterBalanceVersion",
     "ReleaseStatus",
     "PlayerCard",
+    "PlayerCardLegacyStats",
     "ShopEntry",
     "ShopEntryType",
     "ShopRotation",

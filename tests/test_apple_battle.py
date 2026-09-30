@@ -15,6 +15,8 @@ Pins the audited/locked decisions:
 import json
 
 import pytest
+
+from sib.services.card_progression import card_attributes
 from sqlalchemy import select
 
 from sib.database.models import (
@@ -239,7 +241,8 @@ async def test_battle_plan_is_precomputed_with_formula_and_staged_beats(db_sessi
     # Formula UNCHANGED: effective = (p + 1.05*s + 0.95*i) × hidden mods.
     c1 = await db_session.get(__import__("sib.database.models", fromlist=["PlayerCard"]).PlayerCard, card_a.id)
     ch1 = await db_session.get(__import__("sib.database.models", fromlist=["Character"]).Character, c1.character_id)
-    expected = round(c1.power + 1.05 * c1.speed + 0.95 * c1.intelligence, 2)
+    stats = card_attributes(c1, ch1)
+    expected = round(stats.power + 1.05 * stats.speed + 0.95 * stats.intelligence, 2)
     for v in (ch1.hidden_modifier_params or {}).values():
         if isinstance(v, (int, float)):
             expected = round(expected * (1.0 + float(v) * 0.1), 2)

@@ -35,8 +35,9 @@ class CharacterService:
     # ------------------------------------------------------------------
     @classmethod
     async def validate_base_budget(cls, session: AsyncSession, power: int, speed: int, intelligence: int) -> None:
-        budgets = await ConfigService.get(session, "card_level_budgets")
-        level1_budget = int(budgets[0]) if budgets else 60
+        level1_budget = int(
+            await ConfigService.get(session, "card_base_attribute_budget") or 60
+        )
         if power < 0 or speed < 0 or intelligence < 0:
             raise CharacterValidationError("ویژگی‌ها نمی‌توانند منفی باشند.")
         if power + speed + intelligence != level1_budget:

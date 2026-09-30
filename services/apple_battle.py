@@ -48,6 +48,11 @@ from sib.database.models import (
     SeedlingInventory,
 )
 from sib.database.connection import get_session
+from sib.services.card_progression import (
+    CardAttributes,
+    attributes_at_level,
+    card_attributes,
+)
 
 
 class BattleError(ValueError):
@@ -116,8 +121,26 @@ class AppleBattleService:
     # Precomputed plan (formula UNCHANGED)
     # ------------------------------------------------------------------
     @staticmethod
-    def _effective_score(card: PlayerCard, character: Optional[Character]) -> float:
-        base = card.power * 1.0 + card.speed * 1.05 + card.intelligence * 0.95
+    def _card_stats(card: PlayerCard, character: Optional[Character]) -> CardAttributes:
+        """Attributes of an owned card: character base + level progression."""
+        if character is None:
+            # Orphaned card (cannot happen with FK-backed data): neutral base.
+            return attributes_at_level(CardAttributes(20, 20, 20), card.level)
+        return card_attributes(card, character)
+
+    @classmethod
+    def _effective_score(cls, card: PlayerCard, character: Optional[Character]) -> float:
+        stats = cls._card_stats(card, character)
+        return cls._score_for_stats(
+            stats.power, stats.speed, stats.intelligence, character
+        )
+
+    @staticmethod
+    def _score_for_stats(
+        power: int, speed: int, intelligence: int, character: Optional[Character]
+    ) -> float:
+        """The (unchanged) effective-score formula for explicit attributes."""
+        base = power * 1.0 + speed * 1.05 + intelligence * 0.95
         if character:
             hidden = character.hidden_modifier_params
             for key, value in hidden.items():
@@ -229,14 +252,15 @@ class AppleBattleService:
             )
             if not card:
                 return None
+            stats = cls._card_stats(card, char_objs[p.user_id])
             cards_map[str(p.user_id)] = {
                 "card_id": card.id,
                 "name": char_objs[p.user_id].name_fa
                 if char_objs[p.user_id]
                 else "جنگجوی ناشناس",
-                "power": card.power,
-                "speed": card.speed,
-                "intelligence": card.intelligence,
+                "power": stats.power,
+                "speed": stats.speed,
+                "intelligence": stats.intelligence,
                 "level": card.level,
             }
 

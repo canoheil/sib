@@ -128,12 +128,13 @@ async def _ready_view(user_id: int, origin: str | None = None) -> tuple[str, Inl
             return await _select_view(user_id, origin)
         character = await session.get(Character, card.character_id)
         name = character.name_fa if character else "کارت"
+        stats = AppleBattleService._card_stats(card, character)
 
     lines = [
         "🍎 **نبرد سیبی** ⚔️",
         "",
         f"کارت انتخاب‌شده: **{name}** (سطح {card.level})",
-        f"⚡ قدرت {card.power} | 💨 سرعت {card.speed} | 🧠 هوش {card.intelligence}",
+        f"⚡ قدرت {stats.power} | 💨 سرعت {stats.speed} | 🧠 هوش {stats.intelligence}",
         "",
         "برای ورود به صف جستجوی حریف، دکمه زیر را بزنید.",
     ]

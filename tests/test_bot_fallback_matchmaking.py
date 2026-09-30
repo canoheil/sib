@@ -333,9 +333,6 @@ async def test_apple_battle_solo_timeout_uses_a_bot_card_and_normal_match(db_ses
         user_id=human.id,
         character_id=character.id,
         level=1,
-        power=20,
-        speed=20,
-        intelligence=20,
     )
     db_session.add(card)
     await db_session.flush()

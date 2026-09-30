@@ -12,9 +12,22 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sib.database.models import Character, Faction, PlayerCard, ReleaseStatus
+from sib.services.card_progression import (
+    CARD_ATTRIBUTES,
+    MAX_CARD_LEVEL,
+    CardAttributes,
+    card_attributes,
+)
 from sib.services.characters import render_character_card
 from sib.services.factions import FactionService
 from sib.services.player_cards import PlayerCardService
+
+
+def attribute_lines(stats: CardAttributes) -> List[str]:
+    """One line per attribute with the project's real icons and Persian names."""
+    return [
+        f"{emoji} {label}: `{getattr(stats, key)}`" for key, emoji, label in CARD_ATTRIBUTES
+    ]
 
 
 class WikiService:
@@ -63,9 +76,9 @@ class CollectionService:
     ) -> Tuple[str, int]:
         """(text, total_pages) for the My Cards panel.
 
-        Structure: summary header (count, favorite, total budget) then one
-        compact line per card. Each card is opened directly from the
-        panel's buttons for upgrades/reallocation.
+        Structure: summary header (count, favorite, total attributes) then
+        one compact line per card. Each card is opened from the panel's
+        buttons (view screen with the ⬆️ upgrade action).
         """
         cards = await PlayerCardService.list_cards(session, user_id)
         if not cards:
@@ -90,7 +103,12 @@ class CollectionService:
             ).all()
         }
 
-        total_budget = sum(c.power + c.speed + c.intelligence for c in cards)
+        stats_by_card = {
+            c.id: card_attributes(c, characters[c.character_id])
+            for c in cards
+            if c.character_id in characters
+        }
+        total_budget = sum(a.total for a in stats_by_card.values())
         favorite = next((c for c in cards if c.is_favorite), None)
         fav_name = None
         if favorite is not None:
@@ -111,14 +129,16 @@ class CollectionService:
             character = characters.get(card.character_id)
             name = character.name_fa if character else "نامشخص"
             star = "⭐ " if card.is_favorite else ""
-            budget = card.power + card.speed + card.intelligence
-            lines.append(
-                f"{star}**{name}** — سطح `{card.level}` | "
-                f"💪{card.power} ⚡{card.speed} 🧠{card.intelligence} | مجموع `{budget}`"
+            stats = stats_by_card.get(card.id)
+            stats_text = (
+                f"💪{stats.power} ⚡{stats.speed} 🧠{stats.intelligence} | مجموع `{stats.total}`"
+                if stats
+                else "—"
             )
+            lines.append(f"{star}**{name}** — سطح `{card.level}` | {stats_text}")
 
         lines.append("")
-        lines.append("برای ارتقا و تخصیص امتیاز، کارت مورد نظر را انتخاب کن 👇")
+        lines.append("برای دیدن کارت و ارتقای آن، یکی از کارت‌ها را انتخاب کن 👇")
         return "\n".join(lines), total_pages
 
     @staticmethod
@@ -131,14 +151,12 @@ class CollectionService:
             return None
 
         faction = await FactionService.get_for_character(session, character)
-        budget = card.power + card.speed + card.intelligence
+        stats = card_attributes(card, character)
         lines = [
-            f"🎴 **{character.name_fa}** — سطح `{card.level}`",
+            f"🎴 **{character.name_fa}** — سطح `{card.level}` از `{MAX_CARD_LEVEL}`",
             "",
-            f"💪 قدرت: `{card.power}` (+{card.boosted_power} ارتقا)",
-            f"⚡ سرعت: `{card.speed}` (+{card.boosted_speed} ارتقا)",
-            f"🧠 هوش: `{card.intelligence}` (+{card.boosted_intelligence} ارتقا)",
-            f"📊 مجموع ویژگی‌ها: `{budget}` (بودجه سطح {card.level})",
+            *attribute_lines(stats),
+            f"📊 مجموع ویژگی‌ها: `{stats.total}`",
         ]
         if faction is not None:
             lines.append("")
