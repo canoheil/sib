@@ -22,6 +22,24 @@ async def _give_seedlings_admin(db_session, user_id, n):
     await db_session.commit()
 
 
+class _CurrencyRng:
+    """Deterministic rng whose roll always lands on the currency outcome."""
+
+    def random(self):
+        return 0.0
+
+
+class _ItemRng:
+    """Deterministic rng whose roll always lands on the LAST table key."""
+
+    def __init__(self, value=0.999):
+        self._value = value
+
+    def random(self):
+        return self._value
+
+
+
 @pytest.mark.asyncio
 async def test_garden_created_with_five_plots(db_session):
     user = await create_test_user(db_session, "باغبان ۱")
@@ -99,11 +117,12 @@ async def test_harvest_pays_apples_and_restarts_cycle(db_session):
     plot.fruit_ready_at = past + timedelta(hours=36)
     await db_session.commit()
 
-    apples = await GardenService.harvest(db_session, user.id, 2)
+    outcome = await GardenService.harvest(db_session, user.id, 2, rng=_CurrencyRng())
     await db_session.commit()
 
     expected = await ConfigService.get_int(db_session, "garden_fruit_amount")
-    assert apples == expected
+    assert outcome.apples == expected
+    assert outcome.item_key is None  # currency outcome, not an inventory item
     assert await AppleWalletService.get_balance(db_session, user.id) == expected
 
     views = GardenService.view(garden)
@@ -132,11 +151,11 @@ async def test_uncollected_fruit_does_not_stack(db_session):
     plot.fruit_ready_at = very_long_ago + timedelta(hours=36)
     await db_session.commit()
 
-    apples = await GardenService.harvest(db_session, user.id, 3)
+    outcome = await GardenService.harvest(db_session, user.id, 3, rng=_CurrencyRng())
     await db_session.commit()
 
     expected = await ConfigService.get_int(db_session, "garden_fruit_amount")
-    assert apples == expected  # exactly one cycle's amount despite 30 days
+    assert outcome.apples == expected  # exactly one cycle's amount despite 30 days
 
 
 @pytest.mark.asyncio
@@ -155,7 +174,7 @@ async def test_harvest_award_is_idempotent_per_cycle(db_session):
     plot.fruit_ready_at = past + timedelta(hours=36)
     await db_session.commit()
 
-    await GardenService.harvest(db_session, user.id, 4)
+    await GardenService.harvest(db_session, user.id, 4, rng=_CurrencyRng())
     await db_session.commit()
     balance_once = await AppleWalletService.get_balance(db_session, user.id)
 
@@ -166,7 +185,7 @@ async def test_harvest_award_is_idempotent_per_cycle(db_session):
     plot.cycle_count -= 1
     await db_session.commit()
 
-    await GardenService.harvest(db_session, user.id, 4)
+    await GardenService.harvest(db_session, user.id, 4, rng=_CurrencyRng())
     await db_session.commit()
     balance_twice = await AppleWalletService.get_balance(db_session, user.id)
 
@@ -186,28 +205,34 @@ async def test_harvest_award_is_idempotent_per_cycle(db_session):
 
 
 @pytest.mark.asyncio
-async def test_expansion_costs_apples_and_adds_plots(db_session):
+async def test_unlock_costs_apples_and_adds_one_plot(db_session):
+    """Plots unlock individually at escalating config prices."""
     user = await create_test_user(db_session, "باغبان ۷")
 
     garden = await GardenService.get_or_create(db_session, user.id)
     await db_session.commit()
+    assert garden.capacity_plots == 5
 
     # Not enough apples -> rejected.
     with pytest.raises(ValueError):
-        await GardenService.expand(db_session, user.id)
+        await GardenService.unlock_plot(db_session, user.id)
 
     await AppleWalletService.earn(db_session, user.id, 1000, reason="test_grant")
     await db_session.commit()
 
-    cost = await ConfigService.get_int(db_session, "garden_expansion_cost_apples")
-    step = await ConfigService.get_int(db_session, "garden_expansion_step")
+    prices = await ConfigService.get(db_session, "garden_plot_prices")
+    cost = prices[0]
 
-    new_capacity = await GardenService.expand(db_session, user.id)
+    new_capacity = await GardenService.unlock_plot(db_session, user.id)
     await db_session.commit()
 
-    assert new_capacity == 5 + step
+    assert new_capacity == 6  # exactly ONE new plot
     assert await AppleWalletService.get_balance(db_session, user.id) == 1000 - cost
-    assert len(garden.plots) == 5 + step
+    assert len(garden.plots) == 6
+
+    # The next plot costs the next configured price (escalating).
+    garden = await GardenService.get_or_create(db_session, user.id)
+    assert await GardenService.next_unlock_price(db_session, garden) == prices[1]
 
 
 @pytest.mark.asyncio

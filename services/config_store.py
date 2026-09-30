@@ -18,12 +18,18 @@ from sib.database.models import SystemConfig
 CONFIG_DEFAULTS: dict[str, Any] = {
     # Garden
     "garden_initial_plots": 5,
-    "garden_max_plots": 25,
-    "garden_expansion_step": 5,
-    "garden_expansion_cost_apples": 50,
+    "garden_max_plots": 10,
+    # Per-plot unlock prices for plots 6..10 (index 0 = plot 6).
+    "garden_plot_prices": [100, 250, 500, 1000, 2000],
     "garden_growth_seconds": 24 * 60 * 60,
     "garden_fruit_seconds": 12 * 60 * 60,
     "garden_fruit_amount": 3,
+    # Magical tree progression (per-tree, Magic Powder driven).
+    "garden_max_magic_level": 5,
+    # Magic Powder units required for level 1..5 (index = current level).
+    "magic_powder_level_costs": [1, 2, 3, 5, 8],
+    # Magic Powder shop price (normal Apples).
+    "magic_powder_buy_price": 40,
     # Card upgrades (base/step for the scaling formula; data-driven)
     "card_upgrade_base_cost": 100,
     "card_upgrade_cost_multiplier": 1.5,
@@ -35,34 +41,53 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     # Weekly shop
     "shop_rotation_hours": 168,
     "shop_pool_character_ids": [],
+    # Generic item economy: presence in a price map == the property.
+    # Buyable items (shop "Items" section): key -> buy price in Apples.
+    "item_buy_prices": {"magic_powder": 40},
+    # Sellable items (shop "Sell Items" section): key -> sell price in Apples.
+    "item_sell_prices": {
+        "apple_gold": 50,
+        "apple_diamond": 100,
+        "apple_obsidian": 200,
+    },
     # Trading
     "trades_per_day": 1,
     "trade_expiration_hours": 24,
     # "سیب" group wake-word claim (spec: 5 apples every 5 minutes)
     "sib_claim_amount": 5,
     "sib_claim_cooldown_seconds": 5 * 60,
-    # Garden harvest drop table (spec #9/#12). Weights are RELATIVE and
-    # normalized - adding an item is a config change only. Optional
-    # "asset" references a bot_assets key for decorative media.
-    "garden_harvest_drops": [
-        {
-            "key": "apple_normal",
-            "weight": 94,
-            "message": "🍎 یک سیب معمولی از درخت افتاد.",
+    # Harvest drop model (spec: special-apple drops).
+    # Presentation per outcome key. "asset" references a bot_assets key
+    # (or a bundled assets/items/<key>.jpg file) for celebration media.
+    "garden_drop_entries": {
+        "apple_normal": {
+            "message": "🍎 سیب‌های معمولی برداشت شد.",
         },
-        {
-            "key": "apple_gold",
-            "weight": 5,
+        "apple_gold": {
             "message": "✨ شانست گرفت!\n🥇 یک سیب طلایی پیدا کردی!",
             "asset": "golden_apple",
         },
-        {
-            "key": "apple_obsidian",
-            "weight": 1,
+        "apple_diamond": {
+            "message": "💎 درخششی عجیب...\nیک سیب الماسی پیدا کردی!",
+            "asset": "diamond_apple",
+        },
+        "apple_obsidian": {
             "message": "🖤 باورکردنی نیست...\nیک سیب ابسیدینی پیدا کردی!",
             "asset": "obsidian_apple",
         },
-    ],
+    },
+    # Relative weights per tree magic level ("0".."5"). Level 0 is the
+    # base distribution 70/20/9/1; higher levels shift probability from
+    # Normal to special Apples. Weights are RELATIVE (normalized) so a
+    # row never has to sum to exactly 100.
+    "garden_drop_weights": {
+        "0": {"apple_normal": 70, "apple_gold": 20, "apple_diamond": 9, "apple_obsidian": 1},
+        "1": {"apple_normal": 58, "apple_gold": 25, "apple_diamond": 13, "apple_obsidian": 4},
+        "2": {"apple_normal": 46, "apple_gold": 29, "apple_diamond": 17, "apple_obsidian": 8},
+        "3": {"apple_normal": 35, "apple_gold": 32, "apple_diamond": 22, "apple_obsidian": 11},
+        "4": {"apple_normal": 25, "apple_gold": 33, "apple_diamond": 28, "apple_obsidian": 14},
+        "5": {"apple_normal": 15, "apple_gold": 34, "apple_diamond": 34, "apple_obsidian": 17},
+    },
 }
 
 

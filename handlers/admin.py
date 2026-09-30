@@ -9,7 +9,7 @@ from sib.admin.auth import IsAdminFilter
 from sib.core.logging import log_event, Events
 from sib.database.connection import get_session
 from sib.database.models import User, Group, Game, Match, AdCampaign, SponsorChannel
-from sib.keyboards.common import get_admin_main_keyboard
+from sib.keyboards.common import get_admin_main_keyboard, danger_button, primary_button
 from sib.services.ad.service import AdService
 from sib.services.sponsor.service import SponsorService
 
@@ -69,8 +69,8 @@ async def handle_admin_dashboard(callback: CallbackQuery):
     )
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 بروزرسانی", callback_data="admin_dashboard")],
-            [InlineKeyboardButton(text="🔙 بازگشت به منوی ادمین", callback_data="admin_main")],
+            [primary_button(text="🔄 بروزرسانی", callback_data="admin_dashboard")],
+            [danger_button(text="🔙 بازگشت به منوی ادمین", callback_data="admin_main")],
         ]
     )
     await callback.answer()
@@ -98,9 +98,9 @@ async def handle_admin_ads(callback: CallbackQuery):
     for c in campaigns:
         status_icon = "🟢" if (c.is_active and not c.is_expired and not c.is_capped) else "🔴"
         label = f"{status_icon} {c.sponsor_name} — {c.campaign_name} ({c.impressions_count} نمایش)"
-        buttons.append([InlineKeyboardButton(text=label, callback_data=f"admin_ad_view:{c.id}")])
+        buttons.append([primary_button(text=label, callback_data=f"admin_ad_view:{c.id}")])
 
-    buttons.append([InlineKeyboardButton(text="🔙 بازگشت به منوی اصلی", callback_data="admin_main")])
+    buttons.append([danger_button(text="🔙 بازگشت به منوی اصلی", callback_data="admin_main")])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
 
     await callback.answer()
@@ -143,8 +143,8 @@ async def handle_admin_ad_view(callback: CallbackQuery):
         toggle_btn_text = "🔴 غیرفعال‌سازی" if campaign.is_active else "🟢 فعال‌سازی"
         kb = InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(text=toggle_btn_text, callback_data=f"admin_ad_toggle:{campaign.id}")],
-                [InlineKeyboardButton(text="🔙 بازگشت به لیست تبلیغات", callback_data="admin_ads")],
+                [primary_button(text=toggle_btn_text, callback_data=f"admin_ad_toggle:{campaign.id}")],
+                [danger_button(text="🔙 بازگشت به لیست تبلیغات", callback_data="admin_ads")],
             ]
         )
 
@@ -210,7 +210,7 @@ async def handle_admin_matches(callback: CallbackQuery):
                 )
             ],
             [
-                InlineKeyboardButton(
+                danger_button(
                     text="🔙 بازگشت به منوی اصلی",
                     callback_data="admin_main",
                 )

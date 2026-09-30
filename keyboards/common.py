@@ -1,4 +1,13 @@
-"""Inline keyboards for common bot interactions."""
+"""Inline keyboards for common bot interactions.
+
+Semantic glass-button system (Bot API 10.3 styles):
+- success (green)  -> positive/confirm actions (buy, harvest, join, find)
+- danger (red)     -> back / cancel / destructive actions
+- primary (blue)   -> navigation / informational actions
+- unstyled         -> neutral game input (boards, cells)
+
+Colors communicate meaning - never decoration.
+"""
 
 from typing import Optional
 
@@ -13,10 +22,11 @@ def get_membership_keyboard(channel_link: str) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text="📢 عضویت در کانال سیب",
                     url=channel_link,
+                    style="primary",
                 )
             ],
             [
-                InlineKeyboardButton(
+                success_button(
                     text="✅ بررسی عضویت",
                     callback_data="check_membership",
                 )
@@ -33,33 +43,33 @@ def get_private_welcome_keyboard(bot_username: str) -> InlineKeyboardMarkup:
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(
+                primary_button(
                     text="🌳 باغ من",
                     callback_data="apple_garden",
                 ),
-                InlineKeyboardButton(
+                primary_button(
                     text="🎴 کارت‌های من",
                     callback_data="apple_cards",
                 ),
             ],
             [
-                InlineKeyboardButton(
+                primary_button(
                     text="🛒 فروشگاه",
                     callback_data="apple_shop",
                 ),
-                InlineKeyboardButton(
+                primary_button(
                     text="📚 ویکی کاراکترها",
                     callback_data="apple_wiki",
                 ),
             ],
             [
-                InlineKeyboardButton(
+                primary_button(
                     text="🔄 مبادله کارت",
                     callback_data="apple_trade",
                 ),
             ],
             [
-                InlineKeyboardButton(
+                primary_button(
                     text="👤 پروفایل من",
                     callback_data="apple_profile",
                 ),
@@ -68,10 +78,11 @@ def get_private_welcome_keyboard(bot_username: str) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text="➕ افزودن سیب به گروه",
                     url=add_group_url,
+                    style="primary",
                 )
             ],
             [
-                InlineKeyboardButton(
+                primary_button(
                     text="🎮 بازی‌ها و راهنما",
                     callback_data="help_menu",
                 )
@@ -86,29 +97,29 @@ def get_group_welcome_keyboard() -> InlineKeyboardMarkup:
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(
+                primary_button(
                     text="🎮 بازی‌های فعال گروه",
                     callback_data="group_games_panel",
                 )
             ],
             [
-                InlineKeyboardButton(
+                primary_button(
                     text="🏆 رتبه و آمار گروه",
                     callback_data="group_rating_stats",
                 )
             ],
             [
-                InlineKeyboardButton(
+                primary_button(
                     text="🎴 کارت‌های من",
                     callback_data="apple_cards",
                 ),
-                InlineKeyboardButton(
+                primary_button(
                     text="🛒 فروشگاه",
                     callback_data="apple_shop",
                 ),
             ],
             [
-                InlineKeyboardButton(
+                primary_button(
                     text="👤 پروفایل من",
                     callback_data="apple_profile",
                 ),
@@ -163,12 +174,16 @@ def danger_button(text: str, callback_data: str) -> InlineKeyboardButton:
 
 
 def nav_back_row(text: str, callback_data: str) -> list:
-    """Standard 'Back' navigation row (never cancels active matches)."""
+    """Standard 'Back' navigation row (never cancels active matches).
+
+    Back is a semantic RED action per the bot-wide button convention.
+    """
     return [
         [
             InlineKeyboardButton(
                 text=text,
                 callback_data=callback_data,
+                style="danger",
             )
         ]
     ]
@@ -181,6 +196,7 @@ def nav_refresh_row(text: str, callback_data: str) -> list:
             InlineKeyboardButton(
                 text=text,
                 callback_data=callback_data,
+                style="primary",
             )
         ]
     ]
@@ -189,28 +205,60 @@ def nav_refresh_row(text: str, callback_data: str) -> list:
 BACK_TO_MAIN_LABEL = "↩️ بازگشت به منوی اصلی"
 
 
-def get_cards_keyboard(origin: Optional[str] = None) -> InlineKeyboardMarkup:
-    """'کارت‌های من' panel keyboard (contextual Back)."""
-    from sib.services.nav import back_label_for, back_target
+def get_cards_keyboard(
+    origin: Optional[str] = None,
+    card_rows: Optional[list] = None,
+    page: int = 0,
+    total_pages: int = 1,
+) -> InlineKeyboardMarkup:
+    """'کارت‌های من' panel keyboard.
 
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="📚 ویکی کاراکترها",
-                    callback_data="apple_wiki:apple_cards",
+    ``card_rows`` is a list of (card_id, label) pairs shown on the current
+    page (built by the handler from the player's cards); each opens the
+    card's upgrade panel directly.
+    """
+    from sib.services.nav import back_label_for, back_target, with_origin
+
+    keyboard_rows: list[list[InlineKeyboardButton]] = []
+
+    row: list[InlineKeyboardButton] = []
+    for card_id, label in card_rows or []:
+        row.append(primary_button(text=label, callback_data=f"card_panel:{card_id}"))
+        if len(row) == 2:
+            keyboard_rows.append(row)
+            row = []
+    if row:
+        keyboard_rows.append(row)
+
+    if total_pages > 1:
+        nav: list[InlineKeyboardButton] = []
+        if page > 0:
+            nav.append(
+                primary_button(
+                    text="▶️ قبلی",
+                    callback_data=with_origin(f"apple_cards:{page - 1}", origin),
                 )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🛒 فروشگاه",
-                    callback_data="apple_shop",
+            )
+        if page + 1 < total_pages:
+            nav.append(
+                primary_button(
+                    text="◀️ بعدی",
+                    callback_data=with_origin(f"apple_cards:{page + 1}", origin),
                 )
-            ],
+            )
+        keyboard_rows.append(nav)
+
+    keyboard_rows.append(
+        [
+            primary_button(
+                text="📚 ویکی کاراکترها",
+                callback_data=with_origin("apple_wiki", "apple_cards"),
+            )
         ]
     )
-    keyboard.inline_keyboard.extend(nav_back_row(back_label_for(origin), back_target(origin)))
-    return keyboard
+    keyboard_rows.append([primary_button(text="🛒 فروشگاه", callback_data="apple_shop")])
+    keyboard_rows.extend(nav_back_row(back_label_for(origin), back_target(origin)))
+    return InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
 
 
 def get_profile_keyboard(origin: Optional[str] = None) -> InlineKeyboardMarkup:
@@ -220,19 +268,19 @@ def get_profile_keyboard(origin: Optional[str] = None) -> InlineKeyboardMarkup:
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(
+                primary_button(
                     text="🎴 کارت‌های من",
                     callback_data=with_origin("apple_cards", "apple_profile"),
                 )
             ],
             [
-                InlineKeyboardButton(
+                primary_button(
                     text="🌳 باغ من",
                     callback_data="apple_garden",
                 )
             ],
             [
-                InlineKeyboardButton(
+                primary_button(
                     text="🛒 فروشگاه",
                     callback_data="apple_shop",
                 )

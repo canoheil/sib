@@ -1,7 +1,12 @@
-"""Personal garden panel handlers (باغ من 🌳).
+"""Personal garden panel handlers (باغ من 🌳) + magical tree panel.
 
 Private-chat interactive panel. Owner-scoped: only the player who opened
-the panel may plant, harvest or expand through it.
+the panel may plant, harvest, unlock or enchant through it.
+
+Screens:
+- garden panel: compact plot list; each plot opens its own tree panel
+- tree panel: per-tree state, magical level/height, drop chances and
+  actions (plant / harvest / magic powder)
 """
 
 from aiogram import Bot, Router, F
@@ -11,10 +16,11 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from sib.database.connection import get_session
 from sib.database.models import PlotState
 from sib.services.apple_wallet import AppleWalletService
-from sib.services.config_store import ConfigService
-from sib.services.garden import GardenService
+from sib.services.garden import GardenService, magic_height_label
+from sib.services.items import ItemService, DropService, item_emoji, item_label
 from sib.services.panel import PanelOwnershipService
 from sib.services.seedling import SeedlingService
+from sib.keyboards.common import danger_button, primary_button, success_button
 from sib.services.telegram_ui import (
     safe_answer_callback,
     safe_edit_callback_message,
@@ -29,6 +35,14 @@ PLOT_EMOJI = {
     PlotState.FRUIT_READY: "🍎",
 }
 
+# Display metadata for the four harvest outcomes (drop table keys).
+DROP_DISPLAY = [
+    ("apple_normal", "🍎", "سیب معمولی"),
+    ("apple_gold", "🥇", "سیب طلایی"),
+    ("apple_diamond", "💎", "سیب الماسی"),
+    ("apple_obsidian", "🖤", "سیب ابسیدینی"),
+]
+
 
 def format_duration(seconds: int) -> str:
     if seconds <= 0:
@@ -40,71 +54,79 @@ def format_duration(seconds: int) -> str:
     return f"{minutes} دقیقه"
 
 
+def format_percent(weight: float, total: float) -> str:
+    if total <= 0:
+        return "0%"
+    value = weight / total * 100
+    return f"{round(value)}%" if abs(value - round(value)) < 0.05 else f"{value:.1f}%"
+
+
 async def _render_garden(user_id: int, session) -> tuple[str, InlineKeyboardMarkup]:
     from sib.database.models import User
-    from sib.services.items import ItemService
 
+    # Read-only render: no row lock (mutations lock separately).
     garden = await GardenService.get_or_create(session, user_id)
     views = GardenService.view(garden)
     seedlings = await SeedlingService.get_total(session, user_id)
     apples = await AppleWalletService.get_balance(session, user_id)
+    items = await ItemService.list_items(session, user_id)
     owner = await session.get(User, user_id)
     owner_name = (owner.first_name if owner else None) or "سیبی"
 
+    next_price = await GardenService.next_unlock_price(session, garden)
+    max_level = int(await _config(session, "garden_max_magic_level", 5))
+    ready_count = sum(1 for v in views if v.state == PlotState.FRUIT_READY)
+
     lines = [f"🌳 **باغ سیبِ {owner_name}** 🍏\n"]
     lines.append(f"🌱 نهال‌ها: `{seedlings}` | 🍎 سیب‌ها: `{apples}`")
-    lines.append(f"🎁 ذخیره‌ی برداشت‌ها: {await ItemService.summary_line(session, user_id)}")
+    if items:
+        summary = " · ".join(f"{item_emoji(k)}×{q}" for k, q in items.items())
+        lines.append(f"🎁 ذخیره‌ی برداشت‌ها: {summary}")
     lines.append("")
 
     buttons: list[list[InlineKeyboardButton]] = []
-    row: list[InlineKeyboardButton] = []
     for view in views:
         emoji = PLOT_EMOJI.get(view.state, "⬜")
-        line = f"{emoji} قطعه {view.plot_index + 1}"
+        magic = f" ✨{view.magic_level}" if view.magic_level > 0 else ""
         if view.state == PlotState.GROWING:
-            line += f" — رشد تا درخت: {format_duration(view.seconds_to_next_stage)}"
+            hint = f" — رشد: {format_duration(view.seconds_to_next_stage)}"
         elif view.state == PlotState.MATURE:
-            line += f" — میوه تا: {format_duration(view.seconds_to_next_stage)}"
+            hint = f" — میوه تا: {format_duration(view.seconds_to_next_stage)}"
         elif view.state == PlotState.FRUIT_READY:
-            line += " — **آماده برداشت!**"
+            hint = " — **آماده برداشت!**"
         else:
-            line += " — خالی"
-        lines.append(line)
+            hint = " — خالی"
+        lines.append(f"{emoji} قطعه {view.plot_index + 1}{magic}{hint}")
 
-        if view.state == PlotState.EMPTY:
-            row.append(
-                InlineKeyboardButton(
-                    text=f"🌱 کاشت در قطعه {view.plot_index + 1}",
-                    callback_data=f"garden_plant:{view.plot_index}",
-                )
-            )
-        elif view.state == PlotState.FRUIT_READY:
-            row.append(
-                InlineKeyboardButton(
-                    text=f"🍎 برداشت قطعه {view.plot_index + 1}",
-                    callback_data=f"garden_harvest:{view.plot_index}",
-                )
-            )
-        if len(row) == 2:
-            buttons.append(row)
-            row = []
-    if row:
-        buttons.append(row)
+        label = f"{emoji} قطعه {view.plot_index + 1}{magic}"
+        if view.state == PlotState.FRUIT_READY:
+            label = f"{emoji} قطعه {view.plot_index + 1}{magic} — برداشت!"
+        buttons.append([primary_button(text=label, callback_data=f"garden_tree:{view.plot_index}")])
 
-    buttons.append(
-        [
-            InlineKeyboardButton(
-                text=(
-                    f"➕ خرید {await ConfigService.get_int(session, 'garden_expansion_step')} قطعه جدید"
-                    f" — 🍎 {await ConfigService.get_int(session, 'garden_expansion_cost_apples')} سیب"
-                ),
-                callback_data="garden_expand",
-            )
-        ]
-    )
-    buttons.append([InlineKeyboardButton(text="🔄 بروزرسانی", callback_data="garden_refresh")])
-    buttons.append([InlineKeyboardButton(text="↩️ بازگشت به منوی اصلی", callback_data="main_menu")])
+    lines.append("")
+    lines.append(f"✨ برای جزئیات، جادوی درخت و شانس سیب‌ها، قطعه را انتخاب کن. (حداکثر سطح جادویی: {max_level})")
+
+    if next_price is not None:
+        buttons.append(
+            [success_button(
+                text=f"➕ باز کردن قطعه بعدی — 🍎 {next_price} سیب",
+                callback_data="garden_unlock",
+            )]
+        )
+    if ready_count > 1:
+        buttons.append(
+            [success_button(text=f"🍇 برداشت همه ({ready_count} قطعه)", callback_data="garden_harvest_all")]
+        )
+    buttons.append([primary_button(text="🔄 بروزرسانی", callback_data="garden_refresh")])
+    buttons.append([danger_button(text="↩️ بازگشت به منوی اصلی", callback_data="main_menu")])
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+async def _config(session, key: str, fallback):
+    from sib.services.config_store import ConfigService
+
+    value = await ConfigService.get(session, key)
+    return fallback if value is None else value
 
 
 @router.message(Command("garden"))
@@ -129,29 +151,35 @@ async def cmd_garden(message: Message, bot: Bot):
             )
 
 
-async def _rerender(callback: CallbackQuery, bot: Bot, *, answer: str = "بروزرسانی شد 🍏") -> None:
-    """Re-render the garden panel.
+# ---------------------------------------------------------------------------
+# Panel subject resolution + re-render helpers
+# ---------------------------------------------------------------------------
 
-    The garden SUBJECT is resolved from the DB panel owner (authoritative
-    state), never from callback/memory state - the shared message can
-    never switch identity to whoever pressed a button. The screen renders
-    through the canonical banner path (its own banner + caption + keyboard).
-    """
+
+async def _panel_subject(callback: CallbackQuery) -> int:
+    """The garden panel's SUBJECT from the DB panel owner (authoritative)."""
+    user = callback.from_user
+    chat = getattr(callback.message, "chat", None)
+    msg_id = getattr(callback.message, "message_id", None)
+    if chat is not None and msg_id:
+        async with get_session() as session:
+            subject_id, _panel_type = await PanelOwnershipService.get_panel_context(
+                session, chat.id, msg_id, user.id
+            )
+            return subject_id
+    return user.id if user else 0
+
+
+async def _rerender(callback: CallbackQuery, bot: Bot, *, answer: str = "بروزرسانی شد 🍏") -> None:
+    """Re-render the garden panel (canonical banner path)."""
     from sib.services.banner import render_banner
-    from sib.services.panel import PanelOwnershipService
 
     user = callback.from_user
     if not user:
         return
-    chat = getattr(callback.message, "chat", None)
     msg_id = getattr(callback.message, "message_id", None)
+    subject_id = await _panel_subject(callback)
     async with get_session() as session:
-        if chat is not None and msg_id:
-            subject_id, _panel_type = await PanelOwnershipService.get_panel_context(
-                session, chat.id, msg_id, user.id
-            )
-        else:
-            subject_id = user.id
         text, kb = await _render_garden(subject_id, session)
     await safe_answer_callback(callback, answer)
     if callback.message:
@@ -161,19 +189,147 @@ async def _rerender(callback: CallbackQuery, bot: Bot, *, answer: str = "برو�
             isinstance(msg_id, int)
             and isinstance(new_msg_id, int)
             and new_msg_id != msg_id
-            and chat is not None
         ):
-            # The render replaced the message (text↔photo): the panel claim
-            # must follow the live message, never linger on the deleted id.
             async with get_session() as session:
                 await PanelOwnershipService.move_claim(
                     session,
-                    chat_id=chat.id,
+                    chat_id=callback.message.chat.id,
                     old_message_id=msg_id,
                     new_message_id=new_msg_id,
                     user_id=subject_id,
                     panel_type="garden",
                 )
+
+
+# ---------------------------------------------------------------------------
+# Tree panel (per-plot details + magic)
+# ---------------------------------------------------------------------------
+
+
+async def _tree_view(user_id: int, plot_index: int) -> tuple[str, InlineKeyboardMarkup]:
+    """One tree's screen: state, magic level/height, drop chances, actions."""
+    async with get_session() as session:
+        garden = await GardenService.get_or_create(session, user_id)
+        views = GardenService.view(garden)
+        view = next((v for v in views if v.plot_index == plot_index), None)
+        if view is None:
+            return (
+                "این قطعه در باغ شما وجود ندارد.",
+                InlineKeyboardMarkup(
+                    inline_keyboard=[[danger_button(text="↩️ بازگشت به باغ", callback_data="garden_refresh")]]
+                ),
+            )
+
+        max_level = int(await _config(session, "garden_max_magic_level", 5))
+        weights = await DropService.weights_for_level(session, view.magic_level)
+        powder = await ItemService.get_total(session, user_id, "magic_powder")
+        cost = await GardenService.magic_upgrade_cost(session, view.magic_level)
+        seedlings = await SeedlingService.get_total(session, user_id)
+
+    total_weight = sum(weights.values()) or 1.0
+    title = "🌳 **درخت جادویی سیب**" if view.has_tree else "⬜ **قطعه خالی**"
+    lines = [
+        f"{title} — قطعه {plot_index + 1}",
+        "",
+    ]
+
+    if not view.has_tree:
+        lines.append("این قطعه خالی است. با کاشت یک نهال 🌱 شروع کن.")
+        lines.append(f"🌱 نهال‌های شما: `{seedlings}`")
+    else:
+        if view.state == PlotState.GROWING:
+            lines.append(f"🌱 در حال رشد — تا درخت شدن: {format_duration(view.seconds_to_next_stage)}")
+        elif view.state == PlotState.MATURE:
+            lines.append(f"🌳 درخت بالغ — میوه تا: {format_duration(view.seconds_to_next_stage)}")
+        else:
+            lines.append("🍎 **میوه آماده برداشت است!**")
+        lines.append("")
+        lines.append(f"✨ سطح جادویی: `{view.magic_level} / {max_level}`")
+        lines.append(f"📏 ارتفاع: **{magic_height_label(view.magic_level, max_level)}**")
+        lines.append(f"🔄 دوره‌های برداشت: `{view.cycle_count}`")
+        lines.append("")
+        lines.append("**شانس برداشت این درخت:**")
+        for key, emoji, label in DROP_DISPLAY:
+            weight = weights.get(key, 0.0)
+            lines.append(f"{emoji} {label}: `{format_percent(weight, total_weight)}`")
+        lines.append("")
+        lines.append(f"✨ پودر جادویی شما: `{powder}`")
+        if view.magic_level >= max_level:
+            lines.append("🏆 این درخت به بالاترین سطح جادویی رسیده است!")
+        elif cost is not None:
+            lines.append(
+                f"ارتقا به سطح {view.magic_level + 1}: `{cost}` پودر جادویی "
+                f"(شانس سیب‌های ویژه بیشتر می‌شود!)"
+            )
+
+    buttons: list[list[InlineKeyboardButton]] = []
+    if not view.has_tree:
+        buttons.append([success_button(text="🌱 کاشت نهال", callback_data=f"garden_plant:{plot_index}")])
+    elif view.state == PlotState.FRUIT_READY:
+        buttons.append([success_button(text="🍎 برداشت", callback_data=f"garden_harvest:{plot_index}")])
+    if view.has_tree and view.magic_level < max_level and cost is not None:
+        buttons.append(
+            [success_button(
+                text=f"✨ جادویی‌سازی ({cost} پودر)",
+                callback_data=f"garden_magic:{plot_index}",
+            )]
+        )
+    buttons.append([danger_button(text="↩️ بازگشت به باغ", callback_data="garden_refresh")])
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+async def _rerender_tree(
+    callback: CallbackQuery, bot: Bot, plot_index: int, *, answer: str
+) -> None:
+    """Re-render the tree panel after an action on it."""
+    user = callback.from_user
+    if not user:
+        return
+    subject_id = await _panel_subject(callback)
+    text, kb = await _tree_view(subject_id, plot_index)
+    await safe_answer_callback(callback, answer)
+    await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("garden_tree:"))
+async def handle_garden_tree(callback: CallbackQuery, bot: Bot):
+    plot_index = int(callback.data.split(":")[1])
+    user = callback.from_user
+    if not user:
+        return
+    subject_id = await _panel_subject(callback)
+    text, kb = await _tree_view(subject_id, plot_index)
+    await safe_answer_callback(callback)
+    await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("garden_magic:"))
+async def handle_garden_magic(callback: CallbackQuery, bot: Bot):
+    plot_index = int(callback.data.split(":")[1])
+    user = callback.from_user
+    if not user:
+        return
+
+    error = None
+    level = 0
+    async with get_session() as session:
+        try:
+            level = await GardenService.apply_magic(session, user.id, plot_index)
+        except ValueError as e:
+            error = str(e)
+
+    if error:
+        await _rerender_tree(callback, bot, plot_index, answer=error)
+        return
+    await _rerender_tree(
+        callback, bot, plot_index,
+        answer=f"درخت جادویی‌تر شد! سطح جدید: {level} ✨",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Plant / harvest / harvest-all
+# ---------------------------------------------------------------------------
 
 
 @router.callback_query(F.data == "garden_refresh")
@@ -199,9 +355,19 @@ async def handle_garden_plant(callback: CallbackQuery, bot: Bot):
             error = str(e)
 
     if error:
-        await _rerender(callback, bot, answer=error)
+        await _rerender_tree(callback, bot, plot_index, answer=error)
         return
-    await _rerender(callback, bot, answer="نهال کاشته شد! 🌱")
+    await _rerender_tree(callback, bot, plot_index, answer="نهال کاشته شد! 🌱")
+
+
+def _harvest_answer(outcome) -> str:
+    """Toast text for one harvest outcome."""
+    if outcome.is_special:
+        base = f"{item_emoji(outcome.item_key)} {outcome.item_label or ''} برداشت شد!"
+    else:
+        base = f"{outcome.apples} سیب برداشت شد! 🍎"
+    message = (outcome.message or "").strip()
+    return f"{base}\n{message}" if message else base
 
 
 @router.callback_query(F.data.startswith("garden_harvest:"))
@@ -212,11 +378,47 @@ async def handle_garden_harvest(callback: CallbackQuery, bot: Bot):
         return
 
     error = None
-    apples = 0
-    drop = None
+    outcome = None
     async with get_session() as session:
         try:
-            apples, drop = await GardenService.harvest_with_drop(session, user.id, plot_index)
+            outcome = await GardenService.harvest(session, user.id, plot_index)
+        except ValueError as e:
+            error = str(e)
+
+    if error:
+        await _rerender_tree(callback, bot, plot_index, answer=error)
+        return
+
+    await _rerender_tree(callback, bot, plot_index, answer=_harvest_answer(outcome))
+
+    # Celebration art for special Apples (graceful: missing art never
+    # breaks the flow; the toast above already carried the news).
+    if outcome.is_special and outcome.asset:
+        await _send_asset(callback, bot, outcome.asset)
+
+
+async def _send_asset(callback: CallbackQuery, bot: Bot, asset_key: str) -> None:
+    from sib.services.assets import AssetService
+
+    chat = getattr(callback.message, "chat", None)
+    if chat is None:
+        return
+    async with get_session() as session:
+        await AssetService.send(session, bot, chat.id, asset_key)
+
+
+@router.callback_query(F.data == "garden_harvest_all")
+async def handle_garden_harvest_all(callback: CallbackQuery, bot: Bot):
+    """Harvest every ripe plot in ONE transaction (one re-render)."""
+    user = callback.from_user
+    if not user:
+        return
+
+    error = None
+    outcomes = []
+    async with get_session() as session:
+        try:
+            outcomes = await GardenService.harvest_all(session, user.id)
         except ValueError as e:
             error = str(e)
 
@@ -224,27 +426,28 @@ async def handle_garden_harvest(callback: CallbackQuery, bot: Bot):
         await _rerender(callback, bot, answer=error)
         return
 
-    answer = f"{apples} سیب برداشت شد! 🍎"
-    if drop:
-        drop_msg = drop.get("message")
-        if drop_msg:
-            answer += f"\n{drop_msg}"
+    apples = sum(o.apples for o in outcomes)
+    items: dict[str, int] = {}
+    for o in outcomes:
+        if o.item_key:
+            items[o.item_key] = items.get(o.item_key, 0) + 1
+    parts = [f"{apples} سیب 🍎"] if apples else []
+    parts += [f"{item_emoji(k)}×{q}" for k, q in items.items()]
+    answer = "برداشت همه: " + " + ".join(parts)
     await _rerender(callback, bot, answer=answer)
 
-    # Decorative asset (graceful: missing asset never breaks the flow).
-    if drop:
-        from sib.services.assets import AssetService
-
-        asset_key = drop.get("asset")
-        if asset_key:
-            chat = getattr(callback.message, "chat", None)
-            if chat is not None:
-                async with get_session() as session:
-                    await AssetService.send(session, bot, chat.id, asset_key)
+    # One celebration per distinct special Apple (never spam duplicates).
+    for asset in {o.asset for o in outcomes if o.is_special and o.asset}:
+        await _send_asset(callback, bot, asset)
 
 
-@router.callback_query(F.data == "garden_expand")
-async def handle_garden_expand(callback: CallbackQuery, bot: Bot):
+# ---------------------------------------------------------------------------
+# Plot unlocks
+# ---------------------------------------------------------------------------
+
+
+@router.callback_query(F.data == "garden_unlock")
+async def handle_garden_unlock(callback: CallbackQuery, bot: Bot):
     user = callback.from_user
     if not user:
         return
@@ -253,11 +456,13 @@ async def handle_garden_expand(callback: CallbackQuery, bot: Bot):
     capacity = 0
     async with get_session() as session:
         try:
-            capacity = await GardenService.expand(session, user.id)
+            capacity = await GardenService.unlock_plot(session, user.id)
         except ValueError as e:
             error = str(e)
 
     if error:
         await _rerender(callback, bot, answer=error)
         return
-    await _rerender(callback, bot, answer=f"باغ گسترش یافت! ظرفیت جدید: {capacity} قطعه 🌳")
+    await _rerender(
+        callback, bot, answer=f"قطعه جدید باز شد! ظرفیت باغ: {capacity} قطعه 🌳"
+    )

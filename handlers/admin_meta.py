@@ -8,6 +8,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from sqlalchemy import func, select
 
+from sib.keyboards.common import danger_button, primary_button
 from sib.admin.auth import IsAdminFilter
 from sib.database.connection import get_session
 from sib.database.models import (
@@ -39,20 +40,20 @@ def _kb(rows: list[list[InlineKeyboardButton]]) -> InlineKeyboardMarkup:
 MAIN_MENU = _kb(
     [
         [
-            InlineKeyboardButton(text="👤 مدیریت شخصیت‌ها", callback_data="adm_chars"),
-            InlineKeyboardButton(text="🏪 مدیریت فروشگاه", callback_data="adm_shop"),
+            primary_button(text="👤 مدیریت شخصیت‌ها", callback_data="adm_chars"),
+            primary_button(text="🏪 مدیریت فروشگاه", callback_data="adm_shop"),
         ],
         [
-            InlineKeyboardButton(text="🍎 مدیریت اقتصاد", callback_data="adm_econ"),
-            InlineKeyboardButton(text="🌳 مدیریت باغ", callback_data="adm_garden"),
+            primary_button(text="🍎 مدیریت اقتصاد", callback_data="adm_econ"),
+            primary_button(text="🌳 مدیریت باغ", callback_data="adm_garden"),
         ],
         [
-            InlineKeyboardButton(text="⚖️ آزمایشگاه بالانس", callback_data="adm_lab"),
-            InlineKeyboardButton(text="📊 تحلیل‌ها", callback_data="adm_stats"),
+            primary_button(text="⚖️ آزمایشگاه بالانس", callback_data="adm_lab"),
+            primary_button(text="📊 تحلیل‌ها", callback_data="adm_stats"),
         ],
         [
-            InlineKeyboardButton(text="🛡 بازبینی امنیتی", callback_data="adm_security"),
-            InlineKeyboardButton(text="🔄 بروزرسانی", callback_data="adm_menu"),
+            primary_button(text="🛡 بازبینی امنیتی", callback_data="adm_security"),
+            primary_button(text="🔄 بروزرسانی", callback_data="adm_menu"),
         ],
     ]
 )
@@ -226,7 +227,7 @@ async def cmd_admin_meta(message: Message):
 @router.callback_query(F.data.startswith("adm_"))
 async def handle_admin_meta(callback: CallbackQuery, bot: Bot):
     action = callback.data.split(":")[0]
-    back = _kb([[InlineKeyboardButton(text="🔙 بازگشت", callback_data="adm_menu")]])
+    back = _kb([[danger_button(text="🔙 بازگشت", callback_data="adm_menu")]])
 
     if action == "adm_menu":
         text = "⚙️ **پنل مدیریت سیب** — بخش موردنظر را انتخاب کنید."

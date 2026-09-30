@@ -18,6 +18,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup, default_state
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from sib.keyboards.common import danger_button, primary_button
 from sib.admin.auth import IsAdminFilter
 from sib.core.logging import Events, log_event
 from sib.database.connection import get_session
@@ -51,7 +52,7 @@ class AdminChannelFlow(StatesGroup):
 
 
 def _back_admin_main() -> list:
-    return [InlineKeyboardButton(text="🔙 بازگشت به منوی ادمین", callback_data="admin_main")]
+    return [danger_button(text="🔙 بازگشت به منوی ادمین", callback_data="admin_main")]
 
 
 async def _resource_line(session, user_id: int) -> str:
@@ -184,7 +185,7 @@ async def handle_admin_user_op(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     text = f"💳 **{verb} {label}**\n\nمبلغ را به‌صورت عدد بفرست (مثلاً `500`):"
     kb = InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="↩️ انصراف", callback_data=f"admin_user:{user_id_s}")]]
+        inline_keyboard=[[danger_button(text="↩️ انصراف", callback_data=f"admin_user:{user_id_s}")]]
     )
     if callback.message:
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
@@ -275,7 +276,7 @@ async def handle_admin_user_refresh(callback: CallbackQuery, state: FSMContext):
 def _channel_row(ch) -> InlineKeyboardButton:
     status_icon = "🟢" if ch.is_active else "🔴"
     label = f"{status_icon} {ch.title or ch.channel_id} — {ChannelType.label(ch.channel_type)}"
-    return InlineKeyboardButton(text=label, callback_data=f"admin_ch:{ch.channel_id}")
+    return primary_button(text=label, callback_data=f"admin_ch:{ch.channel_id}")
 
 
 async def _channels_screen(session) -> tuple:
@@ -287,7 +288,7 @@ async def _channels_screen(session) -> tuple:
     )
     buttons = [[_channel_row(ch)] for ch in channels]
     buttons.append(
-        [InlineKeyboardButton(text="➕ افزودن کانال", callback_data="admin_ch_add")]
+        [primary_button(text="➕ افزودن کانال", callback_data="admin_ch_add")]
     )
     buttons.append(_back_admin_main())
     return text, InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -324,11 +325,11 @@ async def _channel_detail_view(ch_id: str) -> tuple:
     req_label = "🔓 اختیاری کردن" if ch.is_required else "🔒 اجباری کردن"
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=toggle_label, callback_data=f"admin_ch_toggle:{ch.channel_id}")],
-            [InlineKeyboardButton(text=req_label, callback_data=f"admin_ch_req:{ch.channel_id}")],
-            [InlineKeyboardButton(text="✏️ تغییر نوع کانال", callback_data=f"admin_ch_type:{ch.channel_id}")],
-            [InlineKeyboardButton(text="🗑 حذف کانال", callback_data=f"admin_ch_del:{ch.channel_id}")],
-            [InlineKeyboardButton(text="🔙 بازگشت به کانال‌ها", callback_data="admin_channels")],
+            [primary_button(text=toggle_label, callback_data=f"admin_ch_toggle:{ch.channel_id}")],
+            [primary_button(text=req_label, callback_data=f"admin_ch_req:{ch.channel_id}")],
+            [primary_button(text="✏️ تغییر نوع کانال", callback_data=f"admin_ch_type:{ch.channel_id}")],
+            [danger_button(text="🗑 حذف کانال", callback_data=f"admin_ch_del:{ch.channel_id}")],
+            [danger_button(text="🔙 بازگشت به کانال‌ها", callback_data="admin_channels")],
         ]
     )
     return text, kb
@@ -398,7 +399,7 @@ async def handle_admin_channel_type_picker(callback: CallbackQuery):
         ]
         for t in ChannelType.ALL
     ]
-    buttons.append([InlineKeyboardButton(text="🔙 بازگشت", callback_data=f"admin_ch:{ch_id}")])
+    buttons.append([danger_button(text="🔙 بازگشت", callback_data=f"admin_ch:{ch_id}")])
     await callback.answer()
     if callback.message:
         await callback.message.edit_text(
@@ -439,8 +440,8 @@ async def handle_admin_channel_delete_confirm(callback: CallbackQuery):
     )
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🗑 بله، حذف کن", callback_data=f"admin_ch_del_yes:{ch_id}")],
-            [InlineKeyboardButton(text="↩️ انصراف", callback_data=f"admin_ch:{ch_id}")],
+            [danger_button(text="🗑 بله، حذف کن", callback_data=f"admin_ch_del_yes:{ch_id}")],
+            [danger_button(text="↩️ انصراف", callback_data=f"admin_ch:{ch_id}")],
         ]
     )
     await callback.answer()
@@ -493,7 +494,7 @@ async def handle_admin_channel_add_start(callback: CallbackQuery, state: FSMCont
         "مثال: `@mychannel` یا `https://t.me/mychannel` یا `-1001234567890`"
     )
     kb = InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="🔙 بازگشت به کانال‌ها", callback_data="admin_channels")]]
+        inline_keyboard=[[danger_button(text="🔙 بازگشت به کانال‌ها", callback_data="admin_channels")]]
     )
     if callback.message:
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")

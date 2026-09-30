@@ -25,6 +25,7 @@ from sib.database.connection import get_session
 from sib.database.models import AppleBattle, AppleBattleStatus, Character, PartyStatus, PlayerCard
 from sib.services.apple_battle import AppleBattleService, BattleError
 from sib.services.player_cards import PlayerCardService
+from sib.keyboards.common import danger_button, primary_button, success_button
 from sib.services.nav import back_label_for, back_target, parse_callback, with_origin
 from sib.services.telegram_ui import safe_answer_callback, safe_edit_callback_message
 
@@ -36,7 +37,7 @@ def _kb(rows: list[list[InlineKeyboardButton]]) -> InlineKeyboardMarkup:
 
 
 def _back_row(origin: str | None) -> list[InlineKeyboardButton]:
-    return [InlineKeyboardButton(text=back_label_for(origin), callback_data=back_target(origin))]
+    return [danger_button(text=back_label_for(origin), callback_data=back_target(origin))]
 
 
 # ---------------------------------------------------------------------------
@@ -45,11 +46,24 @@ def _back_row(origin: str | None) -> list[InlineKeyboardButton]:
 
 
 async def _card_names(session, cards) -> dict[int, str]:
-    names: dict[int, str] = {}
-    for card in cards:
-        character = await session.get(Character, card.character_id)
-        names[card.id] = character.name_fa if character else "کارت"
-    return names
+    """Batch-load card->character names (one query, no per-card reads)."""
+    from sqlalchemy import select as sa_select
+
+    character_ids = sorted({c.character_id for c in cards})
+    if not character_ids:
+        return {}
+    characters = {
+        ch.id: ch
+        for ch in (
+            await session.scalars(
+                sa_select(Character).where(Character.id.in_(character_ids))
+            )
+        ).all()
+    }
+    return {
+        card.id: (characters[card.character_id].name_fa if card.character_id in characters else "کارت")
+        for card in cards
+    }
 
 
 async def _select_view(user_id: int, origin: str | None = None) -> tuple[str, InlineKeyboardMarkup]:
@@ -57,10 +71,10 @@ async def _select_view(user_id: int, origin: str | None = None) -> tuple[str, In
     async with get_session() as session:
         cards = await PlayerCardService.list_cards(session, user_id)
         names = await _card_names(session, cards)
+        from sqlalchemy import func, select as sa_select
+
         battle_count = await session.scalar(
-            __import__("sqlalchemy").select(
-                __import__("sqlalchemy").func.count(AppleBattle.id)
-            ).where(
+            sa_select(func.count(AppleBattle.id)).where(
                 ((AppleBattle.player1_id == user_id) | (AppleBattle.player2_id == user_id))
             )
         )
@@ -71,7 +85,7 @@ async def _select_view(user_id: int, origin: str | None = None) -> tuple[str, In
             "برای شرکت در نبرد به کارت نیاز دارید! ابتدا از فروشگاه 🏪 یک شخصیت بخرید.",
             _kb(
                 [
-                    [InlineKeyboardButton(text="🏪 فروشگاه", callback_data="shop_refresh")],
+                    [primary_button(text="🏪 فروشگاه", callback_data="shop_refresh")],
                     _back_row(origin),
                 ]
             ),
@@ -89,15 +103,15 @@ async def _select_view(user_id: int, origin: str | None = None) -> tuple[str, In
     for card in cards[:10]:
         buttons.append(
             [
-                InlineKeyboardButton(
+                primary_button(
                     text=f"⚔️ {names.get(card.id, 'کارت')} (سطح {card.level})",
                     callback_data=f"ab_pick:{card.id}",
                 )
             ]
         )
-    buttons.append([InlineKeyboardButton(text="🏆 لیدربورد نبرد", callback_data="ab_board")])
+    buttons.append([primary_button(text="🏆 لیدربورد نبرد", callback_data="ab_board")])
     buttons.append(
-        [InlineKeyboardButton(text="🔄 بروزرسانی", callback_data=with_origin("ab_refresh", origin))]
+        [primary_button(text="🔄 بروزرسانی", callback_data=with_origin("ab_refresh", origin))]
     )
     buttons.append(_back_row(origin))
     return "\n".join(lines), _kb(buttons)
@@ -125,9 +139,9 @@ async def _ready_view(user_id: int, origin: str | None = None) -> tuple[str, Inl
     ]
     kb = _kb(
         [
-            [InlineKeyboardButton(text="🔍 یافتن حریف", callback_data="ab_find")],
-            [InlineKeyboardButton(text="↩️ تغییر کارت", callback_data=with_origin("ab_change", origin))],
-            [InlineKeyboardButton(text="🏆 لیدربورد نبرد", callback_data="ab_board")],
+            [success_button(text="🔍 یافتن حریف", callback_data="ab_find")],
+            [danger_button(text="↩️ تغییر کارت", callback_data=with_origin("ab_change", origin))],
+            [primary_button(text="🏆 لیدربورد نبرد", callback_data="ab_board")],
             _back_row(origin),
         ]
     )
@@ -146,8 +160,8 @@ def _searching_view(party_id: int, origin: str | None = None) -> tuple[str, Inli
     ]
     kb = _kb(
         [
-            [InlineKeyboardButton(text="✖️ لغو جستجو", callback_data="ab_cancel")],
-            [InlineKeyboardButton(text="🔄 بروزرسانی", callback_data="ab_status")],
+            [danger_button(text="✖️ لغو جستجو", callback_data="ab_cancel")],
+            [primary_button(text="🔄 بروزرسانی", callback_data="ab_status")],
             _back_row(origin),
         ]
     )
@@ -432,8 +446,8 @@ async def handle_ab_board(callback: CallbackQuery, bot: Bot):
     text += "\n".join(names) if names else "هنوز نبردی ثبت نشده است."
     kb = _kb(
         [
-            [InlineKeyboardButton(text="🔄 بروزرسانی", callback_data="ab_board")],
-            [InlineKeyboardButton(text="↩️ بازگشت به نبرد سیبی", callback_data="apple_battle")],
+            [primary_button(text="🔄 بروزرسانی", callback_data="ab_board")],
+            [danger_button(text="↩️ بازگشت به نبرد سیبی", callback_data="apple_battle")],
         ]
     )
     await safe_answer_callback(callback)
