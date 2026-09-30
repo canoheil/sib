@@ -517,8 +517,8 @@ async def test_cancel_matchmaking_releases_party_and_queue(db_session):
 
 
 @pytest.mark.asyncio
-async def test_expired_queue_entry_is_cleaned_up(db_session):
-    """Expired queue entries are deactivated and their parties released."""
+async def test_expired_queue_entry_starts_bot_fallback(db_session):
+    """Expired queue entries become active bot matches instead of being released."""
     from datetime import datetime, timezone, timedelta
     from sib.database.models import MatchmakingQueue, PartyStatus
     from sib.services.maintenance import MaintenanceService
@@ -573,7 +573,11 @@ async def test_expired_queue_entry_is_cleaned_up(db_session):
         party.id,
     )
     assert refreshed_party is not None
-    assert refreshed_party.status == PartyStatus.FULL
+    assert refreshed_party.status == PartyStatus.IN_MATCH
+    fallback_match = await db_session.scalar(
+        select(Match).where(Match.party1_id == party.id)
+    )
+    assert fallback_match is not None and fallback_match.is_bot_match
 
 @pytest.mark.asyncio
 async def test_active_orphan_queue_entry_is_not_silently_expired(db_session):

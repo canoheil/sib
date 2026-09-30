@@ -20,6 +20,7 @@ from sib.database.models import (
     MatchState,
     GroupStats,
     PlayerStats,
+    User,
     Party,
     PartyStatus,
 )
@@ -56,40 +57,67 @@ class MatchResultService:
         match: Match,
         result: GameResult,
     ) -> None:
-        for p in match.players:
-            p_stat = await session.scalar(
-                select(PlayerStats)
-                .where(PlayerStats.user_id == p.user_id)
-                .with_for_update()
+        bot_ids = set()
+        if match.is_bot_match:
+            bot_ids = set(
+                (
+                    await session.scalars(
+                        select(User.id).where(
+                            User.id.in_([p.user_id for p in match.players]),
+                            User.is_bot == True,
+                        )
+                    )
+                ).all()
             )
-            if not p_stat:
-                p_stat = PlayerStats(
-                    user_id=p.user_id,
-                    matches_played=0,
-                    wins=0,
-                    losses=0,
-                    draws=0,
-                )
-                session.add(p_stat)
-                await session.flush()
 
-            p_stat.matches_played += 1
+        for p in match.players:
+            is_bot_player = p.user_id in bot_ids
+            # Bot entities keep a match result, but only human participants
+            # get an aggregate profile record.
+            p_stat = None
+            if not is_bot_player:
+                p_stat = await session.scalar(
+                    select(PlayerStats)
+                    .where(PlayerStats.user_id == p.user_id)
+                    .with_for_update()
+                )
+                if not p_stat:
+                    p_stat = PlayerStats(user_id=p.user_id)
+                    session.add(p_stat)
+                    await session.flush()
 
             if result.is_draw:
                 p.result = "DRAW"
-                p_stat.draws += 1
+                if p_stat:
+                    if match.is_bot_match:
+                        p_stat.bot_matches_played += 1
+                        p_stat.bot_draws += 1
+                    else:
+                        p_stat.matches_played += 1
+                        p_stat.draws += 1
             elif p.team == result.winner_team:
                 p.result = "WIN"
-                p_stat.wins += 1
-                # Seedling rewards belong to eligible NORMAL group wins
-                # only; bot-match winners never receive seedlings.
+                if p_stat:
+                    if match.is_bot_match:
+                        p_stat.bot_matches_played += 1
+                        p_stat.bot_wins += 1
+                    else:
+                        p_stat.matches_played += 1
+                        p_stat.wins += 1
+                # Seedling rewards belong to eligible NORMAL PvP wins only.
                 if not match.is_bot_match:
                     await SeedlingService.award_match_win(
                         session, match_id=match.id, user_id=p.user_id
                     )
             else:
                 p.result = "LOSS"
-                p_stat.losses += 1
+                if p_stat:
+                    if match.is_bot_match:
+                        p_stat.bot_matches_played += 1
+                        p_stat.bot_losses += 1
+                    else:
+                        p_stat.matches_played += 1
+                        p_stat.losses += 1
 
     @classmethod
     async def _free_parties(cls, session: AsyncSession, match: Match) -> None:

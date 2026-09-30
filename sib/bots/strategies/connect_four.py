@@ -28,11 +28,27 @@ class ConnectFourBotStrategy:
         if blocking_col is not None:
             return {"col": blocking_col}
 
-        # 3. Prefer the center, then move outward.
-        for col in (3, 2, 4, 1, 5, 0, 6):
-            if self._is_valid_column(board, col):
-                return {"col": col}
+        # Challenging bots also avoid moves that hand the opponent an
+        # immediate win. This is a one-ply safety check, not a search engine:
+        # it makes the existing solo bot sharper without making it unbeatable.
+        candidate_columns = [
+            col for col in (3, 2, 4, 1, 5, 0, 6)
+            if self._is_valid_column(board, col)
+        ]
+        if difficulty in {"challenging", "hard"}:
+            safe_columns = []
+            for col in candidate_columns:
+                simulated = [row[:] for row in board]
+                row = self._drop_piece(simulated, col, bot_team)
+                if row is None:
+                    continue
+                if self._find_winning_column(simulated, opponent_team) is None:
+                    safe_columns.append(col)
+            if safe_columns:
+                return {"col": safe_columns[0]}
 
+        if candidate_columns:
+            return {"col": candidate_columns[0]}
         raise ValueError("No valid Connect Four move available.")
 
     @classmethod

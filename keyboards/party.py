@@ -168,15 +168,7 @@ def get_party_action_keyboard(
         return InlineKeyboardMarkup(inline_keyboard=buttons)
 
     if party.is_full:
-        # Full party actions
-        if party.mode == "solo":
-            buttons.append([
-                success_button(
-                    text="🤖 بازی با Bot",
-                    callback_data=f"play_bot:{party.id}",
-                )
-            ])
-
+        # Every mode uses the same real-opponent queue with automatic bot fallback.
         buttons.append([
             success_button(
                 text="🔎 پیدا کردن حریف",

@@ -76,7 +76,12 @@ class MatchmakingService:
             raise InvalidActionException("فقط اعضای تیم می‌توانند جستجوی حریف را آغاز کنند 🍏")
 
         now = datetime.now(timezone.utc)
-        expires_at = now + timedelta(seconds=settings.MATCHMAKING_TIMEOUT_SECONDS)
+        timeout_seconds = (
+            settings.SOLO_MATCHMAKING_TIMEOUT_SECONDS
+            if party.mode == "solo"
+            else settings.TEAM_MATCHMAKING_TIMEOUT_SECONDS
+        )
+        expires_at = now + timedelta(seconds=timeout_seconds)
 
         # 5. Clean up any stale queue entry for this party
         existing_queue = await session.scalar(
@@ -122,6 +127,13 @@ class MatchmakingService:
         user_id: int,
     ) -> bool:
         """Cancel matchmaking search and return party to FULL status."""
+        # Queue -> party lock order matches the matcher and timeout worker.
+        queue_entry = await session.scalar(
+            select(MatchmakingQueue)
+            .where(MatchmakingQueue.party_id == party_id)
+            .where(MatchmakingQueue.is_active == True)
+            .with_for_update()
+        )
         party_stmt = (
             select(Party)
             .where(Party.id == party_id)
@@ -136,18 +148,11 @@ class MatchmakingService:
         if not is_member and party.creator_user_id != user_id:
             raise InvalidActionException("فقط اعضای تیم می‌توانند جستجوی حریف را لغو کنند 🍏")
 
-        queue_entry = await session.scalar(
-            select(MatchmakingQueue)
-            .where(MatchmakingQueue.party_id == party.id)
-            .where(MatchmakingQueue.is_active == True)
-            .with_for_update()
-        )
-        if queue_entry:
-            queue_entry.is_active = False
+        if party.status != PartyStatus.IN_QUEUE or not queue_entry:
+            raise InvalidActionException("جستجوی حریف تموم شده یا قبلاً لغو شده 🍏")
 
-        if party.status == PartyStatus.IN_QUEUE:
-            party.status = PartyStatus.FULL
-
+        queue_entry.is_active = False
+        party.status = PartyStatus.FULL
         await session.flush()
 
         log_event(Events.MATCHMAKING_CANCELLED, {"party_id": party.id, "cancelled_by": user_id})
@@ -165,16 +170,23 @@ class MatchmakingService:
         """
         now = datetime.now(timezone.utc)
 
-        # 1. Fetch and lock current party's queue entry
+        # 1. Lock current queue row first. Expiration is checked AFTER lock
+        # acquisition so a late matcher cannot use a snapshot taken just
+        # before the timeout worker claims the same row.
         my_queue_stmt = (
             select(MatchmakingQueue)
             .where(MatchmakingQueue.party_id == party_id)
             .where(MatchmakingQueue.is_active == True)
-            .where(MatchmakingQueue.expires_at > now)
             .with_for_update()
         )
         my_queue = await session.scalar(my_queue_stmt)
-        if not my_queue:
+        if not my_queue or not my_queue.is_active:
+            return None
+        now = datetime.now(timezone.utc)
+        my_expiry = my_queue.expires_at
+        if my_expiry.tzinfo is None:
+            my_expiry = my_expiry.replace(tzinfo=timezone.utc)
+        if my_expiry <= now:
             return None
 
         # 2. Hard compatibility query (NO Elo/MMR involved):
@@ -228,8 +240,24 @@ class MatchmakingService:
         if not party1 or not party2:
             return None
 
-        # Verify neither party was claimed in between
-        if party1.status != PartyStatus.IN_QUEUE or party2.status != PartyStatus.IN_QUEUE:
+        # Verify both queue entries and parties are still claimable after all
+        # row locks have been acquired. This closes the timeout-vs-late-join
+        # race even if a candidate crossed its deadline while we were waiting.
+        now = datetime.now(timezone.utc)
+        candidate_expiry = chosen_cand.expires_at
+        if candidate_expiry.tzinfo is None:
+            candidate_expiry = candidate_expiry.replace(tzinfo=timezone.utc)
+        own_expiry = my_queue.expires_at
+        if own_expiry.tzinfo is None:
+            own_expiry = own_expiry.replace(tzinfo=timezone.utc)
+        if (
+            not my_queue.is_active
+            or not chosen_cand.is_active
+            or own_expiry <= now
+            or candidate_expiry <= now
+            or party1.status != PartyStatus.IN_QUEUE
+            or party2.status != PartyStatus.IN_QUEUE
+        ):
             return None
 
         # 5. Deactivate both queue entries

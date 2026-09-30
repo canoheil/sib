@@ -43,14 +43,15 @@ async def handle_find_match(callback: CallbackQuery, bot: Bot):
             return
 
         if not match:
-            # Still in queue waiting for an opponent
+            # The mode-specific deadline drives the automatic bot fallback.
+            wait_seconds = max(1, int((queue_entry.expires_at - queue_entry.entered_at).total_seconds()))
+            wait_fa = str(wait_seconds).translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
             queue_text = (
-                "🔍 **در حال جستجوی حریف از گروه‌های تلگرام...** 🍏\n\n"
-                "سیب در حال جستجوی یک حریف متناسب با ریتینگ گروه شماست.\n"
-                "با گذشت زمان، دامنه جستجو به‌طور خودکار گسترش می‌یابد.\n\n"
-                "⏳ لطفاً منتظر بمانید..."
+                "🔍 **در حال جستجوی حریف...** 🍏\n\n"
+                f"حدود {wait_fa} ثانیه منتظر می‌مونیم. اگر حریف واقعی پیدا نشه، "
+                "بازی خودکار با تیم سیب شروع می‌شه."
             )
-            await callback.answer("وارد صف مسابقات شدی! 🍏")
+            await callback.answer("جستجوی حریف شروع شد 🍏")
             if callback.message:
                 await safe_edit_callback_message(
                     callback,
@@ -58,6 +59,9 @@ async def handle_find_match(callback: CallbackQuery, bot: Bot):
                     queue_text,
                     reply_markup=get_queue_keyboard(party_id),
                 )
+                message_id = getattr(callback.message, "message_id", None)
+                if isinstance(message_id, int):
+                    queue_entry.message_id = message_id
             return
 
         # Match was found immediately!
@@ -143,7 +147,10 @@ async def handle_accept_match(callback: CallbackQuery, bot: Bot):
                 initial_state = json.loads(match.game_state)
             else:
                 initial_state = engine.create_initial_state(match.players, match.mode)
-            match.game_state = json.dumps(initial_state)
+            from sib.services.match_setup import attach_team_names
+
+            initial_state = attach_team_names(initial_state, match)
+            match.game_state = json.dumps(initial_state, ensure_ascii=False)
 
             # Start the first gameplay timeout immediately.
             # For turn-based games this tracks the current player;

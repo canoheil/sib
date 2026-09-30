@@ -1,7 +1,7 @@
 """Match Player model."""
 
 from typing import Optional
-from sqlalchemy import BigInteger, Boolean, ForeignKey, Integer, String
+from sqlalchemy import BigInteger, Boolean, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sib.database.base import Base, TimestampMixin
 
@@ -20,6 +20,8 @@ class MatchPlayer(Base, TimestampMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     has_accepted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     result: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)  # WIN, LOSS, DRAW
+    # Per-entity bot configuration (difficulty/personality/strategy/loadout).
+    bot_profile: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Relationships
     match = relationship("Match", back_populates="players")

@@ -138,11 +138,13 @@ async def cmd_stats(message: Message):
             name = user.first_name or "شما"
             text = (
                 f"👤 **کارنامه بازیکن: {name}** 🍏\n\n"
-                f"🎮 مجموع حضور در مسابقات: `{p_stats['matches_played']}`\n"
-                f"🟢 پیروزی‌ها: `{p_stats['wins']}` ({p_stats['win_rate']}٪)\n"
-                f"🔴 شکست‌ها: `{p_stats['losses']}`\n"
-                f"⚪ تساوی‌ها: `{p_stats['draws']}`\n"
+                f"⚔️ **مسابقه‌های واقعی**\n"
+                f"بازی‌ها: `{p_stats['matches_played']}` | برد: `{p_stats['wins']}` | "
+                f"باخت: `{p_stats['losses']}` | مساوی: `{p_stats['draws']}`\n\n"
+                f"🤖 **بازی با سیب کوچولو**\n"
+                f"بازی‌ها: `{p_stats['bot_matches_played']}` | برد: `{p_stats['bot_wins']}` | "
+                f"باخت: `{p_stats['bot_losses']}` | مساوی: `{p_stats['bot_draws']}`\n\n"
                 f"🌱 نهال‌ها: `{seedlings}`\n\n"
-                "ℹ️ جایگاه رقابتی سیب بر اساس برد گروه‌هاست؛ بازیکنان رکورد فردی خودشان را دارند."
+                "ℹ️ بازی با Bot روی آمار رقابتی گروه و نهال‌ها اثری نداره."
             )
             await message.reply(text, reply_markup=get_player_stats_keyboard(), parse_mode="Markdown")

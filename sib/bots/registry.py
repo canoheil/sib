@@ -18,9 +18,13 @@ BOT_STRATEGIES: Dict[str, Any] = {
 }
 
 
-def get_bot_strategy(game_code: str):
-    """Return the bot strategy for a game."""
-    strategy = BOT_STRATEGIES.get(game_code)
+def get_bot_strategy(game_code: str, strategy_key: str | None = None):
+    """Return a strategy by registered key, defaulting to the game strategy.
+
+    ``strategy_key`` is stored per bot participant, allowing future bot types
+    to select an independent policy without changing Match or game engines.
+    """
+    strategy = BOT_STRATEGIES.get(strategy_key or game_code)
 
     if not strategy:
         raise ValueError(

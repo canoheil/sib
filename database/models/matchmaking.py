@@ -18,6 +18,8 @@ class MatchmakingQueue(Base, TimestampMixin):
     entered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True, nullable=False)
+    # Live queue-panel reference, used to transition the same message on fallback/cancel.
+    message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
     # Relationships
     party = relationship("Party")

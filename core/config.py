@@ -50,10 +50,14 @@ class Settings(BaseSettings):
     )
 
     # Timeouts (in seconds)
-    MATCHMAKING_TIMEOUT_SECONDS: int = Field(default=600, description="Matchmaking search timeout")
+    SOLO_MATCHMAKING_TIMEOUT_SECONDS: int = Field(default=15, description="Solo matchmaking timeout before bot fallback")
+    TEAM_MATCHMAKING_TIMEOUT_SECONDS: int = Field(default=20, description="2v2/4v4 matchmaking timeout before bot fallback")
+    MATCHMAKING_TIMEOUT_SECONDS: int = Field(default=600, description="Deprecated legacy timeout; mode-specific deadlines are used")
     ACCEPTANCE_TIMEOUT_SECONDS: int = Field(default=120, description="Match acceptance timeout")
-    BOT_OPPONENTS_ENABLED: bool = Field(default=False, description="Enable bot opponents")
-    BOT_OPPONENT_DELAY_SECONDS: int = Field(default=30, description="Delay before bot fallback")
+    # Legacy bot toggles remain readable for deployment compatibility; bot
+    # fallback is now part of the standard matchmaking lifecycle.
+    BOT_OPPONENTS_ENABLED: bool = Field(default=False, description="Deprecated: bot fallback is automatic")
+    BOT_OPPONENT_DELAY_SECONDS: int = Field(default=30, description="Deprecated: fallback uses queue deadlines")
     
     # Anti-spam / Rate Limiting
     RATE_LIMIT_MESSAGE_COUNT: int = Field(default=10, description="Maximum normal messages per window")

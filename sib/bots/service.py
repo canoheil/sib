@@ -41,11 +41,15 @@ class GameBotService:
             )
 
         engine = get_game_engine(match.game.code)
-        strategy = get_bot_strategy(match.game.code)
+        from sib.services.bot import bot_profile_for
+
+        profile = bot_profile_for(player)
+        strategy = get_bot_strategy(match.game.code, strategy_key=profile.get("strategy"))
 
         action = strategy.choose_action(
             state=state,
             bot_player_id=bot_player_id,
+            difficulty=profile.get("difficulty", "normal"),
         )
 
         is_valid, reason = engine.validate_action(

@@ -111,4 +111,8 @@ class LeaderboardService:
             "losses": losses,
             "draws": draws,
             "win_rate": round(win_rate, 1),
+            "bot_matches_played": stats.bot_matches_played if stats else 0,
+            "bot_wins": stats.bot_wins if stats else 0,
+            "bot_losses": stats.bot_losses if stats else 0,
+            "bot_draws": stats.bot_draws if stats else 0,
         }

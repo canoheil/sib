@@ -299,7 +299,7 @@ async def handle_ab_find(callback: CallbackQuery, bot: Bot):
     async with get_session() as session:
         try:
             party = await _ensure_battle_party(session, chat.id, user.id)
-            await MatchmakingService.enqueue_party(session, party.id, user.id)
+            queue_entry = await MatchmakingService.enqueue_party(session, party.id, user.id)
             match = await MatchmakingService.find_and_create_match(session, party.id)
         except (InvalidActionException, PartyNotFoundException, ActiveSessionExistsException) as e:
             await safe_answer_callback(callback, getattr(e, "message", str(e)), show_alert=True)
@@ -313,6 +313,9 @@ async def handle_ab_find(callback: CallbackQuery, bot: Bot):
             if callback.message:
                 text, kb = _searching_view(party.id)
                 await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
+                message_id = getattr(callback.message, "message_id", None)
+                if isinstance(message_id, int):
+                    queue_entry.message_id = message_id
             return
 
         # Match found immediately — precompute the battle BEFORE narration.
