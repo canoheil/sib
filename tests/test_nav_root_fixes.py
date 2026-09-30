@@ -309,9 +309,10 @@ async def test_garden_render_has_inventory_line(db_session):
     text, kb = await _render_garden(1, db_session)
     assert "ذخیره‌ی برداشت‌ها" in text
     assert "🥇×2" in text
-    # Garden controls: plant/refresh/main always; harvest per mature plot.
+    # Garden controls: one panel button per plot + refresh/main always.
     labels = [b.text for b in _all_buttons(kb)]
-    assert any("کاشت" in t for t in labels)
+    callbacks = [b.callback_data for b in _all_buttons(kb)]
+    assert sum(c.startswith("garden_tree:") for c in callbacks) == 5
     assert any("بروزرسانی" in t for t in labels)
     assert any("منوی اصلی" in t for t in labels)
 
@@ -343,6 +344,7 @@ async def test_garden_render_has_inventory_line(db_session):
     text, kb = await _render_garden(1, db_session)
     labels = [b.text for b in _all_buttons(kb)]
     assert any("برداشت" in t for t in labels)
+    assert "آماده برداشت" in text  # the ripe plot is announced in the body
 
 
 # ---------------------------------------------------------------------------

@@ -205,13 +205,20 @@ async def test_full_garden_lifecycle_deterministic(db_session):
     assert v.state == PlotState.FRUIT_READY
 
     # --- HARVEST ---
-    apples = await GardenService.harvest(db_session, user.id, plot_index)
+    class _CurrencyRng:
+        def random(self):
+            return 0.0  # always the normal-apple (currency) outcome
+
+    outcome = await GardenService.harvest(
+        db_session, user.id, plot_index, rng=_CurrencyRng()
+    )
     await db_session.commit()
 
     garden = await _fresh_garden(db_session, user.id)
     v = GardenService.view(garden)[0]
     expected_amount = CONFIG_DEFAULTS.get("garden_fruit_amount", 3)
-    assert apples == expected_amount
+    assert outcome.apples == expected_amount
+    assert outcome.item_key is None
     # Next cycle is underway deterministically.
     assert v.cycle_count == 1
     assert v.state in (PlotState.GROWING, PlotState.MATURE, PlotState.FRUIT_READY)
@@ -234,9 +241,9 @@ async def test_garden_actions_rerender_panel(db_session):
     from unittest.mock import AsyncMock, MagicMock
 
     from sib.handlers.garden import (
-        handle_garden_expand,
         handle_garden_plant,
         handle_garden_refresh,
+        handle_garden_unlock,
     )
     from sib.tests.test_parties import create_test_user
 
@@ -319,11 +326,11 @@ async def test_garden_actions_rerender_panel(db_session):
     await handle_garden_refresh(cb, bot)
     assert rerendered(), "refresh must re-render the panel"
 
-    # Expand -> rerender even when the action is rejected.
+    # Unlock -> rerender even when the action is rejected.
     bot.reset_mock()
     cb = make_cb()
-    await handle_garden_expand(cb, bot)
-    assert rerendered(), "expand must re-render the panel"
+    await handle_garden_unlock(cb, bot)
+    assert rerendered(), "unlock must re-render the panel"
 
     # The rendered panel text contains the plot state machine vocabulary.
     text = rendered_text()

@@ -182,15 +182,15 @@ async def test_garden_price_displayed_matches_purchase_cost(db_session):
         db_session.add(User(id=1, first_name="کاربر", language_code="fa"))
     await db_session.commit()
 
-    cost = await ConfigService.get_int(db_session, "garden_expansion_cost_apples")
-    step = await ConfigService.get_int(db_session, "garden_expansion_step")
+    prices = await ConfigService.get(db_session, "garden_plot_prices")
+    cost = prices[0]
 
     text, kb = await _render_garden(1, db_session)
-    expand_btn = [b for b in _all_buttons(kb) if b.callback_data == "garden_expand"][0]
-    assert f"🍎 {cost} سیب" in expand_btn.text
-    assert f"خرید {step} قطعه" in expand_btn.text
+    unlock_btn = [b for b in _all_buttons(kb) if b.callback_data == "garden_unlock"][0]
+    assert f"🍎 {cost} سیب" in unlock_btn.text
+    assert "باز کردن قطعه بعدی" in unlock_btn.text
 
-    # And the purchase charges exactly that config value.
+    # And the purchase charges exactly that config value for ONE plot.
     from sib.services.apple_wallet import AppleWalletService
     from sib.tests.test_parties import create_test_user
 
@@ -198,11 +198,11 @@ async def test_garden_price_displayed_matches_purchase_cost(db_session):
     await AppleWalletService.earn(db_session, u.id, cost, reason="test")
     await db_session.commit()
     cap_before = (await GardenService.get_or_create(db_session, u.id)).capacity_plots
-    await GardenService.expand(db_session, u.id)
+    await GardenService.unlock_plot(db_session, u.id)
     await db_session.commit()
     assert await AppleWalletService.get_balance(db_session, u.id) == 0
     garden = await GardenService.get_or_create(db_session, u.id)
-    assert garden.capacity_plots == cap_before + step
+    assert garden.capacity_plots == cap_before + 1
 
 
 # ---------------------------------------------------------------------------

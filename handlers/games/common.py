@@ -58,9 +58,11 @@ from sib.bots.runner import run_bot_turns
 
 def get_rematch_keyboard(ad: Optional[AdCampaign] = None) -> InlineKeyboardMarkup:
     """Keyboard shown after game completion with optional sponsor CTA."""
+    from sib.keyboards.common import primary_button, success_button
+
     buttons = [
         [
-            InlineKeyboardButton(
+            success_button(
                 text="➕ بازی جدید در گروه",
                 callback_data="group_games_panel",
             )
@@ -72,11 +74,12 @@ def get_rematch_keyboard(ad: Optional[AdCampaign] = None) -> InlineKeyboardMarku
                 InlineKeyboardButton(
                     text=f"✨ {ad.cta_label or 'مشاهده اسپانسر'}",
                     url=ad.target_url,
+                    style="primary",
                 )
             ])
         else:
             buttons.append([
-                InlineKeyboardButton(
+                primary_button(
                     text=f"✨ {ad.cta_label or 'درباره اسپانسر'}",
                     callback_data=f"ad_click:{ad.id}",
                 )

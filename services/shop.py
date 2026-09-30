@@ -152,30 +152,74 @@ class ShopService:
     async def list_entries(
         cls, session: AsyncSession, *, user_id: Optional[int] = None
     ) -> List[Tuple[ShopEntry, Character, bool]]:
-        """Return (entry, character, already_owned) for the current rotation."""
+        """Return (entry, character, already_owned) for the current rotation.
+
+        One joined query for entries+characters and (at most) one extra
+        query for the caller's owned set — no per-entry round trips.
+        """
         rotation = await cls.current_rotation(session)
-        stmt = (
-            select(ShopEntry)
-            .where(ShopEntry.rotation_id == rotation.id)
-            .where(ShopEntry.is_active == True)
-            .order_by(ShopEntry.sort_order.asc(), ShopEntry.id.asc())
-        )
-        entries = (await session.scalars(stmt)).all()
-        result = []
-        for entry in entries:
-            character = await session.get(Character, entry.character_id)
-            if not character:
-                continue
-            owned = False
-            if user_id is not None:
-                owned = await session.scalar(
+        rows = (
+            await session.execute(
+                select(ShopEntry, Character)
+                .join(Character, Character.id == ShopEntry.character_id)
+                .where(ShopEntry.rotation_id == rotation.id)
+                .where(ShopEntry.is_active == True)
+                .order_by(ShopEntry.sort_order.asc(), ShopEntry.id.asc())
+            )
+        ).all()
+
+        owned_ids: set = set()
+        if user_id is not None and rows:
+            character_ids = [character.id for _, character in rows]
+            owned_ids = set(
+                (
+                    await session.scalars(
+                        select(PlayerCard.character_id).where(
+                            PlayerCard.user_id == user_id,
+                            PlayerCard.character_id.in_(character_ids),
+                        )
+                    )
+                ).all()
+            )
+        return [
+            (entry, character, character.id in owned_ids) for entry, character in rows
+        ]
+
+    @classmethod
+    async def get_entry(
+        cls,
+        session: AsyncSession,
+        entry_id: int,
+        *,
+        user_id: Optional[int] = None,
+    ) -> Tuple[Optional[ShopEntry], Optional[Character], bool]:
+        """Fetch a single shop entry directly (detail screens).
+
+        Returns (None, None, False) when the entry or its character is
+        missing or the entry is not part of the current rotation; avoids
+        materializing the whole rotation for one card.
+        """
+        entry = await session.get(ShopEntry, entry_id)
+        if not entry or not entry.is_active:
+            return None, None, False
+        rotation = await cls.current_rotation(session)
+        if entry.rotation_id != rotation.id:
+            return None, None, False
+        character = await session.get(Character, entry.character_id)
+        if not character:
+            return None, None, False
+        owned = False
+        if user_id is not None:
+            owned = (
+                await session.scalar(
                     select(PlayerCard.id).where(
                         PlayerCard.user_id == user_id,
                         PlayerCard.character_id == character.id,
                     )
-                ) is not None
-            result.append((entry, character, owned))
-        return result
+                )
+                is not None
+            )
+        return entry, character, owned
 
     @staticmethod
     def entry_price(entry: ShopEntry, character: Character) -> int:

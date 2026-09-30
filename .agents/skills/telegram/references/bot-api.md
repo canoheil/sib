@@ -1,0 +1,330 @@
+# Telegram Bot API Reference
+
+## Overview
+
+The Bot API is an HTTP-based interface for building Telegram bots. It provides:
+
+- HTTPS requests to `https://api.telegram.org/bot<token>/METHOD_NAME`
+- JSON responses
+- Webhook or long polling for updates
+
+**Bot API 10.0** is supported in aiogram v3.28.x, **10.1** in v3.29.x, **10.2** in v3.30.x, and **10.3** in v3.31.x.
+
+## Bot API 10.0 highlights
+
+- Guest mode: new guest query/message payloads let bots reply in some chats even without membership.
+- Polls: media in poll questions/options/explanations, `members_only`, `country_codes`, and one-option poll flows.
+- Media: live photos are now sendable/editable and can appear in paid media and media groups.
+- Chat management: reaction-deletion methods and `can_react_to_messages` permissions.
+- Managed/business bots: access-settings methods plus broader bot-to-bot and business-account flows.
+
+## Bot API 10.3 highlights (aiogram v3.31.x)
+
+- Rich messages: `RichMessageButton`/`RichTextButton`/`RichBlockButtons` buttons, expandable block quotations and document blocks, an `is_compact` flag on block tables, and `tg://document?id=` links for file uploads in rich messages.
+- Ephemeral messages: `EphemeralMessageParameters` replaces per-method `receiver_user_id`/`callback_query_id` across send methods, plus `replace_callback_query_message` swapping the original message, and `editEphemeralMessageMedia` file uploads.
+- Reply markup: `DisabledButton` and a `disabled` field on inline buttons; a `force_reply` field on inline/reply keyboards.
+- General: `can_stop`/`keep_on_stop` on message drafts, the `MessageGenerationStopped` update, the `CommunityChatJoined` service message, and `text`/`entities`/`is_private` on `UniqueGiftInfo`.
+
+## Bot API 9.6 highlights
+
+- Managed bots: new managed-bot request flows, token-management methods, and update payloads.
+- Polls: multiple correct answers, revoting, option shuffling/addition, descriptions, and persistent option IDs.
+- Formatting: `date_time` entities are allowed in more quote/checklist/gift contexts.
+
+## Authentication
+
+All requests require bot token:
+
+```
+https://api.telegram.org/bot123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11/getMe
+```
+
+**Critical**: Never expose token in client code or logs.
+
+## Getting Updates
+
+### Polling (getUpdates)
+
+```python
+# Not recommended for production
+response = await client.get(
+    f"https://api.telegram.org/bot{token}/getUpdates",
+    params={"offset": last_update_id + 1, "timeout": 30}
+)
+```
+
+### Webhooks (recommended)
+
+```python
+# Set webhook
+await client.post(
+    f"https://api.telegram.org/bot{token}/setWebhook",
+    json={
+        "url": "https://example.com/webhook/secret123",
+        "secret_token": "my-secret-token",  # For verification
+        "allowed_updates": ["message", "callback_query"],
+    }
+)
+```
+
+## Core Methods
+
+### Messages
+
+| Method                   | Description               |
+| ------------------------ | ------------------------- |
+| `sendMessage`            | Send text message         |
+| `sendPhoto`              | Send photo                |
+| `sendDocument`           | Send file                 |
+| `sendLocation`           | Send location             |
+| `sendVenue`              | Send venue                |
+| `sendContact`            | Send contact              |
+| `sendPoll`               | Send poll                 |
+| `sendLivePhoto`          | Send live photo           |
+| `sendDice`               | Send dice/emoji animation |
+| `editMessageText`        | Edit message text         |
+| `editMessageReplyMarkup` | Edit inline keyboard      |
+| `deleteMessage`          | Delete message            |
+| `forwardMessage`         | Forward message           |
+| `copyMessage`            | Copy message              |
+
+### Chats
+
+| Method                      | Description          |
+| --------------------------- | -------------------- |
+| `getChat`                   | Get chat info        |
+| `getChatMember`             | Get member info      |
+| `getChatMemberCount`        | Get member count     |
+| `getChatAdministrators`     | List admins          |
+| `deleteAllMessageReactions` | Delete all reactions |
+| `deleteMessageReaction`     | Delete one reaction  |
+| `banChatMember`             | Ban user             |
+| `unbanChatMember`           | Unban user           |
+| `restrictChatMember`        | Restrict permissions |
+| `promoteChatMember`         | Promote to admin     |
+| `setChatTitle`              | Set chat title       |
+| `setChatDescription`        | Set description      |
+| `pinChatMessage`            | Pin message          |
+| `leaveChat`                 | Leave chat           |
+
+### Bot Info
+
+| Method                        | Description                        |
+| ----------------------------- | ---------------------------------- |
+| `getMe`                       | Get bot info                       |
+| `setMyCommands`               | Set bot commands                   |
+| `getMyCommands`               | Get bot commands                   |
+| `setMyDescription`            | Set bot description                |
+| `setMyShortDescription`       | Set short description              |
+| `getManagedBotToken`          | Get token for managed bot          |
+| `replaceManagedBotToken`      | Rotate managed bot token           |
+| `getManagedBotAccessSettings` | Read managed-bot access settings   |
+| `setManagedBotAccessSettings` | Update managed-bot access settings |
+
+### Mini Apps / prepared buttons
+
+| Method                       | Description                           |
+| ---------------------------- | ------------------------------------- |
+| `savePreparedKeyboardButton` | Save reusable keyboard request button |
+
+### Inline Mode
+
+| Method              | Description          |
+| ------------------- | -------------------- |
+| `answerInlineQuery` | Answer inline query  |
+| `answerWebAppQuery` | Answer web app query |
+
+### Guest queries
+
+| Method             | Description               |
+| ------------------ | ------------------------- |
+| `answerGuestQuery` | Answer a guest-mode query |
+
+### Callbacks
+
+| Method                | Description            |
+| --------------------- | ---------------------- |
+| `answerCallbackQuery` | Answer button callback |
+
+### Payments
+
+| Method                   | Description          |
+| ------------------------ | -------------------- |
+| `sendInvoice`            | Send payment invoice |
+| `answerPreCheckoutQuery` | Confirm checkout     |
+| `answerShippingQuery`    | Answer shipping      |
+| `createInvoiceLink`      | Create invoice link  |
+| `refundStarPayment`      | Refund Stars         |
+
+## Update Types
+
+```python
+class Update:
+    update_id: int
+    message: Message | None
+    edited_message: Message | None
+    channel_post: Message | None
+    edited_channel_post: Message | None
+    callback_query: CallbackQuery | None
+    inline_query: InlineQuery | None
+    chosen_inline_result: ChosenInlineResult | None
+    shipping_query: ShippingQuery | None
+    pre_checkout_query: PreCheckoutQuery | None
+    poll: Poll | None
+    poll_answer: PollAnswer | None
+    my_chat_member: ChatMemberUpdated | None
+    chat_member: ChatMemberUpdated | None
+    chat_join_request: ChatJoinRequest | None
+    managed_bot: ManagedBotUpdated | None
+    guest_message: Message | None
+```
+
+## Common Types
+
+### Message
+
+```python
+class Message:
+    message_id: int
+    date: int
+    chat: Chat
+    from_user: User | None
+    text: str | None
+    entities: list[MessageEntity] | None
+    reply_to_message: Message | None
+    # ... many more fields
+```
+
+Bot API 10.0 adds guest-mode caller metadata (`guest_query_id`, `guest_bot_caller_user`, `guest_bot_caller_chat`) and `live_photo`; Bot API 9.6 also added `reply_to_poll_option_id` for reply flows anchored to a poll option.
+
+### Chat
+
+```python
+class Chat:
+    id: int
+    type: str  # "private", "group", "supergroup", "channel"
+    title: str | None
+    username: str | None
+```
+
+### User
+
+```python
+class User:
+    id: int
+    is_bot: bool
+    first_name: str
+    last_name: str | None
+    username: str | None
+    language_code: str | None
+    can_manage_bots: bool | None
+    supports_guest_queries: bool | None
+```
+
+### Poll (Bot API 9.6-10.0)
+
+```python
+class Poll:
+    id: str
+    question: str
+    options: list[PollOption]
+    allows_multiple_answers: bool
+    correct_option_ids: list[int] | None
+    allows_revoting: bool | None
+    description: str | None
+    media: PollMedia | None
+    explanation_media: PollMedia | None
+    members_only: bool | None
+    country_codes: list[str] | None
+```
+
+Use `correct_option_ids` instead of the old single-answer mental model, do not key business logic only by option position when persistent option IDs are available, and update validators/serializers for media-bearing poll options on aiogram `3.28.1+`.
+
+### Contact
+
+```python
+class Contact:
+    phone_number: str
+    first_name: str
+    last_name: str | None
+    user_id: int | None
+    vcard: str | None
+    full_name: str | None  # Bot API 9.4
+```
+
+### CallbackQuery
+
+```python
+class CallbackQuery:
+    id: str
+    from_user: User
+    message: Message | None
+    inline_message_id: str | None
+    chat_instance: str
+    data: str | None  # max 64 bytes
+```
+
+## Error Handling
+
+Bot API returns:
+
+```json
+{
+  "ok": false,
+  "error_code": 400,
+  "description": "Bad Request: message text is empty"
+}
+```
+
+Common error codes:
+
+- `400` — Bad request (invalid parameters)
+- `401` — Unauthorized (invalid token)
+- `403` — Forbidden (bot blocked by user)
+- `404` — Not found
+- `429` — Too many requests (rate limited)
+
+## Rate Limits
+
+- ~30 messages/second to different chats
+- ~1 message/second to same chat
+- ~20 messages/minute to same group
+- Bulk limits for notifications
+
+On 429 error, check `retry_after` in response.
+
+## Formatting
+
+### MarkdownV2
+
+````
+*bold*
+_italic_
+__underline__
+~strikethrough~
+||spoiler||
+`inline code`
+```pre```
+[link](https://example.com)
+````
+
+Escape special characters: `_*[]()~`>#+-=|{}.!\`
+
+### HTML
+
+```html
+<b>bold</b>
+<i>italic</i>
+<u>underline</u>
+<s>strikethrough</s>
+<tg-spoiler>spoiler</tg-spoiler>
+<code>inline code</code>
+<pre>code block</pre>
+<a href="https://example.com">link</a>
+```
+
+## Links
+
+- Full API docs: https://core.telegram.org/bots/api
+- Changelog: https://core.telegram.org/bots/api-changelog
+- @BotNews — API updates channel

@@ -7,6 +7,7 @@ from aiogram import Bot, Router, F
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from sib.keyboards.common import danger_button, primary_button, success_button
 from sib.database.connection import get_session
 from sib.database.models import Character, PlayerCard, Trade, TradeStatus
 from sib.services.telegram_ui import safe_answer_callback, safe_edit_callback_message
@@ -49,16 +50,16 @@ async def _pending_view(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
             )
             buttons.append(
                 [
-                    InlineKeyboardButton(
+                    success_button(
                         text=f"✅ تأیید #{trade.id}", callback_data=f"trade_ok:{trade.id}"
                     ),
-                    InlineKeyboardButton(
+                    danger_button(
                         text=f"❌ لغو #{trade.id}", callback_data=f"trade_cancel:{trade.id}"
                     ),
                 ]
             )
-        buttons.append([InlineKeyboardButton(text="🔄 بروزرسانی", callback_data="trade_refresh")])
-    buttons.append([InlineKeyboardButton(text="↩️ بازگشت به منوی اصلی", callback_data="main_menu")])
+        buttons.append([primary_button(text="🔄 بروزرسانی", callback_data="trade_refresh")])
+    buttons.append([danger_button(text="↩️ بازگشت به منوی اصلی", callback_data="main_menu")])
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=buttons)
 
 

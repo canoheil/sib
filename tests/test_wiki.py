@@ -71,14 +71,19 @@ async def test_collection_shows_only_owned_cards(db_session):
     await PlayerCardService.acquire(db_session, user.id, owned.id)
     await db_session.commit()
 
-    text = await CollectionService.render_collection(db_session, user.id)
+    text, total_pages = await CollectionService.render_collection(db_session, user.id)
     assert "کارت‌های من" in text
     assert "سیبک ج" in text
     assert "سیبک د" not in text
+    assert total_pages == 1
+    assert "تعداد کارت‌ها" in text  # summary header
 
     empty_user = await create_test_user(db_session, "کالکتور ۲")
-    empty_text = await CollectionService.render_collection(db_session, empty_user.id)
+    empty_text, empty_pages = await CollectionService.render_collection(
+        db_session, empty_user.id
+    )
     assert "هنوز کارتی ندارید" in empty_text
+    assert empty_pages == 1
 
 
 @pytest.mark.asyncio

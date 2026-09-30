@@ -179,18 +179,20 @@ HELP_TOPICS = {
 
 
 def _help_keyboard() -> InlineKeyboardMarkup:
+    from sib.keyboards.common import danger_button, primary_button
+
     buttons = []
     row: list = []
     for topic, (label, _text) in HELP_TOPICS.items():
         row.append(
-            InlineKeyboardButton(text=label, callback_data=f"help_page:{topic}")
+            primary_button(text=label, callback_data=f"help_page:{topic}")
         )
         if len(row) == 2:
             buttons.append(row)
             row = []
     if row:
         buttons.append(row)
-    buttons.append([InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="main_menu")])
+    buttons.append([danger_button(text="🏠 منوی اصلی", callback_data="main_menu")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -213,10 +215,12 @@ async def handle_help_page(callback: CallbackQuery, bot: Bot):
         await safe_answer_callback(callback, "این بخش پیدا نشد 🍏", show_alert=True)
         return
     _label, text = entry
+    from sib.keyboards.common import danger_button, primary_button
+
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="📚 بازگشت به راهنما", callback_data="help_menu")],
-            [InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="main_menu")],
+            [danger_button(text="📚 بازگشت به راهنما", callback_data="help_menu")],
+            [danger_button(text="🏠 منوی اصلی", callback_data="main_menu")],
         ]
     )
     await safe_answer_callback(callback)
@@ -294,11 +298,42 @@ async def handle_apple_cards(callback: CallbackQuery, bot: Bot):
         return
     _base, origin = parse_callback(callback.data)
 
+    # Optional page argument: apple_cards[:page[:origin]]
+    parts = _base.split(":")
+    page = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+
     prev_message_id = getattr(callback.message, "message_id", None)
     async with get_session() as session:
-        text = await CollectionService.render_collection(session, user.id)
+        from sqlalchemy import select
 
-    kb = get_cards_keyboard(origin=origin)
+        from sib.database.models import Character
+        from sib.services.player_cards import PlayerCardService
+
+        text, total_pages = await CollectionService.render_collection(session, user.id, page=page)
+        cards = await PlayerCardService.list_cards(session, user.id)
+        character_ids = sorted({c.character_id for c in cards})
+        characters = {
+            ch.id: ch
+            for ch in (
+                await session.scalars(
+                    select(Character).where(Character.id.in_(character_ids))
+                )
+            ).all()
+        }
+
+    card_rows = []
+    page_cards = cards[
+        page * CollectionService.PAGE_SIZE : (page + 1) * CollectionService.PAGE_SIZE
+    ]
+    for card in page_cards:
+        character = characters.get(card.character_id)
+        name = character.name_fa if character else "کارت"
+        star = "⭐ " if card.is_favorite else ""
+        card_rows.append((card.id, f"🍎 {star}{name} — سطح {card.level}"))
+
+    kb = get_cards_keyboard(
+        origin=origin, card_rows=card_rows, page=page, total_pages=total_pages
+    )
 
     await callback.answer()
     if callback.message:
@@ -387,12 +422,11 @@ async def handle_apple_profile(callback: CallbackQuery, bot: Bot):
 
         fav_text = None
         fav_photo = None
+        from sib.database.models import Character
+
         for card in cards:
             if getattr(card, "is_favorite", False):
-                character = await session.get(
-                    __import__("sib.database.models", fromlist=["Character"]).Character,
-                    card.character_id,
-                )
+                character = await session.get(Character, card.character_id)
                 if character:
                     fav_text = character.name_fa
                     from sib.services.character_art import (

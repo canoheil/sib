@@ -144,15 +144,26 @@ async def test_shop_item_detail_full_screen(db_session):
 
 @pytest.mark.asyncio
 async def test_shop_list_buttons_open_detail_not_purchase(db_session):
-    """List → detail screen; purchase only happens through confirm."""
-    from sib.handlers.shop import _shop_view
+    """Root → sections; section list → detail; purchase only via confirm."""
+    from sib.handlers.shop import _cards_view, _shop_view
 
     await _shop_character(db_session, "sib_mahi")
     text, kb = await _shop_view(777777)
     callbacks = [b.callback_data for row in kb.inline_keyboard for b in row]
-    assert any(c.startswith("shop_item:") for c in callbacks)
+    # Root offers the three sections, never a direct purchase.
+    assert "shop_cards" in callbacks
+    assert "shop_goods" in callbacks
+    assert "shop_sell" in callbacks
     assert not any(c.startswith("shop_buy:") for c in callbacks)
     assert "فروشگاه" in text
+
+    # The Cards section lists items that open a DETAIL screen.
+    _cards_text, cards_kb = await _cards_view(777777)
+    card_callbacks = [
+        b.callback_data for row in cards_kb.inline_keyboard for b in row
+    ]
+    assert any(c.startswith("shop_item:") for c in card_callbacks)
+    assert not any(c.startswith("shop_buy:") for c in card_callbacks)
 
 
 @pytest.mark.asyncio

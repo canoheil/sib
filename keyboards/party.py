@@ -74,31 +74,32 @@ def get_games_menu_keyboard(
 ) -> InlineKeyboardMarkup:
     """Screen: the games menu (parent of the active-games screen).
 
-    Contains the DB game grid plus the extended game sections (Apple
-    Battle, Cards) with the same navigation convention as every game:
-    entered from here, Back returns here (spec #2).
+    Apple Battle (نبرد سیبی) is the flagship game: it comes FIRST and
+    uses the green (success) theme to stand out from the blue game grid.
     """
     from sib.services.nav import with_origin
 
-    keyboard = _game_grid(games)
-    keyboard.append(
+    keyboard: list = [
         [
-            InlineKeyboardButton(
+            success_button(
                 text="⚔️ نبرد سیبی",
                 callback_data=with_origin("apple_battle", "group_games_panel"),
-            ),
-            InlineKeyboardButton(
+            )
+        ]
+    ]
+    keyboard.extend(_game_grid(games))
+    keyboard.append(
+        [
+            primary_button(
                 text="🃏 کارت‌ها",
                 callback_data=with_origin("apple_cards", "group_games_panel"),
-            ),
+            )
         ]
     )
     label = "🎮 بازی‌های فعال گروه"
     if active_count:
         label += f" ({active_count})"
-    keyboard.append(
-        [InlineKeyboardButton(text=label, callback_data="group_active_games")]
-    )
+    keyboard.append([primary_button(text=label, callback_data="group_active_games")])
     keyboard.extend(nav_back_row(BACK_TO_MAIN, "main_menu"))
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
@@ -194,15 +195,28 @@ def get_party_action_keyboard(
 
 
 def get_active_parties_keyboard(parties: List[Party]) -> InlineKeyboardMarkup:
-    """Screen: active games of the group (child of the games menu)."""
-    buttons = []
+    """Screen: active games of the group (child of the games menu).
+
+    Apple Battle is always available: it leads the list with its green
+    theme, above the group's waiting parties.
+    """
+    from sib.services.nav import with_origin
+
+    buttons: list = [
+        [
+            success_button(
+                text="⚔️ نبرد سیبی",
+                callback_data=with_origin("apple_battle", "group_active_games"),
+            )
+        ]
+    ]
 
     for party in parties:
         mode_text = "انفرادی" if party.mode == "solo" else f"تیمی {party.mode}"
         status_icon = "✅" if party.is_full else "⏳"
         label = f"{status_icon} {party.game.name_fa} ({mode_text}) — {party.current_players_count}/{party.max_players}"
         buttons.append([
-            InlineKeyboardButton(
+            primary_button(
                 text=label,
                 callback_data=f"view_party:{party.id}",
             )
@@ -213,7 +227,7 @@ def get_active_parties_keyboard(parties: List[Party]) -> InlineKeyboardMarkup:
             text="➕ ساخت بازی جدید",
             callback_data="create_new_party_menu",
         ),
-        InlineKeyboardButton(
+        primary_button(
             text="🔄 بروزرسانی",
             callback_data="group_active_games",
         ),

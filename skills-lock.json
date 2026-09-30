@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "skills": {
+    "flux-image-best-practices": {
+      "source": "black-forest-labs/skills",
+      "sourceType": "github",
+      "skillPath": "skills/flux-image-best-practices/SKILL.md",
+      "computedHash": "b7cd334c93138e0eb9991b0e53aead77c1b7dacc1dfa264c021af063831ccad3"
+    },
+    "tasks": {
+      "source": "taoeffect/tasks",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "ed142a31043ea530133fd328510f9cdea7aa44704fc3e0e2812276d06f93d1f2"
+    },
+    "telegram": {
+      "source": "itechmeat/llm-code",
+      "sourceType": "github",
+      "skillPath": "skills/telegram/SKILL.md",
+      "computedHash": "6b5abd6bca192ec1c9771ad0c9f4dc471f625319ba647889678121225233002e"
+    },
+    "telegram-bot-api-commands-keyboards-and-input": {
+      "source": "nzhulikov/telegram-bot-skills",
+      "sourceType": "github",
+      "skillPath": "skills/telegram-bot-api/05-commands-keyboards-and-input/SKILL.md",
+      "computedHash": "75da0d1340c6db9af9e6538a9ddc87e30367e3e8628cc951429921f08b3587d7"
+    },
+    "telegram-bot-api-games": {
+      "source": "nzhulikov/telegram-bot-skills",
+      "sourceType": "github",
+      "skillPath": "skills/telegram-bot-api/18-games/SKILL.md",
+      "computedHash": "2068c517fbe644c797a7c46bd25632ff7350c73d318aa183a7015037b8d212c5"
+    },
+    "telegram-bot-api-getting-started": {
+      "source": "nzhulikov/telegram-bot-skills",
+      "sourceType": "github",
+      "skillPath": "skills/telegram-bot-api/01-getting-started/SKILL.md",
+      "computedHash": "08479758fbaca1d3a96e9df871d35d9aa538cd062e03d691f6f94acef45aebc0"
+    },
+    "telegram-bot-api-inline-mode-and-callbacks": {
+      "source": "nzhulikov/telegram-bot-skills",
+      "sourceType": "github",
+      "skillPath": "skills/telegram-bot-api/06-inline-mode-and-callbacks/SKILL.md",
+      "computedHash": "69eb320e723f4158b57988f908c5b346e9b34f61aaf6af3b82fafbf631c683b7"
+    },
+    "telegram-bot-api-mini-apps-and-attachment-menu": {
+      "source": "nzhulikov/telegram-bot-skills",
+      "sourceType": "github",
+      "skillPath": "skills/telegram-bot-api/14-mini-apps-and-attachment-menu/SKILL.md",
+      "computedHash": "07e5ac9b9560fe7c458f2e619a833ddb29cde0cc72c6937aafcd4ee79494d6d4"
+    },
+    "telegram-bot-api-payments-stars-and-broadcasting": {
+      "source": "nzhulikov/telegram-bot-skills",
+      "sourceType": "github",
+      "skillPath": "skills/telegram-bot-api/11-payments-stars-and-broadcasting/SKILL.md",
+      "computedHash": "0cd71967731989e84785c244bd53ddbe11b883e177de8297ba486e8d9e760926"
+    }
+  }
+}

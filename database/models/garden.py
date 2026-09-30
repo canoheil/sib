@@ -65,10 +65,15 @@ class GardenPlot(Base, TimestampMixin):
     # Completed harvest cycles of this tree.
     cycle_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
+    # Magical progression of THIS tree (0..garden_max_magic_level). Each
+    # level was paid for with Magic Powder and improves special-apple
+    # drop chances. Per-tree, never account-global.
+    magic_level: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
     garden = relationship("Garden", back_populates="plots")
 
     def __repr__(self) -> str:
         return (
             f"<GardenPlot garden={self.garden_id} idx={self.plot_index} "
-            f"cycles={self.cycle_count}>"
+            f"cycles={self.cycle_count} magic={self.magic_level}>"
         )

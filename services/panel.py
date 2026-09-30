@@ -28,10 +28,17 @@ OWNER_SCOPED_CALLBACKS: Tuple[str, ...] = (
     # Personal garden panel
     "garden_plant:",
     "garden_harvest:",
-    "garden_expand",
+    "garden_tree:",
+    "garden_magic:",
+    "garden_unlock",
+    "garden_harvest_all",
     "garden_refresh",
     # Shop / cards / trading (spend apples or change ownership)
     "shop_buy:",
+    "shop_good:",
+    "shop_good_buy:",
+    "shop_sell_one:",
+    "shop_sell_all:",
     "card_panel:",
     "card_up:",
     "trade_ok:",
