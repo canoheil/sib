@@ -4,7 +4,7 @@ from sib.database.base import Base, TimestampMixin
 from sib.database.models.user import User
 from sib.database.models.group import Group
 from sib.database.models.game import Game
-from sib.database.models.match import Match, MatchState
+from sib.database.models.match import Match, MatchState, MatchType
 from sib.database.models.match_player import MatchPlayer
 from sib.database.models.group_stats import GroupStats
 from sib.database.models.sponsor_channel import SponsorChannel, ChannelType
@@ -41,6 +41,7 @@ __all__ = [
     "Game",
     "Match",
     "MatchState",
+    "MatchType",
     "MatchPlayer",
     "GroupStats",
     "SponsorChannel",

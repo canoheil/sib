@@ -115,7 +115,11 @@ async def handle_cancel_matchmaking(callback: CallbackQuery, bot: Optional[Bot] 
         await callback.answer("جستجوی حریف لغو شد 🍏")
         if party and callback.message:
             text = render_party_card(party)
-            kb = get_party_action_keyboard(party, is_member=True)
+            kb = get_party_action_keyboard(
+                party,
+                is_member=True,
+                is_host=party.creator_user_id == user.id,
+            )
             await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
 

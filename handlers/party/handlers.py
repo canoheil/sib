@@ -17,9 +17,11 @@ from sib.core.errors import (
 from sib.database.connection import get_session
 from sib.database.models import Game, Party, PartyMember, PartyStatus
 from sib.keyboards.party import (
+    MODE_TITLES,
     get_game_selection_keyboard,
     get_games_menu_keyboard,
     get_game_mode_keyboard,
+    get_match_type_keyboard,
     get_party_action_keyboard,
     get_active_parties_keyboard,
 )
@@ -174,6 +176,44 @@ async def handle_select_game(callback: CallbackQuery, bot: Bot):
         )
 
 
+@router.callback_query(F.data.startswith("select_mode:"))
+async def handle_select_mode(callback: CallbackQuery, bot: Optional[Bot] = None):
+    """Match type screen for one game mode (Game -> Mode -> Match Type).
+
+    Callback format: ``select_mode:{code}:{mode}:{back}``. The mode itself is
+    the SAME for both choices; only the match type changes.
+    """
+    parts = callback.data.split(":")
+    game_code = parts[1]
+    mode = parts[2] if len(parts) > 2 else "solo"
+    back_to = parts[3] if len(parts) > 3 and parts[3] else "group_games_panel"
+
+    async with get_session() as session:
+        game = await session.scalar(select(Game).where(Game.code == game_code))
+        if not game:
+            await callback.answer("بازی یافت نشد 🍏", show_alert=True)
+            return
+
+        mode_text = MODE_TITLES.get(mode, mode)
+        text = (
+            f"🎮 **{game.name_fa}**\n"
+            f"⚔️ **حالت:** {mode_text}\n\n"
+            "می‌خوای رقابتی بازی کنی یا رفیقانه؟\n\n"
+            "🔎 **پیدا کردن حریف:** مسابقهٔ رقابتی با حریف از گروه‌های دیگه "
+            "(روی رتبهٔ گروه اثر داره).\n"
+            "🎉 **بازی با اعضای گروه:** اعضای همین گروه دو تیم رو پر می‌کنن "
+            "(با بات هم می‌تونی جای خالی رو پر کنی). نتیجه‌اش روی رتبه اثر نداره "
+            "و به‌جای نهال، سیب جایزه می‌ده. 🍏"
+        )
+        await callback.answer()
+        await safe_edit_callback_message(
+            callback,
+            bot,
+            text,
+            reply_markup=get_match_type_keyboard(game, mode, back_to=back_to),
+        )
+
+
 @router.callback_query(F.data.startswith("create_party:"))
 async def handle_create_party(callback: CallbackQuery, bot: Optional[Bot] = None):
     """Create a new party for the chosen game and mode."""
@@ -207,7 +247,7 @@ async def handle_create_party(callback: CallbackQuery, bot: Optional[Bot] = None
             return
 
         text = render_party_card(party)
-        kb = get_party_action_keyboard(party, is_member=True)
+        kb = get_party_action_keyboard(party, is_member=True, is_host=True)
 
         # The party card stays claimed to its CREATOR (cancel is a
         # creator-right). Joins/views are public and pass the shared
@@ -233,8 +273,9 @@ async def handle_view_party(callback: CallbackQuery, bot: Optional[Bot] = None):
             return
 
         is_member = any(m.user_id == user.id for m in party.members) if user else False
+        is_host = bool(user) and party.creator_user_id == user.id
         text = render_party_card(party)
-        kb = get_party_action_keyboard(party, is_member=is_member)
+        kb = get_party_action_keyboard(party, is_member=is_member, is_host=is_host)
 
         await callback.answer()
         if callback.message:
@@ -243,8 +284,18 @@ async def handle_view_party(callback: CallbackQuery, bot: Optional[Bot] = None):
 
 @router.callback_query(F.data.startswith("join_party:"))
 async def handle_join_party(callback: CallbackQuery, bot: Optional[Bot] = None):
-    """Join an open party slot."""
-    party_id = int(callback.data.split(":")[1])
+    """Join an open party slot (friendly parties may pick their team).
+
+    Callback format: ``join_party:{id}`` or ``join_party:{id}:{team}``.
+    """
+    parts = callback.data.split(":")
+    party_id = int(parts[1])
+    team = None
+    if len(parts) > 2 and parts[2]:
+        try:
+            team = int(parts[2])
+        except ValueError:
+            team = None
     user = callback.from_user
 
     if not user:
@@ -254,13 +305,15 @@ async def handle_join_party(callback: CallbackQuery, bot: Optional[Bot] = None):
         await UserService.get_or_create_user(session, user)
 
         try:
-            party = await PartyService.join_party(session, party_id, user.id)
+            party = await PartyService.join_party(session, party_id, user.id, team=team)
         except (ActiveSessionExistsException, PartyFullException, PartyNotFoundException, InvalidActionException) as e:
             await callback.answer(e.message, show_alert=True)
             return
 
         text = render_party_card(party)
-        kb = get_party_action_keyboard(party, is_member=True)
+        kb = get_party_action_keyboard(
+            party, is_member=True, is_host=party.creator_user_id == user.id
+        )
 
         await callback.answer("به پارتی اضافه شدی! 🍏✨")
         if callback.message:

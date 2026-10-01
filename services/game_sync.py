@@ -16,10 +16,20 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from sib.core.logging import logger
 from sib.database.models import Match, MatchState
 from sib.games.registry import get_game_engine
+from sib.keyboards.party import get_friendly_rematch_keyboard
+from sib.services.friendly import (
+    is_friendly,
+    shape_friendly_final_text,
+    state_viewer_id,
+    viewer_audience,
+)
 from sib.services.telegram_ui import safe_edit_screen, with_refresh_button
 
 
-def final_keyboard() -> InlineKeyboardMarkup:
+def final_keyboard(match: Optional[Match] = None) -> InlineKeyboardMarkup:
+    """Final-board keyboard; friendly matches get their Rematch action."""
+    if match is not None and is_friendly(match):
+        return get_friendly_rematch_keyboard(match.id)
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -61,6 +71,37 @@ async def sync_match_messages(
 
     match_over = match.state != MatchState.ACTIVE
     players_by_group = {p.group_id: p.user_id for p in match.players}
+
+    if is_friendly(match):
+        # Friendly matches hold BOTH teams in ONE group and share ONE board
+        # message (group1 == group2): sync it exactly once, from the current
+        # player's team perspective, with the neutral team-named finale.
+        human_ids = {p.user_id for p in match.players if p.group_id is not None}
+        viewer = state_viewer_id(state, human_ids, None)
+        audience = viewer_audience(match, state, viewer) or match.group1_id
+        msg_id = match.group1_message_id or match.group2_message_id
+        if match.group1_id and msg_id:
+            text = engine.render_for_group(state, audience, viewer)
+            kb = with_refresh_button(
+                engine.get_keyboard(state, match.id, viewer), match.id
+            )
+            if match_over:
+                text = shape_friendly_final_text(text, match, state)
+                kb = get_friendly_rematch_keyboard(match.id)
+            if suffix:
+                text = f"{text}\n\n{suffix}"
+            new_msg_id = await safe_edit_screen(
+                bot,
+                chat_id=match.group1_id,
+                message_id=msg_id,
+                text=text,
+                reply_markup=kb,
+            )
+            if new_msg_id and new_msg_id != msg_id:
+                match.group1_message_id = new_msg_id
+                if match.group2_id == match.group1_id:
+                    match.group2_message_id = new_msg_id
+        return
 
     for group_id, msg_id, which in (
         (match.group1_id, match.group1_message_id, 1),

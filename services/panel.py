@@ -24,7 +24,10 @@ OWNER_SCOPED_CALLBACKS: Tuple[str, ...] = (
     "close_panel",
     "create_new_party_menu",
     "select_game:",
+    "select_mode:",
     "create_party:",
+    "create_friendly_party:",
+    "make_friendly:",
     # Personal garden panel
     "garden_plant:",
     "garden_harvest:",

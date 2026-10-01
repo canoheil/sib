@@ -26,6 +26,7 @@ from sib.database.models import (
     Match,
     MatchPlayer,
     MatchState,
+    MatchType,
     MatchmakingQueue,
 )
 
@@ -63,6 +64,13 @@ class MatchmakingService:
             raise PartyNotFoundException()
 
         # 2. Hard requirements
+        if party.is_friendly:
+            # A friendly party already contains BOTH teams of a group match.
+            # It must never enter the ranked queue (no accidental ranked game).
+            raise InvalidActionException(
+                "این پارتی رفیقانه است و توی صف حریف رقابتی قرار نمی‌گیره؛ "
+                "برای شروع، دکمهٔ «شروع بازی رفیقانه» رو بزن 🍏"
+            )
         if party.status == PartyStatus.IN_QUEUE:
             raise InvalidActionException("این تیم در حال حاضر در صف جستجوی حریف قرار دارد 🍏")
         if party.status == PartyStatus.IN_MATCH:
@@ -205,6 +213,8 @@ class MatchmakingService:
             .where(MatchmakingQueue.game_id == my_queue.game_id)
             .where(MatchmakingQueue.mode == my_queue.mode)
             .where(Party.max_players == my_party_size)
+            # Friendly parties are group-internal and never ranked opponents.
+            .where(Party.match_type == MatchType.NORMAL)
             .where(MatchmakingQueue.group_id != my_queue.group_id)
             .where(MatchmakingQueue.is_active == True)
             .where(MatchmakingQueue.expires_at > now)

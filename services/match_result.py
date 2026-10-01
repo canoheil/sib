@@ -5,6 +5,9 @@ Group progression is win-based:
 - A normal eligible group win awards exactly one group win.
 - A loss does NOT subtract a win.
 - Bot matches never affect group wins or group leaderboard position.
+- FRIENDLY matches never affect rank/ELO/MMR, group wins/leaderboards or
+  competitive player counters, and never award seedlings: they pay the
+  configurable Apple reward instead (see ``sib.services.friendly``).
 """
 
 from datetime import datetime, timezone
@@ -18,6 +21,7 @@ from sib.database.models import (
     Match,
     MatchPlayer,
     MatchState,
+    MatchType,
     GroupStats,
     PlayerStats,
     User,
@@ -57,8 +61,13 @@ class MatchResultService:
         match: Match,
         result: GameResult,
     ) -> None:
+        # Friendly matches are casual: participants keep their per-match
+        # result (the board shows it), but NO competitive profile counters
+        # and NO seedlings - their reward is the Apple payout below.
+        friendly = match.match_type == MatchType.FRIENDLY
+
         bot_ids = set()
-        if match.is_bot_match:
+        if match.is_bot_match or friendly:
             bot_ids = set(
                 (
                     await session.scalars(
@@ -75,7 +84,7 @@ class MatchResultService:
             # Bot entities keep a match result, but only human participants
             # get an aggregate profile record.
             p_stat = None
-            if not is_bot_player:
+            if not is_bot_player and not friendly:
                 p_stat = await session.scalar(
                     select(PlayerStats)
                     .where(PlayerStats.user_id == p.user_id)
@@ -105,7 +114,7 @@ class MatchResultService:
                         p_stat.matches_played += 1
                         p_stat.wins += 1
                 # Seedling rewards belong to eligible NORMAL PvP wins only.
-                if not match.is_bot_match:
+                if not match.is_bot_match and not friendly:
                     await SeedlingService.award_match_win(
                         session, match_id=match.id, user_id=p.user_id
                     )
@@ -150,12 +159,15 @@ class MatchResultService:
         if result.is_draw:
             match.is_draw = True
             match.winner_group_id = None
+            match.winner_team = None
         elif result.winner_team in (1, "1", "A"):
             match.is_draw = False
             match.winner_group_id = match.group1_id
+            match.winner_team = 1
         elif result.winner_team in (2, "2", "B"):
             match.is_draw = False
             match.winner_group_id = match.group2_id
+            match.winner_team = 2
         else:
             raise ValueError(
                 f"Invalid game result: winner_team={result.winner_team}, "
@@ -165,7 +177,23 @@ class MatchResultService:
         # 3. Individual player statistics always recorded.
         await cls._record_player_results(session, match, result)
 
-        if match.is_bot_match:
+        if match.match_type == MatchType.FRIENDLY:
+            # 4. FRIENDLY match: never rank/ELO/MMR, never group wins or
+            #    seedlings. The Apple reward (daily-capped, ledger-idempotent)
+            #    is the only payout.
+            from sib.services.friendly import FriendlyRewardService
+
+            await FriendlyRewardService.award_match_rewards(session, match)
+            log_event(
+                Events.MATCH_FINISHED,
+                {
+                    "match_id": match.id,
+                    "match_type": MatchType.FRIENDLY,
+                    "winner_team": match.winner_team,
+                    "is_draw": match.is_draw,
+                },
+            )
+        elif match.is_bot_match:
             # 4a. Bot matches MUST NOT affect group wins/leaderboard.
             log_event(
                 Events.MATCH_FINISHED,
