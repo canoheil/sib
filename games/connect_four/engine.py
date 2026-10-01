@@ -6,7 +6,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from sib.core.config import settings
 from sib.core.text import safe_name
 from sib.database.models import MatchPlayer
-from sib.games.base import BaseGameEngine, GameResult
+from sib.games.base import BaseGameEngine, GameResult, is_friendly_state, player_for_view, team_label
 
 
 class ConnectFourEngine(BaseGameEngine):
@@ -210,9 +210,12 @@ class ConnectFourEngine(BaseGameEngine):
 
         if self.is_finished(game_state):
             result = self.get_result(game_state)
-            my_team = next((p["team"] for p in game_state["players"].values() if p["group_id"] == for_group_id), None)
+            viewer = player_for_view(game_state, for_group_id, for_player_id)
+            my_team = viewer.get("team") if viewer else None
             if result.is_draw:
                 outcome = "🤝 **نتیجه: مساوی!**"
+            elif is_friendly_state(game_state):
+                outcome = f"🎉 **{team_label(game_state, result.winner_team)} پیروز شد!** 🍏🏆"
             elif result.winner_team == my_team:
                 outcome = "🎉 **گروه شما پیروز شد!** 🍏🏆"
             else:

@@ -44,6 +44,8 @@ class AcceptanceService:
         session: AsyncSession,
         match_id: int,
         user_id: int,
+        *,
+        group_id: Optional[int] = None,
     ) -> Tuple[Match, bool]:
         """
         Record acceptance from a player for their team.
@@ -72,6 +74,11 @@ class AcceptanceService:
         player = next((p for p in match.players if p.user_id == user_id), None)
         if not player:
             raise InvalidActionException("شما بازیکن این مسابقه نیستید 🍏")
+        if group_id is not None and (
+            player.group_id != group_id
+            or group_id not in (match.group1_id, match.group2_id)
+        ):
+            raise InvalidActionException("این پذیرش فقط از گروه ثبت‌شده‌ی شما ممکنه 🍏")
 
         player.has_accepted = True
 
@@ -115,6 +122,8 @@ class AcceptanceService:
         session: AsyncSession,
         match_id: int,
         user_id: int,
+        *,
+        group_id: Optional[int] = None,
     ) -> Match:
         """
         Reject a match before gameplay starts.
@@ -143,6 +152,11 @@ class AcceptanceService:
         player = next((p for p in match.players if p.user_id == user_id), None)
         if not player:
             raise InvalidActionException("شما بازیکن این مسابقه نیستید 🍏")
+        if group_id is not None and (
+            player.group_id != group_id
+            or group_id not in (match.group1_id, match.group2_id)
+        ):
+            raise InvalidActionException("این پذیرش فقط از گروه ثبت‌شده‌ی شما ممکنه 🍏")
 
         if not cls.can_transition(match.state, MatchState.CANCELLED):
             raise InvalidActionException("انتقال به وضعیت لغو مسابقه غیرمجاز است 🍏")

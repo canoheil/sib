@@ -14,7 +14,7 @@ from aiogram import Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from sib.core.logging import logger
-from sib.database.models import Match, MatchState
+from sib.database.models import Match, MatchState, MatchType
 from sib.games.registry import get_game_engine
 from sib.services.telegram_ui import safe_edit_screen, with_refresh_button
 
@@ -60,7 +60,15 @@ async def sync_match_messages(
         return
 
     match_over = match.state != MatchState.ACTIVE
-    players_by_group = {p.group_id: p.user_id for p in match.players}
+    players_by_group = {p.group_id: p.user_id for p in match.players if p.group_id is not None}
+    if match.match_type == MatchType.FRIENDLY and match.group1_id:
+        current_pid = state.get("current_player_id")
+        friendly_players = [p for p in match.players if p.group_id == match.group1_id]
+        viewer = next((p for p in friendly_players if p.user_id == current_pid), None)
+        if viewer is None:
+            viewer = next((p for p in friendly_players if p.team == 1), None)
+        if viewer is not None:
+            players_by_group[match.group1_id] = viewer.user_id
 
     for group_id, msg_id, which in (
         (match.group1_id, match.group1_message_id, 1),
@@ -74,6 +82,8 @@ async def sync_match_messages(
                 outcome = ""
                 if match.is_draw:
                     outcome = "🤝 این مسابقه مساوی شد."
+                elif match.match_type == MatchType.FRIENDLY and match.winner_team in (1, 2):
+                    outcome = f"🎉 تیم {'اول' if match.winner_team == 1 else 'دوم'} پیروز شد."
                 elif match.winner_group_id:
                     outcome = (
                         "🎉 گروه شما پیروز شد!"

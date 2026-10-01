@@ -6,7 +6,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from sib.core.config import settings
 from sib.core.text import safe_name
 from sib.database.models import MatchPlayer
-from sib.games.base import BaseGameEngine, GameResult
+from sib.games.base import BaseGameEngine, GameResult, is_friendly_state, team_label
 
 
 class RockPaperScissorsEngine(BaseGameEngine):
@@ -222,6 +222,45 @@ class RockPaperScissorsEngine(BaseGameEngine):
         """Render Persian status of the current RPS round."""
         players = list(game_state["players"].values())
 
+        if is_friendly_state(game_state):
+            team_players = {
+                team: next((p for p in players if str(p.get("team")) == str(team)), None)
+                for team in (1, 2)
+            }
+            team_one, team_two = team_players[1], team_players[2]
+            if not team_one or not team_two:
+                return "اطلاعات بازی دوستانه کامل نیست."
+            score_one, score_two = team_one["score"], team_two["score"]
+            team_one_label = team_label(game_state, 1)
+            team_two_label = team_label(game_state, 2)
+            if self.is_finished(game_state):
+                result = self.get_result(game_state)
+                if result.is_draw:
+                    outcome = "🤝 **نتیجه‌ی بازی: مساوی شد.**"
+                else:
+                    winner = team_one_label if str(result.winner_team) in ("1", "A") else team_two_label
+                    outcome = f"🎉 **{winner} پیروز شد!**"
+                choice_one = self.CHOICES.get(team_one["choice"], "—")
+                choice_two = self.CHOICES.get(team_two["choice"], "—")
+                return (
+                    "✂️ **نتیجه‌ی نهایی سنگ، کاغذ، قیچی**\n\n"
+                    f"🏆 **امتیاز:** {score_one} - {score_two}\n"
+                    f"👥 **{team_one_label}:** {team_one['name']}، {choice_one}\n"
+                    f"👥 **{team_two_label}:** {team_two['name']}، {choice_two}\n\n"
+                    f"{outcome}\n📝 {result.summary}"
+                )
+
+            status_one = "✅ انتخاب ثبت شده" if team_one["locked"] else "⏳ در انتظار انتخاب"
+            status_two = "✅ انتخاب ثبت شده" if team_two["locked"] else "⏳ در انتظار انتخاب"
+            return (
+                "✂️ **بازی دوستانه‌ی سنگ، کاغذ، قیچی**\n\n"
+                f"🎯 **راند {game_state.get('round', 1)} از {self.TOTAL_ROUNDS}**\n"
+                f"🏆 **امتیاز:** {score_one} - {score_two}\n\n"
+                f"👥 **{team_one_label}:** {team_one['name']}، {status_one}\n"
+                f"👥 **{team_two_label}:** {team_two['name']}، {status_two}\n\n"
+                "🔒 انتخاب‌های ثبت‌شده تا پایان راند مخفی می‌مونن."
+            )
+
         my_p = next(
             (p for p in players if p["group_id"] == for_group_id),
             None,
@@ -293,6 +332,17 @@ class RockPaperScissorsEngine(BaseGameEngine):
 
         if self.is_finished(game_state):
             return InlineKeyboardMarkup(inline_keyboard=[])
+
+        if is_friendly_state(game_state):
+            # The board is shared by both teams. The callback actor, not the
+            # keyboard payload, identifies whose hidden choice is recorded.
+            return InlineKeyboardMarkup(
+                inline_keyboard=[[
+                    InlineKeyboardButton(text="🗿 سنگ", callback_data=f"rps_action:{match_id}:rock"),
+                    InlineKeyboardButton(text="📄 کاغذ", callback_data=f"rps_action:{match_id}:paper"),
+                    InlineKeyboardButton(text="✂️ قیچی", callback_data=f"rps_action:{match_id}:scissors"),
+                ]]
+            )
 
         if player_data and player_data.get("locked"):
             chosen = self.CHOICES.get(

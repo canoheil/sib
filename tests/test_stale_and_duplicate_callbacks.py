@@ -51,6 +51,10 @@ async def test_stale_callback_on_finished_or_cancelled_match(db_session):
     mock_cb = MagicMock(spec=CallbackQuery)
     mock_cb.data = f"rps_action:{match.id}:rock"
     mock_cb.from_user = TelegramUser(id=u1.id, is_bot=False, first_name=u1.first_name)
+    participant = next(p for p in match.players if p.user_id == u1.id)
+    mock_cb.message = MagicMock(spec=Message)
+    mock_cb.message.chat = TelegramChat(id=participant.group_id, type="supergroup", title="گروه تست")
+    mock_cb.message.edit_text = AsyncMock()
     mock_cb.answer = AsyncMock()
 
     mock_bot = AsyncMock()

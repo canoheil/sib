@@ -7,7 +7,9 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from sib.core.config import settings
 from sib.core.text import safe_name
 from sib.database.models import MatchPlayer
-from sib.games.base import BaseGameEngine, GameResult
+from sib.games.base import (
+    BaseGameEngine, GameResult, is_friendly_state, opponent_for_view, player_for_view, team_label,
+)
 
 
 class TicTacToeEngine(BaseGameEngine):
@@ -137,8 +139,9 @@ class TicTacToeEngine(BaseGameEngine):
     ) -> str:
         board = game_state["board"]
         players = list(game_state["players"].values())
-        my_p = next((p for p in players if p["group_id"] == for_group_id), None)
-        opp_p = next((p for p in players if p["group_id"] != for_group_id), None)
+        friendly = is_friendly_state(game_state)
+        my_p = player_for_view(game_state, for_group_id, for_player_id)
+        opp_p = opponent_for_view(game_state, my_p, for_group_id)
 
         if not my_p or not opp_p:
             return "اطلاعات بازی ناقص است."
@@ -153,9 +156,16 @@ class TicTacToeEngine(BaseGameEngine):
 
         if self.is_finished(game_state):
             result = self.get_result(game_state)
-            outcome = "🤝 **نتیجه: مساوی!**" if result.is_draw else (
-                "🎉 **برنده شدید!** 🍏🏆" if result.winner_team == my_p["team"] else "💔 **بازی را واگذار کردید!** 🍏"
-            )
+            if result.is_draw:
+                outcome = "🤝 **نتیجه: مساوی!**"
+            elif friendly:
+                outcome = f"🎉 **{team_label(game_state, result.winner_team)} پیروز شد!** 🍏🏆"
+            else:
+                outcome = (
+                    "🎉 **برنده شدید!** 🍏🏆"
+                    if result.winner_team == my_p["team"]
+                    else "💔 **بازی را واگذار کردید!** 🍏"
+                )
             return (
                 "🍎🍏 **پایان بازی دوز (Tic-Tac-Toe)**\n\n"
                 f"{board_art}\n\n"
@@ -169,6 +179,14 @@ class TicTacToeEngine(BaseGameEngine):
             game_state, for_group_id, for_player_id,
             "یک خانه خالی را لمس کنید.", "یک خانه خالی را لمس کنید.",
         )
+
+        if friendly:
+            return (
+                "🍎🍏 **بازی دوستانه‌ی دوز (Tic-Tac-Toe)**\n\n"
+                f"👥 **{team_label(game_state, my_p['team'])}:** {my_p['name']} ({icons[my_p['symbol']]})\n"
+                f"👥 **{team_label(game_state, opp_p['team'])}:** {opp_p['name']} ({icons[opp_p['symbol']]})\n\n"
+                f"{board_art}\n\n{turn_text}"
+            )
 
         return (
             "🍎🍏 **بازی دوز (Tic-Tac-Toe)** 🍏\n\n"

@@ -43,6 +43,7 @@ def test_migration_chain_has_single_head():
     heads = [line.strip() for line in result.stdout.splitlines() if line.strip()]
     assert len(heads) == 1
     assert "(head)" in heads[0]
+    assert "023_friendly_match_foundation" in heads[0]
 
 
 def test_alembic_current_revision():

@@ -26,6 +26,7 @@ from sib.database.models import (
     Match,
     MatchPlayer,
     MatchState,
+    MatchType,
     MatchmakingQueue,
 )
 
@@ -49,8 +50,10 @@ class MatchmakingService:
         session: AsyncSession,
         party_id: int,
         user_id: int,
+        *,
+        group_id: Optional[int] = None,
     ) -> MatchmakingQueue:
-        """Enqueue a full party into matchmaking."""
+        """Enqueue a full Competitive party into matchmaking."""
         # 1. Fetch party with row lock
         party_stmt = (
             select(Party)
@@ -61,6 +64,10 @@ class MatchmakingService:
         party = await session.scalar(party_stmt)
         if not party:
             raise PartyNotFoundException()
+        if group_id is not None and party.group_id != group_id:
+            raise PartyNotFoundException()
+        if party.match_type != MatchType.COMPETITIVE:
+            raise InvalidActionException("پارتی دوستانه وارد صف رقابتی نمی‌شه 🍏")
 
         # 2. Hard requirements
         if party.status == PartyStatus.IN_QUEUE:
@@ -125,8 +132,10 @@ class MatchmakingService:
         session: AsyncSession,
         party_id: int,
         user_id: int,
+        *,
+        group_id: Optional[int] = None,
     ) -> bool:
-        """Cancel matchmaking search and return party to FULL status."""
+        """Cancel Competitive matchmaking search and return party to FULL."""
         # Queue -> party lock order matches the matcher and timeout worker.
         queue_entry = await session.scalar(
             select(MatchmakingQueue)
@@ -143,6 +152,10 @@ class MatchmakingService:
         party = await session.scalar(party_stmt)
         if not party:
             raise PartyNotFoundException()
+        if group_id is not None and party.group_id != group_id:
+            raise PartyNotFoundException()
+        if party.match_type != MatchType.COMPETITIVE:
+            raise InvalidActionException("پارتی دوستانه صف رقابتی نداره 🍏")
 
         is_member = any(m.user_id == user_id for m in party.members)
         if not is_member and party.creator_user_id != user_id:
@@ -195,9 +208,12 @@ class MatchmakingService:
         # - Same party size
         # - DIFFERENT Telegram group (Group A != Group B is NEVER allowed to match!)
         # - Active & not expired
-        my_party_size = await session.scalar(
-            select(Party.max_players).where(Party.id == my_queue.party_id)
+        own_party = await session.scalar(
+            select(Party).where(Party.id == my_queue.party_id)
         )
+        if not own_party or own_party.match_type != MatchType.COMPETITIVE:
+            return None
+        my_party_size = own_party.max_players
 
         candidate_stmt = (
             select(MatchmakingQueue)
@@ -205,6 +221,7 @@ class MatchmakingService:
             .where(MatchmakingQueue.game_id == my_queue.game_id)
             .where(MatchmakingQueue.mode == my_queue.mode)
             .where(Party.max_players == my_party_size)
+            .where(Party.match_type == MatchType.COMPETITIVE)
             .where(MatchmakingQueue.group_id != my_queue.group_id)
             .where(MatchmakingQueue.is_active == True)
             .where(MatchmakingQueue.expires_at > now)
@@ -272,6 +289,7 @@ class MatchmakingService:
         new_match = Match(
             game_id=my_queue.game_id,
             mode=my_queue.mode,
+            match_type=MatchType.COMPETITIVE,
             state=MatchState.WAITING_FOR_ACCEPTANCE,
             group1_id=party1.group_id,
             group2_id=party2.group_id,

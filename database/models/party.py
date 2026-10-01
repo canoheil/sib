@@ -2,9 +2,10 @@
 
 from datetime import datetime
 from typing import List, Optional
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, UniqueConstraint, func
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sib.database.base import Base, TimestampMixin
+from .match_type import MatchType
 
 
 class PartyStatus:
@@ -24,6 +25,10 @@ class Party(Base, TimestampMixin):
     group_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("groups.id", ondelete="CASCADE"), nullable=False, index=True)
     game_id: Mapped[int] = mapped_column(Integer, ForeignKey("games.id"), nullable=False, index=True)
     mode: Mapped[str] = mapped_column(String(20), default="solo", nullable=False)  # solo, 2v2, 4v4
+    match_type: Mapped[str] = mapped_column(
+        String(20), default=MatchType.COMPETITIVE,
+        server_default=MatchType.COMPETITIVE, nullable=False, index=True,
+    )
     max_players: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     current_players_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     status: Mapped[str] = mapped_column(String(20), default=PartyStatus.OPEN, nullable=False, index=True)
@@ -57,6 +62,13 @@ class PartyMember(Base, TimestampMixin):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     party_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("parties.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
+    team: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
+    bot_profile: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    selected_card_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger,
+        ForeignKey("player_cards.id", ondelete="SET NULL", name="fk_party_member_selected_card"),
+        nullable=True,
+    )
     joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     # Relationships

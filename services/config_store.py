@@ -62,6 +62,9 @@ CONFIG_DEFAULTS: dict[str, Any] = {
         {"apples": 1300, "item": "apple_obsidian", "quantity": 6},  # 8 -> 9
         {"apples": 1600, "item": "apple_obsidian", "quantity": 8},  # 9 -> 10
     ],
+    # Friendly/group matches. These economy values are tunable at runtime.
+    "friendly_match_reward_apples": 10,
+    "friendly_match_daily_match_cap": 5,
     # Apple Battle
     "apple_battle_winner_seedlings": 1,
     "apple_battle_queue_timeout_seconds": 600,

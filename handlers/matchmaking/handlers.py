@@ -27,16 +27,25 @@ router = Router(name="matchmaking")
 @router.callback_query(F.data.startswith("find_match:"))
 async def handle_find_match(callback: CallbackQuery, bot: Bot):
     """Start matchmaking search for a full party."""
-    party_id = int(callback.data.split(":")[1])
+    try:
+        party_id = int((callback.data or "").split(":")[1])
+    except (IndexError, ValueError):
+        await callback.answer("درخواست نامعتبر است 🍏", show_alert=True)
+        return
     user = callback.from_user
     chat = callback.message.chat if callback.message else None
 
     if not user or not chat:
         return
+    if chat.type not in ("group", "supergroup"):
+        await callback.answer("جستجوی حریف فقط در گروه انجام می‌شه 🍏", show_alert=True)
+        return
 
     async with get_session() as session:
         try:
-            queue_entry = await MatchmakingService.enqueue_party(session, party_id, user.id)
+            queue_entry = await MatchmakingService.enqueue_party(
+                session, party_id, user.id, group_id=chat.id
+            )
             match = await MatchmakingService.find_and_create_match(session, party_id)
         except (InvalidActionException, PartyNotFoundException) as e:
             await callback.answer(e.message, show_alert=True)
@@ -98,15 +107,22 @@ async def handle_find_match(callback: CallbackQuery, bot: Bot):
 @router.callback_query(F.data.startswith("cancel_matchmaking:"))
 async def handle_cancel_matchmaking(callback: CallbackQuery, bot: Optional[Bot] = None):
     """Cancel waiting in matchmaking queue."""
-    party_id = int(callback.data.split(":")[1])
+    try:
+        party_id = int((callback.data or "").split(":")[1])
+    except (IndexError, ValueError):
+        await callback.answer("درخواست نامعتبر است 🍏", show_alert=True)
+        return
     user = callback.from_user
-
-    if not user:
+    chat = callback.message.chat if callback.message else None
+    if not user or not chat or chat.type not in ("group", "supergroup"):
+        await callback.answer("این صف فقط از گروه خودش قابل لغوه 🍏", show_alert=True)
         return
 
     async with get_session() as session:
         try:
-            await MatchmakingService.cancel_matchmaking(session, party_id, user.id)
+            await MatchmakingService.cancel_matchmaking(
+                session, party_id, user.id, group_id=chat.id
+            )
             party = await PartyService.get_party_by_id(session, party_id)
         except (InvalidActionException, PartyNotFoundException) as e:
             await callback.answer(e.message, show_alert=True)
@@ -115,22 +131,31 @@ async def handle_cancel_matchmaking(callback: CallbackQuery, bot: Optional[Bot] 
         await callback.answer("جستجوی حریف لغو شد 🍏")
         if party and callback.message:
             text = render_party_card(party)
-            kb = get_party_action_keyboard(party, is_member=True)
+            kb = get_party_action_keyboard(
+                party, is_member=True, is_creator=party.creator_user_id == user.id
+            )
             await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
 
 @router.callback_query(F.data.startswith("accept_match:"))
 async def handle_accept_match(callback: CallbackQuery, bot: Bot):
-    """Player accepts match for their side."""
-    match_id = int(callback.data.split(":")[1])
+    """Participant accepts from the Telegram group recorded for their side."""
+    try:
+        match_id = int((callback.data or "").split(":")[1])
+    except (IndexError, ValueError):
+        await callback.answer("درخواست نامعتبر است 🍏", show_alert=True)
+        return
     user = callback.from_user
-
-    if not user:
+    chat = callback.message.chat if callback.message else None
+    if not user or not chat or chat.type not in ("group", "supergroup"):
+        await callback.answer("پذیرش مسابقه فقط از گروه ثبت‌شده ممکنه 🍏", show_alert=True)
         return
 
     async with get_session() as session:
         try:
-            match, both_accepted = await AcceptanceService.accept_match(session, match_id, user.id)
+            match, both_accepted = await AcceptanceService.accept_match(
+                session, match_id, user.id, group_id=chat.id
+            )
         except (InvalidActionException, MatchNotFoundException) as e:
             await callback.answer(e.message, show_alert=True)
             return
@@ -211,16 +236,23 @@ async def handle_accept_match(callback: CallbackQuery, bot: Bot):
 
 @router.callback_query(F.data.startswith("reject_match:"))
 async def handle_reject_match(callback: CallbackQuery, bot: Bot):
-    """Player rejects match before gameplay."""
-    match_id = int(callback.data.split(":")[1])
+    """Participant rejects from the Telegram group recorded for their side."""
+    try:
+        match_id = int((callback.data or "").split(":")[1])
+    except (IndexError, ValueError):
+        await callback.answer("درخواست نامعتبر است 🍏", show_alert=True)
+        return
     user = callback.from_user
-
-    if not user:
+    chat = callback.message.chat if callback.message else None
+    if not user or not chat or chat.type not in ("group", "supergroup"):
+        await callback.answer("پذیرش مسابقه فقط از گروه ثبت‌شده ممکنه 🍏", show_alert=True)
         return
 
     async with get_session() as session:
         try:
-            match = await AcceptanceService.reject_match(session, match_id, user.id)
+            match = await AcceptanceService.reject_match(
+                session, match_id, user.id, group_id=chat.id
+            )
         except (InvalidActionException, MatchNotFoundException) as e:
             await callback.answer(e.message, show_alert=True)
             return

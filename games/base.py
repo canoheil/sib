@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 from aiogram.types import InlineKeyboardMarkup
-from sib.database.models import MatchPlayer
+from sib.database.models import MatchPlayer, MatchType
 
 
 @dataclass
@@ -40,6 +40,56 @@ def turn_line(
     if current_pid is not None and current_pid == for_player_id and len(members) <= 1:
         return f"🟢 **نوبت شماست!** {your_verb}"
     return f"🟢 **نوبت {curr_name} است!** {name_verb}"
+
+
+def is_friendly_state(game_state: Dict[str, Any]) -> bool:
+    """Whether an engine state is a same-group Friendly match."""
+    return game_state.get("match_type") == MatchType.FRIENDLY
+
+
+def player_for_view(
+    game_state: Dict[str, Any],
+    for_group_id: Optional[int],
+    for_player_id: Optional[int],
+) -> Optional[Dict[str, Any]]:
+    """Pick the viewer's player state without confusing same-group teams."""
+    players = game_state.get("players", {})
+    if is_friendly_state(game_state) and for_player_id is not None:
+        return players.get(str(for_player_id))
+    return next(
+        (p for p in players.values() if p.get("group_id") == for_group_id),
+        None,
+    )
+
+
+def opponent_for_view(
+    game_state: Dict[str, Any],
+    viewer: Optional[Dict[str, Any]],
+    for_group_id: Optional[int],
+) -> Optional[Dict[str, Any]]:
+    """Select the opposing side in a public Friendly view or private PvP view."""
+    if is_friendly_state(game_state):
+        if viewer is None:
+            return None
+        return next(
+            (p for p in game_state.get("players", {}).values() if p.get("team") != viewer.get("team")),
+            None,
+        )
+    return next(
+        (p for p in game_state.get("players", {}).values() if p.get("group_id") != for_group_id),
+        None,
+    )
+
+
+def team_label(game_state: Dict[str, Any], team: Any) -> str:
+    """Return the configured team name, with a Friendly-safe fallback."""
+    key = str(team)
+    configured = game_state.get("team_names", {}).get(key)
+    if configured:
+        return configured
+    if is_friendly_state(game_state):
+        return "تیم اول" if key in ("1", "A") else "تیم دوم"
+    return "تیم A" if key in ("1", "A") else "تیم B"
 
 
 class BaseGameEngine(ABC):

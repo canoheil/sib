@@ -2,7 +2,8 @@
 
 from datetime import datetime
 from typing import Optional, List
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from .match_type import MatchType
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sib.database.base import Base, TimestampMixin
 
@@ -21,20 +22,34 @@ class MatchState:
 class Match(Base, TimestampMixin):
     """Match model representing a game session between two groups/teams."""
     __tablename__ = "matches"
+    __table_args__ = (
+        UniqueConstraint("rematch_of_match_id", name="uq_matches_rematch_of_match"),
+        Index("ix_matches_match_type", "match_type"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     game_id: Mapped[int] = mapped_column(Integer, ForeignKey("games.id"), nullable=False, index=True)
     mode: Mapped[str] = mapped_column(String(20), default="solo", nullable=False)  # solo, 2v2, 4v4
+    match_type: Mapped[str] = mapped_column(
+        String(20), default=MatchType.COMPETITIVE,
+        server_default=MatchType.COMPETITIVE, nullable=False,
+    )
     state: Mapped[str] = mapped_column(String(50), default=MatchState.CREATED, nullable=False, index=True)
 
     group1_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("groups.id"), nullable=True, index=True)
     group2_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("groups.id"), nullable=True, index=True)
     party1_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("parties.id"), nullable=True)
     party2_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("parties.id"), nullable=True)
+    rematch_of_match_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger,
+        ForeignKey("matches.id", ondelete="SET NULL", name="fk_matches_rematch_source"),
+        nullable=True,
+    )
     group1_message_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     group2_message_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     
     winner_group_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("groups.id"), nullable=True)
+    winner_team: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     is_draw: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     
     # Persistent serialized state of the active game

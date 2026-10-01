@@ -20,7 +20,7 @@ from sqlalchemy.orm import selectinload
 
 from sib.core.logging import logger, log_event, Events
 from sib.database.connection import get_session
-from sib.database.models import Match, MatchPlayer, MatchState, Group, AdCampaign
+from sib.database.models import Match, MatchPlayer, MatchState, MatchType, Group, AdCampaign
 from sib.games.registry import get_game_engine
 from sib.services.match_result import MatchResultService
 from sib.services.ad.service import AdService
@@ -31,6 +31,11 @@ from sib.services.telegram_ui import (
     safe_edit_screen,
     with_refresh_button,
 )
+
+
+async def answer_invalid_game_callback(callback: CallbackQuery) -> None:
+    """Acknowledge malformed/stale game callback data without raising."""
+    await safe_answer_callback(callback, "درخواست بازی معتبر نیست 🍏", show_alert=True)
 
 
 async def _persist_board_message_id(match_id: int, group_id: int, message_id: int) -> None:
@@ -104,7 +109,7 @@ async def render_board_for(
     the rematch keyboard, otherwise with the live playable keyboard.
     """
     engine = get_game_engine(match.game.code)
-    message = callback.message
+    message = getattr(callback, "message", None)
     chat = getattr(message, "chat", None) if message is not None else None
     chat_id = getattr(chat, "id", None) if chat is not None else None
     group_id = chat_id or match.group1_id or for_player_id
@@ -114,6 +119,15 @@ async def render_board_for(
         outcome = ""
         if match.is_draw:
             outcome = "🤝 این مسابقه مساوی شد."
+        elif match.match_type == MatchType.FRIENDLY:
+            from sib.games.base import team_label
+
+            result = engine.get_result(state) if engine.is_finished(state) else None
+            winner_team = (
+                result.winner_team if result is not None else match.winner_team
+            )
+            if winner_team in (1, 2, "1", "2", "A", "B"):
+                outcome = f"🎉 {team_label(state, winner_team)} پیروز شد."
         elif match.winner_group_id:
             outcome = (
                 "🎉 گروه شما پیروز شد!"
@@ -167,6 +181,29 @@ async def process_game_action(
         match = await session.scalar(match_stmt)
         if not match:
             await safe_answer_callback(callback, "مسابقه پیدا نشد 🍏", show_alert=True)
+            return
+
+        player = next((p for p in match.players if p.user_id == user.id), None)
+        if player is None:
+            await safe_answer_callback(
+                callback, "شما بازیکن این مسابقه نیستید 🍏", show_alert=True
+            )
+            return
+        message = getattr(callback, "message", None)
+        chat = getattr(message, "chat", None) if message is not None else None
+        chat_id = getattr(chat, "id", None) if chat is not None else None
+        allowed_group_ids = {gid for gid in (match.group1_id, match.group2_id) if gid is not None}
+        if (
+            not chat
+            or getattr(chat, "type", None) not in ("group", "supergroup")
+            or player.group_id != chat_id
+            or chat_id not in allowed_group_ids
+        ):
+            await safe_answer_callback(
+                callback,
+                "این حرکت فقط از گروه ثبت‌شده‌ی مسابقه ممکنه 🍏",
+                show_alert=True,
+            )
             return
 
         if match.state != MatchState.ACTIVE:
@@ -349,7 +386,7 @@ async def process_game_action(
                         await _persist_board_message_id(match_id, group_id, new_msg_id)
         else:
             target_pid = user.id
-            message = callback.message
+            message = getattr(callback, "message", None)
             chat = getattr(message, "chat", None) if message is not None else None
             group_id = getattr(chat, "id", None) or user.id
             engine = get_game_engine(render_payload["game_code"])
@@ -412,7 +449,7 @@ async def process_game_action(
                 if new_msg_id and new_msg_id != msg_id:
                     await _persist_board_message_id(match_id, group_id, new_msg_id)
     else:
-        message = callback.message
+        message = getattr(callback, "message", None)
         chat = getattr(message, "chat", None) if message is not None else None
         chat_id = getattr(chat, "id", None)
         final_text = build_post_match_text(chat_id)
@@ -451,10 +488,26 @@ async def handle_game_refresh(callback: CallbackQuery, bot: Bot) -> None:
             await safe_answer_callback(callback, "مسابقه پیدا نشد 🍏", show_alert=True)
             return
 
-        is_participant = any(p.user_id == user.id for p in match.players)
-        if not is_participant:
+        player = next((p for p in match.players if p.user_id == user.id), None)
+        if not player:
             await safe_answer_callback(
                 callback, "فقط بازیکنان این مسابقه می‌توانند صفحه را بروزرسانی کنند.", show_alert=True
+            )
+            return
+        message = getattr(callback, "message", None)
+        chat = getattr(message, "chat", None) if message is not None else None
+        chat_id = getattr(chat, "id", None) if chat is not None else None
+        allowed_group_ids = {gid for gid in (match.group1_id, match.group2_id) if gid is not None}
+        if (
+            not chat
+            or getattr(chat, "type", None) not in ("group", "supergroup")
+            or player.group_id != chat_id
+            or chat_id not in allowed_group_ids
+        ):
+            await safe_answer_callback(
+                callback,
+                "صفحه‌ی بازی فقط از گروه ثبت‌شده‌ی مسابقه قابل بروزرسانیه 🍏",
+                show_alert=True,
             )
             return
 
@@ -466,9 +519,7 @@ async def handle_game_refresh(callback: CallbackQuery, bot: Bot) -> None:
             )
             return
 
-        message = callback.message
-        chat = getattr(message, "chat", None) if message is not None else None
-        group_id = getattr(chat, "id", None) or user.id
+        group_id = chat_id
         text = engine.render_for_group(state, group_id, user.id)
 
         if match.state == MatchState.ACTIVE:

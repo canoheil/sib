@@ -5,6 +5,7 @@ from sib.database.models.user import User
 from sib.database.models.group import Group
 from sib.database.models.game import Game
 from sib.database.models.match import Match, MatchState
+from sib.database.models.match_type import MatchType
 from sib.database.models.match_player import MatchPlayer
 from sib.database.models.group_stats import GroupStats
 from sib.database.models.sponsor_channel import SponsorChannel, ChannelType
@@ -26,6 +27,8 @@ from sib.database.models.apple_battle import (
     AppleBattleQueueEntry,
     AppleBattleStatus,
 )
+from sib.database.models.friendly_match_reward import FriendlyMatchReward
+from sib.database.models.trade_selection import TradeSelection, TradeSelectionStatus
 from sib.database.models.faction import Faction
 from sib.database.models.character import (
     Character,
@@ -41,6 +44,7 @@ __all__ = [
     "Game",
     "Match",
     "MatchState",
+    "MatchType",
     "MatchPlayer",
     "GroupStats",
     "SponsorChannel",
@@ -77,4 +81,7 @@ __all__ = [
     "AppleBattle",
     "AppleBattleQueueEntry",
     "AppleBattleStatus",
+    "FriendlyMatchReward",
+    "TradeSelection",
+    "TradeSelectionStatus",
 ]

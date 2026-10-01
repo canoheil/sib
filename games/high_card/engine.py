@@ -7,7 +7,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from sib.core.config import settings
 from sib.core.text import safe_name
 from sib.database.models import MatchPlayer
-from sib.games.base import BaseGameEngine, GameResult
+from sib.games.base import BaseGameEngine, GameResult, is_friendly_state, team_label
 
 
 class HighCardEngine(BaseGameEngine):
@@ -130,6 +130,37 @@ class HighCardEngine(BaseGameEngine):
     ) -> str:
         """Render High Card status."""
         players = list(game_state["players"].values())
+        if is_friendly_state(game_state):
+            team_one = next((p for p in players if str(p.get("team")) in ("1", "A")), None)
+            team_two = next((p for p in players if str(p.get("team")) in ("2", "B")), None)
+            if not team_one or not team_two:
+                return "اطلاعات بازی دوستانه کامل نیست."
+            label_one = team_label(game_state, team_one["team"])
+            label_two = team_label(game_state, team_two["team"])
+            if self.is_finished(game_state):
+                result = self.get_result(game_state)
+                card_one = f"{team_one['card_suit']} {self.CARD_NAMES.get(team_one['card_rank'], '—')}"
+                card_two = f"{team_two['card_suit']} {self.CARD_NAMES.get(team_two['card_rank'], '—')}"
+                if result.is_draw:
+                    outcome = "🤝 **نتیجه: مساوی شد.**"
+                else:
+                    winner = label_one if str(result.winner_team) in ("1", "A") else label_two
+                    outcome = f"🎉 **{winner} پیروز شد!**"
+                return (
+                    "🃏 **نتیجه‌ی بازی دوستانه‌ی کارت بالا**\n\n"
+                    f"👥 **{label_one}:** {team_one['name']}، {card_one}\n"
+                    f"👥 **{label_two}:** {team_two['name']}، {card_two}\n\n"
+                    f"{outcome}\n📝 {result.summary}"
+                )
+            status_one = "✅ کارت ثبت شده" if team_one["locked"] else "⏳ در انتظار انتخاب"
+            status_two = "✅ کارت ثبت شده" if team_two["locked"] else "⏳ در انتظار انتخاب"
+            return (
+                "🃏 **بازی دوستانه‌ی کارت بالا**\n\n"
+                f"👥 **{label_one}:** {team_one['name']}، {status_one}\n"
+                f"👥 **{label_two}:** {team_two['name']}، {status_two}\n\n"
+                "🔒 کارت‌ها تا ثبت انتخاب هر دو تیم مخفی می‌مونن."
+            )
+
         my_p = next((p for p in players if p["group_id"] == for_group_id), None)
         opp_p = next((p for p in players if p["group_id"] != for_group_id), None)
 
@@ -174,6 +205,16 @@ class HighCardEngine(BaseGameEngine):
 
         pid_str = str(for_player_id)
         player_data = game_state.get("players", {}).get(pid_str)
+
+        if is_friendly_state(game_state):
+            return InlineKeyboardMarkup(
+                inline_keyboard=[[
+                    InlineKeyboardButton(
+                        text="🃏 کشیدن کارت تصادفی",
+                        callback_data=f"hc_action:{match_id}:draw",
+                    )
+                ]]
+            )
 
         if player_data and player_data.get("locked"):
             c = f"{player_data['card_suit']} {self.CARD_NAMES.get(player_data['card_rank'])}"

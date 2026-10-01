@@ -107,28 +107,28 @@ def get_games_menu_keyboard(
 def get_game_mode_keyboard(
     game: Game, back_to: str = "group_games_panel"
 ) -> InlineKeyboardMarkup:
-    """Screen: game mode selection (solo, 2v2, 4v4)."""
+    """Screen: choose a supported mode before choosing match type."""
     buttons = []
 
     if game.supports_solo:
         buttons.append([
             primary_button(
                 text="👤 انفرادی (Solo - ۱ به ۱)",
-                callback_data=f"create_party:{game.code}:solo",
+                callback_data=f"select_match_type:{game.code}:solo:{back_to}",
             )
         ])
     if game.supports_2v2:
         buttons.append([
             primary_button(
                 text="👥 تیمی ۲ به ۲ (2v2)",
-                callback_data=f"create_party:{game.code}:2v2",
+                callback_data=f"select_match_type:{game.code}:2v2:{back_to}",
             )
         ])
     if game.supports_4v4:
         buttons.append([
             primary_button(
                 text="👥 تیمی ۴ به ۴ (4v4)",
-                callback_data=f"create_party:{game.code}:4v4",
+                callback_data=f"select_match_type:{game.code}:4v4:{back_to}",
             )
         ])
 
@@ -136,18 +136,39 @@ def get_game_mode_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def get_party_action_keyboard(
-    party: Party, is_member: bool = False
+def get_match_type_keyboard(
+    game: Game, mode: str, back_to: str = "group_games_panel"
 ) -> InlineKeyboardMarkup:
-    """Screen: one party/game (child of the active-games screen).
+    """Screen after mode selection: Competitive or Friendly."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                success_button(
+                    text="🏆 رقابتی با گروه‌های دیگه",
+                    callback_data=f"create_party:{game.code}:{mode}:competitive",
+                )
+            ],
+            [
+                primary_button(
+                    text="🤝 دوستانه داخل همین گروه",
+                    callback_data=f"create_party:{game.code}:{mode}:friendly",
+                )
+            ],
+            nav_back_row(
+                "↩️ بازگشت به انتخاب حالت",
+                f"select_game:{game.code}:{back_to}",
+            )[0],
+        ]
+    )
 
-    Queue and in-match parties are LIVE (they block a new game) but have
-    no party actions left: the queue screen owns "cancel search" and the
-    board owns the match. They still get Refresh + Back so the Active
-    Games screen can always show and inspect every live game.
-    """
+
+def get_party_action_keyboard(
+    party: Party,
+    is_member: bool = False,
+    is_creator: bool = False,
+) -> InlineKeyboardMarkup:
+    """Screen for an active party; Back never changes its lifecycle."""
     buttons = []
-
     from sib.database.models import PartyStatus
 
     if party.status == PartyStatus.IN_QUEUE:
@@ -167,8 +188,65 @@ def get_party_action_keyboard(
         buttons.extend(nav_back_row(BACK_TO_ACTIVE, "group_active_games"))
         return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-    if party.is_full:
-        # Every mode uses the same real-opponent queue with automatic bot fallback.
+    if party.match_type == "FRIENDLY":
+        team_capacity = {"solo": 1, "2v2": 2, "4v4": 4}.get(party.mode, 1)
+        team_counts = {
+            team: sum(1 for member in party.members if member.team == team)
+            for team in (1, 2)
+        }
+        if party.is_full:
+            if is_member:
+                buttons.append([
+                    success_button(
+                        text="🎮 شروع بازی دوستانه",
+                        callback_data=f"start_friendly:{party.id}",
+                    )
+                ])
+            if is_creator:
+                buttons.append([
+                    danger_button(
+                        text="❌ لغو پارتی",
+                        callback_data=f"cancel_party:{party.id}",
+                    )
+                ])
+        else:
+            if not is_member:
+                for team in (1, 2):
+                    remaining = team_capacity - team_counts[team]
+                    if remaining > 0:
+                        team_label = "۱" if team == 1 else "۲"
+                        buttons.append([
+                            success_button(
+                                text=(
+                                    f"➕ پیوستن به تیم {team_label} "
+                                    f"({team_counts[team]}/{team_capacity})"
+                                ),
+                                callback_data=f"join_party:{party.id}:{team}",
+                            )
+                        ])
+            else:
+                buttons.append([
+                    danger_button(
+                        text="🚪 ترک پارتی",
+                        callback_data=f"leave_party:{party.id}",
+                    )
+                ])
+            if is_creator:
+                if is_member and party.game.code != "apple_battle":
+                    buttons.append([
+                        primary_button(
+                            text="🤖 پر کردن جای خالی با بات‌های سیب",
+                            callback_data=f"fill_friendly_bots:{party.id}",
+                        )
+                    ])
+                buttons.append([
+                    danger_button(
+                        text="❌ لغو پارتی",
+                        callback_data=f"cancel_party:{party.id}",
+                    )
+                ])
+    elif party.is_full:
+        # Competitive matchmaking remains unchanged.
         buttons.append([
             success_button(
                 text="🔎 پیدا کردن حریف",
@@ -182,7 +260,6 @@ def get_party_action_keyboard(
             )
         ])
     else:
-        # Open party with slots
         row = []
         if not is_member:
             row.append(

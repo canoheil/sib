@@ -7,7 +7,9 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from sib.core.config import settings
 from sib.core.text import safe_name
 from sib.database.models import MatchPlayer
-from sib.games.base import BaseGameEngine, GameResult
+from sib.games.base import (
+    BaseGameEngine, GameResult, is_friendly_state, player_for_view, team_label,
+)
 
 
 class BattleshipEngine(BaseGameEngine):
@@ -253,29 +255,37 @@ class BattleshipEngine(BaseGameEngine):
                 labels[key] = self.BLUE
         return labels
 
+    def _radar_art(self, labels: Dict[str, str]) -> str:
+        rows = []
+        for r in range(self.GRID_SIZE):
+            rows.append("".join(labels.get(f"{r},{c}", self.GLASS) for c in range(self.GRID_SIZE)))
+        return "\n".join(rows)
+
     def render_for_group(
         self,
         game_state: Dict[str, Any],
         for_group_id: int,
         for_player_id: Optional[int] = None,
     ) -> str:
-        my_p = next((p for p in game_state["players"].values() if p["group_id"] == for_group_id), None)
-        team_code = my_p.get("team_code", "A") if my_p else "A"
+        friendly = is_friendly_state(game_state)
+        viewer = player_for_view(game_state, for_group_id, for_player_id)
+        if not viewer and not friendly:
+            viewer = next(
+                (p for p in game_state["players"].values() if p.get("group_id") == for_group_id),
+                None,
+            )
+        team_code = viewer.get("team_code", "A") if viewer else "A"
         opp_team_code = "B" if team_code == "A" else "A"
 
+        team_a = game_state["teams"]["A"]
+        team_b = game_state["teams"]["B"]
         my_remaining = game_state["teams"][team_code]["remaining_cells"]
         opp_remaining = game_state["teams"][opp_team_code]["remaining_cells"]
-        labels = self.radar_labels(game_state, team_code)
+        radar_art = self._radar_art(self.radar_labels(game_state, team_code))
+        radar_a = self._radar_art(self.radar_labels(game_state, "A"))
+        radar_b = self._radar_art(self.radar_labels(game_state, "B"))
 
-        grid_rows = []
-        for r in range(self.GRID_SIZE):
-            row_symbols = []
-            for c in range(self.GRID_SIZE):
-                row_symbols.append(labels.get(f"{r},{c}", self.GLASS))
-            grid_rows.append("".join(row_symbols))
-        radar_art = "\n".join(grid_rows)
-
-        last_ev = game_state.get("last_event") or "هنوز شلیکی انجام نشده است."
+        last_ev = game_state.get("last_event") or "هنوز شلیکی انجام نشده."
         team_names = game_state.get("team_names", {})
         roster_a = ", ".join(
             p["name"] for p in game_state["players"].values()
@@ -285,14 +295,61 @@ class BattleshipEngine(BaseGameEngine):
             p["name"] for p in game_state["players"].values()
             if p.get("team_code") == "B"
         )
+        team_a_title = team_names.get("1", "تیم شما" if not friendly else team_label(game_state, 1))
+        team_b_title = team_names.get("2", "تیم حریف" if not friendly else team_label(game_state, 2))
         teams_line = (
-            f"⚔️ **{team_names.get('1', 'تیم شما')}:** {roster_a}\n"
-            f"🆚 **{team_names.get('2', 'تیم حریف')}:** {roster_b}"
+            f"⚔️ **{team_a_title}:** {roster_a}\n"
+            f"🆚 **{team_b_title}:** {roster_b}"
         )
 
+        if friendly:
+            radars = (
+                f"🎯 **رادار شلیک‌های {team_a_title}:**\n{radar_a}\n\n"
+                f"🎯 **رادار شلیک‌های {team_b_title}:**\n{radar_b}"
+            )
+            remaining_line = (
+                f"🛡️ خانه‌های سالم ناوگان {team_a_title}: {team_a['remaining_cells']}/14\n"
+                f"🛡️ خانه‌های سالم ناوگان {team_b_title}: {team_b['remaining_cells']}/14"
+            )
+            if self.is_finished(game_state):
+                result = self.get_result(game_state)
+                if result.is_draw:
+                    outcome = "🤝 **نتیجه: مساوی شد.**"
+                else:
+                    winner = team_label(game_state, result.winner_team)
+                    outcome = f"🎉 **{winner} پیروز شد!** 🍏🚢"
+                return (
+                    "🚢 **پایان بازی دوستانه‌ی جنگ کشتی‌ها**\n\n"
+                    f"{teams_line}\n\n{radars}\n\n"
+                    f"{remaining_line}\n\n{outcome}\n"
+                    f"📝 {result.summary}"
+                )
+
+            curr_pid = game_state.get("current_player_id")
+            curr_p = game_state["players"].get(str(curr_pid), {})
+            if curr_pid == for_player_id:
+                from sib.games.base import turn_line
+                turn_msg = turn_line(
+                    game_state, for_group_id, for_player_id,
+                    "یک خانه را روی رادار فعال هدف بگیر.",
+                    "یک خانه را روی رادار فعال هدف بگیر.",
+                )
+            else:
+                turn_msg = f"⏳ نوبت شلیکِ {curr_p.get('name', 'بازیکن')} است."
+            active_team = team_label(game_state, curr_p.get("team")) if curr_p else "تیم"
+            return (
+                "🚢 **جنگ کشتی‌ها، مسابقه‌ی دوستانه**\n\n"
+                f"{teams_line}\n\n{radars}\n\n"
+                f"{remaining_line}\n"
+                f"📢 آخرین رویداد: {last_ev}\n"
+                f"🎯 رادار فعال: {active_team}\n{turn_msg}"
+            )
+
+        if not viewer:
+            return "اطلاعات بازی ناقص است."
         if self.is_finished(game_state):
             result = self.get_result(game_state)
-            is_winner = (my_p and result.winner_team == my_p["team"])
+            is_winner = result.winner_team == viewer["team"]
             outcome = "🎉 **گروه شما پیروز شد!** 🍏🚢" if is_winner else "💔 **گروه حریف پیروز شد!** 🍏"
             return (
                 "🚢 **پایان نبرد دریایی (Battleship)**\n\n"

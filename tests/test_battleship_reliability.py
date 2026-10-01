@@ -75,12 +75,14 @@ async def _start_battleship_match(db_session):
     return match, u1, u2
 
 
-def _make_callback(user_id: int, data: str, first_name: str = "کاربر") -> CallbackQuery:
+def _make_callback(
+    user_id: int, data: str, first_name: str = "کاربر", group_id: int = -100123
+) -> CallbackQuery:
     cb = MagicMock(spec=CallbackQuery)
     cb.data = data
     cb.from_user = TelegramUser(id=user_id, is_bot=False, first_name=first_name)
     cb.message = MagicMock(spec=Message)
-    cb.message.chat = TelegramChat(id=-100123, type="supergroup", title="گروه تست")
+    cb.message.chat = TelegramChat(id=group_id, type="supergroup", title="گروه تست")
     cb.message.message_id = 777
     cb.answer = AsyncMock()
     return cb
@@ -105,7 +107,8 @@ async def test_battleship_shot_survives_persistent_edit_failure(db_session):
     active_pid = state["current_player_id"]
 
     bot = _make_bot_with_failing_edits(Exception("network is down"))
-    cb = _make_callback(active_pid, f"bs_action:{match.id}:0:0")
+    active_group_id = next(p.group_id for p in match.players if p.user_id == active_pid)
+    cb = _make_callback(active_pid, f"bs_action:{match.id}:0:0", group_id=active_group_id)
 
     await handle_bs_action(cb, bot)
 
@@ -129,13 +132,14 @@ async def test_battleship_refresh_recovers_stale_board(db_session):
     active_pid = state["current_player_id"]
 
     bot = _make_bot_with_failing_edits(Exception("network is down"))
-    cb = _make_callback(active_pid, f"bs_action:{match.id}:0:0")
+    active_group_id = next(p.group_id for p in match.players if p.user_id == active_pid)
+    cb = _make_callback(active_pid, f"bs_action:{match.id}:0:0", group_id=active_group_id)
     await handle_bs_action(cb, bot)
     await db_session.rollback()
 
     # User taps the refresh button.
     bot2 = AsyncMock()
-    refresh_cb = _make_callback(active_pid, f"game_refresh:{match.id}")
+    refresh_cb = _make_callback(active_pid, f"game_refresh:{match.id}", group_id=active_group_id)
     await handle_game_refresh(refresh_cb, bot2)
 
     assert refresh_cb.answer.called
@@ -231,7 +235,8 @@ async def test_battleship_keyboard_marks_hits_and_misses(db_session):
     active_pid = state["current_player_id"]
 
     bot = AsyncMock()
-    cb = _make_callback(active_pid, f"bs_action:{match.id}:0:0")
+    active_group_id = next(p.group_id for p in match.players if p.user_id == active_pid)
+    cb = _make_callback(active_pid, f"bs_action:{match.id}:0:0", group_id=active_group_id)
     await process_game_action(cb, bot, match.id, {"r": 0, "c": 0})
 
     assert bot.edit_message_text.called

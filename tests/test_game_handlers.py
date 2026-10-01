@@ -16,6 +16,18 @@ from sib.services.party import PartyService
 from sib.tests.test_parties import create_test_user, create_test_group
 
 
+def _game_callback(user_id, group_id, data, first_name="بازیکن"):
+    callback = MagicMock(spec=CallbackQuery)
+    callback.data = data
+    callback.from_user = TelegramUser(id=user_id, is_bot=False, first_name=first_name)
+    callback.message = MagicMock(spec=Message)
+    callback.message.chat = TelegramChat(id=group_id, type="supergroup", title="گروه بازی")
+    callback.message.message_id = 777
+    callback.message.edit_text = AsyncMock()
+    callback.answer = AsyncMock()
+    return callback
+
+
 @pytest.mark.asyncio
 async def test_high_card_handler_flow(db_session):
     g1 = await create_test_group(db_session, "گروه های‌کارت ۱")
@@ -106,19 +118,15 @@ async def test_tic_tac_toe_handler_flow(db_session):
     mock_bot = AsyncMock()
 
     # Inactive player attempts to move out of turn
-    mock_cb_err = MagicMock(spec=CallbackQuery)
-    mock_cb_err.data = f"ttt_action:{match.id}:0"
-    mock_cb_err.from_user = TelegramUser(id=inactive_pid, is_bot=False, first_name="Inactive")
-    mock_cb_err.answer = AsyncMock()
+    inactive_group_id = next(p.group_id for p in match.players if p.user_id == inactive_pid)
+    mock_cb_err = _game_callback(inactive_pid, inactive_group_id, f"ttt_action:{match.id}:0", "Inactive")
 
     await handle_ttt_action(mock_cb_err, mock_bot)
     assert "هنوز نوبت شما نشده است" in mock_cb_err.answer.call_args[0][0]
 
     # Active player moves
-    mock_cb_act = MagicMock(spec=CallbackQuery)
-    mock_cb_act.data = f"ttt_action:{match.id}:0"
-    mock_cb_act.from_user = TelegramUser(id=active_pid, is_bot=False, first_name="Active")
-    mock_cb_act.answer = AsyncMock()
+    active_group_id = next(p.group_id for p in match.players if p.user_id == active_pid)
+    mock_cb_act = _game_callback(active_pid, active_group_id, f"ttt_action:{match.id}:0", "Active")
 
     await handle_ttt_action(mock_cb_act, mock_bot)
     assert "ثبت شد" in mock_cb_act.answer.call_args[0][0]
@@ -160,10 +168,8 @@ async def test_connect_four_handler_flow(db_session):
     active_pid = state["current_player_id"]
     inactive_pid = u2.id if active_pid == u1.id else u1.id
 
-    mock_cb = MagicMock(spec=CallbackQuery)
-    mock_cb.data = f"c4_action:{match.id}:3"
-    mock_cb.from_user = TelegramUser(id=active_pid, is_bot=False, first_name="Active")
-    mock_cb.answer = AsyncMock()
+    active_group_id = next(p.group_id for p in match.players if p.user_id == active_pid)
+    mock_cb = _game_callback(active_pid, active_group_id, f"c4_action:{match.id}:3", "Active")
 
     await handle_c4_action(mock_cb, mock_bot)
     assert "ثبت شد" in mock_cb.answer.call_args[0][0]
@@ -204,10 +210,8 @@ async def test_battleship_handler_flow(db_session):
     active_pid = state["current_player_id"]
     inactive_pid = u2.id if active_pid == u1.id else u1.id
 
-    mock_cb = MagicMock(spec=CallbackQuery)
-    mock_cb.data = f"bs_action:{match.id}:0:0"
-    mock_cb.from_user = TelegramUser(id=active_pid, is_bot=False, first_name="Active")
-    mock_cb.answer = AsyncMock()
+    active_group_id = next(p.group_id for p in match.players if p.user_id == active_pid)
+    mock_cb = _game_callback(active_pid, active_group_id, f"bs_action:{match.id}:0:0", "Active")
 
     await handle_bs_action(mock_cb, mock_bot)
     assert "ثبت شد" in mock_cb.answer.call_args[0][0]
