@@ -20,7 +20,12 @@ from sib.database.models import PlotState
 from sib.services.apple_wallet import AppleWalletService
 from sib.services.garden import GardenService, magic_height_label
 from sib.services.items import ItemService, DropService, item_emoji, item_label
-from sib.services.panel import PanelOwnershipService
+from sib.services.panel import (
+    LOCKED_MESSAGE,
+    PanelAuthorizationError,
+    PanelOwnershipService,
+    resolve_personal_actor,
+)
 from sib.services.seedling import SeedlingService
 from sib.keyboards.common import danger_button, primary_button, success_button
 from sib.services.telegram_ui import (
@@ -159,17 +164,29 @@ async def cmd_garden(message: Message, bot: Bot):
 
 
 async def _panel_subject(callback: CallbackQuery) -> int:
-    """The garden panel's SUBJECT from the DB panel owner (authoritative)."""
+    """The garden panel's SUBJECT from the DB panel owner (authoritative).
+
+    Uses the shared ``resolve_personal_actor`` boundary so that the presser
+    must match the panel owner — defense in depth beyond the middleware.
+    Returns 0 only when there is no acting user (should never happen for
+    callback queries, but keeps renders safe).
+    """
     user = callback.from_user
-    chat = getattr(callback.message, "chat", None)
-    msg_id = getattr(callback.message, "message_id", None)
-    if chat is not None and msg_id:
-        async with get_session() as session:
-            subject_id, _panel_type = await PanelOwnershipService.get_panel_context(
-                session, chat.id, msg_id, user.id
-            )
-            return subject_id
-    return user.id if user else 0
+    if user is None:
+        return 0
+    try:
+        subject_id, _msg_id = await resolve_personal_actor(callback)
+    except PanelAuthorizationError:
+        # Middleware should have answered and blocked; refuse to act.
+        try:
+            await callback.answer(LOCKED_MESSAGE, show_alert=True)
+        except Exception:  # pragma: no cover - defensive
+            pass
+        # Return the would-be violator's id so the *render* below uses their
+        # own view instead of leaking the owner's; any mutation in the same
+        # handler already did not run because we raise.
+        return user.id
+    return subject_id
 
 
 async def _rerender(callback: CallbackQuery, bot: Bot, *, answer: str = "بروزرسانی شد 🍏") -> None:
@@ -312,11 +329,16 @@ async def handle_garden_magic(callback: CallbackQuery, bot: Bot):
     if not user:
         return
 
+    subject_id = await _panel_subject(callback)
+    if subject_id != user.id:
+        # Authorization already answered via _panel_subject; do not mutate.
+        return
+
     error = None
     level = 0
     async with get_session() as session:
         try:
-            level = await GardenService.apply_magic(session, user.id, plot_index)
+            level = await GardenService.apply_magic(session, subject_id, plot_index)
         except ValueError as e:
             error = str(e)
 
@@ -346,13 +368,17 @@ async def handle_garden_plant(callback: CallbackQuery, bot: Bot):
     if not user:
         return
 
+    subject_id = await _panel_subject(callback)
+    if subject_id != user.id:
+        return
+
     # State first, presentation second: the re-render runs AFTER the
     # service transaction is closed (never hold FOR UPDATE locks while
     # opening another session - that self-deadlocks).
     error = None
     async with get_session() as session:
         try:
-            await GardenService.plant(session, user.id, plot_index)
+            await GardenService.plant(session, subject_id, plot_index)
         except ValueError as e:
             error = str(e)
 
@@ -379,6 +405,10 @@ async def handle_garden_harvest(callback: CallbackQuery, bot: Bot):
     if not user:
         return
 
+    subject_id = await _panel_subject(callback)
+    if subject_id != user.id:
+        return
+
     # Capture the live chat BEFORE any render: the transition engine may
     # replace the message (text<->photo), which retargets callback.message.
     chat = getattr(callback.message, "chat", None)
@@ -388,7 +418,7 @@ async def handle_garden_harvest(callback: CallbackQuery, bot: Bot):
     outcome = None
     async with get_session() as session:
         try:
-            outcome = await GardenService.harvest(session, user.id, plot_index)
+            outcome = await GardenService.harvest(session, subject_id, plot_index)
         except ValueError as e:
             error = str(e)
 
@@ -424,6 +454,10 @@ async def handle_garden_harvest_all(callback: CallbackQuery, bot: Bot):
     if not user:
         return
 
+    subject_id = await _panel_subject(callback)
+    if subject_id != user.id:
+        return
+
     # Capture the live chat before the render (see handle_garden_harvest).
     chat = getattr(callback.message, "chat", None)
     chat_id = getattr(chat, "id", None)
@@ -432,7 +466,7 @@ async def handle_garden_harvest_all(callback: CallbackQuery, bot: Bot):
     outcomes = []
     async with get_session() as session:
         try:
-            outcomes = await GardenService.harvest_all(session, user.id)
+            outcomes = await GardenService.harvest_all(session, subject_id)
         except ValueError as e:
             error = str(e)
 
@@ -472,11 +506,15 @@ async def handle_garden_unlock(callback: CallbackQuery, bot: Bot):
     if not user:
         return
 
+    subject_id = await _panel_subject(callback)
+    if subject_id != user.id:
+        return
+
     error = None
     capacity = 0
     async with get_session() as session:
         try:
-            capacity = await GardenService.unlock_plot(session, user.id)
+            capacity = await GardenService.unlock_plot(session, subject_id)
         except ValueError as e:
             error = str(e)
 

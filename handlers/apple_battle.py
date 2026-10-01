@@ -24,6 +24,11 @@ from sib.core.logging import logger
 from sib.database.connection import get_session
 from sib.database.models import AppleBattle, AppleBattleStatus, Character, PartyStatus, PlayerCard
 from sib.services.apple_battle import AppleBattleService, BattleError
+from sib.services.panel import (
+    LOCKED_MESSAGE,
+    PanelAuthorizationError,
+    resolve_personal_actor,
+)
 from sib.services.player_cards import PlayerCardService
 from sib.keyboards.common import danger_button, primary_button, success_button
 from sib.services.nav import back_label_for, back_target, parse_callback, with_origin
@@ -34,6 +39,28 @@ router = Router(name="apple_battle")
 
 def _kb(rows: list[list[InlineKeyboardButton]]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _battle_actor(callback: CallbackQuery) -> int:
+    """Resolve the authorized actor for an apple-battle callback.
+
+    The battle HUB is a personal panel (``apple_battle``); only the
+    opener may pick a loadout / queue / cancel. Defense-in-depth beyond
+    the outer middleware - a stale, replayed or forged button is never
+    allowed to affect another user's queue or loadout.
+    """
+    user = callback.from_user
+    if user is None:
+        return 0
+    try:
+        actor_id, _ = await resolve_personal_actor(callback)
+    except PanelAuthorizationError:
+        try:
+            await callback.answer(LOCKED_MESSAGE, show_alert=True)
+        except Exception:  # pragma: no cover - defensive
+            pass
+        return 0
+    return actor_id
 
 
 def _back_row(origin: str | None) -> list[InlineKeyboardButton]:
@@ -233,7 +260,20 @@ async def cmd_battle(message: Message, bot: Bot):
     if not user:
         return
     text, kb = await battle_entry_view(user.id)
-    await message.reply(text, reply_markup=kb, parse_mode="Markdown")
+    sent = await message.reply(text, reply_markup=kb, parse_mode="Markdown")
+    if sent is not None and sent.message_id:
+        from sib.database.connection import get_session as _gs
+        from sib.services.panel import PanelOwnershipService as _POS
+
+        async with _gs() as session:
+            await _POS.claim(
+                session,
+                chat_id=sent.chat.id,
+                message_id=sent.message_id,
+                user_id=user.id,
+                panel_type="apple_battle",
+            )
+            await session.commit()
 
 
 @router.callback_query(F.data.startswith("ab_refresh"))
@@ -241,8 +281,11 @@ async def handle_ab_refresh(callback: CallbackQuery, bot: Bot):
     user = callback.from_user
     if not user:
         return
+    actor = await _battle_actor(callback)
+    if not actor or actor != user.id:
+        return
     _base, origin = parse_callback(callback.data)
-    text, kb = await battle_entry_view(user.id, origin=origin)
+    text, kb = await battle_entry_view(actor, origin=origin)
     await safe_answer_callback(callback, "بروزرسانی شد ⚔️")
     await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
@@ -259,15 +302,18 @@ async def handle_ab_pick(callback: CallbackQuery, bot: Bot):
     user = callback.from_user
     if not user:
         return
+    actor = await _battle_actor(callback)
+    if not actor or actor != user.id:
+        return
 
     async with get_session() as session:
         card = await session.get(PlayerCard, card_id)
-        if not card or card.user_id != user.id:
+        if not card or card.user_id != actor:
             await safe_answer_callback(callback, "این کارت متعلق به شما نیست 🍏", show_alert=True)
             return
-        await AppleBattleService.set_loadout(session, user.id, card.id)
+        await AppleBattleService.set_loadout(session, actor, card.id)
 
-    text, kb = await _ready_view(user.id, origin=origin)
+    text, kb = await _ready_view(actor, origin=origin)
     await safe_answer_callback(callback, "کارت انتخاب شد ⚔️")
     await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
@@ -277,10 +323,13 @@ async def handle_ab_change(callback: CallbackQuery, bot: Bot):
     user = callback.from_user
     if not user:
         return
+    actor = await _battle_actor(callback)
+    if not actor or actor != user.id:
+        return
     _base, origin = parse_callback(callback.data)
     async with get_session() as session:
-        await AppleBattleService.dequeue(session, user.id)
-    text, kb = await _select_view(user.id, origin=origin)
+        await AppleBattleService.dequeue(session, actor)
+    text, kb = await _select_view(actor, origin=origin)
     await safe_answer_callback(callback, "کارت جدید را انتخاب کنید ⚔️")
     await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
@@ -292,6 +341,9 @@ async def handle_ab_find(callback: CallbackQuery, bot: Bot):
     chat = callback.message.chat if callback.message else None
     if not user or not chat:
         return
+    actor = await _battle_actor(callback)
+    if not actor or actor != user.id:
+        return
 
     from sib.handlers.matchmaking.renderer import render_match_found_for_group
     from sib.keyboards.matchmaking import get_acceptance_keyboard
@@ -299,8 +351,8 @@ async def handle_ab_find(callback: CallbackQuery, bot: Bot):
 
     async with get_session() as session:
         try:
-            party = await _ensure_battle_party(session, chat.id, user.id)
-            queue_entry = await MatchmakingService.enqueue_party(session, party.id, user.id)
+            party = await _ensure_battle_party(session, chat.id, actor)
+            queue_entry = await MatchmakingService.enqueue_party(session, party.id, actor)
             match = await MatchmakingService.find_and_create_match(session, party.id)
         except (InvalidActionException, PartyNotFoundException, ActiveSessionExistsException) as e:
             await safe_answer_callback(callback, getattr(e, "message", str(e)), show_alert=True)
@@ -385,22 +437,25 @@ async def handle_ab_cancel(callback: CallbackQuery, bot: Bot):
     user = callback.from_user
     if not user:
         return
+    actor = await _battle_actor(callback)
+    if not actor or actor != user.id:
+        return
 
     from sib.matchmaking.matcher import MatchmakingService
 
     async with get_session() as session:
         try:
             party = await _find_my_battle_party(
-                session, callback.message.chat.id if callback.message else 0, user.id
+                session, callback.message.chat.id if callback.message else 0, actor
             )
             if party and party.status == PartyStatus.IN_QUEUE:
-                await MatchmakingService.cancel_matchmaking(session, party.id, user.id)
-            await AppleBattleService.dequeue(session, user.id)
+                await MatchmakingService.cancel_matchmaking(session, party.id, actor)
+            await AppleBattleService.dequeue(session, actor)
         except (InvalidActionException, PartyNotFoundException) as e:
             await safe_answer_callback(callback, e.message, show_alert=True)
             return
 
-    text, kb = await _select_view(user.id)
+    text, kb = await _select_view(actor)
     await safe_answer_callback(callback, "جستجوی حریف لغو شد 🍏")
     await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
@@ -411,10 +466,13 @@ async def handle_ab_status(callback: CallbackQuery, bot: Bot):
     user = callback.from_user
     if not user:
         return
+    actor = await _battle_actor(callback)
+    if not actor or actor != user.id:
+        return
 
     async with get_session() as session:
         party = await _find_my_battle_party(
-            session, callback.message.chat.id if callback.message else 0, user.id
+            session, callback.message.chat.id if callback.message else 0, actor
         )
 
     if party and party.status == PartyStatus.IN_QUEUE:
@@ -423,12 +481,12 @@ async def handle_ab_status(callback: CallbackQuery, bot: Bot):
     else:
         loadout = None
         async with get_session() as session:
-            loadout = await AppleBattleService.get_loadout(session, user.id)
+            loadout = await AppleBattleService.get_loadout(session, actor)
         if loadout:
-            text, kb = await _ready_view(user.id)
+            text, kb = await _ready_view(actor)
             await safe_answer_callback(callback, "آماده‌ی نبرد ⚔️")
         else:
-            text, kb = await _select_view(user.id)
+            text, kb = await _select_view(actor)
             await safe_answer_callback(callback, "کارت خود را انتخاب کنید ⚔️")
     await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 

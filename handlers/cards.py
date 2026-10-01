@@ -28,7 +28,12 @@ from sib.services.card_upgrade_render import (
     success_toast,
 )
 from sib.services.character_art import photo_arg, resolve_character_photo
-from sib.services.panel import PanelOwnershipService
+from sib.services.panel import (
+    LOCKED_MESSAGE,
+    PanelAuthorizationError,
+    PanelOwnershipService,
+    resolve_personal_actor,
+)
 from sib.services.telegram_ui import safe_answer_callback, safe_edit_callback_message
 from sib.services.wiki import CollectionService
 
@@ -36,6 +41,30 @@ router = Router(name="cards")
 
 PANEL_TYPE = "card_panel"
 NOT_FOUND_TEXT = "کارت پیدا نشد."
+
+
+async def _card_actor(callback: CallbackQuery) -> int:
+    """Resolve the authorized actor for a card callback (defense in depth).
+
+    Cards are opened from the personal 'cards' panel (panel_type='cards'),
+    and the detail/upgrade screens are themselves personal
+    (panel_type='card_panel'). Only the opener may view, buy upgrades or
+    navigate - the middleware blocks unauthorized presses and this helper
+    is the service-boundary check that refuses to mutate if anything
+    slips through (e.g. a stale callback after the panel owner changed).
+    """
+    user = callback.from_user
+    if user is None:
+        return 0
+    try:
+        actor_id, _ = await resolve_personal_actor(callback)
+    except PanelAuthorizationError:
+        try:
+            await callback.answer(LOCKED_MESSAGE, show_alert=True)
+        except Exception:  # pragma: no cover - defensive
+            pass
+        return 0
+    return actor_id
 
 
 def _parse_ids(data: Optional[str], expected_parts: int) -> Optional[list[int]]:
@@ -120,9 +149,12 @@ async def handle_card_panel(callback: CallbackQuery, bot: Bot):
     if not user or ids is None:
         await safe_answer_callback(callback, NOT_FOUND_TEXT, show_alert=True)
         return
-    view = await _card_view(user.id, ids[0])
+    actor = await _card_actor(callback)
+    if not actor or actor != user.id:
+        return
+    view = await _card_view(actor, ids[0])
     await safe_answer_callback(callback)
-    await _show(callback, bot, user.id, view)
+    await _show(callback, bot, actor, view)
 
 
 @router.callback_query(F.data.startswith("card_upgrade:"))
@@ -133,9 +165,12 @@ async def handle_card_upgrade_screen(callback: CallbackQuery, bot: Bot):
     if not user or ids is None:
         await safe_answer_callback(callback, NOT_FOUND_TEXT, show_alert=True)
         return
-    view = await _upgrade_view(user.id, ids[0])
+    actor = await _card_actor(callback)
+    if not actor or actor != user.id:
+        return
+    view = await _upgrade_view(actor, ids[0])
     await safe_answer_callback(callback)
-    await _show(callback, bot, user.id, view)
+    await _show(callback, bot, actor, view)
 
 
 @router.callback_query(F.data.startswith("card_upgrade_do:"))
@@ -146,6 +181,9 @@ async def handle_card_upgrade_do(callback: CallbackQuery, bot: Bot):
     if not user or ids is None:
         await safe_answer_callback(callback, NOT_FOUND_TEXT, show_alert=True)
         return
+    actor = await _card_actor(callback)
+    if not actor or actor != user.id:
+        return
     card_id, seen_level = ids
 
     toast: str = ""
@@ -153,7 +191,7 @@ async def handle_card_upgrade_do(callback: CallbackQuery, bot: Bot):
     async with get_session() as session:
         try:
             result = await CardUpgradeService.upgrade(
-                session, user.id, card_id, expected_level=seen_level
+                session, actor, card_id, expected_level=seen_level
             )
             toast = success_toast(result)
         except InsufficientResourcesError as exc:
@@ -164,6 +202,6 @@ async def handle_card_upgrade_do(callback: CallbackQuery, bot: Bot):
             toast, alert = str(exc), True
 
     # Always re-render from the authoritative state (also after refusals).
-    view = await _upgrade_view(user.id, card_id)
+    view = await _upgrade_view(actor, card_id)
     await safe_answer_callback(callback, toast, show_alert=alert)
-    await _show(callback, bot, user.id, view)
+    await _show(callback, bot, actor, view)

@@ -45,13 +45,22 @@ OWNER_SCOPED_CALLBACKS: Tuple[str, ...] = (
     "card_panel:",
     "card_upgrade:",
     "card_upgrade_do:",
+    # Apple-battle (private battle hub)
+    "ab_pick:",
+    "ab_find",
+    "ab_cancel",
+    "ab_change",
     # NOTE: trade confirm/cancel are deliberately NOT owner-scoped: a trade is
     # a SHARED group message that BOTH participants must be able to press.
     # Authorization is enforced server-side by TradeService (participants
     # only, state-guarded, atomic) - the middleware is a UX nicety, not the
     # security boundary.
-    # Apple battle
-    "ab_join:",
+    # NOTE: ab_join is not registered - apple battle uses the real shared
+    # matchmaking queue (join_party-style flows are not applicable here).
+    # Friendly-party host controls (creator only; service-layer enforced too)
+    "friendly_fill_bots:",
+    "friendly_start:",
+    "make_friendly:",
 )
 
 REJECT_MESSAGE = (
@@ -66,8 +75,76 @@ LOCKED_MESSAGE = "🔒 این پنل برای کاربر دیگری باز شد�
 # owner may press ANY button (including navigation). Everything else
 # (party flows, game boards) follows the game's own public rules.
 PERSONAL_PANEL_TYPES = frozenset(
-    {"profile", "garden", "cards", "shop", "trade", "card_panel", "panel_guard_personal"}
+    {
+        "profile",
+        "garden",
+        "cards",
+        "shop",
+        "trade",
+        "card_panel",
+        "apple_battle",
+        "panel_guard_personal",
+    }
 )
+
+
+class PanelAuthorizationError(PermissionError):
+    """Raised when a user attempts to act on a panel they do not own.
+
+    Handlers should answer the callback with a friendly alert and return
+    without mutating state.
+    """
+
+
+async def resolve_personal_actor(
+    callback,
+) -> Tuple[int, Optional[int]]:
+    """Resolve the authorized actor (subject user_id) for a callback.
+
+    Defense-in-depth helper used at the handler/service boundary:
+
+    * On a PERSONAL panel, returns ``(owner_user_id, message_id)`` ONLY
+      when ``callback.from_user.id`` matches the recorded owner.
+      Otherwise raises :class:`PanelAuthorizationError`.
+    * On a public / unowned message, returns ``(presser_user_id,
+      message_id)`` — the presser acts on their own state.
+    * When there is no message handle (e.g. inline callbacks), returns
+      ``(presser_user_id, None)``.
+
+    This helper is the SINGLE source of truth for "who does this button
+    act for?" and MUST be used instead of reading ``callback.from_user.id``
+    directly in handlers that mutate personal state (garden, cards, shop,
+    apple battle, trade hub, profile). The middleware already drops
+    unauthorized presses before they reach handlers; this helper is the
+    belt-and-braces check so that a future handler routing change or a
+    callback manually forged with another user's id in its payload can
+    never cause cross-user state mutation.
+    """
+    from sib.database.connection import get_session
+
+    user = callback.from_user
+    if user is None:
+        raise PanelAuthorizationError("No acting user")
+    presser_id = user.id
+    message = getattr(callback, "message", None)
+    chat = getattr(message, "chat", None) if message is not None else None
+    chat_id = getattr(chat, "id", None) if chat is not None else None
+    msg_id = getattr(message, "message_id", None) if message is not None else None
+
+    if not chat_id or not isinstance(msg_id, int):
+        return presser_id, None
+
+    async with get_session() as session:
+        owner_id, panel_type = await PanelOwnershipService.get_panel_context(
+            session, chat_id, msg_id, presser_id
+        )
+
+    if is_personal_panel(panel_type) and owner_id != presser_id:
+        raise PanelAuthorizationError(
+            f"user {presser_id} attempted action on personal panel owned by {owner_id}"
+        )
+
+    return owner_id, msg_id
 
 
 def is_personal_panel(panel_type: Optional[str]) -> bool:

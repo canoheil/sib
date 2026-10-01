@@ -146,7 +146,17 @@ async def cmd_trade(message: Message, bot: Bot):
         return
     chat = message.chat
     text, kb = await _pending_view(user.id, chat_type=getattr(chat, "type", None))
-    await message.reply(text, reply_markup=kb, parse_mode="Markdown")
+    sent = await message.reply(text, reply_markup=kb, parse_mode="Markdown")
+    if sent is not None and sent.message_id:
+        async with get_session() as session:
+            await PanelOwnershipService.claim(
+                session,
+                chat_id=sent.chat.id,
+                message_id=sent.message_id,
+                user_id=user.id,
+                panel_type="trade",
+            )
+            await session.commit()
 
 
 @router.callback_query(F.data.startswith("apple_trade"))
