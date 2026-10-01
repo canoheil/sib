@@ -177,8 +177,10 @@ class BotMatchService:
         else:
             state = engine.create_initial_state(match.players, party.mode)
             attach_team_names(state, match)
-            # Simultaneous games need the bot's hidden choice locked before the
-            # board is first rendered. Turn-based modes start with the humans.
+            # Match metadata must reflect the opening engine turn before the
+            # runner validates it (notably when Tic-Tac-Toe randomly starts on
+            # a bot). Simultaneous games use None and lock a hidden bot choice.
+            match.current_turn_player_id = state.get("current_player_id")
             from sib.bots.runner import run_bot_turns
 
             state = await run_bot_turns(match, state)

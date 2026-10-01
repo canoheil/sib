@@ -10,6 +10,8 @@ def test_settings_default_values():
         BOT_TOKEN="123:test_token",
         ADMIN_IDS=[111, 222],
     )
+    assert s.SOLO_MATCHMAKING_TIMEOUT_SECONDS == 25
+    assert s.TEAM_MATCHMAKING_TIMEOUT_SECONDS == 30
     assert s.MATCHMAKING_TIMEOUT_SECONDS == 600
     assert s.ACCEPTANCE_TIMEOUT_SECONDS == 120
     assert s.HIGH_CARD_TIMEOUT == 60

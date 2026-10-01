@@ -22,7 +22,7 @@ from sib.core.errors import (
 )
 from sib.core.logging import log_event, Events
 from sib.database.models import MatchType, Party, PartyMember, PartyStatus, Game, User
-from sib.services.bot import BotService
+from sib.services.bot import BotService, choose_bot_display_names
 from sib.services.session import SessionService
 
 
@@ -418,9 +418,8 @@ class PartyService:
         """Fill every empty friendly-party slot with a bot (host action).
 
         The bots are REAL ``User(is_bot=True)`` participants added through the
-        normal ``PartyMember`` rows of the party/team system - each with a
-        game-appropriate "🤖" name and a persisted profile - so starting the
-        match and running bot turns need no game-specific special casing.
+        normal ``PartyMember`` rows. Their shared randomized name pool and
+        persisted profiles work across every supported game.
         Idempotent under the party row lock: once the party is full a second
         press changes nothing and reports a friendly error.
         """
@@ -442,7 +441,25 @@ class PartyService:
         game_code = game.code if game else ""
 
         free = await cls.free_slots(session, party)
+        existing_bot_names = list(
+            (
+                await session.scalars(
+                    select(User.first_name)
+                    .join(PartyMember, PartyMember.user_id == User.id)
+                    .where(
+                        PartyMember.party_id == party.id,
+                        User.is_bot == True,  # noqa: E712
+                    )
+                )
+            ).all()
+        )
+        total_bots = sum(free.values())
+        bot_names = choose_bot_display_names(
+            total_bots,
+            existing_names=existing_bot_names,
+        )
         ordinal_offset = 0
+        name_offset = 0
         for team in (1, 2):
             count = free.get(team, 0)
             if count <= 0:
@@ -455,6 +472,7 @@ class PartyService:
                 mode=party.mode,
                 team=team,
                 ordinal_offset=ordinal_offset,
+                display_names=bot_names[name_offset:name_offset + count],
             )
             for bot_user, profile, bot_team in bots:
                 session.add(
@@ -467,6 +485,7 @@ class PartyService:
                 )
                 party.current_players_count += 1
             ordinal_offset += count
+            name_offset += count
 
         if party.current_players_count >= party.max_players:
             party.status = PartyStatus.FULL

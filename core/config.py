@@ -50,8 +50,8 @@ class Settings(BaseSettings):
     )
 
     # Timeouts (in seconds)
-    SOLO_MATCHMAKING_TIMEOUT_SECONDS: int = Field(default=15, description="Solo matchmaking timeout before bot fallback")
-    TEAM_MATCHMAKING_TIMEOUT_SECONDS: int = Field(default=20, description="2v2/4v4 matchmaking timeout before bot fallback")
+    SOLO_MATCHMAKING_TIMEOUT_SECONDS: int = Field(default=25, description="Solo matchmaking timeout before bot fallback")
+    TEAM_MATCHMAKING_TIMEOUT_SECONDS: int = Field(default=30, description="2v2/4v4 matchmaking timeout before bot fallback")
     MATCHMAKING_TIMEOUT_SECONDS: int = Field(default=600, description="Deprecated legacy timeout; mode-specific deadlines are used")
     ACCEPTANCE_TIMEOUT_SECONDS: int = Field(default=120, description="Match acceptance timeout")
     # Legacy bot toggles remain readable for deployment compatibility; bot

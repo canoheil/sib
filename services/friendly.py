@@ -344,6 +344,7 @@ class FriendlyMatchService:
         engine = get_game_engine(game.code)
         state = engine.create_initial_state(match.players, party.mode)
         apply_friendly_state(state, match, party.group_id)
+        match.current_turn_player_id = state.get("current_player_id")
 
         # Bots may need to act before the first human (simultaneous games lock
         # their hidden choice; turn-based games may start on a bot turn).
