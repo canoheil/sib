@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.orm import selectinload
 
 from sib.database.models import (
     AppleBattleQueueEntry,
@@ -25,6 +26,7 @@ from sib.games.registry import get_game_engine
 from sib.handlers.party.renderer import render_party_card
 from sib.keyboards.party import get_party_action_keyboard
 from sib.matchmaking.matcher import MatchmakingService
+from sib.services.bot import BOT_DISPLAY_NAME_POOL, BOT_DISPLAY_NAME_PREFIX
 from sib.services.bot_match import BotMatchService
 from sib.services.leaderboard import LeaderboardService
 from sib.services.maintenance import MaintenanceService
@@ -89,7 +91,8 @@ async def test_solo_timeout_creates_one_independent_bot_in_normal_match(db_sessi
     assert len([p for p in match.players if not p.user.is_bot]) == 1
     assert len([p for p in match.players if p.user.is_bot]) == 1
     bot_player = next(p for p in match.players if p.user.is_bot)
-    assert bot_player.user.display_name == "سیب کوچولو"
+    assert bot_player.user.display_name.startswith(BOT_DISPLAY_NAME_PREFIX)
+    assert bot_player.user.display_name.removeprefix(BOT_DISPLAY_NAME_PREFIX) in BOT_DISPLAY_NAME_POOL
     assert bot_player.group_id is None and bot_player.bot_profile
     assert party.status == PartyStatus.IN_MATCH
 
@@ -131,6 +134,13 @@ async def test_team_timeout_creates_exact_bot_roster_and_preserves_team_names(mo
     assert len(humans) == size and all(p.team == 1 for p in humans)
     assert len(bots) == size and all(p.team == 2 and p.group_id is None for p in bots)
     assert len({p.user_id for p in bots}) == size
+    bot_names = [player.user.display_name for player in bots]
+    assert len(set(bot_names)) == size
+    assert all(name.startswith(BOT_DISPLAY_NAME_PREFIX) for name in bot_names)
+    assert all(
+        name.removeprefix(BOT_DISPLAY_NAME_PREFIX) in BOT_DISPLAY_NAME_POOL
+        for name in bot_names
+    )
 
     state = __import__("json").loads(match.game_state)
     assert state["team_names"] == {"1": group.title, "2": "🍎 تیم سیب کوچولو"}
@@ -225,7 +235,16 @@ async def test_solo_bot_turn_runs_through_independent_match_player(db_session):
     state = engine.apply_action(state, human.id, {"col": 3})
     match.current_turn_player_id = state["current_player_id"]
     from sib.bots.runner import run_bot_turns
-    state = await run_bot_turns(match, state)
+
+    async def no_sleep(_delay):
+        return None
+
+    state = await run_bot_turns(
+        match,
+        state,
+        sleep=no_sleep,
+        random_delay=lambda _minimum, _maximum: 1.0,
+    )
 
     assert sum(cell is not None for row in state["board"] for cell in row) == 2
     assert state["current_player_id"] == human.id
@@ -274,14 +293,14 @@ async def test_queue_deadlines_are_mode_specific(db_session):
     solo = await PartyService.create_party(db_session, group.id, solo_user.id, "connect_four", "solo")
     solo_queue = await MatchmakingService.enqueue_party(db_session, solo.id, solo_user.id)
     solo_seconds = (solo_queue.expires_at - solo_queue.entered_at).total_seconds()
-    assert 14 <= solo_seconds <= 16
+    assert solo_seconds == pytest.approx(25.0, abs=0.1)
 
     team_group = await create_test_group(db_session, "گروه تیمی تایم‌اوت")
     team_users = [await create_test_user(db_session, f"تیمی {i}") for i in range(2)]
     team = await _team_party(db_session, team_group, team_users, "2v2")
     team_queue = await MatchmakingService.enqueue_party(db_session, team.id, team_users[0].id)
     team_seconds = (team_queue.expires_at - team_queue.entered_at).total_seconds()
-    assert 19 <= team_seconds <= 21
+    assert team_seconds == pytest.approx(30.0, abs=0.1)
 
 
 @pytest.mark.asyncio
@@ -310,8 +329,13 @@ async def test_timeout_edits_queue_reference_and_releases_public_panel_owner(db_
     assert len(edits) == 1
     chat_id, old_message_id, text, _keyboard = edits[0]
     assert (chat_id, old_message_id) == (group.id, 8811)
-    assert "سیب کوچولو" in text and "چهار در یک خط" in text
-    match = await db_session.scalar(select(Match).where(Match.id == fallbacks[0]["match_id"]))
+    match = await db_session.scalar(
+        select(Match)
+        .where(Match.id == fallbacks[0]["match_id"])
+        .options(selectinload(Match.players).selectinload(MatchPlayer.user))
+    )
+    bot_name = next(player.user.display_name for player in match.players if player.user.is_bot)
+    assert bot_name in text and "چهار در یک خط" in text
     await db_session.refresh(match)
     assert match.group1_message_id == 8911
     assert await PanelOwnershipService.get_owner(db_session, group.id, 8811) is None

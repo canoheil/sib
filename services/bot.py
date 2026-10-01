@@ -1,6 +1,8 @@
 """Services for independent internal game-bot participants."""
 
 import json
+import random
+from typing import Any, Iterable, Optional, Sequence
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,25 +14,79 @@ from sib.database.models import MatchPlayer, User
 # namespace so they can never collide with a per-match bot identity.
 PARTY_BOT_ID_OFFSET = 1_000_000
 
-# Game-appropriate Persian bot names. Every party/match bot is a REAL User row
-# with ``is_bot=True`` and a "🤖" name prefix, so it is always distinguishable
-# from a Telegram player in rosters, boards and keyboards.
-GAME_BOT_NAMES = {
-    "battleship": "ناخدای سیب",
-    "connect_four": "مهره‌چین سیب",
-    "tic_tac_toe": "دوزباز سیب",
-    "rock_paper_scissors": "قیچی‌باز سیب",
-    "high_card": "کارت‌باز سیب",
-    "apple_battle": "سیب کوچولو",
-}
+# One shared pool for every game and bot-fill path. Keep the names game-neutral
+# so adding a strategy never requires adding another display-name mapping.
+BOT_DISPLAY_NAME_POOL = (
+    "جنگجوی سیبی",
+    "سیب کوچولو",
+    "سیب گنده",
+    "کاپیتان سیب",
+    "پهلوان سیب",
+    "فرمانده سیب",
+    "سیب خندان",
+    "سیب دلاور",
+    "سیب ماجراجو",
+    "سیب‌باز زرنگ",
+    "شاه‌سیب",
+    "گردباد سیبی",
+    "سیب آتشین",
+    "سیب شیرین",
+    "سیب ترش",
+    "سیب خوش‌شانس",
+    "سیب فضایی",
+    "سیب سرخ‌پوش",
+    "سیب سبزپوش",
+    "استاد سیب",
+    "سیب کوچولوی شجاع",
+    "سیب تندوتیز",
+    "سیب کماندار",
+    "سیب تاج‌دار",
+)
+BOT_DISPLAY_NAME_PREFIX = "🤖 "
+_PERSIAN_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
 
-DEFAULT_BOT_NAME = "سیب کوچولو"
+
+def _unprefixed_bot_name(name: str) -> str:
+    name = name.strip()
+    if name.startswith(BOT_DISPLAY_NAME_PREFIX):
+        return name[len(BOT_DISPLAY_NAME_PREFIX):].strip()
+    return name
 
 
-def bot_display_name(game_code: str, ordinal: int) -> str:
-    """Game-appropriate, clearly-marked bot display name."""
-    prefix = GAME_BOT_NAMES.get(game_code, DEFAULT_BOT_NAME)
-    return f"🤖 {prefix} {ordinal}"
+def choose_bot_display_names(
+    count: int,
+    *,
+    existing_names: Iterable[str] = (),
+    rng: Any = None,
+) -> list[str]:
+    """Randomly choose marked, unique names for one match or party.
+
+    When a roster is larger than the pool, numbered Persian variants keep
+    every display name unique instead of failing or silently duplicating one.
+    ``rng`` is injectable for deterministic tests; production uses ``random``.
+    """
+    if count <= 0:
+        return []
+
+    chooser = rng or random
+    used_names = {_unprefixed_bot_name(name) for name in existing_names}
+    available = [name for name in BOT_DISPLAY_NAME_POOL if name not in used_names]
+    selected = list(chooser.sample(available, min(count, len(available))))
+    names = [f"{BOT_DISPLAY_NAME_PREFIX}{name}" for name in selected]
+    used_names.update(selected)
+
+    suffix = 2
+    while len(names) < count:
+        base_name = chooser.choice(BOT_DISPLAY_NAME_POOL)
+        candidate = f"{base_name} {str(suffix).translate(_PERSIAN_DIGITS)}"
+        while candidate in used_names:
+            suffix += 1
+            candidate = f"{base_name} {str(suffix).translate(_PERSIAN_DIGITS)}"
+        names.append(f"{BOT_DISPLAY_NAME_PREFIX}{candidate}")
+        used_names.add(candidate)
+        suffix += 1
+
+    return names
 
 
 def _bot_profile(game_code: str, mode: str) -> str:
@@ -60,16 +116,23 @@ class BotService:
         mode: str,
         team: int,
         ordinal_offset: int = 0,
+        display_names: Optional[Sequence[str]] = None,
     ) -> list[tuple[User, str, int]]:
         """Create ``count`` bot participants for one friendly party team.
 
-        Returns ``[(user, profile_json, team), ...]``. IDs come from the party
-        bot namespace, names are game-appropriate, and each bot is a distinct
-        persisted User (``is_bot=True``) - the same abstraction per-match bots
-        already use, so rosters, boards and bot turns need no special casing.
+        Returns ``[(user, profile_json, team), ...]``. IDs remain in the
+        internal party-bot namespace; display names come from the shared pool.
         """
+        names = (
+            list(display_names)
+            if display_names is not None
+            else choose_bot_display_names(count)
+        )
+        if len(names) != count:
+            raise ValueError("One display name is required for each party bot.")
+
         created: list[tuple[User, str, int]] = []
-        for index in range(1, count + 1):
+        for index, name in enumerate(names, start=1):
             ordinal = ordinal_offset + index
             user_id = (
                 settings.BOT_USER_ID
@@ -81,7 +144,7 @@ class BotService:
             if user is None:
                 user = User(
                     id=user_id,
-                    first_name=bot_display_name(game_code, ordinal),
+                    first_name=name,
                     username=f"sib_party_bot_{party_id}_{ordinal}",
                     language_code="fa",
                     is_bot=True,
@@ -89,6 +152,10 @@ class BotService:
                 )
                 session.add(user)
                 await session.flush()
+            elif not user.is_bot:
+                raise ValueError(f"Reserved party-bot identity {user_id} belongs to a real user.")
+            else:
+                user.first_name = name
             created.append((user, _bot_profile(game_code, mode), team))
         return created
 
@@ -108,10 +175,10 @@ class BotService:
         Each bot is still a distinct User and MatchPlayer, not a shared team
         controller. Profiles are persisted on MatchPlayer for extensibility.
         """
+        names = choose_bot_display_names(count)
         created: list[tuple[User, str]] = []
-        for ordinal in range(1, count + 1):
+        for ordinal, name in enumerate(names, start=1):
             user_id = settings.BOT_USER_ID - (match_id * 8) - ordinal
-            name = "سیب کوچولو" if mode == "solo" else f"بات {ordinal}"
             user = await session.get(User, user_id)
             if user is None:
                 user = User(
@@ -124,6 +191,10 @@ class BotService:
                 )
                 session.add(user)
                 await session.flush()
+            elif not user.is_bot:
+                raise ValueError(f"Reserved match-bot identity {user_id} belongs to a real user.")
+            else:
+                user.first_name = name
             profile = json.dumps(
                 {
                     "version": 1,
@@ -146,7 +217,7 @@ class BotService:
             return bot
         bot = User(
             id=settings.BOT_USER_ID,
-            first_name="سیب کوچولو",
+            first_name=choose_bot_display_names(1)[0],
             username="goje_game_bot",
             language_code="fa",
             is_bot=True,

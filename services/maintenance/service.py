@@ -98,9 +98,17 @@ class MaintenanceService:
                 human = next((p for p in match.players if p.team == 1 and not p.user.is_bot), None)
                 viewer_id = human.user_id if human else 0
                 if match.mode == "solo":
+                    solo_bot = next(
+                        (
+                            player for player in match.players
+                            if player.user is not None and player.user.is_bot
+                        ),
+                        None,
+                    )
+                    bot_name = solo_bot.user.display_name if solo_bot else "حریف سیبی"
                     notice = (
                         "حریفی پیدا نشد.\n\n"
-                        "برای اینکه بیشتر منتظر نمونی، این بار با «سیب کوچولو» بازی می‌کنی 🍏"
+                        f"برای اینکه بیشتر منتظر نمونی، این بار با «{bot_name}» بازی می‌کنی 🍏"
                     )
                 else:
                     notice = (

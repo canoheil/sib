@@ -62,7 +62,7 @@ def _member_line(member) -> str:
     user = member.user
     name = user.display_name if user else "بازیکن"
     if user is not None and user.is_bot:
-        return f"🤖 {name}"
+        return name if name.startswith("🤖 ") else f"🤖 {name}"
     return f"👤 {name}"
 
 

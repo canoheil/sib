@@ -1,5 +1,6 @@
 """Tests for Matchmaking Telegram Handlers, callbacks, and Privacy rendering."""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 import pytest
 from aiogram.types import CallbackQuery, Message, User as TelegramUser, Chat as TelegramChat
@@ -43,6 +44,29 @@ async def test_solo_privacy_rendering(db_session):
     assert "گروه محرمانه ۲" not in rendered_g1
     # Must NOT contain numeric ID
     assert str(u2.id) not in rendered_g1
+
+
+def test_solo_bot_match_rendering_uses_the_assigned_display_name():
+    bot_name = "🤖 سیب تندوتیز"
+    match = SimpleNamespace(
+        mode="solo",
+        game=SimpleNamespace(name_fa="چهار در یک خط"),
+        group1_id=-1001,
+        group2_id=None,
+        group1=None,
+        group2=None,
+        is_bot_match=True,
+        players=[
+            SimpleNamespace(team=1, user=SimpleNamespace(display_name="بازیکن واقعی")),
+            SimpleNamespace(team=2, user=SimpleNamespace(display_name=bot_name)),
+        ],
+    )
+
+    rendered = render_match_found_for_group(match, -1001)
+
+    assert bot_name in rendered
+    assert "بازی با «🤖 سیب تندوتیز» خودکار شروع می‌شه." in rendered
+    assert "بازی با سیب کوچولو" not in rendered
 
 
 @pytest.mark.asyncio

@@ -25,7 +25,7 @@ def render_match_found_for_group(match: Match, for_group_id: int) -> str:
         my_player = my_players[0] if my_players else None
         my_name = my_player.user.display_name if my_player and my_player.user else "شما"
         next_step = (
-            "🤖 بازی با سیب کوچولو خودکار شروع می‌شه."
+            f"بازی با «{opp_name}» خودکار شروع می‌شه."
             if match.is_bot_match
             else "⏳ برای شروع مسابقه، روی دکمه «پذیرش مسابقه» بزنید (مهلت: ۱۲۰ ثانیه)."
         )
