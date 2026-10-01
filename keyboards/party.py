@@ -175,17 +175,130 @@ def get_match_type_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+FRIENDLY_TEAM_JOIN_TITLES = {
+    1: "➕ پیوستن به تیم 🍎",
+    2: "➕ پیوستن به تیم 🍏",
+}
+
+
+def friendly_free_team_slots(party: Party) -> dict:
+    """Free slots per team of a friendly party, from its loaded members.
+
+    The party service eager-loads ``party.members`` (with their teams) for
+    every render path, so the shared party card can derive the per-team
+    free slots itself - no extra query and no dependency on who is viewing.
+    Mirrors ``PartyService.free_slots`` (per-team cap = ``party.team_size``).
+    """
+    counts = {1: 0, 2: 0}
+    for member in party.members or []:
+        team = int(member.team or 1)
+        if team in counts:
+            counts[team] += 1
+    try:
+        team_size = max(1, int(party.team_size))
+    except (TypeError, ValueError):
+        # Defensive: if the team data cannot be read, keep offering both
+        # teams - the service still enforces the real per-team cap.
+        return {1: 1, 2: 1}
+    return {team: max(0, team_size - counts[team]) for team in (1, 2)}
+
+
+def friendly_join_row(party: Party) -> list:
+    """Join buttons for every team of a friendly party that still has a slot.
+
+    Once a team is full its Join button is not rendered at all (the party
+    service enforces the same per-team cap on the callback itself).
+    """
+    free = friendly_free_team_slots(party)
+    return [
+        success_button(
+            text=FRIENDLY_TEAM_JOIN_TITLES[team],
+            callback_data=f"join_party:{party.id}:{team}",
+        )
+        for team in (1, 2)
+        if free.get(team, 0) > 0
+    ]
+
+
+def get_shared_friendly_party_keyboard(party: Party) -> InlineKeyboardMarkup:
+    """Keyboard of a friendly party on its ONE shared group message.
+
+    A friendly party holds both teams inside a single Telegram group, so
+    its card is a single message and Telegram renders exactly ONE keyboard
+    for every viewer. The card is therefore built for the GROUP, never for
+    one viewer's membership: it carries the Team 🍎/🍏 join buttons of
+    every team with a free slot (so other members can join immediately -
+    a creator-side render used to hide them until someone pressed
+    Refresh), the member actions (leave, cancel, start when full) and the
+    host's bot filling.
+
+    Visibility is not authorization: which presser may actually use an
+    action is still enforced server-side - the panel guard keeps
+    ``friendly_fill_bots:``/``friendly_start:`` host-scoped and the party
+    service re-checks host/member rights on every callback.
+    """
+    from sib.database.models import PartyStatus
+
+    buttons = []
+
+    if party.status == PartyStatus.IN_MATCH:
+        buttons.extend(nav_refresh_row("🔄 بروزرسانی", f"view_party:{party.id}"))
+        buttons.extend(nav_back_row(BACK_TO_ACTIVE, "group_active_games"))
+        return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    if not party.is_full:
+        join_row = friendly_join_row(party)
+        if join_row:
+            buttons.append(join_row)
+        buttons.append([
+            danger_button(
+                text="🚪 ترک پارتی",
+                callback_data=f"leave_party:{party.id}",
+            )
+        ])
+        buttons.append([
+            success_button(
+                text="🤖 پر کردن جای خالی با بات",
+                callback_data=f"friendly_fill_bots:{party.id}",
+            )
+        ])
+    else:
+        # Only members can start the friendly match (the service enforces it).
+        buttons.append([
+            success_button(
+                text="🚀 شروع بازی رفیقانه",
+                callback_data=f"friendly_start:{party.id}",
+            )
+        ])
+
+    buttons.append([
+        danger_button(
+            text="❌ لغو پارتی",
+            callback_data=f"cancel_party:{party.id}",
+        )
+    ])
+    buttons.extend(nav_refresh_row("🔄 بروزرسانی", f"view_party:{party.id}"))
+    buttons.extend(nav_back_row(BACK_TO_ACTIVE, "group_active_games"))
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def get_friendly_party_keyboard(
     party: Party,
     is_member: bool = False,
     is_host: Optional[bool] = None,
 ) -> InlineKeyboardMarkup:
-    """Screen: one friendly party (both teams inside one group).
+    """Screen: one friendly party from ONE viewer's side.
 
     Actions: join a specific team / leave, bot filling (shown to the host;
     the service enforces host-only anyway), start the friendly match when
     full, cancel, refresh and Back to Active Games. Back NEVER cancels the
     party (cancellation has its own button).
+
+    NOTE: the friendly party card lives on ONE shared group message, so the
+    handlers render :func:`get_shared_friendly_party_keyboard` for it (via
+    ``get_party_action_keyboard``) - a per-viewer keyboard cannot serve a
+    shared message (the creator's render left everyone else without the
+    join buttons). This per-viewer variant remains for direct/private use.
     """
     from sib.database.models import PartyStatus
 
@@ -253,10 +366,14 @@ def get_party_action_keyboard(
     Games screen can always show and inspect every live game.
 
     A friendly party (match type, not a game mode) renders its own screen
-    with team joining, bot filling and the friendly start action.
+    with team joining, bot filling and the friendly start action. Because
+    that card lives on ONE shared group message, it is rendered for the
+    whole group (:func:`get_shared_friendly_party_keyboard`) - rendering it
+    from the creator's side used to leave every other member without the
+    Team join buttons until someone pressed Refresh.
     """
     if party.is_friendly:
-        return get_friendly_party_keyboard(party, is_member=is_member, is_host=is_host)
+        return get_shared_friendly_party_keyboard(party)
 
     buttons = []
 
