@@ -18,6 +18,15 @@ BOT_STRATEGIES: Dict[str, Any] = {
 }
 
 
+def has_bot_strategy(game_code: str | None) -> bool:
+    """True when a game has a registered default bot strategy.
+
+    Only these games can run scheduled bot turns; games with their own
+    automatic flow (e.g. Apple Battle's staged narration) are excluded.
+    """
+    return bool(game_code) and game_code in BOT_STRATEGIES
+
+
 def get_bot_strategy(game_code: str, strategy_key: str | None = None):
     """Return a strategy by registered key, defaulting to the game strategy.
 

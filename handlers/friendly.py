@@ -18,6 +18,7 @@ from typing import Optional
 from aiogram import Bot, F, Router
 from aiogram.types import CallbackQuery
 
+from sib.bots.runner import schedule_bot_turn
 from sib.core.errors import (
     ActiveSessionExistsException,
     InvalidActionException,
@@ -235,6 +236,11 @@ async def handle_friendly_start(callback: CallbackQuery, bot: Bot):
         if board_id:
             await _remember_friendly_board(match.id, group_id, board_id)
 
+    # The board is rendered. If a bot owns the opening turn, its humanization
+    # delay runs in a detached task - never on this callback.
+    if match.is_bot_match:
+        schedule_bot_turn(match.id, bot=bot)
+
 
 @router.callback_query(F.data.startswith("friendly_rematch:"))
 async def handle_friendly_rematch(callback: CallbackQuery, bot: Bot):
@@ -260,3 +266,8 @@ async def handle_friendly_rematch(callback: CallbackQuery, bot: Bot):
         board_id = getattr(callback.message, "message_id", None)
         if board_id:
             await _remember_friendly_board(match.id, group_id, board_id)
+
+    # Same rule as a fresh friendly start: the first bot turn is scheduled,
+    # the rematch callback returns immediately.
+    if match.is_bot_match:
+        schedule_bot_turn(match.id, bot=bot)

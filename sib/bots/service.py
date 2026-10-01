@@ -14,6 +14,36 @@ class GameBotService:
     """Executes bot moves through the normal game engine."""
 
     @staticmethod
+    def sync_turn_metadata(match: Match, state: Dict[str, Any], engine: Any) -> None:
+        """Keep Match turn metadata aligned with the engine state after a move.
+
+        One shared implementation for human and bot moves: turn-based games
+        track the current player's deadline, simultaneous games keep their
+        shared round deadline, and a finished game clears both.
+        """
+        if engine.is_finished(state):
+            match.current_turn_player_id = None
+            match.turn_deadline = None
+            return
+
+        current_player_id = state.get("current_player_id")
+        if current_player_id:
+            match.current_turn_player_id = current_player_id
+            match.turn_deadline = (
+                datetime.now(timezone.utc)
+                + timedelta(seconds=engine.turn_timeout_seconds)
+            )
+        else:
+            # Simultaneous game (e.g. RPS / High Card): keep the shared
+            # deadline so TimeoutService can resolve an incomplete round.
+            match.current_turn_player_id = None
+            if match.turn_deadline is None:
+                match.turn_deadline = (
+                    datetime.now(timezone.utc)
+                    + timedelta(seconds=engine.turn_timeout_seconds)
+                )
+
+    @staticmethod
     async def play_turn(
         match: Match,
         state: Dict[str, Any],
@@ -74,19 +104,7 @@ class GameBotService:
             ensure_ascii=False,
         )
 
-        if engine.is_finished(state):
-            match.current_turn_player_id = None
-            match.turn_deadline = None
-        else:
-            current_player_id = state.get("current_player_id")
-
-            match.current_turn_player_id = current_player_id
-
-            if current_player_id:
-                match.turn_deadline = (
-                    datetime.now(timezone.utc)
-                    + timedelta(seconds=engine.turn_timeout_seconds)
-                )
+        GameBotService.sync_turn_metadata(match, state, engine)
 
         log_event(
             Events.MOVE_PLAYED,

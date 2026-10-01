@@ -149,6 +149,35 @@ class MaintenanceService:
                     await after_start(bot, match.id)
 
     @classmethod
+    async def _resume_pending_bot_turns(cls, bot) -> None:
+        """Self-heal: schedule a bot turn for every live bot match that owns one.
+
+        ``schedule_bot_turn`` is a no-op when a task for the match is already
+        in flight (or when the current turn belongs to a human), so this is
+        idempotent. It covers tasks lost to a restart and mirrors the
+        self-healing contract of the board sync: an active bot match can never
+        sit forever on an idle bot's turn.
+        """
+        from sqlalchemy import select
+        from sib.database.models import Match, MatchState
+        from sib.bots.runner import schedule_bot_turn
+
+        async with get_session() as session:
+            match_ids = list(
+                (
+                    await session.scalars(
+                        select(Match.id).where(
+                            Match.is_bot_match == True,  # noqa: E712
+                            Match.state == MatchState.ACTIVE,
+                        )
+                    )
+                ).all()
+            )
+
+        for match_id in match_ids:
+            schedule_bot_turn(match_id, bot=bot)
+
+    @classmethod
     async def run_once(cls) -> None:
         """Run one maintenance cycle, then publish any committed fallbacks."""
         resolved_ids: list = []
@@ -175,6 +204,13 @@ class MaintenanceService:
                 logger.exception("Could not render bot fallback match screen")
         if resolved_ids and cls._bot is not None:
             await cls._sync_resolved_matches(resolved_ids)
+
+        # Committed bot matches whose bot turn lost its task (e.g. a restart)
+        # are resumed here, after their boards were presented.
+        try:
+            await cls._resume_pending_bot_turns(cls._bot)
+        except Exception:
+            logger.exception("Could not resume pending bot turns")
 
     @classmethod
     async def _sync_resolved_matches(cls, resolved_ids: list) -> None:

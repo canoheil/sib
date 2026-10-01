@@ -20,7 +20,7 @@ filling) live in ``sib.services.party.service``.
 """
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import func, select
@@ -46,6 +46,7 @@ from sib.database.models import (
     PartyStatus,
     User,
 )
+from sib.bots.service import GameBotService
 from sib.games.registry import get_game_engine
 from sib.services.apple_wallet import AppleWalletService
 from sib.services.config_store import ConfigService
@@ -344,21 +345,14 @@ class FriendlyMatchService:
         engine = get_game_engine(game.code)
         state = engine.create_initial_state(match.players, party.mode)
         apply_friendly_state(state, match, party.group_id)
-        match.current_turn_player_id = state.get("current_player_id")
-
-        # Bots may need to act before the first human (simultaneous games lock
-        # their hidden choice; turn-based games may start on a bot turn).
-        from sib.bots.runner import run_bot_turns
-
-        state = await run_bot_turns(match, state)
 
         match.game_state = json.dumps(state, ensure_ascii=False)
-        match.current_turn_player_id = state.get("current_player_id")
-        match.turn_deadline = (
-            None
-            if engine.is_finished(state)
-            else now + timedelta(seconds=engine.turn_timeout_seconds)
-        )
+        # Opening turn metadata only. Bots may need to act before the first
+        # human (simultaneous games lock their hidden choice; turn-based games
+        # may start on a bot turn), but their delay belongs to the scheduled
+        # bot-turn task created by the caller AFTER this transaction commits -
+        # never to the human callback that pressed Start.
+        GameBotService.sync_turn_metadata(match, state, engine)
         party.status = PartyStatus.IN_MATCH
         await session.flush()
 
