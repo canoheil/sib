@@ -400,6 +400,7 @@ async def handle_apple_battle(callback: CallbackQuery, bot: Bot):
         return
     _base, origin = parse_callback(callback.data)
 
+    prev_message_id = getattr(callback.message, "message_id", None)
     text, kb = await battle_entry_view(user.id, origin=origin)
 
     await callback.answer()
@@ -410,6 +411,7 @@ async def handle_apple_battle(callback: CallbackQuery, bot: Bot):
             text,
             reply_markup=kb,
         )
+    await _claim_panel(callback, "apple_battle", prev_message_id)
 
 
 @router.callback_query(F.data == "apple_profile")

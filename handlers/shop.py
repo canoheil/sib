@@ -31,11 +31,39 @@ from sib.keyboards.common import (
     primary_button,
     success_button,
 )
+from sib.services.panel import (
+    LOCKED_MESSAGE,
+    PanelAuthorizationError,
+    resolve_personal_actor,
+)
 from sib.services.telegram_ui import (
     CAPTION_LIMIT, caption_length, safe_answer_callback, safe_edit_callback_message,
 )
 
 router = Router(name="shop")
+
+
+async def _shop_actor(callback: CallbackQuery) -> int:
+    """Resolve the authorized actor for a shop callback (defense in depth).
+
+    The shop is a personal panel; only the opener may browse or buy.
+    Service-layer checks (card ownership, wallet balance) are the final
+    gate; this helper ensures that a forged/replayed callback on someone
+    else's shop panel never reaches the service layer with the wrong
+    user_id.
+    """
+    user = callback.from_user
+    if user is None:
+        return 0
+    try:
+        actor_id, _ = await resolve_personal_actor(callback)
+    except PanelAuthorizationError:
+        try:
+            await callback.answer(LOCKED_MESSAGE, show_alert=True)
+        except Exception:  # pragma: no cover - defensive
+            pass
+        return 0
+    return actor_id
 
 
 # ---------------------------------------------------------------------------
@@ -74,9 +102,20 @@ async def cmd_shop(message: Message, bot: Bot):
     if not user:
         return
     from sib.services.banner import send_screen_reply
+    from sib.services.panel import PanelOwnershipService
 
     text, kb = await _shop_view(user.id)
-    await send_screen_reply(message, "shop", text, kb)
+    sent = await send_screen_reply(message, "shop", text, kb)
+    if sent is not None and sent.message_id:
+        async with get_session() as session:
+            await PanelOwnershipService.claim(
+                session,
+                chat_id=sent.chat.id,
+                message_id=sent.message_id,
+                user_id=user.id,
+                panel_type="shop",
+            )
+            await session.commit()
 
 
 @router.callback_query(F.data == "shop_refresh")
@@ -87,7 +126,10 @@ async def handle_shop_refresh(callback: CallbackQuery, bot: Bot):
     user = callback.from_user
     if not user:
         return
-    text, kb = await _shop_view(user.id)
+    actor = await _shop_actor(callback)
+    if not actor or actor != user.id:
+        return
+    text, kb = await _shop_view(actor)
     await safe_answer_callback(callback, "بروزرسانی شد 🍏")
     if callback.message:
         await render_banner(callback, bot, "shop", text, kb)
@@ -135,7 +177,10 @@ async def handle_shop_cards(callback: CallbackQuery, bot: Bot):
     user = callback.from_user
     if not user:
         return
-    text, kb = await _cards_view(user.id)
+    actor = await _shop_actor(callback)
+    if not actor or actor != user.id:
+        return
+    text, kb = await _cards_view(actor)
     await safe_answer_callback(callback)
     await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
@@ -197,7 +242,10 @@ async def handle_shop_item(callback: CallbackQuery, bot: Bot):
     user = callback.from_user
     if not user:
         return
-    text, kb, art_photo = await _shop_item_view(user.id, entry_id)
+    actor = await _shop_actor(callback)
+    if not actor or actor != user.id:
+        return
+    text, kb, art_photo = await _shop_item_view(actor, entry_id)
     if art_photo is not None and caption_length(text) > CAPTION_LIMIT:
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [primary_button(
@@ -215,8 +263,11 @@ async def handle_shop_item_full(callback: CallbackQuery, bot: Bot):
     user = callback.from_user
     if not user:
         return
+    actor = await _shop_actor(callback)
+    if not actor or actor != user.id:
+        return
     entry_id = int(callback.data.split(":")[1])
-    text, kb, art_photo = await _shop_item_view(user.id, entry_id)
+    text, kb, art_photo = await _shop_item_view(actor, entry_id)
     if art_photo is not None:
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [primary_button(
@@ -239,17 +290,20 @@ async def handle_shop_buy(callback: CallbackQuery, bot: Bot):
     user = callback.from_user
     if not user:
         return
+    actor = await _shop_actor(callback)
+    if not actor or actor != user.id:
+        return
 
     async with get_session() as session:
         try:
-            await ShopService.purchase(session, user.id, entry_id)
+            await ShopService.purchase(session, actor, entry_id)
         except ShopError as e:
             await safe_answer_callback(callback, str(e), show_alert=True)
             return
 
     from sib.services.banner import render_banner
 
-    text, kb = await _shop_view(user.id)
+    text, kb = await _shop_view(actor)
     await safe_answer_callback(callback, "خرید انجام شد! کارت به مجموعه شما اضافه شد 🎉")
     if callback.message:
         await render_banner(callback, bot, "shop", text, kb)
@@ -302,7 +356,10 @@ async def handle_shop_goods(callback: CallbackQuery, bot: Bot):
     user = callback.from_user
     if not user:
         return
-    text, kb = await _goods_view(user.id)
+    actor = await _shop_actor(callback)
+    if not actor or actor != user.id:
+        return
+    text, kb = await _goods_view(actor)
     await safe_answer_callback(callback)
     await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
@@ -353,7 +410,10 @@ async def handle_shop_good(callback: CallbackQuery, bot: Bot):
     user = callback.from_user
     if not user:
         return
-    text, kb, art_photo = await _good_view(user.id, item_key)
+    actor = await _shop_actor(callback)
+    if not actor or actor != user.id:
+        return
+    text, kb, art_photo = await _good_view(actor, item_key)
     await safe_answer_callback(callback)
     await safe_edit_callback_message(callback, bot, text, reply_markup=kb, photo=art_photo)
 
@@ -364,10 +424,13 @@ async def handle_shop_good_buy(callback: CallbackQuery, bot: Bot):
     user = callback.from_user
     if not user:
         return
+    actor = await _shop_actor(callback)
+    if not actor or actor != user.id:
+        return
 
     async with get_session() as session:
         try:
-            total = await ItemService.buy(session, user.id, item_key, 1)
+            total = await ItemService.buy(session, actor, item_key, 1)
         except ValueError as e:
             await safe_answer_callback(callback, str(e), show_alert=True)
             return
@@ -376,7 +439,7 @@ async def handle_shop_good_buy(callback: CallbackQuery, bot: Bot):
         callback,
         f"خرید انجام شد! {item_emoji(item_key)} {item_label(item_key)} خریدی (موجودی: {total}) 🎉",
     )
-    text, kb = await _goods_view(user.id)
+    text, kb = await _goods_view(actor)
     await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
 
@@ -434,7 +497,10 @@ async def handle_shop_sell(callback: CallbackQuery, bot: Bot):
     user = callback.from_user
     if not user:
         return
-    text, kb = await _sell_view(user.id)
+    actor = await _shop_actor(callback)
+    if not actor or actor != user.id:
+        return
+    text, kb = await _sell_view(actor)
     await safe_answer_callback(callback)
     await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
@@ -443,9 +509,12 @@ async def _sell_items(callback: CallbackQuery, bot: Bot, item_key: str, quantity
     user = callback.from_user
     if not user:
         return
+    actor = await _shop_actor(callback)
+    if not actor or actor != user.id:
+        return
     async with get_session() as session:
         try:
-            apples = await ItemService.sell(session, user.id, item_key, quantity)
+            apples = await ItemService.sell(session, actor, item_key, quantity)
         except ValueError as e:
             await safe_answer_callback(callback, str(e), show_alert=True)
             return
@@ -453,7 +522,7 @@ async def _sell_items(callback: CallbackQuery, bot: Bot, item_key: str, quantity
     await safe_answer_callback(
         callback, f"فروش انجام شد! `{apples}` سیب دریافت کردی 🍎"
     )
-    text, kb = await _sell_view(user.id)
+    text, kb = await _sell_view(actor)
     await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
 
@@ -469,8 +538,11 @@ async def handle_shop_sell_all(callback: CallbackQuery, bot: Bot):
     user = callback.from_user
     if not user:
         return
+    actor = await _shop_actor(callback)
+    if not actor or actor != user.id:
+        return
     async with get_session() as session:
-        have = await ItemService.get_total(session, user.id, item_key)
+        have = await ItemService.get_total(session, actor, item_key)
     if have <= 0:
         await safe_answer_callback(callback, "از این آیتم نداری!", show_alert=True)
         return
