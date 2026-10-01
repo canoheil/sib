@@ -15,7 +15,12 @@
   open their own sessions and commit, so re-query in the test after `rollback()`.
 - **Engines**: resolve "my side" from `state["players"][…]["group_id"]`; friendly matches rewrite
   those to per-team audience ids (`abs(group)*1000+2` for team 2) — never change DB `group_id`s.
-- **Keyboards**: `get_party_action_keyboard` delegates to the friendly keyboard when
+- **Keyboards**: `get_party_action_keyboard` delegates to `get_shared_friendly_party_keyboard` when
   `party.is_friendly`; solo normal cards expose `make_friendly:{id}`. Back buttons must never cancel.
+  The friendly card is ONE shared group message, so its keyboard must be VIEWER-INDEPENDENT —
+  rendering it from the creator's side (old `is_member=True`) hid `join_party:{id}:{team}` from
+  every other member until Refresh. Join buttons are only rendered for teams with a free slot
+  (`friendly_free_team_slots`); host-only actions stay protected by `OWNER_SCOPED_CALLBACKS` +
+  `PartyService`, never by hiding the card's buttons.
 - **Rewards**: friendly payouts go through `AppleWalletService.earn(..., idempotency_key=...)`;
   seeds/group stats must never be touched for `match_type == friendly`.

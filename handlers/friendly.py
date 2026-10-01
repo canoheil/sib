@@ -32,7 +32,7 @@ from sib.games.registry import get_game_engine
 from sib.handlers.party.renderer import render_party_card
 from sib.keyboards.party import (
     get_friendly_rematch_keyboard,
-    get_party_action_keyboard,
+    get_shared_friendly_party_keyboard,
 )
 from sib.services.friendly import (
     FriendlyMatchService,
@@ -120,9 +120,16 @@ async def _remember_friendly_board(match_id: int, group_id: int, message_id: int
 
 
 async def _show_friendly_party(callback: CallbackQuery, bot: Optional[Bot], party) -> None:
+    """Render the friendly party card onto the shared GROUP message.
+
+    The card belongs to the whole group (it is one message for both teams),
+    so its keyboard is rendered for the group - team joins included - and
+    is never tailored to the acting host. Tailoring it to the host (the old
+    behaviour) left every other member without the join buttons until they
+    pressed Refresh.
+    """
     text = render_party_card(party)
-    is_host = bool(callback.from_user) and party.creator_user_id == callback.from_user.id
-    kb = get_party_action_keyboard(party, is_member=True, is_host=is_host)
+    kb = get_shared_friendly_party_keyboard(party)
     await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
 

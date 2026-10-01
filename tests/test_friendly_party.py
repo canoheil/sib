@@ -44,12 +44,17 @@ from sib.handlers.friendly import (
     render_friendly_board,
 )
 from sib.handlers.games.connect_four import handle_c4_action
-from sib.handlers.party.handlers import handle_join_party, handle_select_mode
+from sib.handlers.party.handlers import (
+    handle_join_party,
+    handle_select_mode,
+    handle_view_party,
+)
 from sib.handlers.party.renderer import render_party_card
 from sib.keyboards.party import (
     get_friendly_party_keyboard,
     get_match_type_keyboard,
     get_party_action_keyboard,
+    get_shared_friendly_party_keyboard,
 )
 from sib.matchmaking.matcher import MatchmakingService
 from sib.services.apple_wallet import AppleWalletService
@@ -907,6 +912,145 @@ async def test_friendly_ui_callbacks_create_fill_and_start(db_session):
     final_kb = mock_bot.edit_message_text.call_args[1]["reply_markup"]
     cbs = [b.callback_data for row in final_kb.inline_keyboard for b in row]
     assert f"game_refresh:{match.id}" in cbs
+
+
+def _keyboard_callbacks(kb) -> list:
+    return [b.callback_data for row in kb.inline_keyboard for b in row]
+
+
+@pytest.mark.asyncio
+async def test_friendly_party_initial_card_offers_team_joins_immediately(db_session):
+    """REGRESSION: the FIRST party message already carries the join buttons.
+
+    A friendly party is ONE shared group message, so the card every other
+    member sees is the one rendered when the creator creates the party. That
+    render used to be tailored to the host, which left every other member
+    without the Team 🍎/🍏 join buttons until somebody pressed Refresh.
+    """
+    group = await create_test_group(db_session, "گروه نمای اولیه")
+    host = await create_test_user(db_session, "میزبان نمای اولیه")
+    guest = await create_test_user(db_session, "مهمان نمای اولیه")
+    group_id, host_id, guest_id = group.id, host.id, guest.id
+    mock_bot = AsyncMock()
+
+    # 1) the creator creates the friendly party (2v2 -> both teams open)
+    callback = _callback("create_friendly_party:connect_four:2v2", host_id, group_id)
+    await handle_create_friendly_party(callback, mock_bot)
+
+    await db_session.rollback()
+    party_id = (await PartyService.get_active_parties_for_group(db_session, group_id))[0].id
+
+    initial_kb = mock_bot.edit_message_text.call_args[1]["reply_markup"]
+    initial_cbs = _keyboard_callbacks(initial_kb)
+
+    # 2+3) another eligible group member sees BOTH join buttons right there
+    assert f"join_party:{party_id}:1" in initial_cbs
+    assert f"join_party:{party_id}:2" in initial_cbs
+    # 4) and no Refresh was required: the create render is the only render.
+    assert mock_bot.edit_message_text.call_count == 1
+
+    # The creator keeps their normal party controls on the same card.
+    assert f"friendly_fill_bots:{party_id}" in initial_cbs
+    assert f"cancel_party:{party_id}" in initial_cbs
+    assert f"view_party:{party_id}" in initial_cbs
+    assert "group_active_games" in initial_cbs
+
+    # ...and a member's own view of the party (Active Games / Refresh) keeps
+    # the join buttons - the shared card does not flip per viewer.
+    refresh_bot = AsyncMock()
+    refresh_callback = _callback(
+        f"view_party:{party_id}", guest_id, group_id, message_id=701
+    )
+    await handle_view_party(refresh_callback, refresh_bot)
+    refreshed_cbs = _keyboard_callbacks(
+        refresh_bot.edit_message_text.call_args[1]["reply_markup"]
+    )
+    assert f"join_party:{party_id}:1" in refreshed_cbs
+    assert f"join_party:{party_id}:2" in refreshed_cbs
+
+    # Joining a team re-renders the same shared card: the still-open teams
+    # remain joinable for the next member (again without any Refresh).
+    join_bot = AsyncMock()
+    join_callback = _callback(f"join_party:{party_id}:2", guest_id, group_id)
+    await handle_join_party(join_callback, join_bot)
+    joined_cbs = _keyboard_callbacks(
+        join_bot.edit_message_text.call_args[1]["reply_markup"]
+    )
+    assert f"join_party:{party_id}:1" in joined_cbs  # team 🍎 is still open
+    assert f"join_party:{party_id}:2" in joined_cbs  # team 🍏 has one free slot
+
+
+@pytest.mark.asyncio
+async def test_friendly_party_card_hides_join_button_of_a_full_team(db_session):
+    """A full team's Join button disappears; a full party offers Start."""
+    group = await create_test_group(db_session, "گروه تیم پر")
+    host = await create_test_user(db_session, "میزبان تیم پر")
+    mate = await create_test_user(db_session, "هم‌تیمی تیم پر")
+    guest = await create_test_user(db_session, "مهمان تیم پر")
+    group_id, host_id, guest_id = group.id, host.id, guest.id
+
+    party = await PartyService.create_friendly_party(
+        db_session, group_id, host_id, "connect_four", "2v2"
+    )
+    party = await PartyService.join_party(db_session, party.id, mate.id, team=1)
+    party_id = party.id
+    await db_session.commit()
+
+    # Team 🍎 (team 1) is full, team 🍏 (team 2) is still open.
+    kb = get_shared_friendly_party_keyboard(party)
+    cbs = _keyboard_callbacks(kb)
+    assert f"join_party:{party_id}:1" not in cbs
+    assert f"join_party:{party_id}:2" in cbs
+
+    # The same rule applies to the render another member gets from the card.
+    mock_bot = AsyncMock()
+    callback = _callback(f"view_party:{party_id}", guest_id, group_id)
+    await handle_view_party(callback, mock_bot)
+    cbs = _keyboard_callbacks(mock_bot.edit_message_text.call_args[1]["reply_markup"])
+    assert f"join_party:{party_id}:1" not in cbs
+    assert f"join_party:{party_id}:2" in cbs
+
+    # Once the whole party is full the join buttons give way to Start.
+    filler = await create_test_user(db_session, "پرکنندهٔ تیم پر")
+    party = await PartyService.join_party(db_session, party_id, filler.id)
+    last = await create_test_user(db_session, "آخرین تیم پر")
+    party = await PartyService.join_party(db_session, party_id, last.id)
+    await db_session.commit()
+    assert party.is_full
+    cbs = _keyboard_callbacks(get_shared_friendly_party_keyboard(party))
+    assert not any(c.startswith("join_party:") for c in cbs)
+    assert f"friendly_start:{party_id}" in cbs
+    assert f"friendly_fill_bots:{party_id}" not in cbs
+
+
+@pytest.mark.asyncio
+async def test_friendly_party_shared_card_keeps_bot_fill_host_only(db_session):
+    """The shared card carries the host's Bot Fill, but only the host may use it."""
+    group = await create_test_group(db_session, "گروه محافظت بات")
+    host = await create_test_user(db_session, "میزبان محافظت")
+    guest = await create_test_user(db_session, "مهمان محافظت")
+    group_id, host_id, guest_id = group.id, host.id, guest.id
+
+    party = await PartyService.create_friendly_party(
+        db_session, group_id, host_id, "connect_four", "2v2"
+    )
+    party = await PartyService.join_party(db_session, party.id, guest_id, team=2)
+    party_id = party.id
+    await db_session.commit()
+
+    # The non-host presser is refused with a friendly alert, no bots appear
+    # and the card is not re-rendered.
+    mock_bot = AsyncMock()
+    callback = _callback(f"friendly_fill_bots:{party_id}", guest_id, group_id)
+    await handle_friendly_fill_bots(callback, mock_bot)
+
+    await db_session.rollback()
+    refreshed = await PartyService.get_party_by_id(db_session, party_id)
+    assert not refreshed.is_full
+    assert refreshed.current_players_count == 2
+    assert await _bot_members(db_session, party_id) == []
+    assert not mock_bot.edit_message_text.called
+    assert callback.answer.await_count == 1
 
 
 @pytest.mark.asyncio
