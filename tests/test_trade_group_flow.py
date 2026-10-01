@@ -27,7 +27,7 @@ from sib.handlers.trading import (
     handle_trade_ok,
     handle_trade_pick,
 )
-from sib.keyboards.common import get_group_welcome_keyboard
+from sib.keyboards.common import get_group_welcome_keyboard, get_profile_keyboard
 from sib.services.characters import CharacterService
 from sib.services.player_cards import PlayerCardService
 from sib.services.trading import TradeError, TradeService
@@ -101,7 +101,7 @@ def _new_bot() -> MagicMock:
 # ---------------------------------------------------------------------------
 
 
-def test_group_menu_exposes_games_guide_and_trade():
+def test_group_menu_exposes_games_guide_and_profile_keeps_trade():
     kb = get_group_welcome_keyboard()
     data = _button_data(kb)
     labels = " | ".join(b.text for b in _all_buttons(kb))
@@ -109,11 +109,16 @@ def test_group_menu_exposes_games_guide_and_trade():
     # Group features exist in the group menu.
     assert "group_games_panel" in data
     assert "help_menu" in data
-    assert "apple_trade" in data
-    assert "🎮" in labels and "📖" in labels and "🔁" in labels
-    # The group menu still keeps the existing entries.
+    assert "🎮" in labels and "📖" in labels
+    # The group menu still keeps the rating / shop / profile entries.
     assert "group_rating_stats" in data
-    assert "apple_cards" in data and "apple_shop" in data
+    assert "apple_shop" in data and "apple_profile" in data
+    # Card trading is NOT a main-menu shortcut anymore; it is reached from
+    # «👤 پروفایل من» (its handler/callback are unchanged).
+    assert "apple_trade" not in data
+    profile = _button_data(get_profile_keyboard())
+    assert any(cb and cb.startswith("apple_trade") for cb in profile)
+    assert any(cb and cb.startswith("apple_cards") for cb in profile)  # My Cards stays
 
 
 @pytest.mark.asyncio

@@ -42,8 +42,8 @@ def test_other_main_menu_buttons_keep_their_styles():
 
     group_kb = get_group_welcome_keyboard()
     by_text = {b.text: b for b in _buttons(group_kb)}
-    # The guide button next to the games button stays blue.
+    # Every non-games entry of the reorganized 5-button menu stays blue.
     assert by_text["📖 راهنما"].style == "primary"
-    # Action/confirm and trade buttons stay on their semantic colors.
-    assert by_text["🔁 مبادله کارت"].style == "primary"
+    assert by_text["🛒 فروشگاه"].style == "primary"
     assert by_text["👤 پروفایل من"].style == "primary"
+    assert by_text["🏆 رتبه و آمار گروه"].style == "primary"
