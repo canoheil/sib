@@ -95,10 +95,17 @@ def get_private_welcome_keyboard(bot_username: str) -> InlineKeyboardMarkup:
 def get_group_welcome_keyboard() -> InlineKeyboardMarkup:
     """Main keyboard for group chat /start.
 
-    The GROUP menu is the group's front door, so it exposes the group
-    features directly: games, the games menu, card trading, the guide and
-    the group rating. Card trading is a group activity (players trade with
-    each other in the group), never a private-only feature.
+    Five entries only: games, the guide, the shop, the player's profile and
+    the group rating. The Games entry leads the menu full-width.
+
+    Card Trading, My Cards and Active Group Games are NOT duplicated here;
+    each keeps its ONE canonical entry:
+
+    - Card Trading  -> «👤 پروفایل من» (get_profile_keyboard)
+    - My Cards      -> «👤 پروفایل من» (get_profile_keyboard)
+    - Active Games  -> «🎮 بازی‌ها»    (get_games_menu_keyboard)
+
+    Removing a shortcut here never removes the feature itself.
     """
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -106,40 +113,26 @@ def get_group_welcome_keyboard() -> InlineKeyboardMarkup:
                 success_button(
                     text="🎮 بازی‌ها",
                     callback_data="group_games_panel",
-                ),
+                )
+            ],
+            [
                 primary_button(
                     text="📖 راهنما",
                     callback_data="help_menu",
                 ),
-            ],
-            [
                 primary_button(
-                    text="🎯 بازی‌های فعال گروه",
-                    callback_data="group_active_games",
-                ),
-                primary_button(
-                    text="🏆 رتبه و آمار گروه",
-                    callback_data="group_rating_stats",
+                    text="🛒 فروشگاه",
+                    callback_data="apple_shop",
                 ),
             ],
             [
-                primary_button(
-                    text="🔁 مبادله کارت",
-                    callback_data="apple_trade",
-                ),
                 primary_button(
                     text="👤 پروفایل من",
                     callback_data="apple_profile",
                 ),
-            ],
-            [
                 primary_button(
-                    text="🎴 کارت‌های من",
-                    callback_data="apple_cards",
-                ),
-                primary_button(
-                    text="🛒 فروشگاه",
-                    callback_data="apple_shop",
+                    text="🏆 رتبه و آمار گروه",
+                    callback_data="group_rating_stats",
                 ),
             ],
         ]
@@ -280,7 +273,12 @@ def get_cards_keyboard(
 
 
 def get_profile_keyboard(origin: Optional[str] = None) -> InlineKeyboardMarkup:
-    """'پروفایل من' panel keyboard (contextual Back)."""
+    """'پروفایل من' panel keyboard (contextual Back).
+
+    The profile is the ONE home of card ownership features: My Cards and
+    Card Trading live here (they are no longer duplicated in the group main
+    menu), next to the garden and the shop.
+    """
     from sib.services.nav import back_label_for, back_target, with_origin
 
     keyboard = InlineKeyboardMarkup(
@@ -289,6 +287,12 @@ def get_profile_keyboard(origin: Optional[str] = None) -> InlineKeyboardMarkup:
                 primary_button(
                     text="🎴 کارت‌های من",
                     callback_data=with_origin("apple_cards", "apple_profile"),
+                )
+            ],
+            [
+                primary_button(
+                    text="🔁 مبادله کارت",
+                    callback_data=with_origin("apple_trade", "apple_profile"),
                 )
             ],
             [

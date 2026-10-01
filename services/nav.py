@@ -70,6 +70,8 @@ def back_label_for(origin: Optional[str]) -> str:
     """Friendly Persian label for the contextual back button."""
     if origin == "apple_cards":
         return "↩️ بازگشت به کارت‌های من"
+    if origin == "apple_profile":
+        return "↩️ بازگشت به پروفایل من"
     if origin == "group_games_panel":
         return "↩️ بازگشت به بازی‌ها"
     if origin == "group_active_games":

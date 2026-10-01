@@ -453,19 +453,12 @@ def get_party_action_keyboard(
 def get_active_parties_keyboard(parties: List[Party]) -> InlineKeyboardMarkup:
     """Screen: active games of the group (child of the games menu).
 
-    Apple Battle is always available: it leads the list with its green
-    theme, above the group's waiting parties.
+    Lists every live party of the group plus the actions of this screen:
+    create a new game, refresh and Back to the games menu. Apple Battle is
+    NOT duplicated here - its ONE entry lives in the games menu
+    (⚔️ نبرد سیبی).
     """
-    from sib.services.nav import with_origin
-
-    buttons: list = [
-        [
-            success_button(
-                text="⚔️ نبرد سیبی",
-                callback_data=with_origin("apple_battle", "group_active_games"),
-            )
-        ]
-    ]
+    buttons: list = []
 
     from sib.database.models import PartyStatus
 

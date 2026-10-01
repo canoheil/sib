@@ -82,8 +82,10 @@ def test_group_main_menu_exposes_games_and_guide():
     assert any("📖" in label for label in by_label)
     assert "group_games_panel" in by_label.values()
     assert "help_menu" in by_label.values()
-    # Trade is a group activity and lives in the group menu.
-    assert any("🔁" in label for label in by_label)
+    # Card trading / My Cards are reached through «👤 پروفایل من» and the
+    # active-games screen through «🎮 بازی‌ها» - the main menu keeps ONE
+    # entry per feature (see test_main_menu_layout.py).
+    assert not any("🔁" in label for label in by_label)
 
 
 def test_back_buttons_are_navigation_only():
