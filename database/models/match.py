@@ -18,6 +18,21 @@ class MatchState:
     CANCELLED = "CANCELLED"
 
 
+class MatchType:
+    """Match/party types (a TYPE of the same game mode - never a game mode).
+
+    - ``NORMAL``: the competitive matchmaking flow (queue -> real opponent or
+      automatic bot fallback). Group wins/leaderboards and seedlings are for
+      NORMAL matches only.
+    - ``FRIENDLY``: "بازی با اعضای گروه" - players of ONE Telegram group fill
+      both teams (bots may fill the remaining slots), the match starts
+      immediately without a queue, and it NEVER touches rank/ELO/MMR, group
+      wins or seedlings. Friendly matches pay the Apple reward instead.
+    """
+    NORMAL = "normal"
+    FRIENDLY = "friendly"
+
+
 class Match(Base, TimestampMixin):
     """Match model representing a game session between two groups/teams."""
     __tablename__ = "matches"
@@ -25,6 +40,8 @@ class Match(Base, TimestampMixin):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     game_id: Mapped[int] = mapped_column(Integer, ForeignKey("games.id"), nullable=False, index=True)
     mode: Mapped[str] = mapped_column(String(20), default="solo", nullable=False)  # solo, 2v2, 4v4
+    # normal (competitive) | friendly ("بازی با اعضای گروه") - see MatchType.
+    match_type: Mapped[str] = mapped_column(String(20), default=MatchType.NORMAL, nullable=False)
     state: Mapped[str] = mapped_column(String(50), default=MatchState.CREATED, nullable=False, index=True)
 
     group1_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("groups.id"), nullable=True, index=True)
@@ -35,6 +52,9 @@ class Match(Base, TimestampMixin):
     group2_message_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     
     winner_group_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("groups.id"), nullable=True)
+    # Winning team (1 or 2). A friendly match has group1_id == group2_id, so
+    # winner_group_id alone cannot say which side won.
+    winner_team: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     is_draw: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     
     # Persistent serialized state of the active game

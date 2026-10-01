@@ -25,6 +25,7 @@ from sib.handlers.apple_battle import router as apple_battle_router
 from sib.handlers.admin_meta import router as admin_meta_router
 from sib.handlers.assets import router as assets_router
 from sib.handlers.admin_center import router as admin_center_router
+from sib.handlers.friendly import router as friendly_router
 
 
 def register_all_handlers(dp: Dispatcher) -> None:
@@ -50,6 +51,7 @@ def register_all_handlers(dp: Dispatcher) -> None:
     dp.include_router(assets_router)
     dp.include_router(admin_center_router)
     dp.include_router(party_router)
+    dp.include_router(friendly_router)
     dp.include_router(start_router)
 
 
@@ -59,6 +61,7 @@ __all__ = [
     "admin_router",
     "errors_router",
     "party_router",
+    "friendly_router",
     "matchmaking_router",
     "rps_router",
     "high_card_router",

@@ -9,7 +9,7 @@ cancels an active match or party - cancellations have their own explicit
 buttons.
 """
 
-from typing import List
+from typing import List, Optional
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from sib.database.models import Game, Party
 from sib.keyboards.common import (
@@ -107,28 +107,32 @@ def get_games_menu_keyboard(
 def get_game_mode_keyboard(
     game: Game, back_to: str = "group_games_panel"
 ) -> InlineKeyboardMarkup:
-    """Screen: game mode selection (solo, 2v2, 4v4)."""
+    """Screen: game mode selection (solo, 2v2, 4v4).
+
+    Each mode leads to the MATCH TYPE screen (this game's mode + how to play
+    it) - never to a second top-level game list.
+    """
     buttons = []
 
     if game.supports_solo:
         buttons.append([
             primary_button(
                 text="👤 انفرادی (Solo - ۱ به ۱)",
-                callback_data=f"create_party:{game.code}:solo",
+                callback_data=f"select_mode:{game.code}:solo:{back_to}",
             )
         ])
     if game.supports_2v2:
         buttons.append([
             primary_button(
                 text="👥 تیمی ۲ به ۲ (2v2)",
-                callback_data=f"create_party:{game.code}:2v2",
+                callback_data=f"select_mode:{game.code}:2v2:{back_to}",
             )
         ])
     if game.supports_4v4:
         buttons.append([
             primary_button(
                 text="👥 تیمی ۴ به ۴ (4v4)",
-                callback_data=f"create_party:{game.code}:4v4",
+                callback_data=f"select_mode:{game.code}:4v4:{back_to}",
             )
         ])
 
@@ -136,8 +140,110 @@ def get_game_mode_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+MODE_TITLES = {
+    "solo": "انفرادی (Solo - ۱ به ۱)",
+    "2v2": "تیمی ۲ به ۲ (2v2)",
+    "4v4": "تیمی ۴ به ۴ (4v4)",
+}
+
+
+def get_match_type_keyboard(
+    game: Game, mode: str, back_to: str = "group_games_panel"
+) -> InlineKeyboardMarkup:
+    """Screen: MATCH TYPE for one game mode - never a top-level game split.
+
+    «پیدا کردن حریف» is the existing ranked/competitive flow; «بازی با اعضای
+    گروه» is the FRIENDLY match type of the very same mode.
+    """
+    buttons = [
+        [
+            success_button(
+                text="🔎 پیدا کردن حریف",
+                callback_data=f"create_party:{game.code}:{mode}",
+            )
+        ],
+        [
+            success_button(
+                text="🎉 بازی با اعضای گروه (رفیقانه)",
+                callback_data=f"create_friendly_party:{game.code}:{mode}",
+            )
+        ],
+    ]
+    buttons.extend(
+        nav_back_row("↩️ بازگشت به حالت‌های بازی", f"select_game:{game.code}:{back_to}")
+    )
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_friendly_party_keyboard(
+    party: Party,
+    is_member: bool = False,
+    is_host: Optional[bool] = None,
+) -> InlineKeyboardMarkup:
+    """Screen: one friendly party (both teams inside one group).
+
+    Actions: join a specific team / leave, bot filling (shown to the host;
+    the service enforces host-only anyway), start the friendly match when
+    full, cancel, refresh and Back to Active Games. Back NEVER cancels the
+    party (cancellation has its own button).
+    """
+    from sib.database.models import PartyStatus
+
+    buttons = []
+
+    if party.status == PartyStatus.IN_MATCH:
+        buttons.extend(nav_refresh_row("🔄 بروزرسانی", f"view_party:{party.id}"))
+        buttons.extend(nav_back_row(BACK_TO_ACTIVE, "group_active_games"))
+        return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    if not party.is_full:
+        if is_member:
+            buttons.append([
+                danger_button(
+                    text="🚪 ترک پارتی",
+                    callback_data=f"leave_party:{party.id}",
+                )
+            ])
+        else:
+            buttons.append([
+                success_button(
+                    text="➕ پیوستن به تیم 🍎",
+                    callback_data=f"join_party:{party.id}:1",
+                ),
+                success_button(
+                    text="➕ پیوستن به تیم 🍏",
+                    callback_data=f"join_party:{party.id}:2",
+                ),
+            ])
+        if is_member and is_host is not False:
+            buttons.append([
+                success_button(
+                    text="🤖 پر کردن جای خالی با بات",
+                    callback_data=f"friendly_fill_bots:{party.id}",
+                )
+            ])
+    elif is_member:
+        # Only members can start the friendly match (the service enforces it).
+        buttons.append([
+            success_button(
+                text="🚀 شروع بازی رفیقانه",
+                callback_data=f"friendly_start:{party.id}",
+            )
+        ])
+
+    buttons.append([
+        danger_button(
+            text="❌ لغو پارتی",
+            callback_data=f"cancel_party:{party.id}",
+        )
+    ])
+    buttons.extend(nav_refresh_row("🔄 بروزرسانی", f"view_party:{party.id}"))
+    buttons.extend(nav_back_row(BACK_TO_ACTIVE, "group_active_games"))
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def get_party_action_keyboard(
-    party: Party, is_member: bool = False
+    party: Party, is_member: bool = False, is_host: Optional[bool] = None
 ) -> InlineKeyboardMarkup:
     """Screen: one party/game (child of the active-games screen).
 
@@ -145,7 +251,13 @@ def get_party_action_keyboard(
     no party actions left: the queue screen owns "cancel search" and the
     board owns the match. They still get Refresh + Back so the Active
     Games screen can always show and inspect every live game.
+
+    A friendly party (match type, not a game mode) renders its own screen
+    with team joining, bot filling and the friendly start action.
     """
+    if party.is_friendly:
+        return get_friendly_party_keyboard(party, is_member=is_member, is_host=is_host)
+
     buttons = []
 
     from sib.database.models import PartyStatus
@@ -175,6 +287,16 @@ def get_party_action_keyboard(
                 callback_data=f"find_match:{party.id}",
             )
         ])
+        if party.mode == "solo":
+            # Solo menu: the SAME party can become a friendly 1v1 with a group
+            # member (which can be filled with a bot) - a match type, not a
+            # separate game.
+            buttons.append([
+                success_button(
+                    text="🎉 بازی با اعضای گروه (رفیقانه)",
+                    callback_data=f"make_friendly:{party.id}",
+                )
+            ])
         buttons.append([
             danger_button(
                 text="❌ لغو پارتی",
@@ -232,6 +354,8 @@ def get_active_parties_keyboard(parties: List[Party]) -> InlineKeyboardMarkup:
 
     for party in parties:
         mode_text = "انفرادی" if party.mode == "solo" else f"تیمی {party.mode}"
+        if party.is_friendly:
+            mode_text += " رفیقانه"
         counter = f"{party.current_players_count}/{party.max_players}"
         # Every LIVE state is visible: a party that blocks a new game may
         # never be missing from this list ("ghost active game" fix).
@@ -260,4 +384,23 @@ def get_active_parties_keyboard(parties: List[Party]) -> InlineKeyboardMarkup:
         ),
     ])
     buttons.extend(nav_back_row(BACK_TO_GAMES, "group_games_panel"))
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_friendly_rematch_keyboard(match_id: int) -> InlineKeyboardMarkup:
+    """Post-match actions of a FINISHED friendly match.
+
+    Rematch recreates the same game/mode as a friendly match (never ranked);
+    Back always returns to the group's active games without cancelling
+    anything.
+    """
+    buttons = [
+        [
+            success_button(
+                text="🔄 بازی مجدد رفیقانه",
+                callback_data=f"friendly_rematch:{match_id}",
+            )
+        ],
+    ]
+    buttons.extend(nav_back_row(BACK_TO_ACTIVE, "group_active_games"))
     return InlineKeyboardMarkup(inline_keyboard=buttons)

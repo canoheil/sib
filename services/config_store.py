@@ -77,6 +77,18 @@ CONFIG_DEFAULTS: dict[str, Any] = {
         "apple_diamond": 100,
         "apple_obsidian": 200,
     },
+    # Friendly matches ("بازی با اعضای گروه"): Apple reward instead of the
+    # competitive seedling. ALL THREE values are independent limits:
+    #   * at most `friendly_reward_max_matches_per_day` reward-eligible
+    #     friendly matches per player per day,
+    #   * `friendly_reward_apples_per_match` Apples per eligible completed
+    #     match,
+    #   * at most `friendly_reward_daily_apple_cap` Apples per player per day.
+    # The reward is ledger-idempotent (one entry per match+player), so double
+    # callbacks/retries can never pay twice. Rebalancing = edit these values.
+    "friendly_reward_max_matches_per_day": 5,
+    "friendly_reward_apples_per_match": 10,
+    "friendly_reward_daily_apple_cap": 50,
     # Trading
     "trades_per_day": 1,
     "trade_expiration_hours": 24,

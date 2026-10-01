@@ -12,7 +12,7 @@ Design contract (Battleship reliability fix):
 
 import json
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 from aiogram import Bot, Router, F
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy import select
@@ -22,6 +22,14 @@ from sib.core.logging import logger, log_event, Events
 from sib.database.connection import get_session
 from sib.database.models import Match, MatchPlayer, MatchState, Group, AdCampaign
 from sib.games.registry import get_game_engine
+from sib.keyboards.party import get_friendly_rematch_keyboard
+from sib.services.friendly import (
+    FriendlyOutcomeView,
+    is_friendly,
+    shape_friendly_final_text,
+    state_viewer_id,
+    viewer_audience,
+)
 from sib.services.match_result import MatchResultService
 from sib.services.ad.service import AdService
 from sib.services.telegram_ui import (
@@ -47,6 +55,10 @@ async def _persist_board_message_id(match_id: int, group_id: int, message_id: in
                 return
             if group_id == match.group1_id:
                 match.group1_message_id = message_id
+                if match.group2_id == match.group1_id:
+                    # Single-group friendly match: both stored boards are
+                    # the same live message.
+                    match.group2_message_id = message_id
             elif group_id == match.group2_id:
                 match.group2_message_id = message_id
     except Exception as exc:  # pragma: no cover - defensive
@@ -56,9 +68,19 @@ async def _persist_board_message_id(match_id: int, group_id: int, message_id: in
 from sib.bots.runner import run_bot_turns
 
 
-def get_rematch_keyboard(ad: Optional[AdCampaign] = None) -> InlineKeyboardMarkup:
-    """Keyboard shown after game completion with optional sponsor CTA."""
+def get_rematch_keyboard(
+    ad: Optional[AdCampaign] = None, match: Optional[Match] = None
+) -> InlineKeyboardMarkup:
+    """Keyboard shown after game completion with optional sponsor CTA.
+
+    FINISHED friendly matches get the friendly Rematch action instead of the
+    normal group ad/new-game row: rematch recreates the same game/mode as a
+    friendly match (never a ranked one).
+    """
     from sib.keyboards.common import primary_button, success_button
+
+    if match is not None and is_friendly(match):
+        return get_friendly_rematch_keyboard(match.id)
 
     buttons = [
         [
@@ -88,6 +110,26 @@ def get_rematch_keyboard(ad: Optional[AdCampaign] = None) -> InlineKeyboardMarku
 
 
 
+def _friendly_board_target(
+    state: Dict[str, Any],
+    players: Any,
+    actor_id: int,
+    fallback_group_id: Optional[int],
+) -> Tuple[Optional[int], Optional[int]]:
+    """(viewer_player_id, audience_group_id) for a friendly shared board.
+
+    ``players`` is the ``[(user_id, group_id), ...]`` snapshot taken before
+    the DB session closed; bot players have ``group_id=None``.
+    """
+    human_ids = {pid for pid, gid in players if gid is not None}
+    viewer = state_viewer_id(state, human_ids, actor_id)
+    info = (state.get("players") or {}).get(str(viewer)) if viewer else None
+    audience = info.get("group_id") if info else None
+    if audience is None:
+        audience = fallback_group_id
+    return viewer, (int(audience) if audience is not None else None)
+
+
 async def render_board_for(
     callback: CallbackQuery,
     bot: Bot,
@@ -109,6 +151,29 @@ async def render_board_for(
     chat_id = getattr(chat, "id", None) if chat is not None else None
     group_id = chat_id or match.group1_id or for_player_id
 
+    if is_friendly(match):
+        # Friendly boards are shared by both teams in one group: render from
+        # the current player's team perspective, never from one fixed side.
+        friendly_viewer = state_viewer_id(
+            state, {p.user_id for p in match.players if p.group_id is not None}, for_player_id
+        )
+        audience = viewer_audience(match, state, friendly_viewer) or group_id
+        text = engine.render_for_group(state, audience, friendly_viewer)
+        if final:
+            text = shape_friendly_final_text(text, match, state)
+            kb = get_rematch_keyboard(match=match)
+        else:
+            kb = with_refresh_button(
+                engine.get_keyboard(state, match.id, friendly_viewer), match.id
+            )
+        before_id = getattr(message, "message_id", None)
+        await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
+        after_id = getattr(callback.message, "message_id", None)
+        if before_id and after_id and after_id != before_id and match.group1_message_id == before_id:
+            match.group1_message_id = after_id
+            match.group2_message_id = after_id
+        return
+
     text = engine.render_for_group(state, group_id, for_player_id)
     if final:
         outcome = ""
@@ -121,7 +186,7 @@ async def render_board_for(
                 else "💔 گروه حریف پیروز شد."
             )
         text += f"\n\n⏱ **این مسابقه به پایان رسید.** {outcome}"
-        kb = get_rematch_keyboard(selected_ad)
+        kb = get_rematch_keyboard(selected_ad, match=match)
     else:
         kb = with_refresh_button(engine.get_keyboard(state, match.id, for_player_id), match.id)
     before_id = getattr(message, "message_id", None)
@@ -287,6 +352,11 @@ async def process_game_action(
         render_payload = {
             "finished": finished,
             "state": state,
+            "match_id": match.id,
+            "is_friendly": is_friendly(match),
+            "is_draw": match.is_draw,
+            "winner_team": match.winner_team,
+            "match_type": match.match_type,
             "is_bot_match": match.is_bot_match,
             "group1_id": match.group1_id,
             "group2_id": match.group2_id,
@@ -308,6 +378,13 @@ async def process_game_action(
     has_message_ids = bool(
         render_payload["group1_message_id"] or render_payload["group2_message_id"]
     )
+
+    # Friendly matches share ONE board message between both teams (group1 and
+    # group2 are the same group): render exactly one board, from the team of
+    # the player who is (or should be) on turn.
+    if render_payload.get("is_friendly"):
+        await _present_friendly_board(callback, bot, render_payload, user.id)
+        return
 
     def get_group_target_player_id(target_group_id: Optional[int]) -> int:
         if target_group_id is None:
@@ -367,6 +444,7 @@ async def process_game_action(
     # Match IS finished!
     await safe_answer_callback(callback, "بازی به پایان رسید! 🍏✨")
 
+    # (Friendly finals returned earlier through _present_friendly_board.)
     rematch_kb = get_rematch_keyboard(selected_ad)
     engine = get_game_engine(render_payload["game_code"])
 
@@ -419,6 +497,56 @@ async def process_game_action(
         await safe_edit_callback_message(callback, bot, final_text, reply_markup=rematch_kb)
 
 
+async def _present_friendly_board(
+    callback: CallbackQuery,
+    bot: Bot,
+    payload: Dict[str, Any],
+    actor_id: int,
+) -> None:
+    """Present the single shared board of a friendly match (best effort)."""
+    state = payload["state"]
+    finished = payload["finished"]
+    engine = get_game_engine(payload["game_code"])
+    group_id = payload["group1_id"] or payload["group2_id"]
+    viewer, audience = _friendly_board_target(
+        state, payload["players"], actor_id, group_id
+    )
+    outcome_view = FriendlyOutcomeView(
+        payload["match_id"], payload.get("is_draw") or False, payload.get("winner_team")
+    )
+
+    if finished:
+        await safe_answer_callback(callback, "بازی رفیقانه به پایان رسید! 🍏✨")
+        text = shape_friendly_final_text(
+            engine.render_for_group(state, audience, viewer), outcome_view, state
+        )
+        kb = get_friendly_rematch_keyboard(payload["match_id"])
+    else:
+        await safe_answer_callback(callback, "حرکت شما ثبت شد! 🍏")
+        text = engine.render_for_group(state, audience, viewer)
+        kb = with_refresh_button(engine.get_keyboard(state, payload["match_id"], viewer), payload["match_id"])
+
+    message_id = payload["group1_message_id"] or payload["group2_message_id"]
+    if message_id and group_id:
+        new_msg_id = await safe_edit_screen(
+            bot, chat_id=group_id, message_id=message_id, text=text, reply_markup=kb
+        )
+        if new_msg_id and new_msg_id != message_id:
+            await _persist_board_message_id(payload["match_id"], group_id, new_msg_id)
+        elif new_msg_id is None:
+            logger.warning(
+                f"Friendly board refresh failed for match {payload['match_id']} "
+                f"in group {group_id}; refresh button remains available."
+            )
+        return
+
+    if not await safe_edit_callback_message(callback, bot, text, reply_markup=kb):
+        logger.warning(
+            f"Friendly board refresh failed for match {payload['match_id']} "
+            f"in private flow; refresh button remains available."
+        )
+
+
 async def handle_game_refresh(callback: CallbackQuery, bot: Bot) -> None:
     """Re-render a game board from the authoritative database state.
 
@@ -451,8 +579,15 @@ async def handle_game_refresh(callback: CallbackQuery, bot: Bot) -> None:
             await safe_answer_callback(callback, "مسابقه پیدا نشد 🍏", show_alert=True)
             return
 
+        message = callback.message
+        chat = getattr(message, "chat", None) if message is not None else None
+        chat_id = getattr(chat, "id", None)
+
         is_participant = any(p.user_id == user.id for p in match.players)
-        if not is_participant:
+        # The friendly board is a SHARED group message: any member of that
+        # group may refresh it (it is public group information), while normal
+        # matches stay participant-only.
+        if not is_participant and not (is_friendly(match) and chat_id == match.group1_id):
             await safe_answer_callback(
                 callback, "فقط بازیکنان این مسابقه می‌توانند صفحه را بروزرسانی کنند.", show_alert=True
             )
@@ -466,15 +601,27 @@ async def handle_game_refresh(callback: CallbackQuery, bot: Bot) -> None:
             )
             return
 
-        message = callback.message
-        chat = getattr(message, "chat", None) if message is not None else None
-        group_id = getattr(chat, "id", None) or user.id
-        text = engine.render_for_group(state, group_id, user.id)
+        group_id = chat_id or user.id
 
-        if match.state == MatchState.ACTIVE:
-            kb = with_refresh_button(engine.get_keyboard(state, match_id, user.id), match_id)
+        if is_friendly(match):
+            viewer = state_viewer_id(
+                state, {p.user_id for p in match.players if p.group_id is not None}, user.id
+            )
+            audience = viewer_audience(match, state, viewer) or group_id
+            text = engine.render_for_group(state, audience, viewer)
+            if match.state == MatchState.ACTIVE:
+                kb = with_refresh_button(
+                    engine.get_keyboard(state, match_id, viewer), match_id
+                )
+            else:
+                text = shape_friendly_final_text(text, match, state)
+                kb = get_friendly_rematch_keyboard(match.id)
         else:
-            kb = None
+            text = engine.render_for_group(state, group_id, user.id)
+            if match.state == MatchState.ACTIVE:
+                kb = with_refresh_button(engine.get_keyboard(state, match_id, user.id), match_id)
+            else:
+                kb = None
 
     await safe_answer_callback(callback, "صفحه از وضعیت رسمی بازی بروزرسانی شد. 🍏")
     before_id = getattr(message, "message_id", None)
