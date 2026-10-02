@@ -157,7 +157,9 @@ async def test_render_card_is_persian_and_complete(db_session):
     card = render_character_card(character)
     assert "قهرمان داستان" in card
     assert "💪" in card and "⚡" in card and "🧠" in card
-    assert "first_strike" in card
+    # Unimplemented raw passive keys must not be presented as active mechanics.
+    assert "first_strike" not in card
+    assert "توانایی منفعل" not in card
     assert "150" in card
     assert "یک داستان کوتاه." in card
     # Rarity is no longer an active classification: it must not leak into

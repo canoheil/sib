@@ -64,6 +64,14 @@ class TimeoutService:
     ) -> None:
         """Resolve an expired active match for turn-based and simultaneous games."""
         import json
+        from sib.services.apple_battle import AppleBattleService
+
+        if match.result_applied or match.state != MatchState.ACTIVE:
+            return
+
+        if await AppleBattleService.is_apple_battle_match(session, match):
+            if await AppleBattleService.finalize_persisted_match(session, match):
+                return
 
         if match.current_turn_player_id is not None:
             forfeited_pid = match.current_turn_player_id

@@ -70,11 +70,14 @@ async def main():
         except asyncio.CancelledError:
             pass
 
-        # Delayed bot turns are detached by design: cancel the still-sleeping
-        # ones so shutdown never leaves a half-run task behind.
+        # Delayed bot turns and staged Apple Battle narrations are detached by
+        # design: cancel the still-sleeping ones so shutdown never leaves a
+        # half-run task behind.
         from sib.bots.runner import cancel_all_bot_turns
+        from sib.services.apple_battle import AppleBattleService
 
         await cancel_all_bot_turns()
+        await AppleBattleService.cancel_all_narrations()
 
         await bot.session.close()
         logger.info("sib bot stopped cleanly.")

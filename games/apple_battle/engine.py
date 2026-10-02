@@ -186,4 +186,4 @@ class AppleBattleEngine(BaseGameEngine):
         """Schedule the staged narration loop (non-blocking)."""
         from sib.services.apple_battle import AppleBattleService
 
-        asyncio.create_task(AppleBattleService.run_narration(bot, match_id))
+        AppleBattleService.schedule_narration(match_id, bot=bot)

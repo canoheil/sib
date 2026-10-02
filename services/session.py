@@ -297,12 +297,22 @@ class SessionService:
                     and age > grace
                 )
             elif match.state == MatchState.ACTIVE:
-                # An active match without any deadline can never time out.
+                # An active match without any deadline can never time out,
+                # unless it is an Apple Battle match with a persisted result
+                # that can be resumed or finalized.
                 stale = (
                     match.turn_deadline is None
                     and age is not None
                     and age > grace
                 )
+                if stale:
+                    from sib.services.apple_battle import AppleBattleService
+
+                    if (
+                        await AppleBattleService.is_apple_battle_match(session, match)
+                        and await AppleBattleService.has_persisted_result(session, match)
+                    ):
+                        stale = False
             if not stale:
                 continue
 

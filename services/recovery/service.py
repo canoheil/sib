@@ -4,9 +4,18 @@ from datetime import datetime, timezone
 from typing import Any, Dict
 from sqlalchemy import select, update, delete
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from sib.core.logging import logger, log_event, Events
-from sib.database.models import Match, MatchState, MatchmakingQueue, Party, PartyStatus
+from sib.database.models import (
+    Group,
+    Match,
+    MatchPlayer,
+    MatchState,
+    MatchmakingQueue,
+    Party,
+    PartyStatus,
+)
 from sib.services.timeout import TimeoutService
 
 
@@ -14,18 +23,28 @@ class RecoveryService:
     """Service responsible for safe system recovery and orphaned state cleanup on startup."""
 
     @classmethod
-    async def recover_on_startup(cls, session: AsyncSession) -> Dict[str, Any]:
+    async def recover_on_startup(
+        cls,
+        session: AsyncSession,
+        *,
+        bot: Any = None,
+    ) -> Dict[str, Any]:
         """
         Execute recovery routines on bot startup:
         1. Expire matches waiting for acceptance that exceeded acceptance deadline.
         2. Clean up stale matchmaking queue entries and restore parties.
-        3. Terminate stale/abandoned active matches.
+        3. Recover interrupted Apple Battle matches from persisted state/cursor.
+        4. Terminate stale/abandoned active matches.
         """
+        from sib.services.apple_battle import AppleBattleService
+
         now = datetime.now(timezone.utc)
         stats = {
             "expired_acceptance_matches": 0,
             "cleared_queue_entries": 0,
             "expired_abandoned_matches": 0,
+            "resumed_apple_battles": 0,
+            "finalized_apple_battles": 0,
         }
 
         # 0. Consistency repair FIRST: release parties/matches that block a
@@ -72,6 +91,14 @@ class RecoveryService:
                 await session.delete(q)
                 stats["cleared_queue_entries"] += 1
 
+        # 2b. Active Apple Battle matches with persisted results:
+        #     finalize if narration is complete, or keep cursor and re-arm narration.
+        apple_recovery = await AppleBattleService.recover_active_matches(
+            session, now=now
+        )
+        stats["resumed_apple_battles"] = len(apple_recovery["resumed"])
+        stats["finalized_apple_battles"] = apple_recovery["finalized"]
+
         # 3. Active matches with expired turn deadlines
         active_stmt = (
             select(Match)
@@ -79,6 +106,12 @@ class RecoveryService:
                 Match.state == MatchState.ACTIVE,
                 Match.turn_deadline != None,
                 Match.turn_deadline < now,
+            )
+            .options(
+                selectinload(Match.players).selectinload(MatchPlayer.user),
+                selectinload(Match.group1).selectinload(Group.stats),
+                selectinload(Match.group2).selectinload(Group.stats),
+                selectinload(Match.game),
             )
             .with_for_update()
         )
@@ -88,6 +121,9 @@ class RecoveryService:
             stats["expired_abandoned_matches"] += 1
 
         await session.commit()
+
+        for match_id in apple_recovery["resumed"]:
+            AppleBattleService.schedule_narration(match_id, bot=bot)
 
         log_event(
             Events.SYSTEM_RESTART_RECOVERY,

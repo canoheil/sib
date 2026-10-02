@@ -30,7 +30,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -39,7 +39,10 @@ from sib.database.models import (
     AppleBattle,
     AppleBattleQueueEntry,
     AppleBattleStatus,
+    AppleTransaction,
     Character,
+    Game,
+    Group,
     Match,
     MatchPlayer,
     MatchState,
@@ -61,6 +64,9 @@ class BattleError(ValueError):
 
 class AppleBattleService:
     """Precomputed Apple Battle logic + shared-match presentation."""
+
+    _ACTIVE_NARRATION_TASKS: Dict[int, asyncio.Task] = {}
+    _NARRATION_RUNNING: set[int] = set()
 
     # ------------------------------------------------------------------
     # Card loadout ("queue entry" table reused as a persistent selection)
@@ -158,15 +164,20 @@ class AppleBattleService:
         name2: str,
         card_name1: str,
         card_name2: str,
-        level: int,
         winner_id: int,
         seed: str,
+        level: int = 1,
+        level1: Optional[int] = None,
+        level2: Optional[int] = None,
+        is_bot_match: bool = False,
     ) -> List[Dict[str, Any]]:
         """Deterministic staged narrative beats (seeded, never changes outcome)."""
         rng = random.Random(f"plan:{seed}")
         winner_name = name1 if winner_id == player1_id else name2
         winner_card = card_name1 if winner_id == player1_id else card_name2
         loser_name = name2 if winner_id == player1_id else name1
+        lvl1 = level1 if level1 is not None else level
+        lvl2 = level2 if level2 is not None else level
 
         intros = [
             "در دل باغ‌های افسانه‌ای سیب، دو جنگجو رودرروی هم ایستادند...",
@@ -196,14 +207,19 @@ class AppleBattleService:
 
         intro_text = (
             "🍎 **نبرد سیبی آغاز شد!** 🍎\n\n"
-            f"⚔️ {name1} با **{card_name1}** (سطح {level})\n"
-            f"⚔️ {name2} با **{card_name2}** (سطح {level})\n\n"
+            f"⚔️ {name1} با **{card_name1}** (سطح {lvl1})\n"
+            f"⚔️ {name2} با **{card_name2}** (سطح {lvl2})\n\n"
             f"{rng.choice(intros)}"
+        )
+        reward_line = (
+            "🎁 پاداش پیروزی: ۵ سیب 🍏"
+            if is_bot_match
+            else "🎁 پاداش پیروزی: ۱ نهال 🌱 + ۵ سیب 🍏"
         )
         finale_text = (
             f"{rng.choice(endings)}\n\n"
             f"🏆 **برنده: {winner_name}** با **{winner_card}**\n"
-            "🎁 پاداش پیروزی: ۱ نهال 🌱 + ۵ سیب 🍏"
+            f"{reward_line}"
         )
         return [
             {"phase": "intro", "text": intro_text},
@@ -304,8 +320,11 @@ class AppleBattleService:
             card_name1=cards_map[str(p1.user_id)]["name"],
             card_name2=cards_map[str(p2.user_id)]["name"],
             level=c1.level,
+            level1=c1.level,
+            level2=c2.level,
             winner_id=winner_id,
             seed=seed,
+            is_bot_match=bool(getattr(match, "is_bot_match", False)),
         )
 
         state = {
@@ -333,37 +352,382 @@ class AppleBattleService:
         return state
 
     # ------------------------------------------------------------------
+    # Persisted-result inspection & recovery helpers
+    # ------------------------------------------------------------------
+    @classmethod
+    async def is_apple_battle_match(cls, session: AsyncSession, match: Match) -> bool:
+        """Return True if ``match`` is an Apple Battle match."""
+        game = match.__dict__.get("game")
+        if game is not None and getattr(game, "code", None):
+            return game.code == "apple_battle"
+        if match.game_id:
+            code = await session.scalar(
+                select(Game.code).where(Game.id == match.game_id)
+            )
+            if code == "apple_battle":
+                return True
+        if match.id:
+            linked = await session.scalar(
+                select(AppleBattle.id)
+                .where(AppleBattle.match_id == match.id)
+                .limit(1)
+            )
+            if linked is not None:
+                return True
+        return False
+
+    @classmethod
+    async def _rehydrate_players_map(
+        cls,
+        session: AsyncSession,
+        match: Match,
+    ) -> Dict[str, Dict[str, Any]]:
+        players = list(match.__dict__.get("players") or [])
+        if not players and match.id:
+            rows = (
+                await session.scalars(
+                    select(MatchPlayer)
+                    .where(MatchPlayer.match_id == match.id)
+                    .options(selectinload(MatchPlayer.user))
+                )
+            ).all()
+            players = list(rows)
+        players_map: Dict[str, Dict[str, Any]] = {}
+        for p in sorted(players, key=lambda mp: mp.team):
+            user_obj = p.__dict__.get("user")
+            name = (
+                user_obj.display_name
+                if user_obj and getattr(user_obj, "display_name", None)
+                else f"بازیکن {p.user_id}"
+            )
+            players_map[str(p.user_id)] = {
+                "name": name,
+                "group_id": p.group_id,
+                "team": p.team,
+            }
+        return players_map
+
+    @classmethod
+    async def extract_persisted_state(
+        cls,
+        session: AsyncSession,
+        match: Match,
+    ) -> Optional[Dict[str, Any]]:
+        """Return persisted Apple Battle state with its fixed winner, or None if no result exists.
+
+        Never recomputes or randomizes the battle result. If ``match.game_state``
+        already contains ``battle.winner_id``, it is returned (filling in any
+        missing structural fields deterministically from persisted rows). If
+        ``match.game_state`` lacks a result, falls back to an existing
+        ``AppleBattle`` row linked by ``AppleBattle.match_id == match.id`` with
+        a non-null ``winner_id``.
+        """
+        raw_state: Dict[str, Any] = {}
+        if match.game_state:
+            try:
+                parsed = json.loads(match.game_state)
+                if isinstance(parsed, dict):
+                    raw_state = parsed
+            except Exception:
+                raw_state = {}
+
+        battle_block = raw_state.get("battle")
+        winner_id = (
+            battle_block.get("winner_id")
+            if isinstance(battle_block, dict)
+            else None
+        )
+
+        battle_row: Optional[AppleBattle] = None
+        if match.id:
+            battle_row = await session.scalar(
+                select(AppleBattle)
+                .where(AppleBattle.match_id == match.id)
+                .order_by(AppleBattle.id.asc())
+                .limit(1)
+            )
+
+        if winner_id is None:
+            if battle_row is None or battle_row.winner_id is None:
+                return None
+            winner_id = battle_row.winner_id
+
+        winner_id = int(winner_id)
+        players_map = raw_state.get("players")
+        if not isinstance(players_map, dict) or not players_map:
+            players_map = await cls._rehydrate_players_map(session, match)
+        if not players_map and battle_row is not None:
+            players_map = {
+                str(battle_row.player1_id): {
+                    "name": f"بازیکن {battle_row.player1_id}",
+                    "group_id": match.group1_id,
+                    "team": 1,
+                },
+                str(battle_row.player2_id): {
+                    "name": f"بازیکن {battle_row.player2_id}",
+                    "group_id": match.group2_id,
+                    "team": 2,
+                },
+            }
+
+        cards_map = raw_state.get("cards")
+        if not isinstance(cards_map, dict) or not cards_map:
+            cards_map = {}
+            if battle_row is not None:
+                for uid, cid in (
+                    (battle_row.player1_id, battle_row.player1_card_id),
+                    (battle_row.player2_id, battle_row.player2_card_id),
+                ):
+                    card = await session.get(PlayerCard, cid) if cid else None
+                    char = (
+                        await session.get(Character, card.character_id)
+                        if card
+                        else None
+                    )
+                    if card:
+                        stats = cls._card_stats(card, char)
+                        cards_map[str(uid)] = {
+                            "card_id": card.id,
+                            "name": char.name_fa if char else "جنگجوی ناشناس",
+                            "power": stats.power,
+                            "speed": stats.speed,
+                            "intelligence": stats.intelligence,
+                            "level": card.level,
+                        }
+                    else:
+                        cards_map[str(uid)] = {
+                            "card_id": cid or 0,
+                            "name": "جنگجوی ناشناس",
+                            "power": 10,
+                            "speed": 10,
+                            "intelligence": 10,
+                            "level": battle_row.level or 1,
+                        }
+
+        team_ids = sorted(
+            players_map.keys(),
+            key=lambda k: players_map[k].get("team", 1),
+        )
+        p1_id = int(team_ids[0]) if len(team_ids) >= 1 else (
+            battle_row.player1_id if battle_row else winner_id
+        )
+        p2_id = int(team_ids[1]) if len(team_ids) >= 2 else (
+            battle_row.player2_id if battle_row else winner_id
+        )
+        loser_id = p2_id if winner_id == p1_id else p1_id
+
+        if not isinstance(battle_block, dict):
+            battle_block = {}
+        seed = (
+            battle_block.get("seed")
+            or (battle_row.rng_seed if battle_row else None)
+            or "recovered-seed"
+        )
+        balance_version = int(
+            battle_block.get("balance_version")
+            or (battle_row.balance_version if battle_row else 1)
+            or 1
+        )
+        result_payload = battle_block.get("result")
+        if not isinstance(result_payload, dict):
+            if battle_row and battle_row.result_json:
+                try:
+                    result_payload = json.loads(battle_row.result_json)
+                except Exception:
+                    result_payload = {"winner_id": winner_id, "rng_seed": seed}
+            else:
+                result_payload = {"winner_id": winner_id, "rng_seed": seed}
+
+        winner_name = (
+            players_map.get(str(winner_id), {}).get("name")
+            or f"بازیکن {winner_id}"
+        )
+        battle_data = {
+            **battle_block,
+            "winner_id": winner_id,
+            "loser_id": battle_block.get("loser_id", loser_id),
+            "seed": seed,
+            "balance_version": balance_version,
+            "summary": battle_block.get(
+                "summary",
+                f"نبرد سیبی با پیروزی {winner_name} پایان یافت.",
+            ),
+            "result": result_payload,
+        }
+
+        plan = raw_state.get("plan")
+        if not isinstance(plan, list) or not plan:
+            c1_info = cards_map.get(str(p1_id), {})
+            c2_info = cards_map.get(str(p2_id), {})
+            lvl1 = int(c1_info.get("level") or (battle_row.level if battle_row else 1) or 1)
+            lvl2 = int(c2_info.get("level") or (battle_row.level if battle_row else 1) or 1)
+            plan = cls._compose_plan(
+                player1_id=p1_id,
+                player2_id=p2_id,
+                name1=players_map.get(str(p1_id), {}).get("name", f"بازیکن {p1_id}"),
+                name2=players_map.get(str(p2_id), {}).get("name", f"بازیکن {p2_id}"),
+                card_name1=c1_info.get("name", "جنگجوی ناشناس"),
+                card_name2=c2_info.get("name", "جنگجوی ناشناس"),
+                level=lvl1,
+                level1=lvl1,
+                level2=lvl2,
+                winner_id=winner_id,
+                seed=seed,
+                is_bot_match=bool(getattr(match, "is_bot_match", False)),
+            )
+
+        if "cursor" in raw_state and raw_state["cursor"] is not None:
+            cursor = int(raw_state["cursor"])
+        elif battle_row and battle_row.status == AppleBattleStatus.COMPLETED:
+            cursor = len(plan)
+        else:
+            cursor = 1
+
+        return {
+            **raw_state,
+            "players": players_map,
+            "cards": cards_map,
+            "battle": battle_data,
+            "plan": plan,
+            "cursor": cursor,
+            "current_player_id": None,
+        }
+
+    @classmethod
+    async def has_persisted_result(cls, session: AsyncSession, match: Match) -> bool:
+        """Return True if an Apple Battle result/winner has already been persisted."""
+        return (await cls.extract_persisted_state(session, match)) is not None
+
+    @classmethod
+    async def finalize_persisted_match(
+        cls,
+        session: AsyncSession,
+        match: Match,
+    ) -> bool:
+        """Finalize an Apple Battle match from its persisted result without recomputing."""
+        state = await cls.extract_persisted_state(session, match)
+        if state is None:
+            return False
+        match.game_state = json.dumps(state, ensure_ascii=False)
+        battle = await cls.record_battle(session, match, state)
+        await cls.finalize_match(session, match, battle.id)
+        return True
+
+    @classmethod
+    async def recover_active_matches(
+        cls,
+        session: AsyncSession,
+        *,
+        now: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        """Recover active Apple Battle matches on startup.
+
+        - If no persisted result exists: left untouched for normal timeout handling.
+        - If narration is already complete (``cursor >= len(plan)``): finalized
+          immediately and idempotently.
+        - If narration is incomplete (``cursor < len(plan)``): preserves the
+          persisted result and cursor, records the ``AppleBattle`` row if needed,
+          refreshes ``turn_deadline`` so generic timeout does not kill it, and
+          returns the match id so narration can be re-armed after commit.
+        """
+        from sib.games.apple_battle.engine import AppleBattleEngine
+
+        if now is None:
+            now = datetime.now(timezone.utc)
+        engine = AppleBattleEngine()
+
+        stmt = (
+            select(Match)
+            .join(Game, Match.game_id == Game.id)
+            .where(
+                Match.state == MatchState.ACTIVE,
+                Game.code == "apple_battle",
+            )
+            .options(
+                selectinload(Match.players).selectinload(MatchPlayer.user),
+                selectinload(Match.group1).selectinload(Group.stats),
+                selectinload(Match.group2).selectinload(Group.stats),
+                selectinload(Match.game),
+            )
+            .with_for_update()
+        )
+        matches = list((await session.scalars(stmt)).all())
+
+        resumed_ids: List[int] = []
+        finalized_count = 0
+
+        for match in matches:
+            state = await cls.extract_persisted_state(session, match)
+            if state is None:
+                continue
+
+            match.game_state = json.dumps(state, ensure_ascii=False)
+            battle = await cls.record_battle(session, match, state)
+
+            if engine.is_finished(state):
+                await cls.finalize_match(session, match, battle.id)
+                finalized_count += 1
+            else:
+                match.turn_deadline = now + timedelta(
+                    seconds=engine.turn_timeout_seconds
+                )
+                resumed_ids.append(match.id)
+
+        await session.flush()
+        return {
+            "resumed": resumed_ids,
+            "finalized": finalized_count,
+        }
+
+    # ------------------------------------------------------------------
     # Battle record (leaderboard history) + match finalization
     # ------------------------------------------------------------------
     @classmethod
-    async def record_battle(cls, session, match: Match, state: Dict[str, Any]) -> AppleBattle:
+    async def record_battle(
+        cls,
+        session,
+        match: Match,
+        state: Optional[Dict[str, Any]] = None,
+    ) -> AppleBattle:
         """Create (idempotent per match) the AppleBattle history row."""
         existing = await session.scalar(
-            select(AppleBattle).where(AppleBattle.match_id == match.id)
+            select(AppleBattle)
+            .where(AppleBattle.match_id == match.id)
+            .order_by(AppleBattle.id.asc())
+            .limit(1)
+            .with_for_update()
         )
         if existing:
             return existing
 
+        if state is None:
+            state = await cls.extract_persisted_state(session, match)
+        if not state:
+            raise BattleError("نتیجه نبرد سیبی یافت نشد.")
+
         battle = state["battle"]
-        cards = state["cards"]
+        cards = state.get("cards") or {}
+        players = state.get("players") or {}
         team_ids = sorted(
-            state["players"].keys(), key=lambda k: state["players"][k]["team"]
+            players.keys(), key=lambda k: players[k].get("team", 1)
         )
         p1_id, p2_id = int(team_ids[0]), int(team_ids[1])
-        level = int(cards[str(p1_id)]["level"])
+        c1_info = cards.get(str(p1_id), {})
+        c2_info = cards.get(str(p2_id), {})
+        level = int(c1_info.get("level", 1))
 
         row = AppleBattle(
             player1_id=p1_id,
             player2_id=p2_id,
-            player1_card_id=int(cards[str(p1_id)]["card_id"]),
-            player2_card_id=int(cards[str(p2_id)]["card_id"]),
+            player1_card_id=int(c1_info.get("card_id", 0)),
+            player2_card_id=int(c2_info.get("card_id", 0)),
             level=level,
             match_id=match.id,
             status=AppleBattleStatus.RESULT_READY,
-            winner_id=battle["winner_id"],
-            result_json=json.dumps(battle["result"], ensure_ascii=False),
-            rng_seed=battle["seed"],
-            balance_version=battle["balance_version"],
+            winner_id=int(battle["winner_id"]),
+            result_json=json.dumps(battle.get("result", {}), ensure_ascii=False),
+            rng_seed=str(battle.get("seed", "recovered-seed")),
+            balance_version=int(battle.get("balance_version", 1)),
             matched_at=datetime.now(timezone.utc),
             expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
         )
@@ -376,7 +740,7 @@ class AppleBattleService:
         cls,
         session,
         match: Match,
-        battle_id: int,
+        battle_id: Optional[int] = None,
     ) -> None:
         """Finish the shared match + award the winner (idempotent).
 
@@ -390,52 +754,216 @@ class AppleBattleService:
         from sib.services.apple_wallet import AppleWalletService
         from sib.services.match_result import MatchResultService
 
-        state = json.loads(match.game_state or "{}")
+        state = await cls.extract_persisted_state(session, match)
+        if state is None:
+            state = json.loads(match.game_state or "{}")
+
+        plan = state.get("plan")
+        if isinstance(plan, list) and plan and int(state.get("cursor", 0)) < len(plan):
+            state["cursor"] = len(plan)
+        match.game_state = json.dumps(state, ensure_ascii=False)
+
+        canonical_battle = await session.scalar(
+            select(AppleBattle)
+            .where(AppleBattle.match_id == match.id)
+            .order_by(AppleBattle.id.asc())
+            .limit(1)
+            .with_for_update()
+        )
+        battle = canonical_battle
+        if battle is None and battle_id is not None:
+            battle = await session.get(AppleBattle, battle_id)
+        if battle is None and (state.get("battle") or {}).get("winner_id") is not None:
+            battle = await cls.record_battle(session, match, state)
+
+        if battle is not None:
+            battle_id = battle.id
+
         engine = AppleBattleEngine()
         result = engine.get_result(state)
 
         await MatchResultService.apply_match_result(session, match, result)
 
-        battle = await session.get(AppleBattle, battle_id)
-        if battle and battle.status != AppleBattleStatus.COMPLETED:
-            battle.status = AppleBattleStatus.COMPLETED
-            battle.completed_at = datetime.now(timezone.utc)
-            battle.seedlings_awarded = 0 if match.is_bot_match else 1
-            await session.flush()
+        if battle is not None:
+            now_ts = datetime.now(timezone.utc)
+            seedlings_awarded = 0 if match.is_bot_match else 1
+            if battle.status != AppleBattleStatus.COMPLETED:
+                await session.execute(
+                    update(AppleBattle)
+                    .where(
+                        AppleBattle.id == battle.id,
+                        AppleBattle.status != AppleBattleStatus.COMPLETED,
+                    )
+                    .values(
+                        status=AppleBattleStatus.COMPLETED,
+                        completed_at=now_ts,
+                        seedlings_awarded=seedlings_awarded,
+                    )
+                )
+                battle.status = AppleBattleStatus.COMPLETED
+                battle.completed_at = now_ts
+                battle.seedlings_awarded = seedlings_awarded
+                await session.flush()
 
-        winner_id = state.get("battle", {}).get("winner_id")
-        if winner_id:
-            await AppleWalletService.earn(
-                session,
-                user_id=int(winner_id),
-                amount=5,
-                reason="apple_battle_win",
-                ref_type="apple_battle",
-                ref_id=battle_id,
-                idempotency_key=f"apple_battle_win:{battle_id}",
+        winner_id = (state.get("battle") or {}).get("winner_id") or (
+            battle.winner_id if battle is not None else None
+        )
+        if winner_id and battle_id is not None:
+            battle_ids_for_match = list(
+                (
+                    await session.scalars(
+                        select(AppleBattle.id).where(
+                            AppleBattle.match_id == match.id
+                        )
+                    )
+                ).all()
             )
-            log_event(
-                Events.APPLE_BATTLE_EVENT,
-                {
-                    "action": "match_completed",
-                    "battle_id": battle_id,
-                    "match_id": match.id,
-                    "winner_id": winner_id,
-                },
+            if battle_id not in battle_ids_for_match:
+                battle_ids_for_match.append(battle_id)
+
+            existing_apple_tx = await session.scalar(
+                select(AppleTransaction.id)
+                .where(
+                    AppleTransaction.user_id == int(winner_id),
+                    AppleTransaction.reason == "apple_battle_win",
+                    AppleTransaction.ref_type == "apple_battle",
+                    AppleTransaction.ref_id.in_(battle_ids_for_match),
+                )
+                .limit(1)
             )
+            if existing_apple_tx is None:
+                await AppleWalletService.earn(
+                    session,
+                    user_id=int(winner_id),
+                    amount=5,
+                    reason="apple_battle_win",
+                    ref_type="apple_battle",
+                    ref_id=battle_id,
+                    idempotency_key=f"apple_battle_win:{battle_id}",
+                )
+                log_event(
+                    Events.APPLE_BATTLE_EVENT,
+                    {
+                        "action": "match_completed",
+                        "battle_id": battle_id,
+                        "match_id": match.id,
+                        "winner_id": winner_id,
+                    },
+                )
 
     # ------------------------------------------------------------------
     # Staged narration runner (asyncio task; never blocks handlers)
     # ------------------------------------------------------------------
     @classmethod
-    async def run_narration(cls, bot, match_id: int) -> None:
+    def narration_task(cls, match_id: int) -> Optional[asyncio.Task]:
+        """Return the active narration task for ``match_id`` if still running."""
+        task = cls._ACTIVE_NARRATION_TASKS.get(match_id)
+        if task is not None and not task.done():
+            return task
+        return None
+
+    @classmethod
+    def is_narration_scheduled(cls, match_id: int) -> bool:
+        """Return True if a narration worker is currently active for ``match_id``."""
+        return (
+            cls.narration_task(match_id) is not None
+            or match_id in cls._NARRATION_RUNNING
+        )
+
+    @classmethod
+    def schedule_narration(
+        cls,
+        match_id: int,
+        bot: Any = None,
+        *,
+        beat_delay: Optional[float] = None,
+    ) -> Optional[asyncio.Task]:
+        """Schedule staged narration for ``match_id`` at most once concurrently."""
+        existing = cls.narration_task(match_id)
+        if existing is not None:
+            return existing
+        if match_id in cls._NARRATION_RUNNING:
+            return None
+
+        task = asyncio.create_task(
+            cls.run_narration(bot, match_id, beat_delay=beat_delay)
+        )
+        cls._ACTIVE_NARRATION_TASKS[match_id] = task
+
+        def _cleanup(done_task: asyncio.Task) -> None:
+            if cls._ACTIVE_NARRATION_TASKS.get(match_id) is done_task:
+                cls._ACTIVE_NARRATION_TASKS.pop(match_id, None)
+
+        task.add_done_callback(_cleanup)
+        return task
+
+    @classmethod
+    async def cancel_narration(cls, match_id: int) -> None:
+        """Cancel the in-flight narration task for ``match_id``, if any."""
+        task = cls._ACTIVE_NARRATION_TASKS.pop(match_id, None)
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+        cls._NARRATION_RUNNING.discard(match_id)
+
+    @classmethod
+    async def cancel_all_narrations(cls) -> None:
+        """Cancel all in-flight narration tasks (used on shutdown/tests)."""
+        tasks = list(cls._ACTIVE_NARRATION_TASKS.values())
+        cls._ACTIVE_NARRATION_TASKS.clear()
+        cls._NARRATION_RUNNING.clear()
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        for task in tasks:
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    @classmethod
+    async def run_narration(
+        cls,
+        bot,
+        match_id: int,
+        *,
+        beat_delay: Optional[float] = None,
+    ) -> None:
         """Advance the battle plan beat by beat (~3s), then finalize."""
         from sib.games.apple_battle.engine import BEAT_DELAY_SECONDS
 
+        if match_id in cls._NARRATION_RUNNING:
+            existing = cls.narration_task(match_id)
+            current = asyncio.current_task()
+            if existing is not None and existing is not current:
+                try:
+                    await existing
+                except (asyncio.CancelledError, Exception):
+                    pass
+            return
+
+        current = asyncio.current_task()
+        cls._NARRATION_RUNNING.add(match_id)
+        if current is not None and cls.narration_task(match_id) is None:
+            cls._ACTIVE_NARRATION_TASKS[match_id] = current
+
+        delay = BEAT_DELAY_SECONDS if beat_delay is None else beat_delay
         try:
-            await cls._narration_loop(bot, match_id, BEAT_DELAY_SECONDS)
+            await cls._narration_loop(bot, match_id, delay)
+        except asyncio.CancelledError:
+            raise
         except Exception as e:  # pragma: no cover - defensive
             logger.exception(f"Apple battle narration failed for match {match_id}: {e}")
+        finally:
+            cls._NARRATION_RUNNING.discard(match_id)
+            if (
+                current is not None
+                and cls._ACTIVE_NARRATION_TASKS.get(match_id) is current
+            ):
+                cls._ACTIVE_NARRATION_TASKS.pop(match_id, None)
 
     @classmethod
     async def _narration_loop(cls, bot, match_id: int, beat_delay: float) -> None:
@@ -443,6 +971,7 @@ class AppleBattleService:
 
         engine = AppleBattleEngine()
         battle_id: Optional[int] = None
+        last_cursor: Optional[int] = None
 
         while True:
             await asyncio.sleep(beat_delay)
@@ -455,18 +984,31 @@ class AppleBattleService:
                 match = await session.scalar(
                     select(Match)
                     .where(Match.id == match_id)
-                    .options(selectinload(Match.players).selectinload(MatchPlayer.user))
+                    .options(
+                        selectinload(Match.players).selectinload(MatchPlayer.user),
+                        selectinload(Match.group1).selectinload(Group.stats),
+                        selectinload(Match.group2).selectinload(Group.stats),
+                        selectinload(Match.game),
+                    )
                     .execution_options(populate_existing=True)
                     .with_for_update()
                 )
                 if (
                     not match
                     or match.state != MatchState.ACTIVE
-                    or not match.game_state
+                    or match.result_applied
                 ):
                     return
 
-                state = json.loads(match.game_state)
+                state = await cls.extract_persisted_state(session, match)
+                if not state:
+                    return
+
+                current_cursor = int(state.get("cursor", 0))
+                if last_cursor is not None and current_cursor != last_cursor:
+                    # Another worker already advanced or finalized this battle.
+                    return
+
                 if battle_id is None:
                     battle = await cls.record_battle(session, match, state)
                     battle_id = battle.id
@@ -476,11 +1018,8 @@ class AppleBattleService:
                     finished = True
                 else:
                     state = engine.apply_action(state, 0, {"type": "advance"})
+                    last_cursor = int(state.get("cursor", 0))
                     match.game_state = json.dumps(state, ensure_ascii=False)
-                    if engine.is_finished(state):
-                        # Last beat just became visible; finalize next round
-                        # so viewers see the finale first.
-                        pass
                     await session.flush()
 
                 for group_id, msg_id in (
@@ -503,10 +1042,15 @@ class AppleBattleService:
         """Winner's framed card art for the finale swap (None when unavailable)."""
         try:
             from sib.database.connection import get_session
-            from sib.services.character_art import photo_arg, artwork_path
+            from sib.services.character_art import photo_arg, resolve_character_photo
 
             async with get_session() as session:
-                battle = await session.get(AppleBattle, match_id)
+                battle = await session.scalar(
+                    select(AppleBattle)
+                    .where(AppleBattle.match_id == match_id)
+                    .order_by(AppleBattle.id.asc())
+                    .limit(1)
+                )
                 if not battle or battle.status != AppleBattleStatus.COMPLETED:
                     return None
                 winner_card_id = None
@@ -518,8 +1062,8 @@ class AppleBattleService:
                 character = await session.get(Character, card.character_id) if card else None
                 if character is None:
                     return None
-                path = artwork_path(character)
-                return photo_arg(None, path)
+                file_id, path = await resolve_character_photo(session, character)
+                return photo_arg(file_id, path)
         except Exception:
             return None
 
@@ -533,6 +1077,18 @@ class AppleBattleService:
         match_id: int,
         finished: bool,
     ) -> None:
+        if not edit_targets:
+            return
+        if bot is None:
+            try:
+                from sib.services.maintenance.service import MaintenanceService
+
+                bot = MaintenanceService._bot
+            except Exception:
+                bot = None
+        if bot is None:
+            return
+
         from sib.services.game_sync import final_keyboard
         from sib.services.telegram_ui import safe_edit_screen
 
