@@ -4,7 +4,8 @@ UX (locked decisions):
   1. pick a battle card (loadout)        → ``ab_pick:{card_id}``
   2. press "یافتن حریف" (Find Opponent)  → ``ab_find``  → REAL shared queue
   3. wait online (searching screen)      → ``ab_cancel`` is the ONLY way out
-  4. match found → shared acceptance → staged narrative battle → reward
+  4. match found → shared acceptance → cinematic narration as SEPARATE
+     temporary photo messages (Phase 2A) → final report → reward
 
 Back/home buttons are NAVIGATION ONLY and never dequeue an active search.
 """

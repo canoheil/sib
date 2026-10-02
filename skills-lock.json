@@ -1,11 +1,29 @@
 {
   "version": 1,
   "skills": {
+    "create-game-assets": {
+      "source": "gamedev-skills/awesome-gamedev-agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/disciplines/create-game-assets/SKILL.md",
+      "computedHash": "e0991db4ed544179782a60a7020aa49c7469b66744de5a5eda28eb3a35f856be"
+    },
     "flux-image-best-practices": {
       "source": "black-forest-labs/skills",
       "sourceType": "github",
       "skillPath": "skills/flux-image-best-practices/SKILL.md",
       "computedHash": "b7cd334c93138e0eb9991b0e53aead77c1b7dacc1dfa264c021af063831ccad3"
+    },
+    "persian-writing": {
+      "source": "ali2000hos/persian-writing",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "7f973464b7905983447edd920910d6cb1bdd47ebd8e7d1a10f4b91debbf606aa"
+    },
+    "procedural-gen": {
+      "source": "gamedev-skills/awesome-gamedev-agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/disciplines/procedural-gen/SKILL.md",
+      "computedHash": "b55735586c0b4cf7c4db06ca3818cce679bb2fe99d4abe838a03083e8b135d37"
     },
     "tasks": {
       "source": "taoeffect/tasks",
@@ -54,12 +72,6 @@
       "sourceType": "github",
       "skillPath": "skills/telegram-bot-api/11-payments-stars-and-broadcasting/SKILL.md",
       "computedHash": "0cd71967731989e84785c244bd53ddbe11b883e177de8297ba486e8d9e760926"
-    },
-    "persian-writing": {
-      "source": "ali2000hos/persian-writing",
-      "sourceType": "github",
-      "skillPath": "SKILL.md",
-      "computedHash": "7f973464b7905983447edd920910d6cb1bdd47ebd8e7d1a10f4b91debbf606aa"
     }
   }
 }

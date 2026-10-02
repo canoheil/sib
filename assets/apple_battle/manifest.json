@@ -1,0 +1,341 @@
+{
+  "schema_version": 1,
+  "library": "apple_battle_narration",
+  "art_direction": "../../.agents/tasks/apple-battle-cinematic-narration/ART_DIRECTION.md",
+  "technical": {
+    "aspect": "1:1",
+    "dimensions": "1024x1024",
+    "format": "jpeg"
+  },
+  "generation": {
+    "mode": "pre-generated",
+    "runtime_generation": false,
+    "tool": "arena-agent image model (FLUX-class text-to-image with style reference)",
+    "created_at": "2026-10-02",
+    "license": "project-internal",
+    "style_reference": "opening_01_crimson_green.jpg"
+  },
+  "casts": {
+    "crimson": {
+      "code": "sib_sorkh",
+      "name_en": "Red Apple",
+      "name_fa": "سیب سرخ"
+    },
+    "green": {
+      "code": "sib_sabz",
+      "name_en": "Green Apple",
+      "name_fa": "سیب سبز"
+    },
+    "gold": {
+      "code": "sib_talayi",
+      "name_en": "Golden Apple",
+      "name_fa": "سیب طلایی"
+    },
+    "moon": {
+      "code": "sib_mahi",
+      "name_en": "Moon Apple",
+      "name_fa": "سیب ماهی"
+    }
+  },
+  "categories": {
+    "opening": "پیش از آغاز نبرد؛ دو حریف رودررو",
+    "attack": "حمله‌ی یکی از حریفان",
+    "counterattack": "دفع ضربه و پاسخ متقابل",
+    "dodge": "جاخالی و رد شدن ضربه",
+    "impact": "برخورد سنگین و موج انفجار",
+    "power_up": "جمع کردن نیرو و انرژی",
+    "critical_moment": "لحظه‌ی بحرانی و زیر فشار بودن",
+    "turning_point": "نقطه‌ی چرخش نبرد",
+    "final_attack": "ضربه‌ی نهایی",
+    "victory": "پیروزی و برنده‌ی میدان"
+  },
+  "scenes": [
+    {
+      "id": "opening_01_crimson_green",
+      "category": "opening",
+      "file": "opening_01_crimson_green.jpg",
+      "status": "ready",
+      "casts": [
+        "crimson",
+        "green"
+      ],
+      "action": "standoff_before_duel",
+      "prompt_summary": "Style anchor: crimson apple knight with glowing longsword facing the green apple elder with a carved staff across the overgrown stone arena, castle and waterfall behind."
+    },
+    {
+      "id": "opening_02_gold_moon",
+      "category": "opening",
+      "file": "opening_02_gold_moon.jpg",
+      "status": "ready",
+      "casts": [
+        "gold",
+        "moon"
+      ],
+      "action": "standoff_before_duel",
+      "prompt_summary": "Golden apple child with a radiant apple-orb staff facing the moon-apple sorceress with a floating moon orb, quiet moment before the duel."
+    },
+    {
+      "id": "opening_03_silhouettes",
+      "category": "opening",
+      "file": "opening_03_silhouettes.jpg",
+      "status": "ready",
+      "casts": [],
+      "cast_free": true,
+      "action": "wide_standoff",
+      "prompt_summary": "Wide establishing shot: two backlit warrior silhouettes far apart in the arena, faces and costume detail hidden — identity-agnostic opener."
+    },
+    {
+      "id": "attack_01_crimson_green",
+      "category": "attack",
+      "file": "attack_01_crimson_green.jpg",
+      "status": "ready",
+      "casts": [
+        "crimson",
+        "green"
+      ],
+      "action": "crimson_strikes_green_braces",
+      "prompt_summary": "Crimson knight lunges with a bright horizontal longsword arc while the green elder braces behind his staff and a green barrier flares."
+    },
+    {
+      "id": "attack_02_green_crimson",
+      "category": "attack",
+      "file": "attack_02_green_crimson.jpg",
+      "status": "ready",
+      "casts": [
+        "green",
+        "crimson"
+      ],
+      "action": "green_casts_crimson_guards",
+      "prompt_summary": "Green elder slams his staff and hurls a spiralling bolt of emerald nature magic while the crimson knight raises his sword crosswise to meet it."
+    },
+    {
+      "id": "attack_03_gold_moon",
+      "category": "attack",
+      "file": "attack_03_gold_moon.jpg",
+      "status": "ready",
+      "casts": [
+        "gold",
+        "moon"
+      ],
+      "action": "gold_light_arc_moon_shield",
+      "prompt_summary": "Golden child sweeps a wide arc of sunlight from the radiant staff; the moon sorceress raises a shield of blue moonlight."
+    },
+    {
+      "id": "counterattack_01_crimson_green",
+      "category": "counterattack",
+      "file": "counterattack_01_crimson_green.jpg",
+      "status": "ready",
+      "casts": [
+        "crimson",
+        "green"
+      ],
+      "action": "crimson_deflects_and_ripostes",
+      "prompt_summary": "Crimson knight catches the green elder's staff on the flat of his sword in a flash of sparks and turns his wrist to push past the guard."
+    },
+    {
+      "id": "counterattack_02_gold_moon",
+      "category": "counterattack",
+      "file": "counterattack_02_gold_moon.jpg",
+      "status": "ready",
+      "casts": [
+        "moon",
+        "gold"
+      ],
+      "action": "moon_absorbs_and_returns",
+      "prompt_summary": "Moon sorceress absorbs a golden strike on her crescent barrier and returns a crescent blade of moonlight; the golden child is knocked wide."
+    },
+    {
+      "id": "dodge_01_crimson_green",
+      "category": "dodge",
+      "file": "dodge_01_crimson_green.jpg",
+      "status": "ready",
+      "casts": [
+        "green",
+        "crimson"
+      ],
+      "action": "green_sidesteps_crimson_blade",
+      "prompt_summary": "Green elder twists aside leaving a green afterimage and swirling leaves while the crimson knight's glowing sword cuts empty air."
+    },
+    {
+      "id": "dodge_02_gold_moon",
+      "category": "dodge",
+      "file": "dodge_02_gold_moon.jpg",
+      "status": "ready",
+      "casts": [
+        "gold",
+        "moon"
+      ],
+      "action": "gold_leaps_clear_of_moonlight",
+      "prompt_summary": "Golden child leaps aside trailing sparkles and an afterimage while a crescent of blue moonlight sweeps through the space he left."
+    },
+    {
+      "id": "impact_01_crimson_green",
+      "category": "impact",
+      "file": "impact_01_crimson_green.jpg",
+      "status": "ready",
+      "casts": [
+        "crimson",
+        "green"
+      ],
+      "action": "sword_vs_staff_shockwave",
+      "prompt_summary": "Crimson longsword and green elder's staff meet at the arena centre in a burst of white-gold light with a low ring shockwave of dust."
+    },
+    {
+      "id": "impact_02_silhouettes",
+      "category": "impact",
+      "file": "impact_02_silhouettes.jpg",
+      "status": "ready",
+      "casts": [],
+      "cast_free": true,
+      "action": "ring_shockwave_no_fighters",
+      "prompt_summary": "Reaction shot: an expanding ring of light and dust races across the empty stone arena, petals hurled outward, no identifiable fighters."
+    },
+    {
+      "id": "power_up_01_green_crimson",
+      "category": "power_up",
+      "file": "power_up_01_green_crimson.jpg",
+      "status": "ready",
+      "casts": [
+        "green",
+        "crimson"
+      ],
+      "action": "green_gathers_nature_magic",
+      "prompt_summary": "Green elder plants his staff and gathers a rising spiral of glowing leaves and emerald light around himself while the crimson knight watches."
+    },
+    {
+      "id": "power_up_02_gold_moon",
+      "category": "power_up",
+      "file": "power_up_02_gold_moon.jpg",
+      "status": "ready",
+      "casts": [
+        "gold",
+        "moon"
+      ],
+      "action": "gold_charges_radiant_staff",
+      "prompt_summary": "Golden child raises his staff as golden light spirals up around him; the moon sorceress gathers blue moonlight in both hands."
+    },
+    {
+      "id": "critical_01_crimson_green",
+      "category": "critical_moment",
+      "file": "critical_01_crimson_green.jpg",
+      "status": "ready",
+      "casts": [
+        "green",
+        "crimson"
+      ],
+      "action": "green_pressed_on_one_knee",
+      "prompt_summary": "Green elder down on one knee behind his braced staff, clearly strained but unharmed, while the crimson knight's blade bears down — the at-risk moment."
+    },
+    {
+      "id": "critical_02_gold_moon",
+      "category": "critical_moment",
+      "file": "critical_02_gold_moon.jpg",
+      "status": "ready",
+      "casts": [
+        "moon",
+        "gold"
+      ],
+      "action": "gold_cornered_behind_staff",
+      "prompt_summary": "Golden child cornered behind his staff, straining but unharmed, as the moon sorceress' moonlight presses in — the at-risk moment for the opposite pair."
+    },
+    {
+      "id": "turning_01_crimson_green",
+      "category": "turning_point",
+      "file": "turning_01_crimson_green.jpg",
+      "status": "ready",
+      "casts": [
+        "crimson",
+        "green"
+      ],
+      "action": "crimson_breaks_the_guard",
+      "prompt_summary": "Crimson knight bursts through the green elder's guard in a burst of light and petals, the duel's momentum visibly shifting."
+    },
+    {
+      "id": "turning_02_gold_moon",
+      "category": "turning_point",
+      "file": "turning_02_gold_moon.jpg",
+      "status": "ready",
+      "casts": [
+        "moon",
+        "gold"
+      ],
+      "action": "moon_seizes_the_momentum",
+      "prompt_summary": "Moon sorceress steps through a burst of blue moonlight and blossoms as the golden child's guard is broken — the duel's momentum visibly shifting."
+    },
+    {
+      "id": "final_attack_01_crimson_green",
+      "category": "final_attack",
+      "file": "final_attack_01_crimson_green.jpg",
+      "status": "ready",
+      "casts": [
+        "crimson",
+        "green"
+      ],
+      "action": "crimson_overhead_finisher",
+      "prompt_summary": "Crimson knight leaps in for an overhead finishing strike wreathed in golden light while the green elder raises a last desperate defence."
+    },
+    {
+      "id": "final_attack_02_gold_moon",
+      "category": "final_attack",
+      "file": "final_attack_02_gold_moon.jpg",
+      "status": "ready",
+      "casts": [
+        "moon",
+        "gold"
+      ],
+      "action": "moon_finishing_crescent",
+      "prompt_summary": "Moon sorceress unleashes a huge silver crescent at the golden child, who raises a last blazing golden barrier — the finishing blow for the opposite pair."
+    },
+    {
+      "id": "victory_01_crimson",
+      "category": "victory",
+      "file": "victory_01_crimson.jpg",
+      "status": "ready",
+      "casts": [
+        "crimson"
+      ],
+      "action": "crimson_triumphant",
+      "prompt_summary": "Crimson knight alone at the arena centre, sword raised in triumph, golden light and blossoms swirling — winner celebration."
+    },
+    {
+      "id": "victory_02_champion_silhouette",
+      "category": "victory",
+      "file": "victory_02_champion_silhouette.jpg",
+      "status": "ready",
+      "casts": [],
+      "cast_free": true,
+      "action": "backlit_champion",
+      "prompt_summary": "Identity-agnostic celebration: a single backlit champion silhouette raising a weapon toward the light as petals rain down."
+    },
+    {
+      "id": "attack_04_silhouettes",
+      "category": "attack",
+      "file": "attack_04_silhouettes.jpg",
+      "status": "ready",
+      "casts": [],
+      "cast_free": true,
+      "action": "two_silhouettes_clash",
+      "prompt_summary": "Identity-free clash: two backlit warrior silhouettes lunge at each other and their weapons meet in a burst of light — used for matchups without a dedicated cast plate."
+    },
+    {
+      "id": "impact_03_silhouettes",
+      "category": "impact",
+      "file": "impact_03_silhouettes.jpg",
+      "status": "ready",
+      "casts": [],
+      "cast_free": true,
+      "action": "vertical_energy_burst_no_fighters",
+      "prompt_summary": "Identity-free reaction shot: a vertical column of white-gold energy erupts from the arena, shattering stone and hurling petals — no characters in frame."
+    },
+    {
+      "id": "victory_03_silhouettes",
+      "category": "victory",
+      "file": "victory_03_silhouettes.jpg",
+      "status": "ready",
+      "casts": [],
+      "cast_free": true,
+      "action": "distant_champion_salute",
+      "prompt_summary": "Identity-free celebration: a lone rim-lit champion plants a weapon and raises a fist toward the sun, face and colours hidden."
+    }
+  ]
+}

@@ -125,6 +125,22 @@ class RecoveryService:
         for match_id in apple_recovery["resumed"]:
             AppleBattleService.schedule_narration(match_id, bot=bot)
 
+        # Phase 2A: battles finalized during recovery never reached their live
+        # narration teardown, so their temporary narration messages are deleted
+        # here. Best effort only - cleanup can never affect settlement or the
+        # final report.
+        if apple_recovery.get("finalized_ids"):
+            from sib.services.apple_battle_narration import AppleBattleNarration
+
+            for match_id in apple_recovery["finalized_ids"]:
+                try:
+                    await AppleBattleNarration.cleanup(bot, match_id)
+                except Exception as exc:  # pragma: no cover - defensive
+                    logger.warning(
+                        f"Narration cleanup after recovery failed for match "
+                        f"{match_id}: {exc}"
+                    )
+
         log_event(
             Events.SYSTEM_RESTART_RECOVERY,
             {"status": "completed", **stats},

@@ -21,6 +21,13 @@ The win formula is UNCHANGED (locked decision):
 The outcome is computed and persisted (in ``match.game_state``) BEFORE any
 narration and never changes after the fact. Narration only advances the plan
 cursor; the result is fixed.
+
+Phase 2A — cinematic narration delivery: every plan beat is sent as its OWN
+temporary Telegram message (photo + short caption) by
+``sib.services.apple_battle_narration``, and the temporary messages are
+deleted when the battle ends. The board message is never used to accumulate
+the story any more; it becomes the UNCHANGED final report once the plan is
+complete (see ``_narration_loop``).
 """
 
 import asyncio
@@ -248,6 +255,8 @@ class AppleBattleService:
         card_objs: Dict[int, Optional[PlayerCard]] = {}
         char_objs: Dict[int, Optional[Character]] = {}
 
+        from sib.services.apple_battle_scenes import AppleBattleSceneLibrary
+
         for p in players:
             name = (
                 p.user.display_name
@@ -274,6 +283,14 @@ class AppleBattleService:
                 "name": char_objs[p.user_id].name_fa
                 if char_objs[p.user_id]
                 else "جنگجوی ناشناس",
+                # Phase 2B: narration scene-library cast key (e.g. "crimson").
+                # Persisted with the precomputed state so scene selection is
+                # restart-safe and needs no extra lookup for new battles.
+                "cast": AppleBattleSceneLibrary.cast_key_for_code(
+                    getattr(char_objs[p.user_id], "code", None)
+                    if char_objs[p.user_id]
+                    else None
+                ),
                 "power": stats.power,
                 "speed": stats.speed,
                 "intelligence": stats.intelligence,
@@ -340,7 +357,11 @@ class AppleBattleService:
                 "result": result,
             },
             "plan": plan,
-            "cursor": 1,  # intro is visible from the very first render
+            # Phase 2A: every beat — including the intro — is delivered as its
+            # OWN temporary narration message, so narration starts at 0. The
+            # board message is no longer used to accumulate the story; it only
+            # becomes the unchanged final report when the battle ends.
+            "cursor": 0,
             "current_player_id": None,
         }
 
@@ -654,7 +675,7 @@ class AppleBattleService:
         matches = list((await session.scalars(stmt)).all())
 
         resumed_ids: List[int] = []
-        finalized_count = 0
+        finalized_ids: List[int] = []
 
         for match in matches:
             state = await cls.extract_persisted_state(session, match)
@@ -666,7 +687,7 @@ class AppleBattleService:
 
             if engine.is_finished(state):
                 await cls.finalize_match(session, match, battle.id)
-                finalized_count += 1
+                finalized_ids.append(match.id)
             else:
                 match.turn_deadline = now + timedelta(
                     seconds=engine.turn_timeout_seconds
@@ -676,7 +697,10 @@ class AppleBattleService:
         await session.flush()
         return {
             "resumed": resumed_ids,
-            "finalized": finalized_count,
+            "finalized": len(finalized_ids),
+            # Phase 2A: the ids whose temporary narration messages still need
+            # cleanup (deleting them is best-effort and never part of settlement).
+            "finalized_ids": finalized_ids,
         }
 
     # ------------------------------------------------------------------
@@ -965,9 +989,37 @@ class AppleBattleService:
             ):
                 cls._ACTIVE_NARRATION_TASKS.pop(match_id, None)
 
+    @staticmethod
+    def _narration_targets(match: Match) -> List[Tuple[int, int]]:
+        """Deduped ``(chat_id, group_no)`` targets for the live narration.
+
+        A friendly-style match where both sides share ONE group must receive
+        each beat exactly once.
+        """
+        targets: List[Tuple[int, int]] = []
+        seen: set[int] = set()
+        for group_id, group_no in (
+            (match.group1_id, 1),
+            (match.group2_id, 2),
+        ):
+            if group_id and group_id not in seen:
+                seen.add(group_id)
+                targets.append((group_id, group_no))
+        return targets
+
     @classmethod
     async def _narration_loop(cls, bot, match_id: int, beat_delay: float) -> None:
+        """Present the precomputed plan as SEPARATE temporary messages.
+
+        Phase 2A: each beat is sent as its own photo + caption message (never
+        appended by editing one message). The plan cursor is persisted BEFORE
+        the send, so a restart resumes at the next unsent beat and can never
+        duplicate a narration event. When the plan is finished the temporary
+        messages are deleted (best effort) and the UNCHANGED final report is
+        rendered onto the existing board message.
+        """
         from sib.games.apple_battle.engine import AppleBattleEngine
+        from sib.services.apple_battle_narration import AppleBattleNarration
 
         engine = AppleBattleEngine()
         battle_id: Optional[int] = None
@@ -976,9 +1028,12 @@ class AppleBattleService:
         while True:
             await asyncio.sleep(beat_delay)
 
-            edit_targets: List[Tuple[int, int]] = []
-            texts: Dict[int, str] = {}
             finished = False
+            beat_index: Optional[int] = None
+            beat_state: Optional[Dict[str, Any]] = None
+            targets: List[Tuple[int, int]] = []
+            report_targets: List[Tuple[int, int]] = []
+            report_texts: Dict[int, str] = {}
 
             async with get_session() as session:
                 match = await session.scalar(
@@ -1014,28 +1069,73 @@ class AppleBattleService:
                     battle_id = battle.id
 
                 if engine.is_finished(state):
-                    await cls.finalize_match(session, match, battle_id)
                     finished = True
+                    for group_id, msg_id in (
+                        (match.group1_id, match.group1_message_id),
+                        (match.group2_id, match.group2_message_id),
+                    ):
+                        if group_id and msg_id:
+                            report_targets.append((group_id, msg_id))
                 else:
+                    # CLAIM the beat before sending it: the advanced cursor is
+                    # durably persisted first, so a restart resumes at the next
+                    # beat and the same beat is never sent twice.
                     state = engine.apply_action(state, 0, {"type": "advance"})
+                    beat_index = current_cursor
+                    beat_state = state
                     last_cursor = int(state.get("cursor", 0))
                     match.game_state = json.dumps(state, ensure_ascii=False)
                     await session.flush()
-
-                for group_id, msg_id in (
-                    (match.group1_id, match.group1_message_id),
-                    (match.group2_id, match.group2_message_id),
-                ):
-                    if group_id and msg_id:
-                        edit_targets.append((group_id, msg_id))
-                        texts[group_id] = engine.render_for_group(
-                            state, group_id, None
-                        )
-
-            await cls._edit_boards(bot, edit_targets, texts, engine, match_id, finished)
+                    targets = cls._narration_targets(match)
 
             if finished:
+                # 1. Remove the temporary narration messages FIRST — while the
+                #    match is still ACTIVE, so a crash during teardown is
+                #    recovered on restart (recovery finalizes the battle and
+                #    cleans up whatever is left). Best effort: failures are
+                #    logged and never touch settlement.
+                await AppleBattleNarration.cleanup(bot, match_id)
+
+                # 2. Settlement (idempotent). Runs only after cleanup, so a
+                #    Telegram problem can never delay or break the result.
+                async with get_session() as session:
+                    match = await session.scalar(
+                        select(Match)
+                        .where(Match.id == match_id)
+                        .options(
+                            selectinload(Match.players).selectinload(MatchPlayer.user),
+                            selectinload(Match.group1).selectinload(Group.stats),
+                            selectinload(Match.group2).selectinload(Group.stats),
+                            selectinload(Match.game),
+                        )
+                        .execution_options(populate_existing=True)
+                        .with_for_update()
+                    )
+                    if not match or match.result_applied:
+                        return
+                    state = await cls.extract_persisted_state(session, match)
+                    if not state:
+                        return
+                    await cls.finalize_match(session, match, battle_id)
+                    # 3. The existing final Apple Battle report, unchanged.
+                    report_texts = {
+                        group_id: engine.render_for_group(state, group_id, None)
+                        for group_id, _msg_id in report_targets
+                    }
+
+                await cls._edit_boards(
+                    bot, report_targets, report_texts, engine, match_id, True
+                )
                 return
+
+            if beat_index is not None and beat_state is not None and targets:
+                await AppleBattleNarration.send_beat(
+                    bot,
+                    match_id=match_id,
+                    state=beat_state,
+                    beat_index=beat_index,
+                    targets=targets,
+                )
 
     @staticmethod
     async def _winner_photo(match_id: int):

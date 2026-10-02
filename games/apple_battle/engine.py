@@ -9,6 +9,9 @@ machinery:
 - Acceptance initializes nothing extra; the engine just advances the plan
   beat by beat via ``apply_action``.
 - ``after_start`` schedules the auto-presentation loop (3s between beats).
+  Phase 2A: each beat is delivered as a SEPARATE temporary photo message
+  (``AppleBattleNarration``); the board message is only rendered as the final
+  report when the plan finishes.
 - When the last beat is shown the match is finished and the standard
   ``MatchResultService`` applies the outcome (seedling, stats, party release).
 

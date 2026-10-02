@@ -257,6 +257,20 @@ class MaintenanceService:
                     match,
                     suffix="⏱ زمان نوبت به پایان رسید.",
                 )
+                # Phase 2A: an Apple Battle resolved out of band (turn-timeout
+                # backstop) still has to drop its temporary narration messages.
+                # Best effort - a cleanup failure never affects settlement.
+                if getattr(match.game, "code", None) == "apple_battle":
+                    try:
+                        from sib.services.apple_battle_narration import (
+                            AppleBattleNarration,
+                        )
+
+                        await AppleBattleNarration.cleanup(cls._bot, match.id)
+                    except Exception:  # pragma: no cover - defensive
+                        logger.exception(
+                            f"Could not clean up narration messages for match {match.id}"
+                        )
 
     @classmethod
     async def run_forever(cls, stop_event: asyncio.Event, bot=None) -> None:
