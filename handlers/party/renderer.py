@@ -58,11 +58,18 @@ FRIENDLY_TEAM_TITLES = {
 
 
 def _member_line(member) -> str:
-    """One roster line; bots are always clearly marked."""
+    """One roster line.
+
+    Bots are marked by their Apple-themed pool name (and their internal
+    ``is_bot`` identity), never by a "🤖" emoji: legacy rows that still store
+    the old prefixed name are normalized for display.
+    """
     user = member.user
     name = user.display_name if user else "بازیکن"
     if user is not None and user.is_bot:
-        return name if name.startswith("🤖 ") else f"🤖 {name}"
+        from sib.services.bot import strip_bot_display_prefix
+
+        return strip_bot_display_prefix(name)
     return f"👤 {name}"
 
 

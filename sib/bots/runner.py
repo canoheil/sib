@@ -20,6 +20,13 @@ Sleeping outside the lock matters: the previous implementation awaited the
 delay inside the caller's serialized transaction, which pushed every bot
 delay onto the human request that started the chain (the human waited for
 all bots, then all bots moved back-to-back).
+
+A related rule lives in the maintenance worker and the interactive handlers:
+scheduling a bot turn must never be placed behind Telegram presentation, and
+no DB transaction (row lock) may stay open across a presentation await.
+Both used to push the best-effort edit/flood-retry sleeps into the path a
+bot turn waits on, which is how an intentionally 0.6-1.8s humanization delay
+could turn into an apparent 20-30s "thinking" time.
 """
 
 import asyncio
@@ -35,8 +42,8 @@ from sib.bots.registry import has_bot_strategy
 from sib.bots.service import GameBotService
 
 
-BOT_MOVE_DELAY_MIN_SECONDS = 0.8
-BOT_MOVE_DELAY_MAX_SECONDS = 2.0
+BOT_MOVE_DELAY_MIN_SECONDS = 0.6
+BOT_MOVE_DELAY_MAX_SECONDS = 1.8
 BotSleep = Callable[[float], Awaitable[None]]
 DelayPicker = Callable[[float, float], float]
 

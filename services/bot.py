@@ -42,6 +42,10 @@ BOT_DISPLAY_NAME_POOL = (
     "سیب کماندار",
     "سیب تاج‌دار",
 )
+# Bots are marked by their internal identity (``User.is_bot`` + persisted
+# profile), never by an emoji in the display name. The constant is kept as
+# the LEGACY prefix: bot rows created before this change still store the
+# prefixed name in the database, so every user-facing display strips it.
 BOT_DISPLAY_NAME_PREFIX = "🤖 "
 _PERSIAN_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
 
@@ -53,13 +57,25 @@ def _unprefixed_bot_name(name: str) -> str:
     return name
 
 
+def strip_bot_display_prefix(name: str) -> str:
+    """Display-facing form of a bot name (legacy "🤖 " prefix removed).
+
+    New bots are stored unprefixed; this only normalizes rows created while
+    the prefix existed, so old and new matches render names identically.
+    """
+    return _unprefixed_bot_name(name)
+
+
 def choose_bot_display_names(
     count: int,
     *,
     existing_names: Iterable[str] = (),
     rng: Any = None,
 ) -> list[str]:
-    """Randomly choose marked, unique names for one match or party.
+    """Randomly choose unique Apple-themed names for one match or party.
+
+    Names carry no emoji prefix: a bot is marked by its internal identity,
+    not by its display name.
 
     When a roster is larger than the pool, numbered Persian variants keep
     every display name unique instead of failing or silently duplicating one.
@@ -72,7 +88,7 @@ def choose_bot_display_names(
     used_names = {_unprefixed_bot_name(name) for name in existing_names}
     available = [name for name in BOT_DISPLAY_NAME_POOL if name not in used_names]
     selected = list(chooser.sample(available, min(count, len(available))))
-    names = [f"{BOT_DISPLAY_NAME_PREFIX}{name}" for name in selected]
+    names = list(selected)
     used_names.update(selected)
 
     suffix = 2
@@ -82,7 +98,7 @@ def choose_bot_display_names(
         while candidate in used_names:
             suffix += 1
             candidate = f"{base_name} {str(suffix).translate(_PERSIAN_DIGITS)}"
-        names.append(f"{BOT_DISPLAY_NAME_PREFIX}{candidate}")
+        names.append(candidate)
         used_names.add(candidate)
         suffix += 1
 

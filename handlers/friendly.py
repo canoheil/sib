@@ -129,8 +129,15 @@ async def _show_friendly_party(callback: CallbackQuery, bot: Optional[Bot], part
     behaviour) left every other member without the join buttons until they
     pressed Refresh.
     """
-    text = render_party_card(party)
-    kb = get_shared_friendly_party_keyboard(party)
+    await _show_friendly_party_rendered(
+        callback, bot, *_friendly_party_card_snapshot(party)
+    )
+
+
+async def _show_friendly_party_rendered(
+    callback: CallbackQuery, bot: Optional[Bot], text: str, kb
+) -> None:
+    """Present an already-rendered party card (never called under a DB lock)."""
     await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
 
@@ -146,6 +153,9 @@ async def handle_create_friendly_party(callback: CallbackQuery, bot: Optional[Bo
     if not user or not chat:
         return
 
+    error_message: Optional[str] = None
+    answer_text = "پارتی رفیقانه ساخته شد! 🎉🍏"
+    card: Optional[tuple] = None
     async with get_session() as session:
         await UserService.get_or_create_user(session, user)
         await GroupService.get_or_create_group(session, chat)
@@ -159,11 +169,30 @@ async def handle_create_friendly_party(callback: CallbackQuery, bot: Optional[Bo
                 mode=mode,
             )
         except _FRIENDLY_PARTY_ERRORS as e:
-            await callback.answer(e.message, show_alert=True)
-            return
+            await session.rollback()
+            error_message = e.message
+            party = None
+        if error_message is None:
+            # Snapshot the card inside the session; the Telegram render below
+            # must not run while the party row lock is held.
+            card = _friendly_party_card_snapshot(party)
 
-        await callback.answer("پارتی رفیقانه ساخته شد! 🎉🍏")
-        await _show_friendly_party(callback, bot, party)
+    if error_message is not None:
+        await callback.answer(error_message, show_alert=True)
+        return
+
+    await callback.answer(answer_text)
+    if card is not None:
+        await _show_friendly_party_rendered(callback, bot, *card)
+
+
+def _friendly_party_card_snapshot(party) -> tuple:
+    """Pure-rendered (text, keyboard) of a friendly party card.
+
+    Computed while the DB session is open so the presentation phase of the
+    friendly handlers never awaits Telegram with a locked party row held.
+    """
+    return render_party_card(party), get_shared_friendly_party_keyboard(party)
 
 
 @router.callback_query(F.data.startswith("make_friendly:"))
@@ -175,37 +204,64 @@ async def handle_make_friendly(callback: CallbackQuery, bot: Optional[Bot] = Non
     if not user:
         return
 
+    error_message: Optional[str] = None
+    card: Optional[tuple] = None
     async with get_session() as session:
         try:
             party = await PartyService.enable_friendly(session, party_id, user.id)
         except _FRIENDLY_PARTY_ERRORS as e:
-            await callback.answer(e.message, show_alert=True)
-            return
+            await session.rollback()
+            error_message = e.message
+            party = None
+        if error_message is None:
+            card = _friendly_party_card_snapshot(party)
 
-        await callback.answer("پارتی رفیقانهٔ ۱ به ۱ آماده شد! 🎉🍏")
-        await _show_friendly_party(callback, bot, party)
+    if error_message is not None:
+        await callback.answer(error_message, show_alert=True)
+        return
+
+    await callback.answer("پارتی رفیقانهٔ ۱ به ۱ آماده شد! 🎉🍏")
+    if card is not None:
+        await _show_friendly_party_rendered(callback, bot, *card)
 
 
 @router.callback_query(F.data.startswith("friendly_fill_bots:"))
 async def handle_friendly_fill_bots(callback: CallbackQuery, bot: Optional[Bot] = None):
-    """Host action: fill every empty friendly-party slot with a bot."""
+    """Host action: fill every empty friendly-party slot with a bot.
+
+    The party row is FOR UPDATE-locked by the service while bots are
+    created; the card render (a retrying Telegram edit) runs strictly AFTER
+    the transaction commits, so the party lock can never be held across it.
+    A held party/match lock is exactly what would stall the maintenance
+    worker - and thereby the opening bot turns of every queued match.
+    """
     party_id = int(callback.data.split(":")[1])
     user = callback.from_user
 
     if not user:
         return
 
+    error_message: Optional[str] = None
+    card: Optional[tuple] = None
     async with get_session() as session:
         try:
             party = await PartyService.fill_empty_slots_with_bots(
                 session, party_id, user.id
             )
         except _FRIENDLY_PARTY_ERRORS as e:
-            await callback.answer(e.message, show_alert=True)
-            return
+            await session.rollback()
+            error_message = e.message
+            party = None
+        if error_message is None:
+            card = _friendly_party_card_snapshot(party)
 
-        await callback.answer("جای‌های خالی با بات پر شد! 🤖🍏")
-        await _show_friendly_party(callback, bot, party)
+    if error_message is not None:
+        await callback.answer(error_message, show_alert=True)
+        return
+
+    await callback.answer("جای‌های خالی با بات پر شد! 🤖🍏")
+    if card is not None:
+        await _show_friendly_party_rendered(callback, bot, *card)
 
 
 @router.callback_query(F.data.startswith("friendly_start:"))
@@ -217,6 +273,7 @@ async def handle_friendly_start(callback: CallbackQuery, bot: Bot):
     if not user:
         return
 
+    start_error: Optional[str] = None
     async with get_session() as session:
         await UserService.get_or_create_user(session, user)
         try:
@@ -224,10 +281,15 @@ async def handle_friendly_start(callback: CallbackQuery, bot: Bot):
                 session, party_id, user.id
             )
         except _FRIENDLY_PARTY_ERRORS as e:
-            await callback.answer(e.message, show_alert=True)
-            return
+            await session.rollback()
+            start_error = e.message
+            match = None
 
-        await callback.answer("بازی رفیقانه شروع شد! 🎉🍏")
+    if start_error is not None:
+        await callback.answer(start_error, show_alert=True)
+        return
+
+    await callback.answer("بازی رفیقانه شروع شد! 🎉🍏")
 
     if callback.message:
         group_id = callback.message.chat.id
@@ -255,10 +317,19 @@ async def handle_friendly_rematch(callback: CallbackQuery, bot: Bot):
         try:
             match = await FriendlyMatchService.rematch(session, match_id, user.id)
         except sibException as e:
-            await callback.answer(e.message, show_alert=True)
-            return
+            await session.rollback()
+            rematch_error = e.message
+            match = None
+        else:
+            rematch_error = None
 
-        await callback.answer("بازی مجدد رفیقانه شروع شد! 🎉🍏")
+    # Confirmation and board render happen after the rematch transaction has
+    # committed - no DB lock is ever held across a Telegram await.
+    if rematch_error is not None:
+        await callback.answer(rematch_error, show_alert=True)
+        return
+
+    await callback.answer("بازی مجدد رفیقانه شروع شد! 🎉🍏")
 
     if callback.message:
         group_id = callback.message.chat.id

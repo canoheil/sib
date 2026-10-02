@@ -58,7 +58,7 @@ from sib.keyboards.party import (
 )
 from sib.matchmaking.matcher import MatchmakingService
 from sib.services.apple_wallet import AppleWalletService
-from sib.services.bot import BOT_DISPLAY_NAME_POOL, BOT_DISPLAY_NAME_PREFIX
+from sib.services.bot import BOT_DISPLAY_NAME_POOL
 from sib.services.config_store import ConfigService
 from sib.services.friendly import (
     FRIENDLY_REWARD_REASON,
@@ -302,17 +302,18 @@ async def test_fill_empty_slots_with_bots(mode, humans, bots, db_session):
     assert len(bot_members) == bots
     bot_names = [user.display_name for _member, user in bot_members]
     assert len(set(bot_names)) == bots
-    assert all(name.startswith(BOT_DISPLAY_NAME_PREFIX) for name in bot_names)
-    assert all(
-        name.removeprefix(BOT_DISPLAY_NAME_PREFIX) in BOT_DISPLAY_NAME_POOL
-        for name in bot_names
-    )
+    assert all("🤖" not in name for name in bot_names)
+    assert all(name in BOT_DISPLAY_NAME_POOL for name in bot_names)
     for member, user in bot_members:
         assert user.is_bot is True
         assert member.bot_profile
         assert member.team in (1, 2)
     assert {user.id: user.first_name for user in users} == real_names
-    assert "🤖 🤖" not in render_party_card(party)
+    # Party cards show bot names without any robot emoji...
+    assert "🤖" not in render_party_card(party)
+    # ...while real players keep their 👤 line untouched.
+    for user in users:
+        assert f"👤 {user.first_name}" in render_party_card(party)
 
     counts = await PartyService._team_counts(db_session, party.id)
     assert counts[1] == party.team_size and counts[2] == party.team_size

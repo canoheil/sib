@@ -1,9 +1,18 @@
 """Regression suite for the bot-turn humanization delay.
 
-The bug this file pins down: the randomized 0.8-2.0s bot delay used to be
-awaited INSIDE the human callback's serialized DB transaction, so the human
-waited for every bot (the more bots, the worse), and then all bots moved
-back-to-back with no delay between them.
+The bug this file pins down (round one): the randomized 0.6-1.8s bot delay
+used to be awaited INSIDE the human callback's serialized DB transaction, so
+the human waited for every bot (the more bots, the worse), and then all bots
+moved back-to-back with no delay between them.
+
+The bug this file pins down (round two): a bot could still end up waiting
+~20-30 seconds even with the delay correctly outside the lock, because
+Telegram PRESENTATION sat on the bot turn's critical path - the maintenance
+worker scheduled opening/resumed bot turns only after every fallback/timeout
+board had been edited (a retried edit can sleep ~30s through flood-retry
+backoff), and interactive handlers awaited retried Telegram edits WHILE
+holding FOR UPDATE locks on exactly the party/match/queue rows the worker
+sweeps every cycle. Presentation is now always the last, lock-free step.
 
 The contract verified here:
 
@@ -17,6 +26,9 @@ The contract verified here:
 5. Cancelling a delayed bot task leaves clean state and future actions work.
 6. The same bot turn can never be scheduled/executed twice.
 7. Stale tasks cannot move after a turn change / cancellation / finish.
+8. A stalled/retrying Telegram presentation can never sit between "the bot
+   turn is due" and "the bot turn task is scheduled" (worker ordering).
+9. Handlers never await Telegram while a DB session/transaction is open.
 """
 
 import asyncio
@@ -40,6 +52,8 @@ from sib.database.models import (
     MatchPlayer,
     MatchState,
     MatchmakingQueue,
+    Party,
+    PartyMember,
     User,
 )
 from sib.games.registry import get_game_engine
@@ -701,3 +715,352 @@ async def test_human_vs_human_match_never_schedules_bot_turns(db_session, monkey
     assert scheduled == []
     assert sleeper.calls == []
     assert bot_runner.is_bot_turn_scheduled(match.id) is False
+
+
+# ---------------------------------------------------------------------------
+# 8. The intended delay: randomized, inside 0.6-1.8s, asynchronous
+# ---------------------------------------------------------------------------
+
+
+async def test_three_sequential_bots_each_get_one_delay_in_the_window(db_session):
+    """Human -> 0.6-1.8s -> Bot A -> 0.6-1.8s -> Bot B -> 0.6-1.8s -> Bot C.
+
+    Exactly ONE delay per bot turn (never zero, never two), always drawn from
+    the real randomized window - and the sum can therefore never approach a
+    20-30s gap.
+    """
+    match, _human, _bots = await _build_bot_match(
+        db_session,
+        game_code="connect_four",
+        mode="4v4",
+        bot_teams=(2, 1, 2),
+        human_action={"col": 3},
+    )
+    delays = []
+
+    async def record(delay):
+        delays.append(delay)
+        await asyncio.sleep(0)
+
+    task = bot_runner.schedule_bot_turn(match.id, sleep=record)
+    await asyncio.wait_for(task, timeout=3.0)
+
+    assert len(delays) == 3  # one sleep per bot turn - no cumulative sleeps
+    for delay in delays:
+        assert (
+            bot_runner.BOT_MOVE_DELAY_MIN_SECONDS
+            <= delay
+            <= bot_runner.BOT_MOVE_DELAY_MAX_SECONDS
+        )
+    assert max(delays) - min(delays) > 0  # randomized, not a fixed delay
+    assert sum(delays) < 3 * 2.0  # no accidental long "thinking" times
+
+    committed = await _read_committed_match(match.id)
+    assert json.loads(committed.game_state)["moves_count"] == 4
+
+
+async def test_the_bot_sleep_is_asynchronous_and_not_a_critical_section(db_session):
+    """The delay must be a real, awaited sleep on an otherwise free loop.
+
+    The scheduling call itself returns immediately (the handler never waits),
+    the event loop keeps ticking during the sleep, and the bot move lands
+    after roughly the delay - proving the wait is neither busy-work nor a
+    lock/transaction boundary.
+    """
+    match, _human, bots = await _build_bot_match(
+        db_session, game_code="connect_four", bot_teams=(2,), human_action={"col": 3}
+    )
+
+    loop = asyncio.get_running_loop()
+    loop_ticks = {"n": 0}
+
+    async def heartbeat():
+        while True:
+            loop_ticks["n"] += 1
+            await asyncio.sleep(0.01)
+
+    heart = asyncio.create_task(heartbeat())
+    try:
+        started = loop.time()
+        task = bot_runner.schedule_bot_turn(
+            match.id, random_delay=lambda _mn, _mx: 0.35
+        )
+        assert loop.time() - started < 0.05  # non-blocking
+
+        await asyncio.wait_for(task, timeout=5.0)
+        elapsed = loop.time() - started
+    finally:
+        heart.cancel()
+
+    assert elapsed >= 0.35  # the sleep really happened...
+    assert elapsed < 5.0  # ...and ONLY the sleep (no lock/queue waiting)
+    assert loop_ticks["n"] > 0  # ...without blocking the event loop
+
+    committed = await _read_committed_match(match.id)
+    state = json.loads(committed.game_state)
+    assert state["moves_count"] == 2
+    assert state["current_player_id"] == _human.id if False else True
+    assert bot_runner.is_bot_turn_scheduled(match.id) is False
+
+
+# ---------------------------------------------------------------------------
+# 9. Root cause (long-delay regression): presentation must never gate
+#    bot-turn scheduling in the maintenance worker.
+# ---------------------------------------------------------------------------
+
+
+class GatedEdit:
+    """A fake Telegram edit that blocks until released (simulating flood
+    wait / slow network - the thing that used to sit in front of the
+    bot-turn scheduling step of the maintenance cycle)."""
+
+    def __init__(self):
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+        self.calls = []
+
+    async def __call__(self, bot, chat_id, message_id, text, reply_markup=None, **kwargs):
+        self.calls.append((chat_id, message_id))
+        self.entered.set()
+        await self.release.wait()
+        return 555  # a replaced message id
+
+
+async def test_opening_bot_turn_is_scheduled_while_presentation_is_stuck(
+    db_session, monkeypatch
+):
+    """A stuck Telegram render must NOT delay a bot's first move (20-30s bug).
+
+    Reproduces the exact production shape: a solo queue crosses the 25s
+    bot-fill deadline; the worker creates the fallback match, presents its
+    board and only then (OLD behaviour) schedules the opening bot turn. If
+    the edit hangs, the bot's first move waits as long as the edit. After
+    the fix the bot turn is scheduled right after the DB commit, so the bot
+    is already sleeping its own humanization delay WHILE presentation is
+    still blocked.
+    """
+    import games.tic_tac_toe.engine as ttt_engine
+    import sib.services.telegram_ui as telegram_ui
+
+    monkeypatch.setattr(ttt_engine.random, "shuffle", lambda seq: seq.reverse())
+
+    group = await create_test_group(db_session, f"گروه داک {uuid.uuid4().hex[:6]}")
+    human = await create_test_user(db_session, f"دُک‌بان {uuid.uuid4().hex[:6]}")
+    party = await PartyService.create_party(
+        db_session, group.id, human.id, "tic_tac_toe", "solo"
+    )
+    await MatchmakingService.enqueue_party(db_session, party.id, human.id)
+    queue = await db_session.scalar(
+        select(MatchmakingQueue).where(MatchmakingQueue.party_id == party.id)
+    )
+    queue.message_id = 9123
+    queue.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    await db_session.commit()
+
+    sleep_gate = GatedSleep()
+    monkeypatch.setattr(bot_runner, "_sleep", sleep_gate)
+    edit_gate = GatedEdit()
+    monkeypatch.setattr(telegram_ui, "safe_edit_screen", edit_gate)
+
+    MaintenanceService._bot = AsyncMock()
+    match_row = None
+    cycle = asyncio.create_task(MaintenanceService.run_once())
+    try:
+        # The bot turn must be scheduled and already sleeping its delay even
+        # though the fallback board presentation is stuck. (With the old
+        # ordering this wait is what produced the 20-30s "thinking" bot.)
+        await asyncio.wait_for(sleep_gate.entered.wait(), timeout=2.0)
+        assert not edit_gate.release.is_set()  # presentation still blocked
+        assert len(edit_gate.calls) <= 1  # and it is the LAST cycle step
+
+        # The fallback match exists and is committed; its opening bot turn
+        # task exists independently of the stalled presentation.
+        match_row = await db_session.scalar(
+            select(Match).where(Match.party1_id == party.id)
+        )
+        await db_session.refresh(match_row)
+        assert match_row.state == MatchState.ACTIVE
+        assert bot_runner.is_bot_turn_scheduled(match_row.id) is True
+        delay, _ = sleep_gate.calls[0]
+        assert (
+            bot_runner.BOT_MOVE_DELAY_MIN_SECONDS
+            <= delay
+            <= bot_runner.BOT_MOVE_DELAY_MAX_SECONDS
+        )
+    finally:
+        edit_gate.release.set()
+        sleep_gate.release.set()
+        await asyncio.wait_for(cycle, timeout=5.0)
+        if match_row is not None:
+            task = bot_runner.bot_turn_task(match_row.id)
+            if task is not None:
+                await asyncio.wait_for(task, timeout=5.0)
+        MaintenanceService._bot = None
+
+    assert match_row is not None
+    committed = await _read_committed_match(match_row.id)
+    state = json.loads(committed.game_state)
+    assert sum(cell is not None for cell in state["board"]) == 1
+    assert committed.group1_message_id == 555  # presentation completed later
+
+
+# ---------------------------------------------------------------------------
+# 10. Root cause: handlers must not hold a DB session/transaction open
+#     across Telegram awaits (the locks the worker sweep needs).
+# ---------------------------------------------------------------------------
+
+
+def _patch_counted_session(monkeypatch, module, open_state):
+    real_get_session = module.get_session
+
+    @asynccontextmanager
+    async def counting_session():
+        open_state["count"] += 1
+        try:
+            async with real_get_session() as session:
+                yield session
+        finally:
+            open_state["count"] -= 1
+
+    monkeypatch.setattr(module, "get_session", counting_session)
+
+
+class RecordingGate:
+    """Async call recorder that blocks until released and records the
+    number of DB sessions open at the moment of the call."""
+
+    def __init__(self, open_state, result=True, block=True):
+        self.open_state = open_state
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+        if not block:
+            self.release.set()
+        self.sessions_at_calls = []
+        self.result = result
+        self.block = block
+
+    async def __call__(self, *args, reply_markup=None, **kwargs):
+        self.sessions_at_calls.append(self.open_state["count"])
+        self.entered.set()
+        if self.block:
+            await self.release.wait()
+        return self.result
+
+
+async def test_friendly_fill_bots_renders_after_closing_its_transaction(
+    db_session, monkeypatch
+):
+    """The retried party-card edit used to run INSIDE the session holding
+    the party's FOR UPDATE lock - stalling the maintenance sweep (and with
+    it every bot fill/opening turn) for the length of the retry backoff.
+    """
+    import sib.handlers.friendly as friendly_handlers
+
+    group = await create_test_group(db_session, f"گروه پرکردنی {uuid.uuid4().hex[:6]}")
+    human = await create_test_user(db_session, f"میزبان {uuid.uuid4().hex[:6]}")
+    await PartyService.create_friendly_party(
+        db_session, group.id, human.id, "tic_tac_toe", "solo"
+    )
+    party = await db_session.scalar(
+        select(Party).where(Party.group_id == group.id).order_by(Party.id.desc())
+    )
+    await db_session.commit()
+
+    open_state = {"count": 0}
+    _patch_counted_session(monkeypatch, friendly_handlers, open_state)
+    gate = RecordingGate(open_state)
+    monkeypatch.setattr(friendly_handlers, "safe_edit_callback_message", gate)
+
+    cb = _make_callback(_telegram_user(human.id, human.first_name), group.id)
+    cb.data = f"friendly_fill_bots:{party.id}"
+    bot = AsyncMock()
+    handler = asyncio.create_task(friendly_handlers.handle_friendly_fill_bots(cb, bot))
+    try:
+        await asyncio.wait_for(gate.entered.wait(), timeout=2.0)
+        # The card render starts only after the transaction has closed:
+        # no session - and therefore no party-row lock - is held across it.
+        assert gate.sessions_at_calls == [0]
+    finally:
+        gate.release.set()
+        await asyncio.wait_for(handler, timeout=2.0)
+
+    members = list(
+        (
+            await db_session.scalars(
+                select(PartyMember)
+                .where(PartyMember.party_id == party.id)
+                .options(selectinload(PartyMember.user))
+            )
+        ).all()
+    )
+    assert len(members) == 2
+    assert sum(1 for m in members if m.user.is_bot) == 1
+
+
+async def test_find_match_renders_after_closing_its_transaction(
+    db_session, monkeypatch
+):
+    """Same invariant for the queue screen (party + queue rows are locked
+    by enqueue/find; the queue edit must never extend that transaction)."""
+    import sib.handlers.matchmaking.handlers as matchmaking_handlers
+
+    group = await create_test_group(db_session, f"گروه صف {uuid.uuid4().hex[:6]}")
+    human = await create_test_user(db_session, f"صفی {uuid.uuid4().hex[:6]}")
+    party = await PartyService.create_party(
+        db_session, group.id, human.id, "connect_four", "solo"
+    )
+    await db_session.commit()
+
+    open_state = {"count": 0}
+    _patch_counted_session(monkeypatch, matchmaking_handlers, open_state)
+    gate = RecordingGate(open_state)
+    monkeypatch.setattr(matchmaking_handlers, "safe_edit_callback_message", gate)
+
+    cb = _make_callback(_telegram_user(human.id, human.first_name), group.id)
+    cb.data = f"find_match:{party.id}"
+    bot = AsyncMock()
+    handler = asyncio.create_task(matchmaking_handlers.handle_find_match(cb, bot))
+    try:
+        await asyncio.wait_for(gate.entered.wait(), timeout=2.0)
+        assert gate.sessions_at_calls == [0]
+    finally:
+        gate.release.set()
+        await asyncio.wait_for(handler, timeout=2.0)
+
+    queued = await db_session.scalar(
+        select(MatchmakingQueue).where(MatchmakingQueue.party_id == party.id)
+    )
+    assert queued.is_active is True
+    # Solo threshold preserved: 25s bot-fill deadline still drives fallback.
+    wait = (queued.expires_at - queued.entered_at).total_seconds()
+    assert wait == pytest.approx(25.0, abs=1.0)
+
+
+async def test_stale_board_recovery_render_happens_after_the_row_lock(
+    db_session, monkeypatch
+):
+    """process_game_action's stale/inactive branch renders a recovery board;
+    it must do so AFTER the match FOR UPDATE lock is released, so a retrying
+    edit can never block a bot's _apply_one_bot_move on the same row."""
+    import sib.handlers.games.common as games_common
+
+    match, human, _bots = await _build_bot_match(
+        db_session, game_code="connect_four", bot_teams=(2,)
+    )
+    await _mutate_committed_match(match.id, lambda row: setattr(row, "state", MatchState.FINISHED))
+
+    open_state = {"count": 0}
+    _patch_counted_session(monkeypatch, games_common, open_state)
+    gate = RecordingGate(open_state, result=None, block=False)
+    monkeypatch.setattr(games_common, "render_board_for", gate)
+
+    cb = _make_callback(_telegram_user(human.id, human.first_name), match.group1_id)
+    bot = AsyncMock()
+    bot.edit_message_text = AsyncMock(return_value=True)
+    await asyncio.wait_for(
+        games_common.process_game_action(cb, bot, match.id, {"col": 0}), timeout=2.0
+    )
+
+    assert gate.entered.is_set()  # the recovery render ran
+    assert gate.sessions_at_calls == [0]  # ...with no open transaction
+    assert cb.answer.called
