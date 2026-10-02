@@ -56,9 +56,18 @@ def _group_of_team(match, team):
 
 
 def _winning_state(engine, match, winner_user, loser_user):
+    """Create a winning state for High Card (best of 5, first to 3 wins)."""
     state = engine.create_initial_state(match.players, match.mode)
-    engine.apply_action(state, winner_user.id, {"rank": 14, "suit": "♠️"})
-    engine.apply_action(state, loser_user.id, {"rank": 2, "suit": "♥️"})
+
+    # Play 3 rounds where winner_user wins each
+    for _ in range(3):
+        # Winner draws Ace, loser draws 2
+        engine.apply_action(state, winner_user.id, {"draw": True, "rank": 14, "suit": "♠️"})
+        engine.apply_action(state, loser_user.id, {"draw": True, "rank": 2, "suit": "♥️"})
+        # Both keep their cards
+        engine.apply_action(state, winner_user.id, {"choice": "keep"})
+        engine.apply_action(state, loser_user.id, {"choice": "keep"})
+
     return state
 
 
