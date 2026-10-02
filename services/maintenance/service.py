@@ -105,7 +105,13 @@ class MaintenanceService:
                         ),
                         None,
                     )
-                    bot_name = solo_bot.user.display_name if solo_bot else "حریف سیبی"
+                    from sib.services.bot import strip_bot_display_prefix
+
+                    bot_name = (
+                        strip_bot_display_prefix(solo_bot.user.display_name)
+                        if solo_bot
+                        else "حریف سیبی"
+                    )
                     notice = (
                         "حریفی پیدا نشد.\n\n"
                         f"برای اینکه بیشتر منتظر نمونی، این بار با «{bot_name}» بازی می‌کنی 🍏"
@@ -157,6 +163,12 @@ class MaintenanceService:
         idempotent. It covers tasks lost to a restart and mirrors the
         self-healing contract of the board sync: an active bot match can never
         sit forever on an idle bot's turn.
+
+        This must run directly after the committed DB phase - NEVER behind
+        Telegram presentation. The opening bot turn of a freshly created
+        fallback match is scheduled here, and a retried board edit (which can
+        sleep for seconds) must not delay it; the presentation then simply
+        renders whatever the authoritative state says at that moment.
         """
         from sqlalchemy import select
         from sib.database.models import Match, MatchState
@@ -179,7 +191,14 @@ class MaintenanceService:
 
     @classmethod
     async def run_once(cls) -> None:
-        """Run one maintenance cycle, then publish any committed fallbacks."""
+        """Run one maintenance cycle, then publish any committed fallbacks.
+
+        Ordering is part of the bot-turn contract: every DB work of the
+        cycle is committed first, bot turns are scheduled IMMEDIATELY after
+        the commit, and only then does best-effort Telegram presentation
+        run. Presentation awaits (edit retries with flood-wait sleeps) can
+        therefore never delay the opening/resumed bot turn of a bot match.
+        """
         resolved_ids: list = []
         fallbacks: list[dict] = []
         async with get_session() as session:
@@ -195,7 +214,17 @@ class MaintenanceService:
             except Exception:
                 await session.rollback()
                 fallbacks.clear()
+                resolved_ids = []
                 logger.exception("Maintenance cycle failed")
+
+        # Committed bot matches whose bot turn needs a task (a fallback match
+        # that just started, or a task lost to a restart) are scheduled here -
+        # BEFORE any presentation - so a slow or retrying Telegram edit can
+        # never sit between "match is playable" and "bot turn task exists".
+        try:
+            await cls._resume_pending_bot_turns(cls._bot)
+        except Exception:
+            logger.exception("Could not resume pending bot turns")
 
         if fallbacks:
             try:
@@ -204,13 +233,6 @@ class MaintenanceService:
                 logger.exception("Could not render bot fallback match screen")
         if resolved_ids and cls._bot is not None:
             await cls._sync_resolved_matches(resolved_ids)
-
-        # Committed bot matches whose bot turn lost its task (e.g. a restart)
-        # are resumed here, after their boards were presented.
-        try:
-            await cls._resume_pending_bot_turns(cls._bot)
-        except Exception:
-            logger.exception("Could not resume pending bot turns")
 
     @classmethod
     async def _sync_resolved_matches(cls, resolved_ids: list) -> None:

@@ -47,7 +47,8 @@ async def test_solo_privacy_rendering(db_session):
 
 
 def test_solo_bot_match_rendering_uses_the_assigned_display_name():
-    bot_name = "🤖 سیب تندوتیز"
+    # A LEGACY stored bot row (created while the "🤖 " prefix existed) must
+    # still render without the robot emoji; the Apple name stays intact.
     match = SimpleNamespace(
         mode="solo",
         game=SimpleNamespace(name_fa="چهار در یک خط"),
@@ -57,16 +58,52 @@ def test_solo_bot_match_rendering_uses_the_assigned_display_name():
         group2=None,
         is_bot_match=True,
         players=[
-            SimpleNamespace(team=1, user=SimpleNamespace(display_name="بازیکن واقعی")),
-            SimpleNamespace(team=2, user=SimpleNamespace(display_name=bot_name)),
+            SimpleNamespace(
+                team=1,
+                user=SimpleNamespace(display_name="بازیکن واقعی", is_bot=False),
+            ),
+            SimpleNamespace(
+                team=2,
+                user=SimpleNamespace(display_name="🤖 سیب تندوتیز", is_bot=True),
+            ),
         ],
     )
 
     rendered = render_match_found_for_group(match, -1001)
 
-    assert bot_name in rendered
-    assert "بازی با «🤖 سیب تندوتیز» خودکار شروع می‌شه." in rendered
+    assert "🤖" not in rendered
+    assert "بازی با «سیب تندوتیز» خودکار شروع می‌شه." in rendered
+    # Real player names are never touched by the bot-name normalization.
+    assert "👤 **شما:** بازیکن واقعی" in rendered
     assert "بازی با سیب کوچولو" not in rendered
+
+
+def test_solo_real_opponent_match_rendering_is_unchanged():
+    match = SimpleNamespace(
+        mode="solo",
+        game=SimpleNamespace(name_fa="چهار در یک خط"),
+        group1_id=-1001,
+        group2_id=-1002,
+        group1=None,
+        group2=None,
+        is_bot_match=False,
+        players=[
+            SimpleNamespace(
+                team=1,
+                user=SimpleNamespace(display_name="🤖ِ علی", is_bot=False),
+            ),
+            SimpleNamespace(
+                team=2,
+                user=SimpleNamespace(display_name="سارا", is_bot=False),
+            ),
+        ],
+    )
+
+    rendered = render_match_found_for_group(match, -1001)
+
+    # A human whose own name happens to start with a robot emoji is a real
+    # player name and must be displayed exactly as it is.
+    assert "🤖ِ علی" in rendered
 
 
 @pytest.mark.asyncio

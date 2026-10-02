@@ -21,7 +21,14 @@ def render_match_found_for_group(match: Match, for_group_id: int) -> str:
     if match.mode == "solo":
         # Keep real-player group names and numeric identifiers private.
         opp_player = opp_players[0] if opp_players else None
-        opp_name = opp_player.user.display_name if opp_player and opp_player.user else "حریف"
+        opp_user = opp_player.user if opp_player else None
+        if opp_user is not None and getattr(opp_user, "is_bot", False):
+            # Bots are displayed by their clean Apple name (no legacy "🤖 ").
+            from sib.services.bot import strip_bot_display_prefix
+
+            opp_name = strip_bot_display_prefix(opp_user.display_name)
+        else:
+            opp_name = opp_user.display_name if opp_user else "حریف"
         my_player = my_players[0] if my_players else None
         my_name = my_player.user.display_name if my_player and my_player.user else "شما"
         next_step = (
@@ -46,12 +53,18 @@ def render_match_found_for_group(match: Match, for_group_id: int) -> str:
     )
     my_wins = my_group.stats.wins if my_group and my_group.stats else 0
     opp_wins = opp_group.stats.wins if opp_group and opp_group.stats else 0
-    my_roster = "\n".join(
-        f"  • {p.user.display_name}" for p in my_players if p.user
-    )
-    opp_roster = "\n".join(
-        f"  • {p.user.display_name}" for p in opp_players if p.user
-    )
+
+    def roster_name(player) -> str:
+        """Display name with the legacy bot "🤖 " prefix removed for bots."""
+        from sib.services.bot import strip_bot_display_prefix
+
+        user = player.user
+        if user is not None and getattr(user, "is_bot", False):
+            return strip_bot_display_prefix(user.display_name)
+        return user.display_name
+
+    my_roster = "\n".join(f"  • {roster_name(p)}" for p in my_players if p.user)
+    opp_roster = "\n".join(f"  • {roster_name(p)}" for p in opp_players if p.user)
     if match.is_bot_match:
         footer = "🤖 بازی شروع شده و نتیجه‌اش روی رتبه‌ی رقابتی اثر نمی‌ذاره."
     else:

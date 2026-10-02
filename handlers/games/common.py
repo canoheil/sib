@@ -211,9 +211,17 @@ async def process_game_action(
 
     # ------------------------------------------------------------------
     # Phase A: authoritative state transition (pure DB work, no UI).
+    #
+    # Invariant: this transaction locks the match row (FOR UPDATE), so the
+    # block must contain NO Telegram await at all - every acknowledgement and
+    # every board render (error paths included) happens AFTER Phase A has
+    # committed. A render held under the row lock would make a bot's
+    # ``_apply_one_bot_move`` wait for the whole presentation - flood-retry
+    # sleeps included (up to ~30s).
     # ------------------------------------------------------------------
     selected_ad: Optional[AdCampaign] = None
     render_payload: Optional[Dict[str, Any]] = None
+    early_exit: Optional[Dict[str, Any]] = None
 
     async with get_session() as session:
         # Fetch match with lock
@@ -231,115 +239,172 @@ async def process_game_action(
         )
         match = await session.scalar(match_stmt)
         if not match:
+            early_exit = {"kind": "not_found", "match": None, "state": None}
+        elif match.state != MatchState.ACTIVE:
+            # Self-heal: the visible keyboard is stale (e.g. the match was
+            # resolved by a turn timeout in the background). The recovery
+            # render happens below - after this row lock is released.
+            early_exit = {
+                "kind": "inactive",
+                "match": match,
+                "state": (
+                    json.loads(match.game_state) if match.game_state else None
+                ),
+            }
+
+        if early_exit is None:
+            engine = get_game_engine(match.game.code)
+
+            # Deserialize or initialize game state
+            if not match.game_state:
+                state = engine.create_initial_state(match.players, match.mode)
+            else:
+                state = json.loads(match.game_state)
+
+            # Validate action
+            is_valid, reason = engine.validate_action(state, user.id, action)
+            if not is_valid:
+                # Self-heal: whatever the rejection (stale keyboard, wrong
+                # player, repeated cell), the viewer immediately receives the
+                # LATEST authoritative board - manual refresh is never
+                # required. The render runs below, after the row lock is
+                # released.
+                early_exit = {
+                    "kind": "invalid",
+                    "reason": reason,
+                    "match": match,
+                    "state": state,
+                }
+            else:
+                # Apply action
+                state = engine.apply_action(state, user.id, action)
+
+                match.game_state = json.dumps(state, ensure_ascii=False)
+
+                # Keep Match timeout metadata synchronized with the game
+                # engine state.
+                GameBotService.sync_turn_metadata(match, state, engine)
+
+                log_event(
+                    Events.MOVE_PLAYED,
+                    {
+                        "match_id": match.id,
+                        "user_id": user.id,
+                        "action": action,
+                        "game": match.game.code,
+                    },
+                )
+
+                finished = engine.is_finished(state)
+                result = None
+                if finished:
+                    result = engine.get_result(state)
+                    # Apply the result (idempotent) BEFORE committing.
+                    await MatchResultService.apply_match_result(session, match, result)
+
+                    # Fetch eligible post-match ad safely (never affects the
+                    # match result if it fails) - DB-only work.
+                    try:
+                        match_num = 1
+                        if match.group1 and match.group1.stats:
+                            match_num = match.group1.stats.matches_played
+
+                        selected_ad = await AdService.get_eligible_ad(
+                            session,
+                            game_id=match.game_id,
+                            group_id=match.group1_id,
+                            match_number=match_num,
+                        )
+                        if selected_ad:
+                            await AdService.record_impression(
+                                session, selected_ad.id, match_id=match.id
+                            )
+                    except Exception as ad_err:
+                        logger.warning(
+                            f"Non-fatal error delivering post-match ad: {ad_err}"
+                        )
+                        selected_ad = None
+
+                # Commit the authoritative state before touching Telegram.
+                # From this point on, presentation failures cannot affect the
+                # result - and the match row lock no longer exists while the
+                # board is rendered or a bot turn task runs.
+                await session.commit()
+
+                # Snapshot everything the presentation layer needs.
+                render_payload = {
+                    "finished": finished,
+                    "state": state,
+                    "match_id": match.id,
+                    "is_friendly": is_friendly(match),
+                    "is_draw": match.is_draw,
+                    "winner_team": match.winner_team,
+                    "match_type": match.match_type,
+                    "is_bot_match": match.is_bot_match,
+                    "group1_id": match.group1_id,
+                    "group2_id": match.group2_id,
+                    "group1_message_id": match.group1_message_id,
+                    "group2_message_id": match.group2_message_id,
+                    "group1_wins": (
+                        match.group1.stats.wins
+                        if match.group1 and match.group1.stats
+                        else 0
+                    ),
+                    "group2_wins": (
+                        match.group2.stats.wins
+                        if match.group2 and match.group2.stats
+                        else 0
+                    ),
+                    "game_id": match.game_id,
+                    "game_code": match.game.code,
+                    "players": [(p.user_id, p.group_id) for p in match.players],
+                }
+
+        if early_exit is not None:
+            # Nothing was written on the error paths. Commit the read-only
+            # transaction (NOT rollback - rollback would expire the loaded
+            # match and its eager-loaded relations, which the recovery render
+            # below must still read): the FOR UPDATE lock is released before
+            # any presentation await.
+            await session.commit()
+
+    if early_exit is not None:
+        if early_exit["kind"] == "not_found":
             await safe_answer_callback(callback, "مسابقه پیدا نشد 🍏", show_alert=True)
             return
-
-        if match.state != MatchState.ACTIVE:
-            # Self-heal: the visible keyboard is stale (e.g. the match was
-            # resolved by a turn timeout in the background). Reload the
-            # authoritative state and render the true final board.
+        if early_exit["kind"] == "invalid":
             await safe_answer_callback(
                 callback,
-                "این مسابقه دیگر در جریان نیست؛ آخرین وضعیت بازی بارگذاری شد. 🍏",
-                show_alert=True,
-            )
-            if match.game_state:
-                try:
-                    state = json.loads(match.game_state)
-                    await render_board_for(
-                        callback, bot, match, state, user.id, final=True
-                    )
-                except Exception as render_err:
-                    logger.warning(f"Stale-board recovery render failed: {render_err}")
-            return
-
-        engine = get_game_engine(match.game.code)
-
-        # Deserialize or initialize game state
-        if not match.game_state:
-            state = engine.create_initial_state(match.players, match.mode)
-        else:
-            state = json.loads(match.game_state)
-
-        # Validate action
-        is_valid, reason = engine.validate_action(state, user.id, action)
-        if not is_valid:
-            # Self-heal: whatever the rejection (stale keyboard, wrong
-            # player, repeated cell), the viewer immediately receives the
-            # LATEST authoritative board - manual refresh is never required.
-            await safe_answer_callback(
-                callback,
-                (reason or "حرکت نامعتبر است 🍏") + "\nآخرین وضعیت بازی بارگذاری شد.",
+                (early_exit["reason"] or "حرکت نامعتبر است 🍏")
+                + "\nآخرین وضعیت بازی بارگذاری شد.",
                 show_alert=True,
             )
             try:
-                await render_board_for(callback, bot, match, state, user.id)
+                await render_board_for(
+                    callback, bot, early_exit["match"], early_exit["state"], user.id
+                )
             except Exception as render_err:
                 logger.warning(f"Rejected-action recovery render failed: {render_err}")
             return
-
-        # Apply action
-        state = engine.apply_action(state, user.id, action)
-
-        match.game_state = json.dumps(state, ensure_ascii=False)
-
-        # Keep Match timeout metadata synchronized with the game engine state.
-        GameBotService.sync_turn_metadata(match, state, engine)
-
-        log_event(
-            Events.MOVE_PLAYED,
-            {"match_id": match.id, "user_id": user.id, "action": action, "game": match.game.code},
+        # Inactive/stale board: answer, then render the true final board.
+        await safe_answer_callback(
+            callback,
+            "این مسابقه دیگر در جریان نیست؛ آخرین وضعیت بازی بارگذاری شد. 🍏",
+            show_alert=True,
         )
-
-        finished = engine.is_finished(state)
-        result = None
-        if finished:
-            result = engine.get_result(state)
-            # Apply the result (idempotent) BEFORE committing.
-            await MatchResultService.apply_match_result(session, match, result)
-
-            # Fetch eligible post-match ad safely (never affects match result if fails)
+        if early_exit["state"] is not None:
             try:
-                match_num = 1
-                if match.group1 and match.group1.stats:
-                    match_num = match.group1.stats.matches_played
-
-                selected_ad = await AdService.get_eligible_ad(
-                    session,
-                    game_id=match.game_id,
-                    group_id=match.group1_id,
-                    match_number=match_num,
+                await render_board_for(
+                    callback,
+                    bot,
+                    early_exit["match"],
+                    early_exit["state"],
+                    user.id,
+                    final=True,
                 )
-                if selected_ad:
-                    await AdService.record_impression(session, selected_ad.id, match_id=match.id)
-            except Exception as ad_err:
-                logger.warning(f"Non-fatal error delivering post-match ad: {ad_err}")
-                selected_ad = None
-
-        # Commit the authoritative state before touching Telegram. From
-        # this point on, presentation failures cannot affect the result.
-        await session.commit()
-
-        # Snapshot everything the presentation layer needs.
-        render_payload = {
-            "finished": finished,
-            "state": state,
-            "match_id": match.id,
-            "is_friendly": is_friendly(match),
-            "is_draw": match.is_draw,
-            "winner_team": match.winner_team,
-            "match_type": match.match_type,
-            "is_bot_match": match.is_bot_match,
-            "group1_id": match.group1_id,
-            "group2_id": match.group2_id,
-            "group1_message_id": match.group1_message_id,
-            "group2_message_id": match.group2_message_id,
-            "group1_wins": match.group1.stats.wins if match.group1 and match.group1.stats else 0,
-            "group2_wins": match.group2.stats.wins if match.group2 and match.group2.stats else 0,
-            "game_id": match.game_id,
-            "game_code": match.game.code,
-            "players": [(p.user_id, p.group_id) for p in match.players],
-        }
+            except Exception as render_err:
+                logger.warning(f"Stale-board recovery render failed: {render_err}")
+        return
 
     # ------------------------------------------------------------------
     # Phase B: presentation (best effort, never authoritative).

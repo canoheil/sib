@@ -16,11 +16,17 @@ from sib.tests.test_parties import create_test_user, create_test_group
 
 
 @pytest.mark.asyncio
-async def test_non_existent_match_callback():
-    """Clicking button for a non-existent match ID gracefully returns error alert."""
+async def test_non_existent_match_callback(db_session):
+    """Clicking button for a non-existent match ID gracefully returns error alert.
+
+    Runs against the isolated test DB (db_session): the handler opens a real
+    session for the missing match and must answer the alert AFTER that
+    transaction has closed (error paths never await Telegram under a lock).
+    """
     mock_cb = MagicMock(spec=CallbackQuery)
     mock_cb.data = "rps_action:99999999:rock"
     mock_cb.from_user = TelegramUser(id=123, is_bot=False, first_name="Stranger")
+    mock_cb.message = None
     mock_cb.answer = AsyncMock()
 
     mock_bot = AsyncMock()

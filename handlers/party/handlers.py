@@ -216,7 +216,12 @@ async def handle_select_mode(callback: CallbackQuery, bot: Optional[Bot] = None)
 
 @router.callback_query(F.data.startswith("create_party:"))
 async def handle_create_party(callback: CallbackQuery, bot: Optional[Bot] = None):
-    """Create a new party for the chosen game and mode."""
+    """Create a new party for the chosen game and mode.
+
+    DB work (user lock + party creation) commits BEFORE any Telegram await:
+    a card render with flood-retry sleeps must never extend the session that
+    holds the user/party row locks the maintenance worker needs.
+    """
     parts = callback.data.split(":")
     game_code = parts[1]
     mode = parts[2]
@@ -227,6 +232,9 @@ async def handle_create_party(callback: CallbackQuery, bot: Optional[Bot] = None
     if not user or not chat:
         return
 
+    error_message: Optional[str] = None
+    text: Optional[str] = None
+    kb = None
     async with get_session() as session:
         await UserService.get_or_create_user(session, user)
         await GroupService.get_or_create_group(session, chat)
@@ -239,22 +247,24 @@ async def handle_create_party(callback: CallbackQuery, bot: Optional[Bot] = None
                 game_code=game_code,
                 mode=mode,
             )
-        except ActiveSessionExistsException as e:
-            await callback.answer(e.message, show_alert=True)
-            return
-        except InvalidActionException as e:
-            await callback.answer(e.message, show_alert=True)
-            return
+        except (ActiveSessionExistsException, InvalidActionException) as e:
+            await session.rollback()
+            error_message = e.message
+            party = None
+        if error_message is None:
+            text = render_party_card(party)
+            kb = get_party_action_keyboard(party, is_member=True, is_host=True)
 
-        text = render_party_card(party)
-        kb = get_party_action_keyboard(party, is_member=True, is_host=True)
+    if error_message is not None:
+        await callback.answer(error_message, show_alert=True)
+        return
 
-        # The party card stays claimed to its CREATOR (cancel is a
-        # creator-right). Joins/views are public and pass the shared
-        # two-tier gate without any ownership (spec #6).
-        await callback.answer("پارتی با موفقیت ایجاد شد! 🍏")
-        if callback.message:
-            await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
+    # The party card stays claimed to its CREATOR (cancel is a
+    # creator-right). Joins/views are public and pass the shared
+    # two-tier gate without any ownership (spec #6).
+    await callback.answer("پارتی با موفقیت ایجاد شد! 🍏")
+    if callback.message:
+        await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
 
 @router.callback_query(F.data.startswith("view_party:"))
@@ -301,23 +311,33 @@ async def handle_join_party(callback: CallbackQuery, bot: Optional[Bot] = None):
     if not user:
         return
 
+    error_message: Optional[str] = None
+    text: Optional[str] = None
+    kb = None
     async with get_session() as session:
         await UserService.get_or_create_user(session, user)
 
         try:
             party = await PartyService.join_party(session, party_id, user.id, team=team)
         except (ActiveSessionExistsException, PartyFullException, PartyNotFoundException, InvalidActionException) as e:
-            await callback.answer(e.message, show_alert=True)
-            return
+            await session.rollback()
+            error_message = e.message
+            party = None
+        if error_message is None:
+            # Joining FOR UPDATE-locks the user and the party row; the card
+            # is built here but rendered only after the transaction commits.
+            text = render_party_card(party)
+            kb = get_party_action_keyboard(
+                party, is_member=True, is_host=party.creator_user_id == user.id
+            )
 
-        text = render_party_card(party)
-        kb = get_party_action_keyboard(
-            party, is_member=True, is_host=party.creator_user_id == user.id
-        )
+    if error_message is not None:
+        await callback.answer(error_message, show_alert=True)
+        return
 
-        await callback.answer("به پارتی اضافه شدی! 🍏✨")
-        if callback.message:
-            await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
+    await callback.answer("به پارتی اضافه شدی! 🍏✨")
+    if callback.message:
+        await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
 
 
@@ -381,22 +401,34 @@ async def handle_leave_party(callback: CallbackQuery, bot: Optional[Bot] = None)
     if not user:
         return
 
+    error_message: Optional[str] = None
+    was_cancelled = False
+    text: Optional[str] = None
+    kb = None
     async with get_session() as session:
         try:
             party, was_cancelled = await PartyService.leave_party(session, party_id, user.id)
         except (PartyNotFoundException, InvalidActionException) as e:
-            await callback.answer(e.message, show_alert=True)
-            return
-
-        if was_cancelled:
-            await callback.answer("شما خارج شدید و چون کسی نمانده بود، پارتی لغو شد 🍏")
-            await _cancel_and_restore_menu(callback, "❌ **این پارتی لغو شد.**", bot)
-        else:
-            await callback.answer("از پارتی خارج شدی 🍏")
+            await session.rollback()
+            error_message = e.message
+            party = None
+        if error_message is None and not was_cancelled:
             text = render_party_card(party)
             kb = get_party_action_keyboard(party, is_member=False)
-            if callback.message:
-                await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
+
+    # Leaving locks the party row; every confirmation / menu restore (which
+    # includes its own delay + renders) waits for the commit first.
+    if error_message is not None:
+        await callback.answer(error_message, show_alert=True)
+        return
+
+    if was_cancelled:
+        await callback.answer("شما خارج شدید و چون کسی نمانده بود، پارتی لغو شد 🍏")
+        await _cancel_and_restore_menu(callback, "❌ **این پارتی لغو شد.**", bot)
+    else:
+        await callback.answer("از پارتی خارج شدی 🍏")
+        if callback.message:
+            await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
 
 @router.callback_query(F.data.startswith("cancel_party:"))
@@ -408,17 +440,22 @@ async def handle_cancel_party(callback: CallbackQuery, bot: Optional[Bot] = None
     if not user:
         return
 
+    error_message: Optional[str] = None
     async with get_session() as session:
         try:
             await PartyService.cancel_party(session, party_id, user.id)
         except (PartyNotFoundException, InvalidActionException) as e:
-            await callback.answer(e.message, show_alert=True)
-            return
+            await session.rollback()
+            error_message = e.message
 
-        await callback.answer("پارتی لغو شد 🍏")
-        await _cancel_and_restore_menu(
-            callback, "❌ **این پارتی توسط کاربر لغو گردید.**", bot
-        )
+    if error_message is not None:
+        await callback.answer(error_message, show_alert=True)
+        return
+
+    await callback.answer("پارتی لغو شد 🍏")
+    await _cancel_and_restore_menu(
+        callback, "❌ **این پارتی توسط کاربر لغو گردید.**", bot
+    )
 
 
 @router.callback_query(F.data == "close_panel")
