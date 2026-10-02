@@ -57,12 +57,13 @@ def edit_text(call) -> str:
 def radar_markers(text: str) -> int:
     """Count shot markers inside the radar block only (not the event line).
 
-    Visual language: ░ unselected, 🟦 shot water, 💥 hit, 🔥 sunk.
+    Visual language: · empty, 🌊 miss, 💥 hit, 🔥 sunk.
+    Grid lines start with row numbers 1-8 followed by space-separated cells.
     """
     total = 0
     for line in text.splitlines():
-        if line and all(ch in "░🟦💥🔥" for ch in line):
-            total += line.count("🟦") + line.count("💥") + line.count("🔥")
+        if line and line[0] in "12345678" and " " in line:
+            total += line.count("🌊") + line.count("💥") + line.count("🔥")
     return total
 
 
