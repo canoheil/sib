@@ -13,7 +13,7 @@ Group progression is win-based:
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sib.core.logging import logger, log_event, Events
@@ -66,20 +66,35 @@ class MatchResultService:
         # and NO seedlings - their reward is the Apple payout below.
         friendly = match.match_type == MatchType.FRIENDLY
 
+        if "players" in match.__dict__:
+            players = list(match.players)
+        elif match.id is not None:
+            players = list(
+                (
+                    await session.scalars(
+                        select(MatchPlayer).where(
+                            MatchPlayer.match_id == match.id
+                        )
+                    )
+                ).all()
+            )
+        else:
+            players = []
+
         bot_ids = set()
-        if match.is_bot_match or friendly:
+        if (match.is_bot_match or friendly) and players:
             bot_ids = set(
                 (
                     await session.scalars(
                         select(User.id).where(
-                            User.id.in_([p.user_id for p in match.players]),
+                            User.id.in_([p.user_id for p in players]),
                             User.is_bot == True,
                         )
                     )
                 ).all()
             )
 
-        for p in match.players:
+        for p in players:
             is_bot_player = p.user_id in bot_ids
             # Bot entities keep a match result, but only human participants
             # get an aggregate profile record.
@@ -173,6 +188,19 @@ class MatchResultService:
                 f"Invalid game result: winner_team={result.winner_team}, "
                 f"is_draw={result.is_draw}"
             )
+
+        if match.id is not None:
+            cas = await session.execute(
+                update(Match)
+                .where(Match.id == match.id, Match.result_applied == False)  # noqa: E712
+                .values(result_applied=True)
+            )
+            if cas.rowcount == 0:
+                await session.refresh(match)
+                logger.warning(
+                    f"Result already applied concurrently for match_id={match.id}. Skipping duplicate update."
+                )
+                return match
 
         # 3. Individual player statistics always recorded.
         await cls._record_player_results(session, match, result)

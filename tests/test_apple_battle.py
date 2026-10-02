@@ -782,3 +782,625 @@ async def test_narration_loop_edits_both_messages_and_finalizes(db_session):
     # The precomputed winner never changed.
     final_state = json.loads(match.game_state)
     assert final_state["battle"]["winner_id"] == winner_id
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 — Apple Battle Integrity Regression Suite
+# ---------------------------------------------------------------------------
+
+from datetime import datetime, timedelta, timezone
+from sib.games.apple_battle.engine import AppleBattleEngine
+
+
+async def _setup_active_apple_battle(
+    db_session,
+    suffix: str,
+    *,
+    cursor: int = 1,
+    level1: int = 1,
+    level2: int = 1,
+    is_bot_match: bool = False,
+    expired_deadline: bool = True,
+):
+    from sib.database.models import Game
+    from sib.services.group import GroupService
+
+    class _Chat:
+        def __init__(self, cid, title):
+            self.id = cid
+            self.title = title
+            self.type = "supergroup"
+            self.username = None
+
+    base_chat = -(abs(hash(suffix)) % 900_000 + 100_000)
+    await GroupService.get_or_create_group(
+        db_session, _Chat(base_chat, f"گروه اول {suffix}")
+    )
+    await GroupService.get_or_create_group(
+        db_session, _Chat(base_chat - 1, f"گروه دوم {suffix}")
+    )
+
+    u1 = await create_test_user(db_session, f"بازیکن اول {suffix}")
+    u2 = await create_test_user(db_session, f"بازیکن دوم {suffix}")
+    if is_bot_match:
+        u2.is_bot = True
+        await db_session.flush()
+
+    c1 = await _card(db_session, u1, f"char1_{suffix}")
+    c2 = await _card(db_session, u2, f"char2_{suffix}")
+    c1.level = level1
+    c2.level = level2
+    await db_session.flush()
+
+    await AppleBattleService.enqueue(db_session, u1.id, c1.id)
+    await AppleBattleService.enqueue(db_session, u2.id, c2.id)
+
+    game = await db_session.scalar(select(Game).where(Game.code == "apple_battle"))
+    match = await _make_match(
+        db_session,
+        game,
+        type("G", (), {"id": base_chat})(),
+        type("G", (), {"id": base_chat - 1})(),
+        u1,
+        u2,
+    )
+    match.is_bot_match = is_bot_match
+    await db_session.flush()
+
+    match = await _reload_match(db_session, match.id)
+    state = await AppleBattleService.build_match_state(db_session, match)
+    state["cursor"] = cursor
+    match.game_state = json.dumps(state, ensure_ascii=False)
+    match.state = MatchState.ACTIVE
+    match.turn_deadline = (
+        datetime.now(timezone.utc) - timedelta(minutes=15)
+        if expired_deadline
+        else datetime.now(timezone.utc) + timedelta(minutes=10)
+    )
+    await db_session.commit()
+    return match, state, u1, u2, c1, c2
+
+
+@pytest.mark.asyncio
+async def test_recovery_persisted_result_stage_0_resumes_and_preserves_winner(db_session):
+    """Recovery test: persisted result + stage 0 resumes narration and never draws."""
+    from sib.services.recovery.service import RecoveryService
+
+    match, state, u1, u2, _c1, _c2 = await _setup_active_apple_battle(
+        db_session, "rec_stage0", cursor=0, expired_deadline=True
+    )
+    persisted_winner = state["battle"]["winner_id"]
+    persisted_seed = state["battle"]["seed"]
+    match_id = match.id
+
+    stats = await RecoveryService.recover_on_startup(db_session)
+    assert stats["resumed_apple_battles"] == 1
+    assert stats["expired_abandoned_matches"] == 0
+    assert AppleBattleService.is_narration_scheduled(match_id) is True
+
+    # Cancel the default 3s task so we can drive narration deterministically at 0s.
+    await AppleBattleService.cancel_narration(match_id)
+
+    await db_session.refresh(match)
+    assert match.state == MatchState.ACTIVE
+    assert match.is_draw is False
+    recovered_state = json.loads(match.game_state)
+    assert recovered_state["cursor"] == 0
+    assert recovered_state["battle"]["winner_id"] == persisted_winner
+    assert recovered_state["battle"]["seed"] == persisted_seed
+
+    await AppleBattleService.run_narration(None, match_id, beat_delay=0.0)
+    await db_session.rollback()
+
+    match = await _reload_match(db_session, match_id)
+    assert match.state == MatchState.FINISHED
+    assert match.result_applied is True
+    assert match.is_draw is False
+    final_state = json.loads(match.game_state)
+    assert final_state["battle"]["winner_id"] == persisted_winner
+    assert await SeedlingService.get_total(db_session, persisted_winner) == 1
+    assert await AppleWalletService.get_balance(db_session, persisted_winner) == 5
+
+
+@pytest.mark.asyncio
+async def test_recovery_persisted_result_middle_stage_resumes_from_cursor(db_session):
+    """Recovery test: persisted result + middle stage (cursor=2) resumes without resetting."""
+    from sib.services.recovery.service import RecoveryService
+
+    match, state, u1, u2, _c1, _c2 = await _setup_active_apple_battle(
+        db_session, "rec_mid", cursor=2, expired_deadline=True
+    )
+    persisted_winner = state["battle"]["winner_id"]
+    persisted_seed = state["battle"]["seed"]
+    match_id = match.id
+
+    stats = await RecoveryService.recover_on_startup(db_session)
+    assert stats["resumed_apple_battles"] == 1
+    assert AppleBattleService.is_narration_scheduled(match_id) is True
+
+    # Idempotent second recovery call while active does not reset cursor or duplicate rows.
+    stats_second = await RecoveryService.recover_on_startup(db_session)
+    assert stats_second["resumed_apple_battles"] == 1
+
+    await AppleBattleService.cancel_narration(match_id)
+
+    await db_session.refresh(match)
+    recovered_state = json.loads(match.game_state)
+    assert recovered_state["cursor"] == 2
+    assert recovered_state["battle"]["winner_id"] == persisted_winner
+    assert recovered_state["battle"]["seed"] == persisted_seed
+
+    battles = list(
+        (
+            await db_session.scalars(
+                select(AppleBattle).where(AppleBattle.match_id == match_id)
+            )
+        ).all()
+    )
+    assert len(battles) == 1
+
+    await AppleBattleService.run_narration(None, match_id, beat_delay=0.0)
+    await db_session.rollback()
+
+    match = await _reload_match(db_session, match_id)
+    assert match.state == MatchState.FINISHED
+    assert match.result_applied is True
+    assert match.is_draw is False
+    assert json.loads(match.game_state)["battle"]["winner_id"] == persisted_winner
+    assert await SeedlingService.get_total(db_session, persisted_winner) == 1
+    assert await AppleWalletService.get_balance(db_session, persisted_winner) == 5
+
+
+@pytest.mark.asyncio
+async def test_recovery_persisted_result_final_stage_pending_finalizes_immediately(db_session):
+    """Recovery test: persisted result + final stage pending finalizes settlement idempotently."""
+    from sib.services.recovery.service import RecoveryService
+
+    match, state, u1, u2, _c1, _c2 = await _setup_active_apple_battle(
+        db_session, "rec_final", cursor=len(state["plan"]) if False else 5, expired_deadline=True
+    )
+    persisted_winner = state["battle"]["winner_id"]
+    match_id = match.id
+
+    stats = await RecoveryService.recover_on_startup(db_session)
+    assert stats["finalized_apple_battles"] == 1
+    assert stats["resumed_apple_battles"] == 0
+    assert stats["expired_abandoned_matches"] == 0
+    assert AppleBattleService.is_narration_scheduled(match_id) is False
+
+    await db_session.refresh(match)
+    assert match.state == MatchState.FINISHED
+    assert match.result_applied is True
+    assert match.is_draw is False
+    assert await SeedlingService.get_total(db_session, persisted_winner) == 1
+    assert await AppleWalletService.get_balance(db_session, persisted_winner) == 5
+
+    battle = await db_session.scalar(
+        select(AppleBattle).where(AppleBattle.match_id == match_id)
+    )
+    assert battle is not None
+    assert battle.status == AppleBattleStatus.COMPLETED
+    assert battle.winner_id == persisted_winner
+
+    # Running recovery a second time is a harmless no-op.
+    stats_again = await RecoveryService.recover_on_startup(db_session)
+    assert stats_again["finalized_apple_battles"] == 0
+    assert await SeedlingService.get_total(db_session, persisted_winner) == 1
+    assert await AppleWalletService.get_balance(db_session, persisted_winner) == 5
+
+
+@pytest.mark.asyncio
+async def test_recovery_no_result_preserves_existing_timeout_behavior(db_session):
+    """Recovery test: active Apple Battle without a persisted result follows existing timeout behavior."""
+    from datetime import timedelta
+    from sib.database.models import Game
+    from sib.services.group import GroupService
+    from sib.services.recovery.service import RecoveryService
+
+    class _Chat:
+        def __init__(self, cid, title):
+            self.id = cid
+            self.title = title
+            self.type = "supergroup"
+            self.username = None
+
+    await GroupService.get_or_create_group(db_session, _Chat(-91001, "بدون نتیجه ۱"))
+    await GroupService.get_or_create_group(db_session, _Chat(-91002, "بدون نتیجه ۲"))
+    u1 = await create_test_user(db_session, "بازیکن بی‌نتیجه ۱")
+    u2 = await create_test_user(db_session, "بازیکن بی‌نتیجه ۲")
+    game = await db_session.scalar(select(Game).where(Game.code == "apple_battle"))
+    match = await _make_match(
+        db_session,
+        game,
+        type("G", (), {"id": -91001})(),
+        type("G", (), {"id": -91002})(),
+        u1,
+        u2,
+    )
+    match = await _reload_match(db_session, match.id)
+    match.state = MatchState.ACTIVE
+    match.game_state = json.dumps(
+        AppleBattleEngine().create_initial_state(list(match.players), "solo"),
+        ensure_ascii=False,
+    )
+    match.turn_deadline = datetime.now(timezone.utc) - timedelta(minutes=20)
+    await db_session.commit()
+
+    stats = await RecoveryService.recover_on_startup(db_session)
+    assert stats["resumed_apple_battles"] == 0
+    assert stats["finalized_apple_battles"] == 0
+    assert stats["expired_abandoned_matches"] == 1
+
+    await db_session.refresh(match)
+    assert match.state == MatchState.FINISHED
+    assert match.result_applied is True
+    assert match.is_draw is True
+
+
+@pytest.mark.asyncio
+async def test_timeout_persisted_winner_preserved_and_settled_not_draw(db_session):
+    """Timeout test: persisted winner + generic timeout preserves winner and never draws."""
+    from sib.services.timeout.service import TimeoutService
+
+    match, state, u1, u2, _c1, _c2 = await _setup_active_apple_battle(
+        db_session, "timeout_win", cursor=2, expired_deadline=True
+    )
+    persisted_winner = state["battle"]["winner_id"]
+    loser_id = u2.id if persisted_winner == u1.id else u1.id
+    expected_team = 1 if persisted_winner == u1.id else 2
+    match_id = match.id
+
+    processed = await TimeoutService.process_turn_timeouts(db_session)
+    assert match_id in processed
+
+    await db_session.refresh(match)
+    assert match.state == MatchState.FINISHED
+    assert match.result_applied is True
+    assert match.is_draw is False
+    assert match.winner_team == expected_team
+
+    battle = await db_session.scalar(
+        select(AppleBattle).where(AppleBattle.match_id == match_id)
+    )
+    assert battle is not None
+    assert battle.status == AppleBattleStatus.COMPLETED
+    assert battle.winner_id == persisted_winner
+
+    assert await SeedlingService.get_total(db_session, persisted_winner) == 1
+    assert await SeedlingService.get_total(db_session, loser_id) == 0
+    assert await AppleWalletService.get_balance(db_session, persisted_winner) == 5
+    assert await AppleWalletService.get_balance(db_session, loser_id) == 0
+
+
+@pytest.mark.asyncio
+async def test_timeout_no_result_uses_existing_behavior(db_session):
+    """Timeout test: no persisted result + timeout keeps existing draw behavior."""
+    from datetime import timedelta
+    from sib.database.models import Game
+    from sib.services.group import GroupService
+    from sib.services.timeout.service import TimeoutService
+
+    class _Chat:
+        def __init__(self, cid, title):
+            self.id = cid
+            self.title = title
+            self.type = "supergroup"
+            self.username = None
+
+    await GroupService.get_or_create_group(db_session, _Chat(-92001, "تایم‌اوت ۱"))
+    await GroupService.get_or_create_group(db_session, _Chat(-92002, "تایم‌اوت ۲"))
+    u1 = await create_test_user(db_session, "بازیکن تایم‌اوت ۱")
+    u2 = await create_test_user(db_session, "بازیکن تایم‌اوت ۲")
+    game = await db_session.scalar(select(Game).where(Game.code == "apple_battle"))
+    match = await _make_match(
+        db_session,
+        game,
+        type("G", (), {"id": -92001})(),
+        type("G", (), {"id": -92002})(),
+        u1,
+        u2,
+    )
+    match.state = MatchState.ACTIVE
+    match.game_state = "{}"
+    match.turn_deadline = datetime.now(timezone.utc) - timedelta(minutes=10)
+    await db_session.commit()
+
+    processed = await TimeoutService.process_turn_timeouts(db_session)
+    assert match.id in processed
+
+    await db_session.refresh(match)
+    assert match.state == MatchState.FINISHED
+    assert match.result_applied is True
+    assert match.is_draw is True
+    assert match.winner_team is None
+
+
+@pytest.mark.asyncio
+async def test_timeout_already_finalized_is_noop(db_session):
+    """Timeout test: already finalized match + timeout is a harmless no-op."""
+    from sib.services.timeout.service import TimeoutService
+
+    match, state, u1, u2, _c1, _c2 = await _setup_active_apple_battle(
+        db_session, "timeout_noop", cursor=5, expired_deadline=True
+    )
+    persisted_winner = state["battle"]["winner_id"]
+    battle = await AppleBattleService.record_battle(db_session, match, state)
+    await AppleBattleService.finalize_match(db_session, match, battle.id)
+    await db_session.commit()
+
+    processed = await TimeoutService.process_turn_timeouts(db_session)
+    assert match.id not in processed
+
+    # Direct invocation on the already-finalized match is also a no-op.
+    match = await _reload_match(db_session, match.id)
+    await TimeoutService._resolve_expired_active_match(db_session, match)
+    await db_session.commit()
+
+    await db_session.refresh(match)
+    assert match.state == MatchState.FINISHED
+    assert match.is_draw is False
+    assert await SeedlingService.get_total(db_session, persisted_winner) == 1
+    assert await AppleWalletService.get_balance(db_session, persisted_winner) == 5
+
+
+@pytest.mark.asyncio
+async def test_finalize_match_called_multiple_times_grants_one_reward_set(db_session):
+    """Idempotency test: finalize_match called multiple times grants exactly one reward set."""
+    from sib.database.models import AppleTransaction, PlayerStats, SeedlingAward
+
+    match, state, u1, u2, _c1, _c2 = await _setup_active_apple_battle(
+        db_session, "idem_multi", cursor=5
+    )
+    persisted_winner = state["battle"]["winner_id"]
+    battle = await AppleBattleService.record_battle(db_session, match, state)
+    await db_session.commit()
+
+    for _ in range(4):
+        match = await _reload_match(db_session, match.id)
+        await AppleBattleService.finalize_match(db_session, match, battle.id)
+        await AppleBattleService.finalize_match(db_session, match, None)
+        await db_session.commit()
+
+    assert await SeedlingService.get_total(db_session, persisted_winner) == 1
+    assert await AppleWalletService.get_balance(db_session, persisted_winner) == 5
+
+    awards = list(
+        (
+            await db_session.scalars(
+                select(SeedlingAward).where(SeedlingAward.match_id == match.id)
+            )
+        ).all()
+    )
+    txs = list(
+        (
+            await db_session.scalars(
+                select(AppleTransaction).where(
+                    AppleTransaction.user_id == persisted_winner,
+                    AppleTransaction.reason == "apple_battle_win",
+                )
+            )
+        ).all()
+    )
+    p_stat = await db_session.scalar(
+        select(PlayerStats).where(PlayerStats.user_id == persisted_winner)
+    )
+    assert len(awards) == 1
+    assert len(txs) == 1
+    assert p_stat is not None and p_stat.wins == 1
+
+
+@pytest.mark.asyncio
+async def test_recovery_and_scheduled_narration_race_is_deduplicated(db_session):
+    """Concurrency test: recovery + scheduled narration race produces one worker and one reward set."""
+    import asyncio
+    from sib.services.recovery.service import RecoveryService
+
+    match, state, u1, u2, _c1, _c2 = await _setup_active_apple_battle(
+        db_session, "race_rec_narr", cursor=1, expired_deadline=True
+    )
+    persisted_winner = state["battle"]["winner_id"]
+    match_id = match.id
+
+    t1 = AppleBattleService.schedule_narration(match_id, bot=None, beat_delay=0.01)
+    t2 = AppleBattleService.schedule_narration(match_id, bot=None, beat_delay=0.01)
+    assert t1 is t2
+
+    await asyncio.gather(
+        RecoveryService.recover_on_startup(db_session),
+        AppleBattleService.run_narration(None, match_id, beat_delay=0.01),
+        t1,
+    )
+    await db_session.rollback()
+
+    match = await _reload_match(db_session, match_id)
+    assert match.state == MatchState.FINISHED
+    assert match.result_applied is True
+    assert match.is_draw is False
+    assert json.loads(match.game_state)["battle"]["winner_id"] == persisted_winner
+    assert await SeedlingService.get_total(db_session, persisted_winner) == 1
+    assert await AppleWalletService.get_balance(db_session, persisted_winner) == 5
+
+
+@pytest.mark.asyncio
+async def test_scheduled_narration_and_timeout_race_preserves_winner_and_single_rewards(db_session):
+    """Concurrency test: scheduled narration + timeout race never draws or double-rewards."""
+    import asyncio
+    from sib.database.connection import get_session
+    from sib.services.timeout.service import TimeoutService
+
+    match, state, u1, u2, _c1, _c2 = await _setup_active_apple_battle(
+        db_session, "race_narr_timeout", cursor=3, expired_deadline=True
+    )
+    persisted_winner = state["battle"]["winner_id"]
+    match_id = match.id
+
+    async def _run_timeout():
+        async with get_session() as timeout_session:
+            await TimeoutService.process_turn_timeouts(timeout_session)
+
+    await asyncio.gather(
+        AppleBattleService.run_narration(None, match_id, beat_delay=0.0),
+        _run_timeout(),
+    )
+    await db_session.rollback()
+
+    match = await _reload_match(db_session, match_id)
+    assert match.state == MatchState.FINISHED
+    assert match.result_applied is True
+    assert match.is_draw is False
+    assert json.loads(match.game_state)["battle"]["winner_id"] == persisted_winner
+    assert await SeedlingService.get_total(db_session, persisted_winner) == 1
+    assert await AppleWalletService.get_balance(db_session, persisted_winner) == 5
+
+
+@pytest.mark.asyncio
+async def test_winner_photo_resolves_by_match_id_when_battle_id_differs(db_session):
+    """Presentation test: AppleBattle.id != Match.id still resolves winner artwork."""
+    from sib.database.models import Game
+    from sib.services.group import GroupService
+
+    class _Chat:
+        def __init__(self, cid, title):
+            self.id = cid
+            self.title = title
+            self.type = "supergroup"
+            self.username = None
+
+    await GroupService.get_or_create_group(db_session, _Chat(-93001, "عکس ۱"))
+    await GroupService.get_or_create_group(db_session, _Chat(-93002, "عکس ۲"))
+    u1 = await create_test_user(db_session, "بازیکن عکس ۱")
+    u2 = await create_test_user(db_session, "بازیکن عکس ۲")
+    # Use a seeded character code ("sib_sorkh") that has real artwork on disk.
+    c1 = await _card(db_session, u1, "sib_sorkh")
+    c2 = await _card(db_session, u2, "sib_sabz")
+
+    game = await db_session.scalar(select(Game).where(Game.code == "apple_battle"))
+    # Create extra matches so target_match.id != battle.id.
+    decoy_match = await _make_match(
+        db_session,
+        game,
+        type("G", (), {"id": -93001})(),
+        type("G", (), {"id": -93002})(),
+        u1,
+        u2,
+    )
+    _spacer_match = await _make_match(
+        db_session,
+        game,
+        type("G", (), {"id": -93001})(),
+        type("G", (), {"id": -93002})(),
+        u1,
+        u2,
+    )
+    target_match = await _make_match(
+        db_session,
+        game,
+        type("G", (), {"id": -93001})(),
+        type("G", (), {"id": -93002})(),
+        u1,
+        u2,
+    )
+
+    # Create a cancelled decoy AppleBattle row whose PK equals target_match.id
+    # if possible, plus the real completed AppleBattle row with a different PK.
+    decoy_battle = AppleBattle(
+        id=target_match.id,
+        player1_id=u1.id,
+        player2_id=u2.id,
+        player1_card_id=c1.id,
+        player2_card_id=c2.id,
+        level=1,
+        match_id=decoy_match.id,
+        status=AppleBattleStatus.CANCELLED,
+    )
+    real_battle = AppleBattle(
+        id=target_match.id + 500,
+        player1_id=u1.id,
+        player2_id=u2.id,
+        player1_card_id=c1.id,
+        player2_card_id=c2.id,
+        level=1,
+        match_id=target_match.id,
+        status=AppleBattleStatus.COMPLETED,
+        winner_id=u1.id,
+    )
+    db_session.add_all([decoy_battle, real_battle])
+    await db_session.commit()
+
+    assert real_battle.id != target_match.id
+    photo = await AppleBattleService._winner_photo(target_match.id)
+    assert photo is not None
+
+
+@pytest.mark.asyncio
+async def test_different_card_levels_display_accurately_and_help_copy_is_truthful(db_session):
+    """Presentation test: different card levels render accurately for both players."""
+    from sib.handlers.start import HELP_TOPICS
+
+    match, state, u1, u2, _c1, _c2 = await _setup_active_apple_battle(
+        db_session, "diff_levels", cursor=1, level1=4, level2=2
+    )
+    intro_text = state["plan"][0]["text"]
+    assert f"{u1.display_name} با" in intro_text
+    assert "(سطح 4)" in intro_text
+    assert "(سطح 2)" in intro_text
+
+    rendered = AppleBattleEngine().render_for_group(state, match.group1_id, u1.id)
+    assert "(سطح 4)" in rendered
+    assert "(سطح 2)" in rendered
+
+    # Help copy must not promise guaranteed same-level opponents.
+    _title, apple_help_body = HELP_TOPICS["apple_battle"]
+    assert "هم‌سطح" not in apple_help_body
+    assert "هم سطح" not in apple_help_body
+
+
+@pytest.mark.asyncio
+async def test_bot_vs_pvp_reward_text_matches_actual_reward_logic(db_session):
+    """Presentation test: bot vs PvP finale reward text matches actual reward outcome."""
+    pvp_match, pvp_state, _u1, _u2, _c1, _c2 = await _setup_active_apple_battle(
+        db_session, "reward_pvp", cursor=5, is_bot_match=False
+    )
+    bot_match, bot_state, bu1, bu2, _bc1, _bc2 = await _setup_active_apple_battle(
+        db_session, "reward_bot", cursor=5, is_bot_match=True
+    )
+
+    pvp_finale = pvp_state["plan"][-1]["text"]
+    bot_finale = bot_state["plan"][-1]["text"]
+
+    assert "🎁 پاداش پیروزی: ۱ نهال 🌱 + ۵ سیب 🍏" in pvp_finale
+    assert "🎁 پاداش پیروزی: ۵ سیب 🍏" in bot_finale
+    assert "نهال" not in bot_finale
+
+    # Finalize bot match and verify actual reward settlement matches the text.
+    bot_battle = await AppleBattleService.record_battle(db_session, bot_match, bot_state)
+    await AppleBattleService.finalize_match(db_session, bot_match, bot_battle.id)
+    await db_session.commit()
+
+    bot_winner = bot_state["battle"]["winner_id"]
+    assert await SeedlingService.get_total(db_session, bot_winner) == 0
+    assert await AppleWalletService.get_balance(db_session, bot_winner) == 5
+    await db_session.refresh(bot_battle)
+    assert bot_battle.seedlings_awarded == 0
+
+
+@pytest.mark.asyncio
+async def test_unimplemented_passives_are_not_shown_as_active(db_session):
+    """Presentation test: unimplemented passive_key values are omitted from player cards/wiki."""
+    from sib.database.connection import seed_characters
+    from sib.services.characters import CharacterService, render_character_card
+    from sib.services.wiki import WikiService
+
+    await seed_characters(db_session)
+    await db_session.commit()
+
+    released = await CharacterService.list_released(db_session)
+    assert len(released) >= 4
+    for char in released:
+        card_text = render_character_card(char)
+        wiki_text = await WikiService.wiki_page(db_session, char.id)
+        assert "توانایی منفعل" not in card_text
+        assert (char.passive_key or "") not in card_text
+        if wiki_text:
+            assert "توانایی منفعل" not in wiki_text
+            assert (char.passive_key or "") not in wiki_text

@@ -250,6 +250,11 @@ class CharacterService:
 
 STAT_EMOJI = {"power": "💪", "speed": "⚡", "intelligence": "🧠"}
 
+# Passives with real runtime combat effects in the Apple Battle resolver.
+# Unimplemented passive_key values on Character rows must not be displayed as
+# active mechanics or raw internal keys on player-facing cards.
+IMPLEMENTED_PASSIVES: Dict[str, str] = {}
+
 
 def render_character_card(
     character: Character,
@@ -283,8 +288,13 @@ def render_character_card(
     lines.append(
         f"💪 قدرت: `{character.power}` | ⚡ سرعت: `{character.speed}` | 🧠 هوش: `{character.intelligence}`"
     )
-    if character.passive_key:
-        lines.append(f"✨ توانایی منفعل: `{character.passive_key}`")
+    passive_label = (
+        IMPLEMENTED_PASSIVES.get(character.passive_key)
+        if character.passive_key
+        else None
+    )
+    if passive_label:
+        lines.append(f"✨ توانایی منفعل: {passive_label}")
     if character.strengths_list:
         lines.append(f"✅ نقاط قوت: {', '.join(character.strengths_list)}")
     if character.weaknesses_list:

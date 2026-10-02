@@ -165,6 +165,6 @@ class CollectionService:
                 lines.append(f"نقش: {character.faction_role_fa}")
         lines += [
             "",
-            "برای دیدن توانایی و داستان، به ویکی شخصیت‌ها سر بزن.",
+            "برای دیدن داستان و جزئیات شخصیت، به ویکی شخصیت‌ها سر بزن.",
         ]
         return "\n".join(lines)

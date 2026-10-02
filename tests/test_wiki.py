@@ -52,7 +52,9 @@ async def test_wiki_page_is_persian_with_sidegrades(db_session):
     assert "💪" in page and "⚡" in page and "🧠" in page
     assert "هوش" in page  # strengths
     assert "سرعت" in page  # weaknesses
-    assert "test_passive" in page
+    # Unimplemented raw passive keys must not be presented as active mechanics.
+    assert "test_passive" not in page
+    assert "توانایی منفعل" not in page
 
     # Unreleased characters are hidden from the wiki.
     draft = await CharacterService.create(

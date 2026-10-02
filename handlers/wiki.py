@@ -133,7 +133,7 @@ async def _wiki_text_and_kb(
     text = (
         f"📚 **ویکی شخصیت‌ها** ({len(characters)} شخصیت){counter}\n\n"
         + "\n".join(_wiki_index_lines(page_characters, faction_by_id))
-        + "\n\nتوانایی‌ها و ویژگی‌ها کاملاً شفاف؛ برای دیدن کارت کامل، شخصیت را انتخاب کن."
+        + "\n\nویژگی‌ها کاملاً شفاف؛ برای دیدن کارت کامل، شخصیت را انتخاب کن."
     )
     return text, _wiki_keyboard(characters, page, origin)
 

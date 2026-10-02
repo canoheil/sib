@@ -134,8 +134,10 @@ async def db_session():
     # the task never outlives the test-scoped database engine).
     try:
         from sib.bots.runner import cancel_all_bot_turns
+        from sib.services.apple_battle import AppleBattleService
 
         await cancel_all_bot_turns()
+        await AppleBattleService.cancel_all_narrations()
     except Exception:  # pragma: no cover - cleanup is best effort
         pass
 
