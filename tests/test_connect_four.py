@@ -180,3 +180,194 @@ def test_c4_rendering_and_keyboard(solo_players):
     # Opponent keyboard has noop
     kb_opp = engine.get_keyboard(state, 1, 302)
     assert kb_opp.inline_keyboard[0][0].callback_data == "noop"
+
+
+# ---------------------------------------------------------------------------
+# Turn Clarity Tests
+# ---------------------------------------------------------------------------
+
+
+def test_c4_turn_clarity_solo_initial(solo_players):
+    """Verify solo mode shows correct turn indicator at game start."""
+    engine = ConnectFourEngine()
+    state = engine.create_initial_state(solo_players, mode="solo")
+
+    # Player 301 (team A, 🍎) goes first
+    text = engine.render_for_group(state, -3001, 301)
+    assert "🍎 **نوبت شماست!**" in text
+
+    # Player 302 (team B, 🍏) sees waiting
+    text_opp = engine.render_for_group(state, -3002, 302)
+    assert "⏳ نوبت حریف (🍎 Player 1)" in text_opp
+
+
+def test_c4_turn_clarity_solo_after_move(solo_players):
+    """Verify solo mode turn indicator updates after a valid move."""
+    engine = ConnectFourEngine()
+    state = engine.create_initial_state(solo_players, mode="solo")
+
+    # Player 301 makes a move
+    state = engine.apply_action(state, 301, {"col": 3})
+
+    # Now player 302 should see "your turn"
+    text = engine.render_for_group(state, -3002, 302)
+    assert "🍏 **نوبت شماست!**" in text
+
+    # Player 301 sees waiting for opponent
+    text_opp = engine.render_for_group(state, -3001, 301)
+    assert "⏳ نوبت حریف (🍏 Player 2)" in text_opp
+
+
+def test_c4_turn_clarity_solo_invalid_move(solo_players):
+    """Verify invalid moves do not change the turn indicator."""
+    engine = ConnectFourEngine()
+    state = engine.create_initial_state(solo_players, mode="solo")
+
+    # Player 302 tries to move (invalid - not their turn)
+    is_valid, _ = engine.validate_action(state, 302, {"col": 0})
+    assert not is_valid
+
+    # Turn should still be 301
+    assert state["current_player_id"] == 301
+    text = engine.render_for_group(state, -3001, 301)
+    assert "نوبت شماست" in text
+
+
+def test_c4_turn_clarity_solo_game_over(solo_players):
+    """Verify no turn indicator is shown when game is finished."""
+    engine = ConnectFourEngine()
+    state = engine.create_initial_state(solo_players, mode="solo")
+
+    # Player 301 wins horizontally
+    moves = [
+        (301, 0), (302, 6),
+        (301, 1), (302, 6),
+        (301, 2), (302, 6),
+        (301, 3),  # 4 in a row!
+    ]
+    for pid, col in moves:
+        state = engine.apply_action(state, pid, {"col": col})
+
+    assert engine.is_finished(state)
+
+    # No turn indicator should be present
+    text = engine.render_for_group(state, -3001, 301)
+    assert "نوبت شماست" not in text
+    assert "نوبت حریف" not in text
+    assert "پایان بازی" in text
+
+
+def test_c4_turn_clarity_team_your_turn(team_players_2v2):
+    """Verify team mode shows correct turn indicator when you are the active player.
+
+    In shared group mode (both teammates in same group), the current player
+    sees their name instead of "your turn" to avoid confusion.
+    """
+    engine = ConnectFourEngine()
+    state = engine.create_initial_state(team_players_2v2, mode="2v2")
+
+    # Turn order: [310, 312, 311, 313]
+    # Player 310 (team A, "Player 0") goes first
+    # Since both team A players are in group -3001 (shared group),
+    # player 310 sees "نوبت Player 0 است!" instead of "نوبت شماست!"
+    text = engine.render_for_group(state, -3001, 310)
+    assert "🍎 **نوبت Player 0 است!**" in text
+
+
+def test_c4_turn_clarity_team_teammate_turn(team_players_2v2):
+    """Verify team mode shows 'your team's turn: TeammateName' when teammate is active."""
+    engine = ConnectFourEngine()
+    state = engine.create_initial_state(team_players_2v2, mode="2v2")
+
+    # Turn order: [310, 312, 311, 313]
+    # Player names: 310="Player 0", 311="Player 1", 312="Player 2", 313="Player 3"
+
+    # After 310 moves, it's 312's turn (team B)
+    state = engine.apply_action(state, 310, {"col": 0})
+
+    # Player 311 (team A) sees opponent's turn (312 is team B)
+    text = engine.render_for_group(state, -3001, 311)
+    assert "⏳ نوبت تیم حریف: 👤 Player 2 (🍏)" in text
+
+    # After 312 moves, it's 311's turn (team A)
+    state = engine.apply_action(state, 312, {"col": 1})
+
+    # Player 311 (team A, "Player 1") sees their turn
+    # Since group is shared, they see "نوبت Player 1 است!"
+    text = engine.render_for_group(state, -3001, 311)
+    assert "🍎 **نوبت Player 1 است!**" in text
+
+    # Player 310 (team A, same team as 311) sees "your team's turn: Player 1"
+    # (311's name is "Player 1")
+    text_teammate = engine.render_for_group(state, -3001, 310)
+    assert "🍎 **نوبت تیم شما:** 👤 Player 1" in text_teammate
+
+
+def test_c4_turn_clarity_team_opponent_turn(team_players_2v2):
+    """Verify team mode shows 'opponent team's turn' when opponent is active."""
+    engine = ConnectFourEngine()
+    state = engine.create_initial_state(team_players_2v2, mode="2v2")
+
+    # Turn order: [310, 312, 311, 313]
+    # Player 310 (team A) goes first
+
+    # Player 312 (team B) sees opponent's turn
+    text = engine.render_for_group(state, -3002, 312)
+    assert "⏳ نوبت تیم حریف: 👤 Player 0 (🍎)" in text
+
+    # Player 313 (team B) also sees opponent's turn
+    text2 = engine.render_for_group(state, -3002, 313)
+    assert "⏳ نوبت تیم حریف: 👤 Player 0 (🍎)" in text2
+
+
+def test_c4_turn_clarity_team_full_rotation(team_players_2v2):
+    """Verify turn clarity through a full rotation in 2v2 mode."""
+    engine = ConnectFourEngine()
+    state = engine.create_initial_state(team_players_2v2, mode="2v2")
+
+    # Turn order: [310, 312, 311, 313]
+    # Player names: 310="Player 0", 311="Player 1", 312="Player 2", 313="Player 3"
+
+    # Turn 0: 310 (team A) active
+    # Shared group: 310 sees "نوبت Player 0 است!"
+    text_310 = engine.render_for_group(state, -3001, 310)
+    assert "🍎 **نوبت Player 0 است!**" in text_310
+
+    text_311 = engine.render_for_group(state, -3001, 311)
+    assert "🍎 **نوبت تیم شما:** 👤 Player 0" in text_311
+
+    text_312 = engine.render_for_group(state, -3002, 312)
+    assert "⏳ نوبت تیم حریف: 👤 Player 0 (🍎)" in text_312
+
+    state = engine.apply_action(state, 310, {"col": 0})
+
+    # Turn 1: 312 (team B) active
+    # Shared group: 312 sees "نوبت Player 2 است!"
+    text_312 = engine.render_for_group(state, -3002, 312)
+    assert "🍏 **نوبت Player 2 است!**" in text_312
+
+    text_313 = engine.render_for_group(state, -3002, 313)
+    assert "🍏 **نوبت تیم شما:** 👤 Player 2" in text_313
+
+    text_310 = engine.render_for_group(state, -3001, 310)
+    assert "⏳ نوبت تیم حریف: 👤 Player 2 (🍏)" in text_310
+
+    state = engine.apply_action(state, 312, {"col": 1})
+
+    # Turn 2: 311 (team A, "Player 1") active
+    # Shared group: 311 sees "نوبت Player 1 است!"
+    text_311 = engine.render_for_group(state, -3001, 311)
+    assert "🍎 **نوبت Player 1 است!**" in text_311
+
+    text_310 = engine.render_for_group(state, -3001, 310)
+    assert "🍎 **نوبت تیم شما:** 👤 Player 1" in text_310
+
+    state = engine.apply_action(state, 311, {"col": 2})
+
+    # Turn 3: 313 (team B, "Player 3") active
+    # Shared group: 313 sees "نوبت Player 3 است!"
+    text_313 = engine.render_for_group(state, -3002, 313)
+    assert "🍏 **نوبت Player 3 است!**" in text_313
+
+    text_312 = engine.render_for_group(state, -3002, 312)
+    assert "🍏 **نوبت تیم شما:** 👤 Player 3" in text_312

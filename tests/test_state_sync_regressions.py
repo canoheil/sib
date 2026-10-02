@@ -307,33 +307,44 @@ def test_battleship_radar_and_keyboard_share_labels():
     text = engine.render_for_group(state, -8001, 1)
     kb = engine.get_keyboard(state, 1, 1)
 
-    # Keyboard buttons only use the board visual language.
+    # Keyboard buttons only use the board visual language + coordinate labels.
+    # Valid button texts: coordinate labels ( , A-H, 1-8) + cell states (·, 🌊, 💥, 🔥)
+    valid_labels = {" ", "·", "🌊", "💥", "🔥"} | set("ABCDEFGH12345678")
     for row in kb.inline_keyboard:
         for btn in row:
-            assert btn.text in ("░", "🟦", "💥", "🔥")
+            assert btn.text in valid_labels
 
-    assert kb.inline_keyboard[miss_cell[0]][miss_cell[1]].text == "🟦"  # shot water: blue
-    assert kb.inline_keyboard[miss_cell[0]][miss_cell[1]].callback_data == "noop"
-    assert kb.inline_keyboard[hit_cell[0]][hit_cell[1]].text == "💥"   # hit
-    assert kb.inline_keyboard[sunk_cell[0]][sunk_cell[1]].text == "🔥"  # sunk
+    assert kb.inline_keyboard[miss_cell[0] + 1][miss_cell[1] + 1].text == "🌊"  # miss: wave
+    assert kb.inline_keyboard[miss_cell[0] + 1][miss_cell[1] + 1].callback_data == "noop"
+    assert kb.inline_keyboard[hit_cell[0] + 1][hit_cell[1] + 1].text == "💥"   # hit
+    assert kb.inline_keyboard[sunk_cell[0] + 1][sunk_cell[1] + 1].text == "🔥"  # sunk
     glass_cell = next(
         (r, c) for r in range(8) for c in range(8)
         if f"{r},{c}" not in state["teams"]["A"]["shots_taken"]
     )
-    assert kb.inline_keyboard[glass_cell[0]][glass_cell[1]].text == "░"  # glassy
-    assert kb.inline_keyboard[glass_cell[0]][glass_cell[1]].callback_data.startswith("bs_action:")
+    assert kb.inline_keyboard[glass_cell[0] + 1][glass_cell[1] + 1].text == "·"  # empty
+    assert kb.inline_keyboard[glass_cell[0] + 1][glass_cell[1] + 1].callback_data.startswith("bs_action:")
 
-    # 3 shot cells -> 61 glassy unselected cells.
-    glassy = sum(1 for row in kb.inline_keyboard for b in row if b.text == "░")
-    assert glassy == 61
+    # 3 shot cells -> 61 empty unselected cells (skip header row and label columns).
+    empty = sum(
+        1 for row_idx in range(1, 9) for btn in kb.inline_keyboard[row_idx][1:]
+        if btn.text == "·"
+    )
+    assert empty == 61
 
     # The text radar carries the identical grid (visual consistency).
+    # Grid lines start with row numbers 1-8 followed by space-separated cells.
     radar_lines = [
         ln for ln in text.splitlines()
-        if ln and all(ch in "░🟦💥🔥" for ch in ln)
+        if ln and ln[0] in "12345678" and " " in ln
     ]
     assert len(radar_lines) == 8
-    assert radar_lines[miss_cell[0]][miss_cell[1]] == "🟦"
-    assert radar_lines[hit_cell[0]][hit_cell[1]] == "💥"
-    assert radar_lines[sunk_cell[0]][sunk_cell[1]] == "🔥"
-    assert radar_lines[glass_cell[0]][glass_cell[1]] == "░"
+    # Each line: "{row_num} {cell} {cell} ..." - split and skip row number
+    def get_cell(line: str, col: int) -> str:
+        parts = line.split()
+        return parts[col + 1]  # skip row number
+
+    assert get_cell(radar_lines[miss_cell[0]], miss_cell[1]) == "🌊"
+    assert get_cell(radar_lines[hit_cell[0]], hit_cell[1]) == "💥"
+    assert get_cell(radar_lines[sunk_cell[0]], sunk_cell[1]) == "🔥"
+    assert get_cell(radar_lines[glass_cell[0]], glass_cell[1]) == "·"

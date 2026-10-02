@@ -131,8 +131,18 @@ def test_battleship_rendering_and_keyboard(solo_players):
     assert "جنگ کشتی‌ها" in text
     assert "رادار شلیک‌های شما" in text
     assert "نوبت شماست" in text
+    # Coordinate grid must be present in the rendered text.
+    assert "A B C D E F G H" in text
 
     kb = engine.get_keyboard(state, 1, 401)
-    assert len(kb.inline_keyboard) == 8
-    assert len(kb.inline_keyboard[0]) == 8
-    assert kb.inline_keyboard[0][0].callback_data.startswith("bs_action:1:0:0")
+    # 1 header row + 8 data rows = 9 total
+    assert len(kb.inline_keyboard) == 9
+    # Header row: corner label + 8 column letters
+    assert len(kb.inline_keyboard[0]) == 9
+    assert kb.inline_keyboard[0][1].text == "A"
+    assert kb.inline_keyboard[0][8].text == "H"
+    # Data rows: row label + 8 cells
+    assert kb.inline_keyboard[1][0].text == "1"
+    assert kb.inline_keyboard[8][0].text == "8"
+    # Cell at (0,0) is at keyboard row 1, col 1 (offset by header + label)
+    assert kb.inline_keyboard[1][1].callback_data.startswith("bs_action:1:0:0")

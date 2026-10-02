@@ -122,6 +122,7 @@ class BattleshipEngine(BaseGameEngine):
                 },
             },
             "last_event": None,
+            "last_shot": None,
             "finished": False,
             "winner_team": None,
             "is_draw": False,
@@ -188,9 +189,11 @@ class BattleshipEngine(BaseGameEngine):
                 event_msg = f"💥🎯 شلیک {player_info['name']} به هدف خورد و کشتی {hit_ship['size']} خانه‌ای دشمن غرق شد!"
             else:
                 event_msg = f"💥 شلیک {player_info['name']} به یکی از کشتی‌های دشمن اصابت کرد!"
+            game_state["last_shot"] = {"r": r, "c": c, "result": "hit"}
         else:
             game_state["teams"][team_code]["shots_taken"][coord_key] = "miss"
             event_msg = f"🌊 شلیک {player_info['name']} به آب خورد (خطا)!"
+            game_state["last_shot"] = {"r": r, "c": c, "result": "miss"}
 
         game_state["last_event"] = event_msg
 
@@ -225,14 +228,19 @@ class BattleshipEngine(BaseGameEngine):
 
     # Visual language of the board (rendered text AND keyboard buttons
     # always agree - the state lives in the button itself):
-    #   unselected  -> ░  (glassy/transparent pane)
-    #   shot/water  -> 🟦 (the button itself turns blue)
-    #   hit         -> 💥
-    #   sunk        -> 🔥
-    GLASS = "░"
-    BLUE = "🟦"
+    #   unselected  -> ·  (visually minimal, blue Telegram button style)
+    #   miss/water  -> 🌊 (wave emoji)
+    #   hit         -> 💥 (explosion emoji)
+    #   sunk        -> 🔥 (fire emoji)
+    EMPTY = "·"
+    MISS = "🌊"
     HIT = "💥"
     SUNK = "🔥"
+
+    @staticmethod
+    def _coord_label(r: int, c: int) -> str:
+        """Convert (row, col) to human-readable coordinate like 'C4'."""
+        return f"{chr(ord('A') + c)}{r + 1}"
 
     def radar_labels(self, game_state: Dict[str, Any], team_code: str) -> Dict[str, str]:
         """Labels for this team's radar (their shots at the enemy fleet)."""
@@ -250,7 +258,7 @@ class BattleshipEngine(BaseGameEngine):
             elif val == "hit":
                 labels[key] = self.HIT
             else:
-                labels[key] = self.BLUE
+                labels[key] = self.MISS
         return labels
 
     def render_for_group(
@@ -267,13 +275,29 @@ class BattleshipEngine(BaseGameEngine):
         opp_remaining = game_state["teams"][opp_team_code]["remaining_cells"]
         labels = self.radar_labels(game_state, team_code)
 
-        grid_rows = []
+        # Build grid with coordinate labels:
+        #    A B C D E F G H
+        #  1 · · 💥 · · · · ·
+        #  2 🌊 · · · · · · ·
+        #  ...
+        col_header = "  " + " ".join(chr(ord("A") + c) for c in range(self.GRID_SIZE))
+        grid_rows = [col_header]
         for r in range(self.GRID_SIZE):
             row_symbols = []
             for c in range(self.GRID_SIZE):
-                row_symbols.append(labels.get(f"{r},{c}", self.GLASS))
-            grid_rows.append("".join(row_symbols))
+                row_symbols.append(labels.get(f"{r},{c}", self.EMPTY))
+            grid_rows.append(f"{r + 1} " + " ".join(row_symbols))
         radar_art = "\n".join(grid_rows)
+
+        # Last shot confirmation (compact, Persian UI style)
+        last_shot = game_state.get("last_shot")
+        last_shot_line = ""
+        if last_shot:
+            coord = self._coord_label(last_shot["r"], last_shot["c"])
+            if last_shot.get("result") == "hit":
+                last_shot_line = f"\n🎯 {coord}\n💥 برخورد!\n"
+            else:
+                last_shot_line = f"\n🎯 {coord}\n🌊 خطا!\n"
 
         last_ev = game_state.get("last_event") or "هنوز شلیکی انجام نشده است."
         team_names = game_state.get("team_names", {})
@@ -300,6 +324,7 @@ class BattleshipEngine(BaseGameEngine):
                 f"{radar_art}\n\n"
                 f"📊 خانه‌های باقی‌مانده شما: {my_remaining}/14\n"
                 f"📊 خانه‌های باقی‌مانده حریف: {opp_remaining}/14\n\n"
+                f"{last_shot_line}"
                 f"{outcome}\n"
                 f"📝 {result.summary}"
             )
@@ -325,6 +350,7 @@ class BattleshipEngine(BaseGameEngine):
             f"{radar_art}\n\n"
             f"🛡️ سلول‌های سالم ناوگان شما: {my_remaining}/14\n"
             f"🎯 سلول‌های سالم ناوگان دشمن: {opp_remaining}/14\n\n"
+            f"{last_shot_line}"
             f"📢 آخرین رویداد: {last_ev}\n\n"
             f"{turn_msg}"
         )
@@ -347,9 +373,17 @@ class BattleshipEngine(BaseGameEngine):
         labels = self.radar_labels(game_state, team_code)
         is_my_turn = (game_state.get("current_player_id") == for_player_id)
 
-        buttons = []
+        # Header row: column labels A-H
+        header_row = [InlineKeyboardButton(text=" ", callback_data="noop")]
+        for c in range(self.GRID_SIZE):
+            header_row.append(
+                InlineKeyboardButton(text=chr(ord("A") + c), callback_data="noop")
+            )
+        buttons = [header_row]
+
+        # Data rows: row label + 8 cell buttons
         for r in range(self.GRID_SIZE):
-            row = []
+            row = [InlineKeyboardButton(text=str(r + 1), callback_data="noop")]
             for c in range(self.GRID_SIZE):
                 key = f"{r},{c}"
                 if key in labels:
@@ -358,9 +392,9 @@ class BattleshipEngine(BaseGameEngine):
                         InlineKeyboardButton(text=labels[key], callback_data="noop")
                     )
                 else:
-                    # Unselected cells look glassy; actionable only on your turn.
+                    # Empty cells: visually minimal, blue button style, actionable only on your turn.
                     cb = f"bs_action:{match_id}:{r}:{c}" if is_my_turn else "noop"
-                    row.append(InlineKeyboardButton(text=self.GLASS, callback_data=cb))
+                    row.append(InlineKeyboardButton(text=self.EMPTY, callback_data=cb))
             buttons.append(row)
 
         return InlineKeyboardMarkup(inline_keyboard=buttons)

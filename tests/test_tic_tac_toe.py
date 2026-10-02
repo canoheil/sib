@@ -155,3 +155,98 @@ def test_ttt_rendering_and_keyboard(players):
     # Inactive player keyboard has noop buttons
     kb_inactive = engine.get_keyboard(state, 1, p_o)
     assert kb_inactive.inline_keyboard[0][0].callback_data == "noop"
+
+
+def test_ttt_turn_clarity_initial(players):
+    """Verify turn indicator shows correct player with symbol at game start."""
+    engine = TicTacToeEngine()
+    state = engine.create_initial_state(players, mode="solo")
+
+    p_x = state["current_player_id"]
+    p_o = 202 if p_x == 201 else 201
+
+    # Get the groups for each player
+    p_x_group = state["players"][str(p_x)]["group_id"]
+    p_o_group = state["players"][str(p_o)]["group_id"]
+
+    x_symbol = state["players"][str(p_x)]["symbol"]
+    x_icon = "🍎" if x_symbol == "X" else "🍏"
+
+    # Current player sees "your turn"
+    text = engine.render_for_group(state, p_x_group, p_x)
+    assert f"{x_icon} **نوبت شماست!**" in text
+
+    # Opponent sees "waiting for opponent" with CURRENT player's symbol
+    # (p_x is the current player, so p_o sees p_x's icon and name)
+    x_name = state["players"][str(p_x)]["name"]
+    text_opp = engine.render_for_group(state, p_o_group, p_o)
+    assert f"⏳ نوبت حریف ({x_icon} {x_name})" in text_opp
+
+
+def test_ttt_turn_clarity_after_move(players):
+    """Verify turn indicator updates correctly after a valid move."""
+    engine = TicTacToeEngine()
+    state = engine.create_initial_state(players, mode="solo")
+
+    p_x = state["current_player_id"]
+    p_o = 202 if p_x == 201 else 201
+
+    # Get the groups for each player
+    p_x_group = state["players"][str(p_x)]["group_id"]
+    p_o_group = state["players"][str(p_o)]["group_id"]
+
+    # P_X makes a move
+    state = engine.apply_action(state, p_x, {"cell": 4})
+
+    # Now P_O should see "your turn" with their own icon
+    o_symbol = state["players"][str(p_o)]["symbol"]
+    o_icon = "🍎" if o_symbol == "X" else "🍏"
+    text_o = engine.render_for_group(state, p_o_group, p_o)
+    assert f"{o_icon} **نوبت شماست!**" in text_o
+
+    # P_X should see "waiting for opponent" with P_O's icon and name
+    o_name = state["players"][str(p_o)]["name"]
+    text_x = engine.render_for_group(state, p_x_group, p_x)
+    assert f"⏳ نوبت حریف ({o_icon} {o_name})" in text_x
+
+
+def test_ttt_turn_clarity_invalid_move(players):
+    """Verify invalid moves do not change the turn indicator."""
+    engine = TicTacToeEngine()
+    state = engine.create_initial_state(players, mode="solo")
+
+    p_x = state["current_player_id"]
+    p_o = 202 if p_x == 201 else 201
+
+    # P_O tries to move (invalid - not their turn)
+    is_valid, _ = engine.validate_action(state, p_o, {"cell": 0})
+    assert not is_valid
+
+    # Turn should still be P_X
+    assert state["current_player_id"] == p_x
+    text = engine.render_for_group(state, -2001, p_x)
+    assert "نوبت شماست" in text
+
+
+def test_ttt_turn_clarity_game_over(players):
+    """Verify no turn indicator is shown when game is finished."""
+    engine = TicTacToeEngine()
+    state = engine.create_initial_state(players, mode="solo")
+
+    p_x = state["current_player_id"]
+    p_o = 202 if p_x == 201 else 201
+
+    # P_X wins with top row
+    state = engine.apply_action(state, p_x, {"cell": 0})
+    state = engine.apply_action(state, p_o, {"cell": 3})
+    state = engine.apply_action(state, p_x, {"cell": 1})
+    state = engine.apply_action(state, p_o, {"cell": 4})
+    state = engine.apply_action(state, p_x, {"cell": 2})
+
+    assert engine.is_finished(state)
+
+    # No turn indicator should be present
+    text = engine.render_for_group(state, -2001, p_x)
+    assert "نوبت شماست" not in text
+    assert "نوبت حریف" not in text
+    assert "پایان بازی" in text

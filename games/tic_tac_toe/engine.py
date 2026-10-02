@@ -129,6 +129,55 @@ class TicTacToeEngine(BaseGameEngine):
         summary = f"{winner_name} با تکمیل خط سه تایی پیروز شد!"
         return GameResult(winner_team=winner_team, is_draw=False, summary=summary, details={"winner_team": winner_team})
 
+    def _turn_status(
+        self,
+        game_state: Dict[str, Any],
+        my_p: Dict[str, Any],
+        opp_p: Dict[str, Any],
+        for_group_id: int,
+        for_player_id: Optional[int],
+    ) -> str:
+        """Build a clear, symbol-aware turn status line.
+
+        - Your turn (solo):  `🍎 نوبت شماست! یک خانه خالی را لمس کنید.`
+        - Your turn (shared group): `🍎 نوبت PlayerName است! یک خانه خالی را لمس کنید.`
+        - Teammate's turn: `🍎 نوبت TeammateName است! یک خانه خالی را لمس کنید.`
+        - Opponent:   `⏳ نوبت حریف (🍏 PlayerName)...`
+
+        In shared group messages (team mode), we never say "your turn" because
+        the teammate reads the same message. Instead, we name the current player.
+        """
+        icons = {"X": "🍎", "O": "🍏"}
+        current_pid = game_state.get("current_player_id")
+        current_p = game_state["players"].get(str(current_pid), {})
+        current_icon = icons.get(current_p.get("symbol", ""), "")
+
+        # Check if this is a shared group message (multiple players in same group)
+        members = [
+            p for p in game_state["players"].values()
+            if p.get("group_id") == for_group_id
+        ]
+        is_shared_group = len(members) > 1
+
+        # Check if viewer is on the same team as current player
+        viewer_team = my_p.get("team") if my_p else None
+        current_team = current_p.get("team")
+        is_same_team = viewer_team == current_team
+
+        if current_pid == for_player_id:
+            # It's the viewer's turn
+            if is_shared_group:
+                # Shared group: name the current player instead of "your turn"
+                return f"{current_icon} **نوبت {current_p.get('name', 'بازیکن')} است!** یک خانه خالی را لمس کنید."
+            else:
+                return f"{current_icon} **نوبت شماست!** یک خانه خالی را لمس کنید."
+        elif is_same_team:
+            # Teammate's turn: name them
+            return f"{current_icon} **نوبت {current_p.get('name', 'بازیکن')} است!** یک خانه خالی را لمس کنید."
+        else:
+            # Opponent's turn
+            return f"⏳ نوبت حریف ({current_icon} {current_p.get('name', 'حریف')})..."
+
     def render_for_group(
         self,
         game_state: Dict[str, Any],
@@ -163,12 +212,7 @@ class TicTacToeEngine(BaseGameEngine):
                 f"📝 {result.summary}"
             )
 
-        current_pid = game_state.get("current_player_id")
-        from sib.games.base import turn_line
-        turn_text = turn_line(
-            game_state, for_group_id, for_player_id,
-            "یک خانه خالی را لمس کنید.", "یک خانه خالی را لمس کنید.",
-        )
+        turn_text = self._turn_status(game_state, my_p, opp_p, for_group_id, for_player_id)
 
         return (
             "🍎🍏 **بازی دوز (Tic-Tac-Toe)** 🍏\n\n"

@@ -65,12 +65,11 @@ def test_connect_four_uses_apple_icons(solo_players):
 
 
 def test_battleship_uses_glass_and_shot_button_styling(solo_players):
-    """Unselected cells look glassy; shot cells change the BUTTON ITSELF.
+    """Unselected cells look visually minimal; shot cells change the BUTTON ITSELF.
 
     Design contract (UX audit): the visual state lives in the button
-    text - glassy ░ when unselected, the button turns blue 🟦 when shot
-    at water, 💥 on hit, 🔥 on a sunk ship cell. Blue emojis are never
-    used as a background canvas for unselected cells.
+    text - visually minimal · when unselected (blue Telegram button style),
+    🌊 when shot at water (miss), 💥 on hit, 🔥 on a sunk ship cell.
     """
     engine = BattleshipEngine()
     state = engine.create_initial_state(list(solo_players), mode="solo", fleet_seed_a=1, fleet_seed_b=2)
@@ -79,19 +78,22 @@ def test_battleship_uses_glass_and_shot_button_styling(solo_players):
     state["teams"]["A"]["shots_taken"] = {"0,0": "miss", "1,1": "hit"}
 
     text = engine.render_for_group(state, -4001, 401)
-    assert "░" in text   # unselected cells are glassy/transparent
-    assert "🟦" in text  # shot-at-water cells turn blue (state-in-button)
+    assert "·" in text   # unselected cells are visually minimal
+    assert "🌊" in text  # miss: wave emoji
     assert "💥" in text  # hits
-    assert "🌊" not in text  # the old emoji-canvas language is gone
+    assert "░" not in text  # old glass character is gone
+    assert "🟦" not in text  # old blue square is gone
 
+    # Keyboard layout: header row + 8 data rows (row label + 8 cells)
     kb = engine.get_keyboard(state, 1, 401)
-    assert kb.inline_keyboard[0][0].text == "🟦"  # shot water: button is blue
-    assert kb.inline_keyboard[1][1].text == "💥"  # hit
-    assert kb.inline_keyboard[2][2].text == "░"   # unselected: glassy
+    # Cell (0,0) is at keyboard row 1, col 1 (offset by header + label)
+    assert kb.inline_keyboard[1][1].text == "🌊"  # shot water: wave emoji
+    assert kb.inline_keyboard[2][2].text == "💥"  # hit
+    assert kb.inline_keyboard[3][3].text == "·"   # unselected: minimal
     # Shot cells are noop, unshot cell on my turn is clickable.
-    assert kb.inline_keyboard[0][0].callback_data == "noop"
     assert kb.inline_keyboard[1][1].callback_data == "noop"
-    assert kb.inline_keyboard[2][2].callback_data.startswith("bs_action:")
+    assert kb.inline_keyboard[2][2].callback_data == "noop"
+    assert kb.inline_keyboard[3][3].callback_data.startswith("bs_action:")
 
     # Sunk-ship cells render as 🔥 on both text and keyboard.
     state["teams"]["B"]["ships"][0]["sunk"] = True
@@ -99,4 +101,5 @@ def test_battleship_uses_glass_and_shot_button_styling(solo_players):
         state["teams"]["A"]["shots_taken"][f"{cell[0]},{cell[1]}"] = "hit"
     kb = engine.get_keyboard(state, 1, 401)
     r0, c0 = state["teams"]["B"]["ships"][0]["cells"][0]
-    assert kb.inline_keyboard[r0][c0].text == "🔥"
+    # Offset by header row (+1) and row label column (+1)
+    assert kb.inline_keyboard[r0 + 1][c0 + 1].text == "🔥"

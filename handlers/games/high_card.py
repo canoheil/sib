@@ -9,8 +9,17 @@ router = Router(name="game_high_card")
 
 @router.callback_query(F.data.startswith("hc_action:"))
 async def handle_high_card_action(callback: CallbackQuery, bot: Bot):
-    """Handle a player drawing a card in High Card."""
+    """Handle High Card actions: draw, keep, swap."""
     parts = callback.data.split(":")
     match_id = int(parts[1])
+    action_type = parts[2]
 
-    await process_game_action(callback, bot, match_id, {"draw": True})
+    if action_type == "draw":
+        # Initial card draw - just triggers validate_action which draws the card
+        await process_game_action(callback, bot, match_id, {"draw": True})
+    elif action_type == "keep":
+        # Player keeps their current card
+        await process_game_action(callback, bot, match_id, {"choice": "keep"})
+    elif action_type == "swap":
+        # Player swaps for a new card
+        await process_game_action(callback, bot, match_id, {"choice": "swap"})
