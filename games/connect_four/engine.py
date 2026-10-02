@@ -181,6 +181,70 @@ class ConnectFourEngine(BaseGameEngine):
             details={"winner_team": winner_team},
         )
 
+    def _turn_status(
+        self,
+        game_state: Dict[str, Any],
+        for_group_id: int,
+        for_player_id: Optional[int],
+    ) -> str:
+        """Build a clear, team-aware turn status line.
+
+        Solo:
+          - Your turn:    `🍎 نوبت شماست! یک ستون را انتخاب کنید.`
+          - Opponent:     `⏳ نوبت حریف (🍏 PlayerName)...`
+
+        Team (2v2 / 4v4):
+          - Your turn (you are the active player, solo group):
+              `🍎 نوبت شماست! یک ستون را انتخاب کنید.`
+          - Your turn (shared group with teammate):
+              `🍎 نوبت PlayerName است! یک ستون را انتخاب کنید.`
+          - Your team's turn (teammate is active):
+              `🍎 نوبت تیم شما: 👤 TeammateName`
+          - Opponent team's turn:
+              `⏳ نوبت تیم حریف: 👤 PlayerName (🍏)`
+        """
+        current_pid = game_state.get("current_player_id")
+        current_p = game_state["players"].get(str(current_pid), {})
+        current_team_code = current_p.get("team_code", "")
+        current_symbol = current_p.get("symbol", "")
+        current_name = current_p.get("name", "حریف")
+
+        # Find the viewer's team
+        my_p = next(
+            (p for p in game_state["players"].values() if p["group_id"] == for_group_id),
+            None,
+        )
+        my_team_code = my_p.get("team_code", "") if my_p else ""
+        is_team_mode = len(game_state["players"]) > 2
+
+        # Check if this is a shared group message (multiple players in same group)
+        members = [
+            p for p in game_state["players"].values()
+            if p.get("group_id") == for_group_id
+        ]
+        is_shared_group = len(members) > 1
+
+        if not is_team_mode:
+            # Solo mode: simple your-turn / opponent-turn
+            if current_pid == for_player_id:
+                if is_shared_group:
+                    return f"{current_symbol} **نوبت {current_name} است!** یک ستون را انتخاب کنید."
+                return f"{current_symbol} **نوبت شماست!** یک ستون را انتخاب کنید."
+            return f"⏳ نوبت حریف ({current_symbol} {current_name})..."
+
+        # Team mode: distinguish your turn, teammate's turn, opponent's turn
+        if current_pid == for_player_id:
+            if is_shared_group:
+                return f"{current_symbol} **نوبت {current_name} است!** یک ستون را انتخاب کنید."
+            return f"{current_symbol} **نوبت شماست!** یک ستون را انتخاب کنید."
+
+        if current_team_code == my_team_code:
+            # Teammate's turn
+            return f"{current_symbol} **نوبت تیم شما:** 👤 {current_name}"
+
+        # Opponent team's turn
+        return f"⏳ نوبت تیم حریف: 👤 {current_name} ({current_symbol})"
+
     def render_for_group(
         self,
         game_state: Dict[str, Any],
@@ -226,19 +290,7 @@ class ConnectFourEngine(BaseGameEngine):
                 f"📝 {result.summary}"
             )
 
-        current_pid = game_state.get("current_player_id")
-        current_p = game_state["players"].get(str(current_pid), {})
-        is_my_turn = (current_pid == for_player_id)
-
-        if is_my_turn:
-            from sib.games.base import turn_line
-            turn_msg = turn_line(
-                game_state, for_group_id, for_player_id,
-                "یک ستون را برای انداختن مهره انتخاب کنید.",
-                "یک ستون را برای انداختن مهره انتخاب کنید.",
-            )
-        else:
-            turn_msg = f"⏳ **نوبت بازیکن:** {current_p.get('name', 'حریف')} ({current_p.get('symbol', '')})"
+        turn_msg = self._turn_status(game_state, for_group_id, for_player_id)
 
         return (
             "🍎🍏 **چهار در یک خط (Connect Four)** 🍏\n\n"
