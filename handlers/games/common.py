@@ -11,13 +11,14 @@ Design contract (Battleship reliability fix):
 """
 
 import json
-from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, Optional, Tuple
 from aiogram import Bot, Router, F
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+from sib.bots.runner import schedule_bot_turn
+from sib.bots.service import GameBotService
 from sib.core.logging import logger, log_event, Events
 from sib.database.connection import get_session
 from sib.database.models import Match, MatchPlayer, MatchState, Group, AdCampaign
@@ -65,7 +66,6 @@ async def _persist_board_message_id(match_id: int, group_id: int, message_id: in
         logger.warning(
             f"Could not persist replaced board id for match {match_id}: {exc}"
         )
-from sib.bots.runner import run_bot_turns
 
 
 def get_rematch_keyboard(
@@ -281,38 +281,10 @@ async def process_game_action(
         # Apply action
         state = engine.apply_action(state, user.id, action)
 
-        # Sync Match turn metadata before running the bot.
-        if not engine.is_finished(state):
-            match.current_turn_player_id = state.get("current_player_id")
-
-        # If this is a bot match and the bot now has the turn,
-        # execute the bot move before rendering the updated board.
-        if match.is_bot_match and not engine.is_finished(state):
-            state = await run_bot_turns(match, state)
-
         match.game_state = json.dumps(state, ensure_ascii=False)
 
         # Keep Match timeout metadata synchronized with the game engine state.
-        current_player_id = state.get("current_player_id")
-        if engine.is_finished(state):
-            match.current_turn_player_id = None
-            match.turn_deadline = None
-        elif current_player_id:
-            # Turn-based game: the deadline belongs to the current player.
-            match.current_turn_player_id = current_player_id
-            match.turn_deadline = (
-                datetime.now(timezone.utc)
-                + timedelta(seconds=engine.turn_timeout_seconds)
-            )
-        else:
-            # Simultaneous game (e.g. RPS / High Card): keep the shared
-            # deadline so TimeoutService can resolve an incomplete round.
-            match.current_turn_player_id = None
-            if match.turn_deadline is None:
-                match.turn_deadline = (
-                    datetime.now(timezone.utc)
-                    + timedelta(seconds=engine.turn_timeout_seconds)
-                )
+        GameBotService.sync_turn_metadata(match, state, engine)
 
         log_event(
             Events.MOVE_PLAYED,
@@ -378,6 +350,13 @@ async def process_game_action(
     has_message_ids = bool(
         render_payload["group1_message_id"] or render_payload["group2_message_id"]
     )
+
+    # The human move is committed above. If the turn now belongs to a bot,
+    # hand the delay to a detached bot-turn task: the humanization sleep must
+    # never run on this request, nor inside the transaction it just closed.
+    # The task re-reads the state itself and exits when no bot must act.
+    if render_payload["is_bot_match"] and not finished:
+        schedule_bot_turn(render_payload["match_id"], bot=bot)
 
     # Friendly matches share ONE board message between both teams (group1 and
     # group2 are the same group): render exactly one board, from the team of

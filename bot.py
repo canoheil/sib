@@ -70,6 +70,12 @@ async def main():
         except asyncio.CancelledError:
             pass
 
+        # Delayed bot turns are detached by design: cancel the still-sleeping
+        # ones so shutdown never leaves a half-run task behind.
+        from sib.bots.runner import cancel_all_bot_turns
+
+        await cancel_all_bot_turns()
+
         await bot.session.close()
         logger.info("sib bot stopped cleanly.")
 

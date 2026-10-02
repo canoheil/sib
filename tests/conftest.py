@@ -128,7 +128,17 @@ async def db_session():
 
         yield session
         await session.rollback()
-        
+
+    # Bot turns are detached background tasks by design: cancel the ones the
+    # test left sleeping so no test can leak a task into the next one (and
+    # the task never outlives the test-scoped database engine).
+    try:
+        from sib.bots.runner import cancel_all_bot_turns
+
+        await cancel_all_bot_turns()
+    except Exception:  # pragma: no cover - cleanup is best effort
+        pass
+
     db_connection._async_engine = previous_engine
     db_connection._async_sessionmaker = previous_sessionmaker
     await engine.dispose()

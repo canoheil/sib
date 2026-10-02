@@ -1,13 +1,15 @@
-"""Focused bot naming and delayed-turn regressions."""
+"""Bot identity + bot-turn decision regressions.
 
-import asyncio
-import copy
+Delayed bot turn execution itself is covered by
+``tests/test_bot_delay_scheduling.py`` (human path immediacy, per-bot delays,
+lock boundaries, cancellation and duplicate protection). This module keeps
+the bot naming pool tests and pins the pure "who must act next" decision used
+by the scheduler.
+"""
+
 from types import SimpleNamespace
 
-import pytest
-
 from sib.bots import runner
-from sib.bots.runner import run_bot_turns
 from sib.database.models import MatchState
 from sib.services.bot import (
     BOT_DISPLAY_NAME_POOL,
@@ -63,7 +65,7 @@ def test_bot_names_avoid_existing_names_and_overflow_without_duplicates():
     assert any("۲" in name or "۳" in name for name in names)
 
 
-def _bot_turn_fixture():
+def _turn_fixture(game_code="connect_four", *, simultaneous=False):
     human = SimpleNamespace(
         user_id=11001,
         team=1,
@@ -74,238 +76,82 @@ def _bot_turn_fixture():
     bot = SimpleNamespace(
         user_id=11002,
         team=2,
-        group_id=-102,
+        group_id=None,
         user=SimpleNamespace(is_bot=True, display_name="🤖 سیب کوچولو"),
         bot_profile=None,
     )
-    engine = get_game_engine("connect_four")
+    engine = get_game_engine(game_code)
     state = engine.create_initial_state([human, bot], "solo")
-    state = engine.apply_action(state, human.user_id, {"col": 3})
+    state = engine.apply_action(
+        state, human.user_id, {"choice": "rock"} if simultaneous else {"col": 3}
+    )
     match = SimpleNamespace(
         id=404,
-        game=SimpleNamespace(code="connect_four"),
+        game=SimpleNamespace(code=game_code),
         players=[human, bot],
         is_bot_match=True,
         state=MatchState.ACTIVE,
-        current_turn_player_id=bot.user_id,
+        current_turn_player_id=None if simultaneous else bot.user_id,
         game_state=None,
         turn_deadline=None,
     )
     return match, state, human, bot
 
 
-def _simultaneous_bot_turn_fixture():
-    human = SimpleNamespace(
-        user_id=12001,
-        team=1,
-        group_id=-201,
-        user=SimpleNamespace(is_bot=False, display_name="بازیکن واقعی"),
-        bot_profile=None,
-    )
-    bot = SimpleNamespace(
-        user_id=12002,
-        team=2,
-        group_id=-202,
-        user=SimpleNamespace(is_bot=True, display_name="🤖 سیب خندان"),
-        bot_profile=None,
-    )
-    engine = get_game_engine("rock_paper_scissors")
-    state = engine.create_initial_state([human, bot], "solo")
-    state = engine.apply_action(state, human.user_id, {"choice": "rock"})
-    match = SimpleNamespace(
-        id=405,
-        game=SimpleNamespace(code="rock_paper_scissors"),
-        players=[human, bot],
-        is_bot_match=True,
-        state=MatchState.ACTIVE,
-        current_turn_player_id=None,
-        game_state=None,
-        turn_deadline=None,
-    )
-    return match, state, human, bot
+def test_turn_based_decision_requires_the_matching_match_metadata():
+    match, state, human, bot = _turn_fixture()
 
+    assert runner.next_bot_turn(match, state) == (bot.user_id, False)
+    assert runner.has_pending_bot_turn(match, state) is True
 
-@pytest.mark.asyncio
-async def test_simultaneous_bot_choice_is_delayed_once_per_round():
-    match, state, _human, bot = _simultaneous_bot_turn_fixture()
-    delays = []
-
-    async def no_wait(delay):
-        delays.append(delay)
-        await asyncio.sleep(0)
-
-    updated = await run_bot_turns(
-        match,
-        state,
-        sleep=no_wait,
-        random_delay=lambda minimum, maximum: (minimum + maximum) / 2,
-    )
-
-    bot_state = updated["players"][str(bot.user_id)]
-    # Both choices resolved round one and reset for round two. The bot is not
-    # allowed to make a second hidden choice during the same runner call.
-    assert updated["round"] == 2
-    assert bot_state["locked"] is False
-    assert len(delays) == 1
-    assert runner.BOT_MOVE_DELAY_MIN_SECONDS <= delays[0] <= runner.BOT_MOVE_DELAY_MAX_SECONDS
-
-
-@pytest.mark.asyncio
-async def test_bot_move_waits_random_async_delay_and_remains_non_blocking():
-    match, state, human, bot = _bot_turn_fixture()
-    delays = []
-    ranges = []
-    entered_wait = asyncio.Event()
-    release_wait = asyncio.Event()
-
-    def pick_delay(minimum, maximum):
-        ranges.append((minimum, maximum))
-        return 1.37
-
-    async def controlled_sleep(delay):
-        delays.append(delay)
-        entered_wait.set()
-        await release_wait.wait()
-
-    task = asyncio.create_task(
-        run_bot_turns(
-            match,
-            state,
-            sleep=controlled_sleep,
-            random_delay=pick_delay,
-        )
-    )
-    await asyncio.wait_for(entered_wait.wait(), timeout=0.5)
-
-    # The bot has not moved yet, and an unrelated coroutine can run while its
-    # asynchronous delay is pending.
-    assert state["moves_count"] == 1
-    loop_responsive = asyncio.Event()
-    asyncio.get_running_loop().call_soon(loop_responsive.set)
-    await asyncio.wait_for(loop_responsive.wait(), timeout=0.5)
-    assert ranges == [(runner.BOT_MOVE_DELAY_MIN_SECONDS, runner.BOT_MOVE_DELAY_MAX_SECONDS)]
-    assert runner.BOT_MOVE_DELAY_MIN_SECONDS <= delays[0] <= runner.BOT_MOVE_DELAY_MAX_SECONDS
-
-    release_wait.set()
-    updated = await task
-    assert updated["moves_count"] == 2
-    assert updated["current_player_id"] == human.user_id
-    assert match.current_turn_player_id == human.user_id
-    assert bot.user.is_bot is True
-
-
-@pytest.mark.asyncio
-async def test_cancelling_during_delay_prevents_the_bot_move():
-    match, state, _human, _bot = _bot_turn_fixture()
-    entered_wait = asyncio.Event()
-    never_release = asyncio.Event()
-
-    async def controlled_sleep(_delay):
-        entered_wait.set()
-        await never_release.wait()
-
-    task = asyncio.create_task(
-        run_bot_turns(
-            match,
-            state,
-            sleep=controlled_sleep,
-            random_delay=lambda _minimum, _maximum: 1.0,
-        )
-    )
-    await asyncio.wait_for(entered_wait.wait(), timeout=0.5)
-    task.cancel()
-
-    with pytest.raises(asyncio.CancelledError):
-        await task
-
-    assert state["moves_count"] == 1
-    assert state["current_player_id"] == match.current_turn_player_id
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "invalidator",
-    ["turn_changed", "match_cancelled", "match_finished", "game_finished"],
-)
-async def test_wake_up_rechecks_turn_and_match_before_moving(invalidator):
-    match, state, human, bot = _bot_turn_fixture()
-
-    async def invalidate_during_wait(_delay):
-        if invalidator == "turn_changed":
-            state["current_player_id"] = human.user_id
-            match.current_turn_player_id = human.user_id
-        elif invalidator == "match_cancelled":
-            match.state = MatchState.CANCELLED
-        elif invalidator == "match_finished":
-            match.state = MatchState.FINISHED
-        elif invalidator == "game_finished":
-            state["finished"] = True
-
-    updated = await run_bot_turns(
-        match,
-        state,
-        sleep=invalidate_during_wait,
-        random_delay=lambda _minimum, _maximum: 1.0,
-    )
-
-    assert updated["moves_count"] == 1
-    assert bot.user.is_bot is True
-
-
-@pytest.mark.asyncio
-async def test_bot_turn_metadata_prevents_out_of_turn_and_duplicate_moves():
-    match, state, human, bot = _bot_turn_fixture()
-    sleep_calls = []
-
-    async def no_sleep(delay):
-        sleep_calls.append(delay)
-
-    # A stale match turn cannot authorize the bot, even when the game state
-    # still points at it.
+    # A stale Match metadata turn cannot authorize the bot on its own.
     match.current_turn_player_id = human.user_id
-    unchanged = await run_bot_turns(
-        match,
-        state,
-        sleep=no_sleep,
-        random_delay=lambda _minimum, _maximum: 1.0,
-    )
-    assert unchanged["moves_count"] == 1
-    assert sleep_calls == []
+    assert runner.next_bot_turn(match, state) is None
 
-    # Restore the legitimate bot turn and let it move once.
-    match.current_turn_player_id = bot.user_id
-    updated = await run_bot_turns(
-        match,
-        state,
-        sleep=no_sleep,
-        random_delay=lambda _minimum, _maximum: 1.0,
-    )
-    assert updated["moves_count"] == 2
-    after_first_move = copy.deepcopy(updated)
-
-    # Replaying the runner on the now-human turn cannot make another bot move.
-    replayed = await run_bot_turns(
-        match,
-        updated,
-        sleep=no_sleep,
-        random_delay=lambda _minimum, _maximum: 1.0,
-    )
-    assert replayed == after_first_move
-    assert len(sleep_calls) == 1
+    # A human turn is never a bot turn.
+    match.current_turn_player_id = human.user_id
+    state["current_player_id"] = human.user_id
+    assert runner.next_bot_turn(match, state) is None
 
 
-@pytest.mark.asyncio
-async def test_human_vs_human_match_skips_bot_delay():
-    match, state, _human, _bot = _bot_turn_fixture()
+def test_simultaneous_decision_uses_the_unlocked_hidden_choice():
+    match, state, human, bot = _turn_fixture("rock_paper_scissors", simultaneous=True)
+
+    assert runner.next_bot_turn(match, state) == (bot.user_id, True)
+
+    # Once the bot's hidden choice is locked there is no pending bot turn.
+    state["players"][str(bot.user_id)]["locked"] = True
+    assert runner.next_bot_turn(match, state) is None
+
+
+def test_inactive_finished_or_human_matches_never_produce_bot_turns():
+    match, state, human, bot = _turn_fixture()
+
     match.is_bot_match = False
+    assert runner.next_bot_turn(match, state) is None
 
-    async def unexpected_sleep(_delay):
-        raise AssertionError("human-vs-human matches must not wait for a bot")
+    match.is_bot_match = True
+    match.state = MatchState.CANCELLED
+    assert runner.next_bot_turn(match, state) is None
 
-    unchanged = await run_bot_turns(
-        match,
-        state,
-        sleep=unexpected_sleep,
-        random_delay=lambda _minimum, _maximum: 1.0,
+    match.state = MatchState.ACTIVE
+    state["finished"] = True
+    assert runner.next_bot_turn(match, state) is None
+
+
+def test_games_with_their_own_auto_flow_are_never_scheduled():
+    """Apple Battle's narration is not a bot turn (no registered strategy)."""
+    match, state, human, bot = _turn_fixture()
+    match.game = SimpleNamespace(code="apple_battle")
+    # Apple Battle player states carry no hidden-choice ``locked`` flag.
+    state["players"][str(bot.user_id)].pop("locked", None)
+    state["current_player_id"] = None
+
+    assert runner.next_bot_turn(match, state) is None
+
+
+def test_delay_constants_stay_in_the_intended_humanization_window():
+    assert (runner.BOT_MOVE_DELAY_MIN_SECONDS, runner.BOT_MOVE_DELAY_MAX_SECONDS) == (
+        0.8,
+        2.0,
     )
-    assert unchanged["moves_count"] == 1

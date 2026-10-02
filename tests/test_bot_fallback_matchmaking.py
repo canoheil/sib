@@ -233,19 +233,27 @@ async def test_solo_bot_turn_runs_through_independent_match_player(db_session):
     state = __import__("json").loads(match.game_state)
 
     state = engine.apply_action(state, human.id, {"col": 3})
+    match.game_state = __import__("json").dumps(state)
     match.current_turn_player_id = state["current_player_id"]
-    from sib.bots.runner import run_bot_turns
+    await db_session.commit()
+
+    # The human move is committed immediately; the bot's own turn is executed
+    # by the detached scheduler (with an injected instant sleep here).
+    from sib.bots import runner
 
     async def no_sleep(_delay):
         return None
 
-    state = await run_bot_turns(
-        match,
-        state,
+    task = runner.schedule_bot_turn(
+        match.id,
         sleep=no_sleep,
         random_delay=lambda _minimum, _maximum: 1.0,
     )
+    assert task is not None
+    await task
+    await db_session.refresh(match)
 
+    state = __import__("json").loads(match.game_state)
     assert sum(cell is not None for row in state["board"] for cell in row) == 2
     assert state["current_player_id"] == human.id
 

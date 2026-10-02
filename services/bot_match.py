@@ -1,7 +1,7 @@
 """Create normal active Matches with independent bot participants."""
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import select
@@ -22,6 +22,7 @@ from sib.database.models import (
     PlayerCard,
     ReleaseStatus,
 )
+from sib.bots.service import GameBotService
 from sib.games.registry import get_game_engine
 from sib.services.bot import BotService
 from sib.services.match_setup import attach_team_names
@@ -177,22 +178,13 @@ class BotMatchService:
         else:
             state = engine.create_initial_state(match.players, party.mode)
             attach_team_names(state, match)
-            # Match metadata must reflect the opening engine turn before the
-            # runner validates it (notably when Tic-Tac-Toe randomly starts on
-            # a bot). Simultaneous games use None and lock a hidden bot choice.
-            match.current_turn_player_id = state.get("current_player_id")
-            from sib.bots.runner import run_bot_turns
-
-            state = await run_bot_turns(match, state)
 
         match.game_state = json.dumps(state, ensure_ascii=False)
-        current_player_id = state.get("current_player_id")
-        match.current_turn_player_id = current_player_id
-        match.turn_deadline = (
-            None
-            if engine.is_finished(state)
-            else now + timedelta(seconds=engine.turn_timeout_seconds)
-        )
+        # Opening turn metadata only. Bots never move inside match setup: the
+        # caller schedules the first bot turn AFTER this transaction commits,
+        # so creating the match (and rendering its board) is never delayed by
+        # a bot's humanization sleep, and no lock is held across it.
+        GameBotService.sync_turn_metadata(match, state, engine)
         await session.flush()
 
         return await session.scalar(
