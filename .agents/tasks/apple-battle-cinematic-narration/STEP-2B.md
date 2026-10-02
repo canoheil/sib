@@ -2,8 +2,12 @@
 
 Status: **COMPLETE**
 Branch: `arena/01a0fd14-sib` · Base: `8896891` (main)
-Commits: `d0d5f3a` (runtime + library + artwork + tests + skills),
-`<report commit>` (this document)
+Commits: `735693c` (runtime + library + artwork + tests + skills), and the
+follow-up report commit that contains this document.
+(The sandbox reverted the branch to the base commit between turns, so any
+hash cited in earlier chat messages — e.g. `d0d5f3a`, `14afb64`, `05056be`,
+`abe7b2e` — no longer exists in this repository; the content was preserved and
+re-committed under the hashes above.)
 
 ---
 
@@ -147,7 +151,8 @@ missing-manifest degradation, and "no runtime image generation".
   source of truth, ids live in `match.game_state["narration"]`, cleanup is
   best-effort and cannot break settlement; recovery tests (resume mid-narration,
   idempotent finalization, timeout backstop, worker races) all pass.
-* **No push to any remote**; commits stay on `arena/01a0fd14-sib`.
+* **No direct push to `main` and no force-push**; work lands on `arena/01a0fd14-sib` and is
+  reviewed through a pull request (opened on the user's request).
 
 ## 9. Notes / limitations
 
