@@ -253,12 +253,18 @@ class BattleshipEngine(BaseGameEngine):
                     sunk_cells.add(f"{cell[0]},{cell[1]}")
         labels: Dict[str, str] = {}
         for key, val in shots.items():
+            # Always show the shot result, even if the cell later got sunk.
+            # Priority: SUNK > HIT > MISS
             if key in sunk_cells:
                 labels[key] = self.SUNK
             elif val == "hit":
                 labels[key] = self.HIT
             else:
                 labels[key] = self.MISS
+        # Ensure all cells that were shot have a label, even if somehow missing from dict
+        for key in shots:
+            if key not in labels:
+                labels[key] = self.MISS  # Default to miss if somehow not categorized
         return labels
 
     def render_for_group(
