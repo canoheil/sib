@@ -345,16 +345,21 @@ async def test_engine_advances_stages_and_finishes_with_precomputed_winner(db_se
     winner_id = state["battle"]["winner_id"]
     winner_team = state["players"][str(winner_id)]["team"]
 
-    # Intro is visible from the start (cursor=1), not finished.
+    # Phase 2A: narration starts at cursor=0 (the intro is delivered as its
+    # OWN temporary message, not baked into the first board render).
+    assert state["cursor"] == 0
     assert not engine.is_finished(state)
-    assert "نبرد سیبی آغاز شد" in engine.render_for_group(state, -4001, a.id)
 
-    # Advance through all beats (staged presentation).
-    for _ in range(4):
+    # Advance through ALL beats (intro + 3 rounds + finale) — staged.
+    for _ in range(5):
         ok, _reason = engine.validate_action(state, a.id, {"type": "advance"})
         assert ok
         state = engine.apply_action(state, a.id, {"type": "advance"})
     assert engine.is_finished(state)
+
+    # The (unchanged) final report still contains the full story.
+    final_report = engine.render_for_group(state, -4001, a.id)
+    assert "نبرد سیبی آغاز شد" in final_report
 
     result = engine.get_result(state)
     assert result.is_draw is False
@@ -710,16 +715,39 @@ async def test_navigation_back_never_dequeues(db_session):
 
 
 # ---------------------------------------------------------------------------
-# Staged narration loop (auto presentation, ~3s beats, message edits)
+# Phase 2A — live narration as SEPARATE temporary messages
+# (auto presentation, ~3s beats, one photo message per beat, cleanup at end)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_narration_loop_edits_both_messages_and_finalizes(db_session):
+def _mock_bot_with_sends():
+    """Bot mock that numbers every sent message (photo or text) sequentially."""
+    from types import SimpleNamespace
     from unittest.mock import AsyncMock, MagicMock
 
+    counter = {"next": 1000}
+
+    def _next_message(chat_id):
+        message_id = counter["next"]
+        counter["next"] += 1
+        return SimpleNamespace(message_id=message_id, chat_id=chat_id)
+
+    bot = MagicMock()
+    bot.send_photo = AsyncMock(side_effect=lambda chat_id, photo, **kw: _next_message(chat_id))
+    bot.send_message = AsyncMock(side_effect=lambda chat_id, text, **kw: _next_message(chat_id))
+    bot.edit_message_text = AsyncMock()
+    bot.edit_message_media = AsyncMock()
+    bot.delete_message = AsyncMock()
+    return bot
+
+
+@pytest.mark.asyncio
+async def test_narration_loop_sends_separate_messages_and_finalizes(db_session):
+    """Phase 2A: every beat is its OWN photo message; the final report is unchanged."""
     from sib.database.models import Game
+    from sib.games.apple_battle.engine import AppleBattleEngine
     from sib.services.group import GroupService
+    from sib.services.telegram_ui import photo_caption
 
     class _Chat:
         def __init__(self, cid, title):
@@ -733,8 +761,9 @@ async def test_narration_loop_edits_both_messages_and_finalizes(db_session):
 
     a = await create_test_user(db_session, "روایت‌گر الف")
     b = await create_test_user(db_session, "روایت‌گر ب")
-    card_a = await _card(db_session, a, "narr_a")
-    card_b = await _card(db_session, b, "narr_b")
+    # Bundled artwork characters → every narration message can carry a photo.
+    card_a = await _card(db_session, a, "sib_sorkh")
+    card_b = await _card(db_session, b, "sib_sabz")
     await AppleBattleService.enqueue(db_session, a.id, card_a.id)
     await AppleBattleService.enqueue(db_session, b.id, card_b.id)
     await db_session.commit()
@@ -753,25 +782,59 @@ async def test_narration_loop_edits_both_messages_and_finalizes(db_session):
     await db_session.commit()
 
     winner_id = state["battle"]["winner_id"]
+    plan_texts = [beat["text"] for beat in state["plan"]]
 
-    bot = MagicMock()
-    bot.edit_message_text = AsyncMock()
+    bot = _mock_bot_with_sends()
 
     # Beat delay 0 → the loop runs to completion immediately.
     await AppleBattleService._narration_loop(bot, match_id, beat_delay=0.0)
 
-    # Both group messages were edited (staged presentation).
-    edited_chats = {c.kwargs["chat_id"] for c in bot.edit_message_text.call_args_list}
-    assert edited_chats == {-9001, -9002}
-    last_texts = [
-        c.kwargs["chat_id"] and c.args[0] if c.args else c.kwargs.get("text", "")
-        for c in bot.edit_message_text.call_args_list
-    ]
-    assert any("برنده" in t for t in last_texts)
+    # Each beat was sent as a SEPARATE photo message to BOTH groups.
+    assert bot.send_photo.await_count == len(plan_texts) * 2
+    captions = [c.kwargs["caption"] for c in bot.send_photo.call_args_list]
+    for text in plan_texts:
+        assert captions.count(text) == 2, "each narration beat needs its own message"
+    assert len(set(captions)) == len(plan_texts)
+    sent_chats = {c.args[0] if c.args else c.kwargs["chat_id"] for c in bot.send_photo.call_args_list}
+    assert sent_chats == {-9001, -9002}
+
+    # Narration was never appended into one repeatedly edited message: the
+    # ONLY edits are the two final reports (one per group).
+    assert bot.edit_message_media.await_count == 2
+    assert bot.edit_message_text.await_count == 0
 
     await db_session.rollback()
     match = await _reload_match(db_session, match_id)
     assert match.result_applied is True
+
+    # Temporary narration message ids are persisted (restart-safe).
+    final_state = json.loads(match.game_state)
+    records = final_state["narration"]["messages"]
+    assert len(records) == len(plan_texts) * 2
+    assert {r["beat"] for r in records} == set(range(len(plan_texts)))
+    assert all(r["deleted"] is True for r in records)
+    assert final_state["narration"]["cleaned"] is True
+
+    # Cleanup deleted every temporary narration message.
+    deleted = {(c.args[0], c.args[1]) for c in bot.delete_message.call_args_list}
+    assert len(deleted) == len(plan_texts) * 2
+    assert {mid for _chat, mid in deleted} == {r["message_id"] for r in records}
+
+    # The existing final report is shown EXACTLY as before: same render, same
+    # board message ids, same final keyboard, per group.
+    engine = AppleBattleEngine()
+    edited = {
+        c.kwargs["chat_id"]: (c.kwargs["message_id"], c.kwargs["media"].caption)
+        for c in bot.edit_message_media.call_args_list
+    }
+    assert set(edited) == {-9001, -9002}
+    assert edited[-9001][0] == 11 and edited[-9002][0] == 22
+    for group_id, (_mid, caption) in edited.items():
+        assert caption == photo_caption(
+            engine.render_for_group(final_state, group_id, None)
+        )
+    assert "برنده" in edited[-9001][1]
+    assert "✅ این نبرد به پایان رسید." in edited[-9001][1]
 
     assert await SeedlingService.get_total(db_session, winner_id) == 1
     assert await AppleWalletService.get_balance(db_session, winner_id) == 5
@@ -780,7 +843,6 @@ async def test_narration_loop_edits_both_messages_and_finalizes(db_session):
     assert await AppleWalletService.get_balance(db_session, loser_id) == 0
 
     # The precomputed winner never changed.
-    final_state = json.loads(match.game_state)
     assert final_state["battle"]["winner_id"] == winner_id
 
 
