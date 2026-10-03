@@ -444,15 +444,33 @@ async def handle_shop_good_buy(callback: CallbackQuery, bot: Bot):
 
 
 # ---------------------------------------------------------------------------
-# Section 3: Sell Items (special Apples and future sellables)
+# Section 3: Sell Items (special Apples -> normal Apples)
 # ---------------------------------------------------------------------------
+#
+# Flow (spec):
+#     Sell Items  ->  list of OWNED sellable items
+#                 ->  item page (art + price + Sell 1 / Sell All)
+#                 ->  Sell All confirmation  ->  back to the list
+#
+# Sellability and prices stay CONFIG-driven (``item_sell_prices``), so only
+# the three special Apples are listed and normal Apples — the CURRENCY, a
+# wallet balance and not an inventory row — can never enter this flow.
+# Every screen is rendered from FRESH inventory data and every sale re-reads
+# the owned quantity inside the transaction, so a stale callback, a rapid
+# double click or a concurrent change can never overpay or go negative.
+
+
+SELL_EMPTY_LINE = (
+    "آیتم قابل‌فروشی نداری!\n"
+    "سیب‌های ویژه 🥇💎🖤 را از برداشت درخت‌های باغ به دست بیاور."
+)
 
 
 async def _sell_view(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    """Sell Items ROOT: one button per OWNED sellable item (name + qty)."""
     async with get_session() as session:
         balance = await AppleWalletService.get_balance(session, user_id)
-        sell_prices = await ConfigService.get(session, "item_sell_prices") or {}
-        owned = await ItemService.list_items(session, user_id)
+        sellable = await ItemService.sellable_inventory(session, user_id)
 
     lines = [
         "💰 **فروشگاه — فروش آیتم‌ها**",
@@ -460,36 +478,118 @@ async def _sell_view(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
         "",
     ]
     buttons: list[list[InlineKeyboardButton]] = []
-    for key in ITEM_CATALOG:
-        price = sell_prices.get(key)
-        if price is None or owned.get(key, 0) <= 0:
-            continue
-        price = int(price)
-        have = owned[key]
-        lines.append(f"{item_emoji(key)} {item_label(key)} ×{have} — هر عدد `{price}` سیب")
-        row = [
-            success_button(
-                text=f"💸 فروش یکی ({price} 🍎)",
-                callback_data=f"shop_sell_one:{key}",
-            )
-        ]
-        if have > 1:
-            row.append(
-                success_button(
-                    text=f"💸 فروش همه ({have * price} 🍎)",
-                    callback_data=f"shop_sell_all:{key}",
-                )
-            )
-        buttons.append(row)
-
-    if not buttons:
-        lines.append(
-            "آیتم قابل‌فروشی نداری!\n"
-            "سیب‌های ویژه 🥇💎🖤 را از برداشت درخت‌های باغ به دست بیاور."
+    for key, have, _price in sellable:
+        buttons.append(
+            [primary_button(
+                text=f"{item_emoji(key)} {item_label(key)} — {have}",
+                callback_data=f"shop_sell_item:{key}",
+            )]
         )
+
+    if buttons:
+        lines.append("آیتمی که می‌خوای بفروشی رو انتخاب کن 👇")
+    else:
+        lines.append(SELL_EMPTY_LINE)
     buttons.append([primary_button(text="🔄 بروزرسانی", callback_data="shop_sell")])
     buttons.append([danger_button(text="↩️ بازگشت به فروشگاه", callback_data="shop_refresh")])
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+async def _sell_item_state(user_id: int, item_key: str):
+    """Fresh (price, quantity, balance, photo) for one sellable item.
+
+    ``price is None`` means "not sellable" (unknown/invalid item id);
+    ``quantity == 0`` means the user no longer owns it.
+    """
+    from sib.services.assets import AssetService
+    from sib.services.character_art import photo_arg
+
+    async with get_session() as session:
+        price = await ItemService.sell_price(session, item_key)
+        if price is None:
+            return None, 0, 0, None
+        have = await ItemService.get_total(session, user_id, item_key)
+        balance = await AppleWalletService.get_balance(session, user_id)
+        # The ONE existing item -> image mapping (garden celebration art).
+        asset = await ItemService.asset_key(session, item_key)
+        file_id, fs_path = await AssetService.resolve_photo(session, asset)
+        photo = photo_arg(file_id, fs_path)
+    return price, have, balance, photo
+
+
+async def _sell_item_view(user_id: int, item_key: str):
+    """Item page: art, name, owned quantity, sell price, Sell 1 / Sell All."""
+    price, have, balance, photo = await _sell_item_state(user_id, item_key)
+
+    if price is None or have <= 0:
+        text, kb = await _sell_view(user_id)
+        return text, kb, None, False
+
+    lines = [
+        f"{item_emoji(item_key)} **{item_label(item_key)}**",
+        "",
+        item_description(item_key),
+        "",
+        f"📦 موجودی شما: `{have}`",
+        f"💸 قیمت فروش: هر عدد `{price}` سیب 🍎",
+        f"🧮 ارزش کل: `{have * price}` سیب 🍎",
+        f"💰 سیب‌های شما: `{balance}`",
+    ]
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [success_button(
+                text=f"💸 فروش یکی ({price} 🍎)",
+                callback_data=f"shop_sell_one:{item_key}",
+            )],
+            [success_button(
+                text=f"💸 فروش همه ({have * price} 🍎)",
+                callback_data=f"shop_sell_all:{item_key}",
+            )],
+            [danger_button(text="↩️ بازگشت به فروش آیتم‌ها", callback_data="shop_sell")],
+        ]
+    )
+    return "\n".join(lines), kb, photo, True
+
+
+async def _sell_confirm_view(user_id: int, item_key: str):
+    """Sell-All confirmation. The shown quantity is INFORMATIONAL only —
+    the confirm handler re-reads the inventory before selling."""
+    price, have, _balance, photo = await _sell_item_state(user_id, item_key)
+
+    if price is None or have <= 0:
+        text, kb = await _sell_view(user_id)
+        return text, kb, None, False
+
+    lines = [
+        f"⚠️ **تأیید فروش همه**",
+        "",
+        f"مطمئنی می‌خوای همهٔ `{have}` عدد "
+        f"{item_emoji(item_key)} «{item_label(item_key)}» رو بفروشی؟",
+        "",
+        f"💰 دریافتی تقریبی: `{have * price}` سیب 🍎",
+        "",
+        "این کار برگشت‌پذیر نیست.",
+    ]
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [success_button(
+                text="✅ بله، همه را بفروش",
+                callback_data=f"shop_sell_all_ok:{item_key}",
+            )],
+            [danger_button(
+                text="❌ انصراف",
+                callback_data=f"shop_sell_item:{item_key}",
+            )],
+        ]
+    )
+    return "\n".join(lines), kb, photo, True
+
+
+async def _render_sell_list(callback: CallbackQuery, bot: Bot, user_id: int, answer=None) -> None:
+    if answer is not None:
+        await safe_answer_callback(callback, answer, show_alert=True)
+    text, kb = await _sell_view(user_id)
+    await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
 
 @router.callback_query(F.data == "shop_sell")
@@ -500,40 +600,28 @@ async def handle_shop_sell(callback: CallbackQuery, bot: Bot):
     actor = await _shop_actor(callback)
     if not actor or actor != user.id:
         return
-    text, kb = await _sell_view(actor)
     await safe_answer_callback(callback)
-    await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
+    await _render_sell_list(callback, bot, actor)
 
 
-async def _sell_items(callback: CallbackQuery, bot: Bot, item_key: str, quantity: int) -> None:
+@router.callback_query(F.data.startswith("shop_sell_item:"))
+async def handle_shop_sell_item(callback: CallbackQuery, bot: Bot):
+    """Open (or re-open, e.g. after Cancel) one item's selling page."""
+    item_key = callback.data.split(":", 1)[1]
     user = callback.from_user
     if not user:
         return
     actor = await _shop_actor(callback)
     if not actor or actor != user.id:
         return
-    async with get_session() as session:
-        try:
-            apples = await ItemService.sell(session, actor, item_key, quantity)
-        except ValueError as e:
-            await safe_answer_callback(callback, str(e), show_alert=True)
-            return
-
-    await safe_answer_callback(
-        callback, f"فروش انجام شد! `{apples}` سیب دریافت کردی 🍎"
-    )
-    text, kb = await _sell_view(actor)
-    await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
+    text, kb, photo, ok = await _sell_item_view(actor, item_key)
+    await safe_answer_callback(callback, None if ok else "این آیتم دیگر در انبار تو نیست.")
+    await safe_edit_callback_message(callback, bot, text, reply_markup=kb, photo=photo)
 
 
 @router.callback_query(F.data.startswith("shop_sell_one:"))
 async def handle_shop_sell_one(callback: CallbackQuery, bot: Bot):
-    item_key = callback.data.split(":", 1)[1]
-    await _sell_items(callback, bot, item_key, 1)
-
-
-@router.callback_query(F.data.startswith("shop_sell_all:"))
-async def handle_shop_sell_all(callback: CallbackQuery, bot: Bot):
+    """Sell exactly ONE unit, then refresh the item page with fresh data."""
     item_key = callback.data.split(":", 1)[1]
     user = callback.from_user
     if not user:
@@ -541,9 +629,63 @@ async def handle_shop_sell_all(callback: CallbackQuery, bot: Bot):
     actor = await _shop_actor(callback)
     if not actor or actor != user.id:
         return
+
     async with get_session() as session:
-        have = await ItemService.get_total(session, actor, item_key)
-    if have <= 0:
-        await safe_answer_callback(callback, "از این آیتم نداری!", show_alert=True)
+        try:
+            apples = await ItemService.sell(session, actor, item_key, 1)
+        except ValueError as e:
+            # Nothing was sold (stale click, empty stock, not sellable).
+            await _render_sell_list(callback, bot, actor, answer=str(e))
+            return
+
+    # Sold out -> _sell_item_view falls back to the (now shorter) LIST,
+    # from which this item has disappeared; otherwise the item page is
+    # re-rendered from fresh inventory data.
+    text, kb, photo, _still_owned = await _sell_item_view(actor, item_key)
+    await safe_answer_callback(callback, f"فروش انجام شد! `{apples}` سیب دریافت کردی 🍎")
+    await safe_edit_callback_message(callback, bot, text, reply_markup=kb, photo=photo)
+
+
+@router.callback_query(F.data.startswith("shop_sell_all_ok:"))
+async def handle_shop_sell_all_confirm(callback: CallbackQuery, bot: Bot):
+    """Confirmed Sell All: re-read the CURRENT inventory and sell all of it."""
+    item_key = callback.data.split(":", 1)[1]
+    user = callback.from_user
+    if not user:
         return
-    await _sell_items(callback, bot, item_key, have)
+    actor = await _shop_actor(callback)
+    if not actor or actor != user.id:
+        return
+
+    async with get_session() as session:
+        # Authoritative quantity read inside the selling transaction (the
+        # quantity shown on the confirmation screen is never trusted); the
+        # row lock makes a double click sell the remaining 0 units, i.e.
+        # fail loudly instead of paying twice.
+        have = await ItemService.get_total(session, actor, item_key, for_update=True)
+        if have <= 0:
+            await _render_sell_list(callback, bot, actor, answer="از این آیتم نداری!")
+            return
+        try:
+            apples = await ItemService.sell(session, actor, item_key, have)
+        except ValueError as e:
+            await _render_sell_list(callback, bot, actor, answer=str(e))
+            return
+
+    await safe_answer_callback(callback, f"فروش انجام شد! `{apples}` سیب دریافت کردی 🍎")
+    await _render_sell_list(callback, bot, actor)
+
+
+@router.callback_query(F.data.startswith("shop_sell_all:"))
+async def handle_shop_sell_all(callback: CallbackQuery, bot: Bot):
+    """Sell All asks first — no transaction happens on this screen."""
+    item_key = callback.data.split(":", 1)[1]
+    user = callback.from_user
+    if not user:
+        return
+    actor = await _shop_actor(callback)
+    if not actor or actor != user.id:
+        return
+    text, kb, photo, ok = await _sell_confirm_view(actor, item_key)
+    await safe_answer_callback(callback, None if ok else "از این آیتم نداری!")
+    await safe_edit_callback_message(callback, bot, text, reply_markup=kb, photo=photo)
