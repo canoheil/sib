@@ -45,9 +45,9 @@ PLOT_EMOJI = {
 # Display metadata for the four harvest outcomes (drop table keys).
 DROP_DISPLAY = [
     ("apple_normal", "🍎", "سیب معمولی"),
-    ("apple_gold", "🥇", "سیب طلایی"),
+    ("apple_gold", "🪙", "سیب طلایی"),
     ("apple_diamond", "💎", "سیب الماسی"),
-    ("apple_obsidian", "🖤", "سیب ابسیدینی"),
+    ("apple_obsidian", "🌑", "سیب ابسیدینی"),
 ]
 
 

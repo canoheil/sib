@@ -462,7 +462,7 @@ async def handle_shop_good_buy(callback: CallbackQuery, bot: Bot):
 
 SELL_EMPTY_LINE = (
     "آیتم قابل‌فروشی نداری!\n"
-    "سیب‌های ویژه 🥇💎🖤 را از برداشت درخت‌های باغ به دست بیاور."
+    "سیب‌های ویژه 🪙💎🌑 را از برداشت درخت‌های باغ به دست بیاور."
 )
 
 
