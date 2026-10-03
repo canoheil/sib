@@ -103,20 +103,31 @@ def photo_caption(text: str) -> str:
 def with_refresh_button(
     keyboard: Optional[InlineKeyboardMarkup],
     match_id: int,
+    *,
+    refresh_style: Optional[str] = None,
 ) -> InlineKeyboardMarkup:
     """Append a board-refresh row to an existing inline keyboard.
 
     The refresh callback re-renders the board from the database, giving
     users a safe recovery path whenever the rendered message went stale
-    (e.g. after a transient Telegram edit failure).
+    (e.g. after a transient Telegram edit failure). ``refresh_style`` lets
+    a game apply its own Telegram button color without changing other games.
     """
     rows = list(keyboard.inline_keyboard) if keyboard else []
-    if not rows or rows[-1][0].callback_data != f"{REFRESH_CALLBACK_PREFIX}{match_id}":
+    refresh_callback = f"{REFRESH_CALLBACK_PREFIX}{match_id}"
+    if rows and rows[-1][0].callback_data == refresh_callback:
+        # Keep the helper idempotent while honoring an explicitly requested
+        # style if a keyboard already contains this refresh row.
+        refresh_button = rows[-1][0]
+        if refresh_style is not None and refresh_button.style != refresh_style:
+            rows[-1] = [refresh_button.model_copy(update={"style": refresh_style})]
+    else:
         rows.append(
             [
                 InlineKeyboardButton(
                     text="🔄 بروزرسانی صفحه",
-                    callback_data=f"{REFRESH_CALLBACK_PREFIX}{match_id}",
+                    callback_data=refresh_callback,
+                    style=refresh_style,
                 )
             ]
         )

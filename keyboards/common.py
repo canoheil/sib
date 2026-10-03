@@ -4,9 +4,10 @@ Semantic glass-button system (Bot API 10.3 styles):
 - success (green)  -> positive/confirm actions (buy, harvest, join, find)
 - danger (red)     -> back / cancel / destructive actions
 - primary (blue)   -> navigation / informational actions
-- unstyled         -> neutral game input (boards, cells)
+- unstyled         -> neutral actions without a dedicated style
 
-Colors communicate meaning - never decoration.
+Game boards may define a separate style map for their structural controls and
+playable cells. Colors communicate meaning - never decoration.
 """
 
 from typing import Optional

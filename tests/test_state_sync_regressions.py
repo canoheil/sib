@@ -8,8 +8,8 @@ B. process_game_action self-heals stale UI: any rejected click re-renders
    required for normal play.
 C. Shared group messages name the current player instead of claiming
    "your turn" to teammates who cannot act.
-Plus: Battleship visual language (glassy ░, shot = button turns blue 🟦,
-hit 💥, sunk 🔥) on keyboard AND text radar.
+Plus: Battleship cell state (miss 🌊, hit 💥, sunk 🔥) remains in the
+button label and text radar; every playable cell uses the blue/primary style.
 """
 
 import json

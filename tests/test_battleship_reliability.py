@@ -148,6 +148,9 @@ async def test_battleship_refresh_recovers_stale_board(db_session):
     # Cell (0,0) is at keyboard row 1, col 1 (offset by header + label)
     label = _cell_label(kb, 1, 1)
     assert label in ("💥", "🌊", "🔥")  # the button itself shows the shot outcome
+    refresh = kb.inline_keyboard[-1][0]
+    assert refresh.callback_data == f"game_refresh:{match.id}"
+    assert refresh.style == "success"
 
 
 @pytest.mark.asyncio
@@ -252,7 +255,9 @@ async def test_battleship_keyboard_marks_hits_and_misses(db_session):
     assert label in ("💥", "🌊", "🔥")
     # Refresh button present as the recovery path.
     last_row = kb.inline_keyboard[-1]
+    assert last_row[0].text == "🔄 بروزرسانی صفحه"
     assert last_row[0].callback_data == f"game_refresh:{match.id}"
+    assert last_row[0].style == "success"
 
 
 @pytest.mark.asyncio
@@ -277,3 +282,4 @@ def test_with_refresh_button_is_idempotent():
     kb3 = with_refresh_button(kb2, 7)
     assert len(kb3.inline_keyboard) == 2
     assert kb3.inline_keyboard[-1][0].callback_data == "game_refresh:7"
+    assert kb3.inline_keyboard[-1][0].style is None

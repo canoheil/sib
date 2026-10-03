@@ -146,6 +146,7 @@ async def render_board_for(
     the rematch keyboard, otherwise with the live playable keyboard.
     """
     engine = get_game_engine(match.game.code)
+    refresh_style = "success" if engine.game_code == "battleship" else None
     message = callback.message
     chat = getattr(message, "chat", None) if message is not None else None
     chat_id = getattr(chat, "id", None) if chat is not None else None
@@ -164,7 +165,9 @@ async def render_board_for(
             kb = get_rematch_keyboard(match=match)
         else:
             kb = with_refresh_button(
-                engine.get_keyboard(state, match.id, friendly_viewer), match.id
+                engine.get_keyboard(state, match.id, friendly_viewer),
+                match.id,
+                refresh_style=refresh_style,
             )
         before_id = getattr(message, "message_id", None)
         await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
@@ -188,7 +191,11 @@ async def render_board_for(
         text += f"\n\n⏱ **این مسابقه به پایان رسید.** {outcome}"
         kb = get_rematch_keyboard(selected_ad, match=match)
     else:
-        kb = with_refresh_button(engine.get_keyboard(state, match.id, for_player_id), match.id)
+        kb = with_refresh_button(
+            engine.get_keyboard(state, match.id, for_player_id),
+            match.id,
+            refresh_style=refresh_style,
+        )
     before_id = getattr(message, "message_id", None)
     await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
     after_id = getattr(callback.message, "message_id", None)
@@ -456,7 +463,11 @@ async def process_game_action(
                     engine = get_game_engine(render_payload["game_code"])
                     text = engine.render_for_group(state, group_id, target_pid)
                     kb = with_refresh_button(
-                        engine.get_keyboard(state, match_id, target_pid), match_id
+                        engine.get_keyboard(state, match_id, target_pid),
+                        match_id,
+                        refresh_style=(
+                            "success" if engine.game_code == "battleship" else None
+                        ),
                     )
                     new_msg_id = await safe_edit_screen(
                         bot, chat_id=group_id, message_id=msg_id, text=text, reply_markup=kb
@@ -476,7 +487,11 @@ async def process_game_action(
             engine = get_game_engine(render_payload["game_code"])
             text = engine.render_for_group(state, group_id, target_pid)
             kb = with_refresh_button(
-                engine.get_keyboard(state, match_id, target_pid), match_id
+                engine.get_keyboard(state, match_id, target_pid),
+                match_id,
+                refresh_style=(
+                    "success" if engine.game_code == "battleship" else None
+                ),
             )
             if not await safe_edit_callback_message(callback, bot, text, reply_markup=kb):
                 logger.warning(
@@ -551,6 +566,7 @@ async def _present_friendly_board(
     state = payload["state"]
     finished = payload["finished"]
     engine = get_game_engine(payload["game_code"])
+    refresh_style = "success" if engine.game_code == "battleship" else None
     group_id = payload["group1_id"] or payload["group2_id"]
     viewer, audience = _friendly_board_target(
         state, payload["players"], actor_id, group_id
@@ -568,7 +584,11 @@ async def _present_friendly_board(
     else:
         await safe_answer_callback(callback, "حرکت شما ثبت شد! 🍏")
         text = engine.render_for_group(state, audience, viewer)
-        kb = with_refresh_button(engine.get_keyboard(state, payload["match_id"], viewer), payload["match_id"])
+        kb = with_refresh_button(
+            engine.get_keyboard(state, payload["match_id"], viewer),
+            payload["match_id"],
+            refresh_style=refresh_style,
+        )
 
     message_id = payload["group1_message_id"] or payload["group2_message_id"]
     if message_id and group_id:
@@ -638,6 +658,7 @@ async def handle_game_refresh(callback: CallbackQuery, bot: Bot) -> None:
             return
 
         engine = get_game_engine(match.game.code)
+        refresh_style = "success" if engine.game_code == "battleship" else None
         state = json.loads(match.game_state) if match.game_state else None
         if state is None:
             await safe_answer_callback(
@@ -655,7 +676,9 @@ async def handle_game_refresh(callback: CallbackQuery, bot: Bot) -> None:
             text = engine.render_for_group(state, audience, viewer)
             if match.state == MatchState.ACTIVE:
                 kb = with_refresh_button(
-                    engine.get_keyboard(state, match_id, viewer), match_id
+                    engine.get_keyboard(state, match_id, viewer),
+                    match_id,
+                    refresh_style=refresh_style,
                 )
             else:
                 text = shape_friendly_final_text(text, match, state)
@@ -663,7 +686,11 @@ async def handle_game_refresh(callback: CallbackQuery, bot: Bot) -> None:
         else:
             text = engine.render_for_group(state, group_id, user.id)
             if match.state == MatchState.ACTIVE:
-                kb = with_refresh_button(engine.get_keyboard(state, match_id, user.id), match_id)
+                kb = with_refresh_button(
+                    engine.get_keyboard(state, match_id, user.id),
+                    match_id,
+                    refresh_style=refresh_style,
+                )
             else:
                 kb = None
 
