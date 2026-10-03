@@ -39,7 +39,7 @@ ITEM_CATALOG: Dict[str, Dict[str, str]] = {
         "description": "پودری جادویی که درخت‌های باغ رو بلندتر و جادویی‌تر می‌کنه و شانس سیب‌های ویژه رو بالا می‌بره.",
     },
     "apple_gold": {
-        "emoji": "🥇",
+        "emoji": "🪙",
         "label": "سیب طلایی",
         "description": "سیبی کمیاب و درخشان از درخت‌های جادویی؛ تو فروشگاه به سیب معمولی تبدیل می‌شه.",
     },
@@ -49,7 +49,7 @@ ITEM_CATALOG: Dict[str, Dict[str, str]] = {
         "description": "سیبی نایاب با درخشش الماس؛ از سیب طلایی هم ارزشمندتره.",
     },
     "apple_obsidian": {
-        "emoji": "🖤",
+        "emoji": "🌑",
         "label": "سیب ابسیدینی",
         "description": "افسانه‌ای‌ترین سیب باغ؛ نایاب‌ترین و گران‌بهاترین سیب ویژه.",
     },
@@ -205,6 +205,48 @@ class ItemService:
         prices = await ConfigService.get(session, "item_sell_prices") or {}
         price = prices.get(item_key)
         return int(price) if price is not None else None
+
+    @staticmethod
+    async def sell_prices(session: AsyncSession) -> Dict[str, int]:
+        """All configured sell prices (key -> price)."""
+        prices = await ConfigService.get(session, "item_sell_prices") or {}
+        return {key: int(value) for key, value in prices.items()}
+
+    @classmethod
+    async def sellable_inventory(
+        cls, session: AsyncSession, user_id: int
+    ) -> List[Tuple[str, int, int]]:
+        """Owned sellable items as ``(item_key, quantity, unit_price)``.
+
+        Sellability is CONFIG-driven (``item_sell_prices``) exactly like
+        :meth:`sell`, so the Sell screen can never offer something the
+        service layer would refuse — and the currency (normal Apples,
+        which is a wallet balance and not an inventory row) can never
+        appear here. Items with quantity 0 are omitted. Ordering follows
+        ``ITEM_CATALOG`` for a stable UI.
+        """
+        prices = await cls.sell_prices(session)
+        owned = await cls.list_items(session, user_id)
+        ordered = [k for k in ITEM_CATALOG if k in prices]
+        ordered += [k for k in prices if k not in ITEM_CATALOG]
+        return [
+            (key, owned[key], prices[key])
+            for key in ordered
+            if owned.get(key, 0) > 0
+        ]
+
+    @staticmethod
+    async def asset_key(session: AsyncSession, item_key: str) -> str:
+        """Media key of an item's existing artwork.
+
+        Reuses the single item -> image mapping the garden celebration
+        already uses (``garden_drop_entries[key]["asset"]``); the item key
+        itself is the fallback so bundled ``assets/items/<key>.jpg`` art
+        keeps working for items without a drop entry.
+        """
+        entries = await ConfigService.get(session, "garden_drop_entries") or {}
+        entry = entries.get(item_key) or {}
+        return entry.get("asset") or item_key
 
     @classmethod
     async def buy(cls, session: AsyncSession, user_id: int, item_key: str, quantity: int = 1) -> int:

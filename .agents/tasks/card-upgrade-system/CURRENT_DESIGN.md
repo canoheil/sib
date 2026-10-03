@@ -27,8 +27,8 @@ Trading requires equal levels (keeps working; level lives on the row that moves 
 - Normal Apple 🍎 = WALLET currency (`apple_wallets`, ledger `apple_transactions`, `AppleWalletService`).
   There is no "Red Apple" inventory item; the user's "Red Apple" == the normal wallet apple
   (`apple_normal` drop outcome, label «سیب معمولی»/«سیب»). (A *character* named Red Apple exists: sib_sorkh.)
-- Special apples = inventory (`user_items`, `ItemService`): `apple_gold` 🥇 سیب طلایی,
-  `apple_diamond` 💎 سیب الماسی, `apple_obsidian` 🖤 سیب ابسیدینی.
+- Special apples = inventory (`user_items`, `ItemService`): `apple_gold` 🪙 سیب طلایی,
+  `apple_diamond` 💎 سیب الماسی, `apple_obsidian` 🌑 سیب ابسیدینی.
 - Harvest: 1 roll/plot/cycle, cycle 12h, 5..10 plots, 3 apples per normal roll. Weights by tree magic level
   (normal/gold/diamond/obsidian): L0 70/20/9/1 … L5 15/34/34/17.
 - Sell prices: gold 50, diamond 100, obsidian 200 apples. Buy: magic_powder 40. Card prices 100-300,

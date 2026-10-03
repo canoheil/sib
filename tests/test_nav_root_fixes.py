@@ -318,7 +318,7 @@ async def test_garden_render_has_inventory_line(db_session):
     await AssetService.register(db_session, "golden_apple", "f1", type="sticker")
     text, kb = await _render_garden(1, db_session)
     assert "ذخیره‌ی برداشت‌ها" in text
-    assert "🥇×2" in text
+    assert "🪙×2" in text
     # Garden controls: one panel button per plot + refresh/main always.
     labels = [b.text for b in _all_buttons(kb)]
     callbacks = [b.callback_data for b in _all_buttons(kb)]

@@ -41,7 +41,10 @@ OWNER_SCOPED_CALLBACKS: Tuple[str, ...] = (
     "shop_good:",
     "shop_good_buy:",
     "shop_sell_one:",
+    # "shop_sell_all:" only OPENS the confirmation screen; the sale itself
+    # happens on "shop_sell_all_ok:" — both stay owner-scoped.
     "shop_sell_all:",
+    "shop_sell_all_ok:",
     "card_panel:",
     "card_upgrade:",
     "card_upgrade_do:",
