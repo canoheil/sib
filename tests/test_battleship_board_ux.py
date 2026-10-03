@@ -2,7 +2,7 @@
 
 Covers:
 - Empty untouched cells (visually minimal · instead of ░)
-- Blue button style (standard Telegram inline buttons)
+- Telegram button styles for the corner, headers, cells, and refresh row
 - 🌊 for miss, 💥 for hit, 🔥 for sunk
 - Persistent hit/miss rendering
 - Correct row/column coordinates
@@ -14,6 +14,7 @@ Covers:
 import pytest
 from sib.database.models import User, MatchPlayer
 from sib.games.battleship.engine import BattleshipEngine
+from sib.services.telegram_ui import with_refresh_button
 
 
 @pytest.fixture
@@ -48,19 +49,16 @@ def test_untouched_cells_use_minimal_dot(solo_players):
     assert cell.text == "·"
 
 
-def test_untouched_cells_are_blue_inline_buttons(solo_players):
-    """Untouched cells use standard aiogram InlineKeyboardButton (blue by default)."""
+def test_untouched_cells_are_blue_primary_buttons(solo_players):
+    """Untouched cells explicitly use the Telegram primary (blue) style."""
     engine = BattleshipEngine()
     state = engine.create_initial_state(solo_players, mode="solo", fleet_seed_a=10, fleet_seed_b=20)
 
     kb = engine.get_keyboard(state, 1, 401)
-    # All data cells that are untouched should be standard inline buttons
-    # (no special style override - Telegram renders them blue by default)
     for row_idx in range(1, 9):  # skip header row
         for col_idx in range(1, 9):  # skip row label
             btn = kb.inline_keyboard[row_idx][col_idx]
-            # Standard inline buttons have no explicit style attribute
-            assert btn.style is None
+            assert btn.style == "primary"
             assert btn.text == "·"
 
 
@@ -84,6 +82,7 @@ def test_miss_shows_wave_emoji(solo_players):
     # Cell (0,0) is at keyboard row 1, col 1
     assert kb.inline_keyboard[1][1].text == "🌊"
     assert kb.inline_keyboard[1][1].callback_data == "noop"
+    assert kb.inline_keyboard[1][1].style == "primary"
 
 
 def test_hit_shows_explosion_emoji(solo_players):
@@ -100,6 +99,7 @@ def test_hit_shows_explosion_emoji(solo_players):
     kb = engine.get_keyboard(state, 1, 401)
     assert kb.inline_keyboard[1][1].text == "💥"
     assert kb.inline_keyboard[1][1].callback_data == "noop"
+    assert kb.inline_keyboard[1][1].style == "primary"
 
 
 def test_sunk_ship_shows_fire_emoji(solo_players):
@@ -116,6 +116,7 @@ def test_sunk_ship_shows_fire_emoji(solo_players):
     kb = engine.get_keyboard(state, 1, 401)
     r0, c0 = ship["cells"][0]
     assert kb.inline_keyboard[r0 + 1][c0 + 1].text == "🔥"
+    assert kb.inline_keyboard[r0 + 1][c0 + 1].style == "primary"
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +138,9 @@ def test_hit_miss_persist_across_renders(solo_players):
         kb = engine.get_keyboard(state, 1, 401)
         assert kb.inline_keyboard[1][1].text == "🌊"  # miss at (0,0)
         assert kb.inline_keyboard[2][2].text == "💥"  # hit at (1,1)
+        for row_idx in range(1, 9):
+            for col_idx in range(1, 9):
+                assert kb.inline_keyboard[row_idx][col_idx].style == "primary"
 
         text = engine.render_for_group(state, -4001, 401)
         assert "🌊" in text
@@ -154,13 +158,18 @@ def test_keyboard_has_column_header_row(solo_players):
     state = engine.create_initial_state(solo_players, mode="solo", fleet_seed_a=10, fleet_seed_b=20)
 
     kb = engine.get_keyboard(state, 1, 401)
+    assert len(kb.inline_keyboard) == 9  # header + 8 data rows
+    assert [len(row) for row in kb.inline_keyboard] == [9] * 9
+
     header = kb.inline_keyboard[0]
     assert len(header) == 9  # corner label + 8 columns
     assert header[0].text == " "  # corner label
     assert header[0].callback_data == "noop"
+    assert header[0].style == "danger"
     for i, letter in enumerate("ABCDEFGH"):
         assert header[i + 1].text == letter
         assert header[i + 1].callback_data == "noop"
+        assert header[i + 1].style == "success"
 
 
 def test_keyboard_has_row_labels(solo_players):
@@ -173,6 +182,32 @@ def test_keyboard_has_row_labels(solo_players):
         label_btn = kb.inline_keyboard[row_idx][0]
         assert label_btn.text == str(row_idx)
         assert label_btn.callback_data == "noop"
+        assert label_btn.style == "success"
+
+
+def test_refresh_button_is_green_without_changing_the_board(solo_players):
+    engine = BattleshipEngine()
+    state = engine.create_initial_state(solo_players, mode="solo", fleet_seed_a=10, fleet_seed_b=20)
+    board = engine.get_keyboard(state, 1, 401)
+    board_signature = [
+        [(button.text, button.callback_data, button.style) for button in row]
+        for row in board.inline_keyboard
+    ]
+
+    keyboard = with_refresh_button(board, 1)
+    keyboard = with_refresh_button(keyboard, 1, refresh_style="success")
+    keyboard = with_refresh_button(keyboard, 1, refresh_style="success")
+
+    assert len(keyboard.inline_keyboard) == 10
+    assert [len(row) for row in keyboard.inline_keyboard[:-1]] == [9] * 9
+    assert [
+        [(button.text, button.callback_data, button.style) for button in row]
+        for row in keyboard.inline_keyboard[:-1]
+    ] == board_signature
+    refresh = keyboard.inline_keyboard[-1][0]
+    assert refresh.text == "🔄 بروزرسانی صفحه"
+    assert refresh.callback_data == "game_refresh:1"
+    assert refresh.style == "success"
 
 
 def test_text_render_has_coordinate_grid(solo_players):

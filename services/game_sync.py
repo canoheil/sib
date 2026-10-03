@@ -69,6 +69,7 @@ async def sync_match_messages(
         logger.warning(f"Cannot sync messages for match {match.id}: {exc}")
         return
 
+    refresh_style = "success" if engine.game_code == "battleship" else None
     match_over = match.state != MatchState.ACTIVE
     players_by_group = {p.group_id: p.user_id for p in match.players}
 
@@ -83,7 +84,9 @@ async def sync_match_messages(
         if match.group1_id and msg_id:
             text = engine.render_for_group(state, audience, viewer)
             kb = with_refresh_button(
-                engine.get_keyboard(state, match.id, viewer), match.id
+                engine.get_keyboard(state, match.id, viewer),
+                match.id,
+                refresh_style=refresh_style,
             )
             if match_over:
                 text = shape_friendly_final_text(text, match, state)
@@ -133,7 +136,9 @@ async def sync_match_messages(
                 if suffix:
                     text += f"\n\n{suffix}"
                 kb = with_refresh_button(
-                    engine.get_keyboard(state, match.id, viewer_id), match.id
+                    engine.get_keyboard(state, match.id, viewer_id),
+                    match.id,
+                    refresh_style=refresh_style,
                 )
             new_msg_id = await safe_edit_screen(
                 bot, chat_id=group_id, message_id=msg_id, text=text, reply_markup=kb

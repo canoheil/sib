@@ -2,12 +2,13 @@
 
 import random
 from typing import Any, Dict, List, Optional, Tuple
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardMarkup
 
 from sib.core.config import settings
 from sib.core.text import safe_name
 from sib.database.models import MatchPlayer
 from sib.games.base import BaseGameEngine, GameResult
+from sib.keyboards.common import danger_button, primary_button, success_button
 
 
 class BattleshipEngine(BaseGameEngine):
@@ -226,9 +227,9 @@ class BattleshipEngine(BaseGameEngine):
         )
 
 
-    # Visual language of the board (rendered text AND keyboard buttons
-    # always agree - the state lives in the button itself):
-    #   unselected  -> ·  (visually minimal, blue Telegram button style)
+    # Cell state is rendered in text AND in the button label; Telegram button
+    # style is a separate visual layer (all playable cells stay blue/primary):
+    #   unselected  -> ·  (visually minimal)
     #   miss/water  -> 🌊 (wave emoji)
     #   hit         -> 💥 (explosion emoji)
     #   sunk        -> 🔥 (fire emoji)
@@ -379,28 +380,26 @@ class BattleshipEngine(BaseGameEngine):
         labels = self.radar_labels(game_state, team_code)
         is_my_turn = (game_state.get("current_player_id") == for_player_id)
 
-        # Header row: column labels A-H
-        header_row = [InlineKeyboardButton(text=" ", callback_data="noop")]
+        # Header row: column labels A-H, with the non-playable corner marked red.
+        header_row = [danger_button(text=" ", callback_data="noop")]
         for c in range(self.GRID_SIZE):
             header_row.append(
-                InlineKeyboardButton(text=chr(ord("A") + c), callback_data="noop")
+                success_button(text=chr(ord("A") + c), callback_data="noop")
             )
         buttons = [header_row]
 
-        # Data rows: row label + 8 cell buttons
+        # Data rows: green row label + blue playable cell buttons.
         for r in range(self.GRID_SIZE):
-            row = [InlineKeyboardButton(text=str(r + 1), callback_data="noop")]
+            row = [success_button(text=str(r + 1), callback_data="noop")]
             for c in range(self.GRID_SIZE):
                 key = f"{r},{c}"
                 if key in labels:
-                    # Shot cells: the button itself shows the outcome.
-                    row.append(
-                        InlineKeyboardButton(text=labels[key], callback_data="noop")
-                    )
+                    # Shot cells keep their outcome label inside a blue button.
+                    row.append(primary_button(text=labels[key], callback_data="noop"))
                 else:
-                    # Empty cells: visually minimal, blue button style, actionable only on your turn.
+                    # Empty cells remain blue and actionable only on your turn.
                     cb = f"bs_action:{match_id}:{r}:{c}" if is_my_turn else "noop"
-                    row.append(InlineKeyboardButton(text=self.EMPTY, callback_data=cb))
+                    row.append(primary_button(text=self.EMPTY, callback_data=cb))
             buttons.append(row)
 
         return InlineKeyboardMarkup(inline_keyboard=buttons)

@@ -80,6 +80,7 @@ async def render_friendly_board(
         return False
 
     engine = get_game_engine(match.game.code)
+    refresh_style = "success" if engine.game_code == "battleship" else None
     try:
         # The board is shared by both teams: render it from the perspective of
         # whoever is on turn (the presser when the game has no current player).
@@ -90,7 +91,11 @@ async def render_friendly_board(
         return False
 
     if match.state == MatchState.ACTIVE:
-        kb = with_refresh_button(engine.get_keyboard(state, match.id, viewer), match.id)
+        kb = with_refresh_button(
+            engine.get_keyboard(state, match.id, viewer),
+            match.id,
+            refresh_style=refresh_style,
+        )
     else:
         text = shape_friendly_final_text(text, match, state)
         kb = get_friendly_rematch_keyboard(match.id)

@@ -3,7 +3,7 @@
 Spec (Phase 2):
 - Tic Tac Toe:   player 1 = 🍎, player 2 = 🍏, empty = ⬜
 - Connect Four:  player 1 = 🍎, player 2 = 🍏, empty = ⬜
-- Battleship:    blue/sea visual language for the shot buttons.
+- Battleship:    every playable cell stays primary blue; emojis show shot state.
 """
 
 import json

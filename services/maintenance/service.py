@@ -95,6 +95,7 @@ class MaintenanceService:
                     continue
                 state = json.loads(match.game_state)
                 engine = get_game_engine(match.game.code)
+                refresh_style = "success" if engine.game_code == "battleship" else None
                 human = next((p for p in match.players if p.team == 1 and not p.user.is_bot), None)
                 viewer_id = human.user_id if human else 0
                 if match.mode == "solo":
@@ -125,7 +126,9 @@ class MaintenanceService:
                     state, match.group1_id, viewer_id
                 )
                 keyboard = engine.get_keyboard(state, match.id, viewer_id)
-                keyboard = with_refresh_button(keyboard, match.id)
+                keyboard = with_refresh_button(
+                    keyboard, match.id, refresh_style=refresh_style
+                )
                 old_message_id = fallback.get("queue_message_id")
                 message_id = None
                 if old_message_id:
