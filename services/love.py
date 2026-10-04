@@ -46,7 +46,7 @@ on MariaDB/MySQL InnoDB.
 
 import asyncio
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy import func, or_, select, update
@@ -54,7 +54,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from sib.core.logging import Events, log_event
+from sib.core.logging import Events, logger, log_event
 from sib.database.models import (
     FlowerGift,
     FlowerGiftStatus,
@@ -73,6 +73,8 @@ DEFAULT_LOVE_MAX = 100
 DEFAULT_REJECT_PENALTY = 1
 DEFAULT_DAILY_DIRECTIONAL_LIMIT = 1
 DEFAULT_DAILY_DECAY = 1
+# Mirrors CONFIG_DEFAULTS["flower_gift_pending_timeout_seconds"].
+DEFAULT_FLOWER_GIFT_PENDING_TIMEOUT_SECONDS = 300
 
 # Statuses that occupy a sender's directional daily Flower slot for a UTC day.
 # REJECTED, INVALIDATED, and EXPIRED refund the Flower and free the slot so the
@@ -797,10 +799,13 @@ class LoveService:
         *,
         now: Optional[datetime] = None,
     ) -> FlowerGiftResult:
-        """Generic terminal transition ``PENDING -> EXPIRED`` with 1 Flower refund.
+        """Terminal transition ``PENDING -> EXPIRED`` with 1 Flower refund.
 
-        Does not hard-code an expiration duration; ready for future expiration
-        policy integration.
+        The transition itself is duration-agnostic: ``expire_overdue_gifts``
+        decides *which* gifts are overdue from
+        ``flower_gift_pending_timeout_seconds`` and calls this once per gift.
+        Refunds exactly one Flower, leaves Love untouched, and refuses to
+        touch a gift that is no longer ``PENDING``.
         """
         return await cls._transition_pending_gift_with_refund(
             session,
@@ -812,6 +817,109 @@ class LoveService:
 
     # Alias for naming flexibility
     expire_flower = expire_gift
+
+    # ------------------------------------------------------------------
+    # Pending-gift expiration (maintenance / recovery)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    async def _get_pending_gift_timeout_seconds(session: AsyncSession) -> int:
+        """Configured ``flower_gift_pending_timeout_seconds``.
+
+        Never hard-coded here. A non-positive value falls back to the
+        documented default, matching how ``create_proposal`` treats a
+        non-positive ``marriage_proposal_timeout_seconds``.
+        """
+        raw = await ConfigService.get(session, "flower_gift_pending_timeout_seconds")
+        if raw is None:
+            return DEFAULT_FLOWER_GIFT_PENDING_TIMEOUT_SECONDS
+        try:
+            seconds = int(raw)
+        except (TypeError, ValueError):
+            return DEFAULT_FLOWER_GIFT_PENDING_TIMEOUT_SECONDS
+        return seconds if seconds > 0 else DEFAULT_FLOWER_GIFT_PENDING_TIMEOUT_SECONDS
+
+    @classmethod
+    async def expire_overdue_gifts(
+        cls,
+        session: AsyncSession,
+        *,
+        now: Optional[datetime] = None,
+    ) -> List[FlowerGiftResult]:
+        """Expire every PENDING FlowerGift that has outlived its lifetime.
+
+        A gift is overdue when ``created_at + flower_gift_pending_timeout_seconds
+        <= now``. The expiration instant is DERIVED from the existing
+        ``created_at`` column, so no new column and no migration is needed.
+
+        Idempotent and race-safe:
+
+        * Only ``PENDING`` rows are selected, so ACCEPTED / REJECTED /
+          INVALIDATED / EXPIRED gifts are never revisited.
+        * Each gift is expired through ``expire_gift``, whose conditional
+          ``UPDATE ... WHERE status = 'PENDING'`` means a concurrent
+          accept/reject/invalidate wins the race instead of double-refunding.
+          Such a gift raises ``FlowerGiftAlreadyResolvedError`` and is skipped
+          - it was resolved by someone else, which is a valid outcome.
+        * Each gift is processed inside its own savepoint, so one failing gift
+          cannot roll back the ones already expired.
+        * Candidates are walked in ascending id order (deterministic).
+
+        Every expiration refunds exactly one Flower and leaves Love
+        unchanged. Returns the results of the gifts this call expired.
+        """
+        current_time = _utc_now(now)
+        timeout_seconds = await cls._get_pending_gift_timeout_seconds(session)
+        cutoff = current_time - timedelta(seconds=timeout_seconds)
+
+        rows = list(
+            (
+                await session.execute(
+                    select(FlowerGift.id, FlowerGift.created_at).where(
+                        FlowerGift.status == FlowerGiftStatus.PENDING
+                    )
+                )
+            ).all()
+        )
+
+        # ``created_at`` is timezone-aware on MariaDB and naive on SQLite, so
+        # every value is normalised before the comparison.
+        overdue_ids = sorted(
+            int(row.id)
+            for row in rows
+            if row.created_at is not None and _as_utc(row.created_at) <= cutoff
+        )
+        if not overdue_ids:
+            return []
+
+        expired: List[FlowerGiftResult] = []
+        for gift_id in overdue_ids:
+            try:
+                result = await cls.expire_gift(session, gift_id, now=current_time)
+            except FlowerGiftAlreadyResolvedError:
+                # A concurrent accept/reject/invalidate got there first: the
+                # gift is resolved and its Flower was already handled once.
+                continue
+            except FlowerGiftNotFoundError:  # pragma: no cover - defensive
+                continue
+            except Exception as exc:
+                # One poisoned gift must not strand the others. Each gift runs
+                # in its own savepoint, so the gifts already expired stay
+                # expired; this one is simply retried on the next sweep.
+                logger.warning(f"Could not expire FlowerGift {gift_id}: {exc}")
+                continue
+            expired.append(result)
+
+        if expired:
+            log_event(
+                Events.LOVE_EVENT,
+                {
+                    "action": "flower_expired_sweep",
+                    "count": len(expired),
+                    "gift_ids": [int(r.gift_id) for r in expired],
+                },
+            )
+        return expired
 
     @classmethod
     async def invalidate_pending_gifts_for_marriage(

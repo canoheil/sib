@@ -242,6 +242,26 @@ class MaintenanceService:
             return 0
 
     @classmethod
+    async def _expire_pending_flower_gifts(cls) -> int:
+        """Expire PENDING FlowerGifts that outlived their configured lifetime.
+
+        Delegates to ``LoveService.expire_overdue_gifts``, which derives the
+        deadline from the existing ``created_at`` column and
+        ``flower_gift_pending_timeout_seconds``, refunds exactly one Flower
+        per gift, never touches Love, and skips gifts that a concurrent
+        accept/reject/invalidate already resolved.
+        """
+        from sib.services.love import LoveService
+
+        try:
+            async with get_session() as session:
+                expired = await LoveService.expire_overdue_gifts(session)
+                return len(expired)
+        except Exception:
+            logger.exception("Pending FlowerGift expiration failed")
+            return 0
+
+    @classmethod
     async def run_marriage_love_cycle(cls) -> dict:
         """One Marriage/Love maintenance cycle.
 
@@ -252,8 +272,9 @@ class MaintenanceService:
         stats = {
             "expired_marriage_proposals": await cls._expire_marriage_proposals(),
             "love_decay_marriages": await cls._apply_daily_love_decay(),
+            "expired_flower_gifts": await cls._expire_pending_flower_gifts(),
         }
-        if stats["expired_marriage_proposals"] or stats["love_decay_marriages"]:
+        if any(stats.values()):
             logger.info(f"Marriage/Love maintenance: {stats}")
         return stats
 

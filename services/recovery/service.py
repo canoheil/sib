@@ -47,6 +47,7 @@ class RecoveryService:
             "finalized_apple_battles": 0,
             "expired_marriage_proposals": 0,
             "love_decay_marriages": 0,
+            "expired_flower_gifts": 0,
         }
 
         # 0. Consistency repair FIRST: release parties/matches that block a
@@ -125,7 +126,8 @@ class RecoveryService:
         # 4. Marriage & Love: work that a downtime could have skipped.
         #    - proposals that expired while the bot was offline
         #    - daily Love decay for every UTC day that passed offline
-        #    Both are pure delegation to the existing idempotent domain
+        #    - FlowerGifts left PENDING past their configured lifetime
+        #    All are pure delegation to the existing idempotent domain
         #    sweeps - no Marriage/Love logic is reproduced here - and they
         #    are called directly on the shared session, exactly like
         #    ``SessionService.reconcile_stale_state`` and
@@ -142,9 +144,11 @@ class RecoveryService:
                 session, now=now
             )
             decayed = await LoveService.apply_daily_decay(session, now=now)
+            expired_gifts = await LoveService.expire_overdue_gifts(session, now=now)
 
             stats["expired_marriage_proposals"] = len(expired_proposals)
             stats["love_decay_marriages"] = decayed
+            stats["expired_flower_gifts"] = len(expired_gifts)
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning(f"Marriage/Love startup recovery failed: {exc}")
 

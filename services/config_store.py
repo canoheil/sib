@@ -188,6 +188,27 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     #   * The gain is snapshotted onto each FlowerGift (`love_delta`) at SEND
     #     time, so rebalancing here never rewrites offers already in flight.
     "flower_love_gain": 2,
+    # Lifetime of a PENDING FlowerGift. A gift nobody accepts or rejects is
+    # expired by MaintenanceService (periodic) and RecoveryService (startup)
+    # once `created_at + this many seconds` has passed:
+    #
+    #   * the gift transitions PENDING -> EXPIRED (CAS-guarded, so a
+    #     concurrent accept/reject/invalidate always wins instead of
+    #     double-refunding);
+    #   * exactly one Flower is refunded to the sender;
+    #   * Love is NEVER changed (`love_delta` stays 0) - expiry is a return of
+    #     the spent item, not a relationship event;
+    #   * already ACCEPTED / REJECTED / INVALIDATED gifts are never touched.
+    #
+    # 300s matches `marriage_proposal_timeout_seconds`: an unanswered Flower
+    # card is the same shape of interaction as an unanswered proposal card (a
+    # group card with «قبول / رد» buttons waiting on one person), so both
+    # windows are deliberately identical. Because expiry REFUNDS the Flower,
+    # a short window is the sender-safe choice: the item comes back instead
+    # of staying locked inside a card nobody is looking at any more. The
+    # lifetime is derived from `created_at` at sweep time, so rebalancing it
+    # never needs a migration and never rewrites offers already in flight.
+    "flower_gift_pending_timeout_seconds": 300,
     # "سیب" group wake-word claim (spec: 5 apples every 5 minutes)
     "sib_claim_amount": 5,
     "sib_claim_cooldown_seconds": 5 * 60,
