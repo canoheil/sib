@@ -192,6 +192,71 @@ class MaintenanceService:
         for match_id in match_ids:
             schedule_bot_turn(match_id, bot=bot)
 
+    # ------------------------------------------------------------------
+    # Marriage & Love (Phase 10)
+    # ------------------------------------------------------------------
+    # Both steps are pure delegation to the Marriage/Love domain services -
+    # no expiration or decay logic is reproduced here. Each runs in its OWN
+    # transaction so a Marriage/Love failure can neither roll back nor skip
+    # unrelated maintenance work (matchmaking timeouts, trade expiry, ...).
+    # No new loop is introduced: this is part of the existing ``run_once``
+    # sweep, which ``run_forever`` already drives every INTERVAL_SECONDS.
+
+    @classmethod
+    async def _expire_marriage_proposals(cls) -> int:
+        """Expire overdue ``PENDING`` marriage proposals.
+
+        Delegates to ``MarriageProposalService.expire_overdue_proposals``,
+        whose conditional ``UPDATE ... WHERE status = 'PENDING'`` keeps the
+        sweep idempotent and safe against a concurrent accept/reject/expire.
+        The 5-minute lifetime stays in ``marriage_proposal_timeout_seconds``
+        (already stored on each row as ``expires_at``) - nothing is
+        hardcoded here. Pending proposals never consumed a Wedding Ring, so
+        expiration has nothing to refund.
+        """
+        from sib.services.marriage_proposal import MarriageProposalService
+
+        try:
+            async with get_session() as session:
+                expired = await MarriageProposalService.expire_overdue_proposals(session)
+                return len(expired)
+        except Exception:
+            logger.exception("Marriage proposal expiration failed")
+            return 0
+
+    @classmethod
+    async def _apply_daily_love_decay(cls) -> int:
+        """Apply the configured daily Love decay to every ACTIVE marriage.
+
+        Delegates to ``LoveService.apply_daily_decay``, which is idempotent
+        per UTC day via ``marriages.last_decay_date``, catches up days
+        missed while the bot was offline, and clamps to ``love_min``.
+        """
+        from sib.services.love import LoveService
+
+        try:
+            async with get_session() as session:
+                return await LoveService.apply_daily_decay(session)
+        except Exception:
+            logger.exception("Daily Love decay failed")
+            return 0
+
+    @classmethod
+    async def run_marriage_love_cycle(cls) -> dict:
+        """One Marriage/Love maintenance cycle.
+
+        Part of the existing sweep (no second loop). Returns a stats dict;
+        each step swallows and logs its own failure, so a Marriage/Love
+        problem can never break the rest of the maintenance cycle.
+        """
+        stats = {
+            "expired_marriage_proposals": await cls._expire_marriage_proposals(),
+            "love_decay_marriages": await cls._apply_daily_love_decay(),
+        }
+        if stats["expired_marriage_proposals"] or stats["love_decay_marriages"]:
+            logger.info(f"Marriage/Love maintenance: {stats}")
+        return stats
+
     @classmethod
     async def run_once(cls) -> None:
         """Run one maintenance cycle, then publish any committed fallbacks.
@@ -219,6 +284,16 @@ class MaintenanceService:
                 fallbacks.clear()
                 resolved_ids = []
                 logger.exception("Maintenance cycle failed")
+
+        # Marriage & Love DB work (proposal expiration + daily Love decay).
+        # It runs as its own isolated transaction, still BEFORE the bot-turn
+        # scheduling below, so every DB work of the cycle is committed first
+        # - but a Marriage/Love failure can never roll back the matchmaking
+        # work committed above, nor skip the bot turns below.
+        try:
+            await cls.run_marriage_love_cycle()
+        except Exception:
+            logger.exception("Marriage/Love maintenance cycle failed")
 
         # Committed bot matches whose bot turn needs a task (a fallback match
         # that just started, or a task lost to a restart) are scheduled here -

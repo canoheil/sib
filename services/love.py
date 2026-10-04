@@ -65,13 +65,14 @@ from sib.database.models import (
 from sib.services.config_store import ConfigService
 from sib.services.items import ItemService
 from sib.services.marriage import MarriageError, MarriageNotFoundError, MarriageService
-from sib.services.marriage_proposal import _utc_now
+from sib.services.marriage_proposal import _as_utc, _utc_now
 
 FLOWER_ITEM_KEY = "flower"
 DEFAULT_LOVE_MIN = 0
 DEFAULT_LOVE_MAX = 100
 DEFAULT_REJECT_PENALTY = 1
 DEFAULT_DAILY_DIRECTIONAL_LIMIT = 1
+DEFAULT_DAILY_DECAY = 1
 
 # Statuses that occupy a sender's directional daily Flower slot for a UTC day.
 # REJECTED, INVALIDATED, and EXPIRED refund the Flower and free the slot so the
@@ -934,6 +935,148 @@ class LoveService:
         if marriage is None:
             return None
         return int(marriage.love_score)
+
+    # ------------------------------------------------------------------
+    # Daily Love decay (maintenance / recovery)
+    # ------------------------------------------------------------------
+
+    @classmethod
+    async def apply_daily_decay(
+        cls,
+        session: AsyncSession,
+        *,
+        now: Optional[datetime] = None,
+    ) -> int:
+        """Decay the shared Love of every ACTIVE marriage by the configured
+        ``love_daily_decay`` per elapsed UTC day.
+
+        Called by ``MaintenanceService`` (periodic) and ``RecoveryService``
+        (startup catch-up). Both are idempotent because the anchor is the
+        existing ``marriages.last_decay_date`` column:
+
+        * A second run on the same UTC day computes ``days_elapsed == 0``
+          and touches nothing, so the same day can never decay twice.
+        * A bot that was offline for several days decays once per elapsed
+          calendar day in a single run instead of losing that history.
+        * Love is clamped to the configured ``love_min`` - never below it.
+
+        Only ACTIVE marriages are touched; divorced ones keep their frozen
+        ``love_score`` (divorce already resets it). Returns the number of
+        marriages whose Love actually changed.
+        """
+        from sqlalchemy import select as _select
+
+        from sib.services.marriage import MarriageService as _MarriageService
+
+        current_time = _utc_now(now)
+        today = current_time.strftime("%Y-%m-%d")
+        today_date = current_time.date()
+
+        decay_per_day = await cls._get_daily_decay_amount(session)
+        if decay_per_day <= 0:
+            return 0
+        love_min, love_max = await cls._get_love_bounds(session)
+
+        # Candidates only: a non-locking read. Every row is re-locked below
+        # before it is written, so a marriage that ends mid-sweep is skipped.
+        candidates = list(
+            (
+                await session.execute(
+                    _select(
+                        Marriage.id, Marriage.user1_id, Marriage.user2_id
+                    ).where(
+                        Marriage.status == MarriageStatus.ACTIVE,
+                        or_(
+                            Marriage.last_decay_date.is_(None),
+                            Marriage.last_decay_date < today,
+                        ),
+                    )
+                )
+            ).all()
+        )
+
+        changed = 0
+        # Ascending id: deterministic order, so two concurrent sweeps can
+        # never deadlock against each other.
+        for marriage_id, user1_id, user2_id in sorted(
+            (int(c[0]), int(c[1]), int(c[2])) for c in candidates
+        ):
+            # Global relationship lock order: User (ascending) -> Marriage.
+            await _MarriageService._lock_users_ascending(session, user1_id, user2_id)
+            marriage = await cls._lock_marriage(session, marriage_id)
+            if marriage is None or marriage.status != MarriageStatus.ACTIVE:
+                continue
+
+            anchor_date = cls._decay_anchor_date(marriage, current_time)
+            days_elapsed = (today_date - anchor_date).days
+            if days_elapsed <= 0:
+                # Same UTC day as the anchor: nothing to decay. This is what
+                # makes a repeated run a no-op.
+                continue
+
+            current_score = int(marriage.love_score)
+            target_score = max(love_min, current_score - (decay_per_day * days_elapsed))
+            target_score = min(target_score, love_max)
+            if target_score == current_score:
+                # Already at the floor - still stamp the day so we stop
+                # re-examining this marriage every maintenance cycle.
+                marriage.last_decay_date = today
+                await session.flush()
+                continue
+
+            marriage.love_score = target_score
+            marriage.last_decay_date = today
+            await session.flush()
+            changed += 1
+
+            log_event(
+                Events.LOVE_EVENT,
+                {
+                    "action": "daily_decay",
+                    "marriage_id": marriage_id,
+                    "days_elapsed": days_elapsed,
+                    "decay_per_day": decay_per_day,
+                    "love_score": target_score,
+                },
+            )
+
+        if changed:
+            log_event(
+                Events.LOVE_EVENT,
+                {"action": "daily_decay_sweep", "count": changed, "date": today},
+            )
+        return changed
+
+    @staticmethod
+    def _decay_anchor_date(marriage: Marriage, current_time: datetime):
+        """The UTC calendar day from which missed decay days are counted.
+
+        ``last_decay_date`` when the marriage has decayed before, otherwise
+        the wedding day. A corrupt/unparseable value degrades to the wedding
+        day so a bad row can never cause an unbounded catch-up.
+        """
+        anchor = getattr(marriage, "last_decay_date", None)
+        if anchor:
+            try:
+                return datetime.strptime(str(anchor), "%Y-%m-%d").date()
+            except (TypeError, ValueError):
+                pass
+        married_at = getattr(marriage, "married_at", None)
+        if married_at is not None:
+            return _as_utc(married_at).date()
+        return current_time.date()
+
+    @staticmethod
+    async def _get_daily_decay_amount(session: AsyncSession) -> int:
+        """Configured ``love_daily_decay``, clamped to a non-negative int."""
+        raw = await ConfigService.get(session, "love_daily_decay")
+        if raw is None:
+            return DEFAULT_DAILY_DECAY
+        try:
+            amount = int(raw)
+        except (TypeError, ValueError):
+            return DEFAULT_DAILY_DECAY
+        return max(0, amount)
 
     # ------------------------------------------------------------------
     # Internal Helpers
