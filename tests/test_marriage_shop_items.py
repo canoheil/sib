@@ -580,13 +580,16 @@ def test_special_apple_sell_prices_are_unchanged():
 
 
 def test_economy_placeholders_stay_unset():
-    """The foundation's placeholder keys must not become a second price.
+    """The foundation's placeholder price keys must not become a second price.
 
     ``.get`` (rather than ``[]``) so the guard holds both before and after the
     marriage foundation config lands: absent or ``None`` both mean "no second
     source of truth", which is what we are protecting.
+
+    ``flower_love_gain`` is deliberately NOT in this list: it is not a price,
+    and the economy review deliberately gave it a real value.
     """
-    for key in ("flower_love_gain", "wedding_ring_buy_price", "flower_buy_price"):
+    for key in ("wedding_ring_buy_price", "flower_buy_price"):
         assert CONFIG_DEFAULTS.get(key) is None
 
 

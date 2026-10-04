@@ -39,11 +39,16 @@ MARRIAGE_REJECT = "marriage_reject"
 MARRIAGE_DIVORCE_CONFIRM = "marriage_divorce_confirm"
 MARRIAGE_DIVORCE_CANCEL = "marriage_divorce_cancel"
 
+#: Callback actions of a pending Flower gift («قبول گل» / «رد گل»).
+LOVE_FLOWER_ACCEPT = "love_flower_accept"
+LOVE_FLOWER_REJECT = "love_flower_reject"
+
 MARRIAGE_ACTIONS: Tuple[str, ...] = (MARRIAGE_ACCEPT, MARRIAGE_REJECT)
 MARRIAGE_DIVORCE_ACTIONS: Tuple[str, ...] = (
     MARRIAGE_DIVORCE_CONFIRM,
     MARRIAGE_DIVORCE_CANCEL,
 )
+LOVE_FLOWER_ACTIONS: Tuple[str, ...] = (LOVE_FLOWER_ACCEPT, LOVE_FLOWER_REJECT)
 
 # Row ids are positive integers and nothing else: no sign, no whitespace,
 # no separators, no non-ASCII digits. Bounded so a hostile payload cannot
@@ -135,6 +140,57 @@ def get_marriage_proposal_keyboard(proposal_id: int) -> InlineKeyboardMarkup:
             danger_button(
                 text="❌ رد",
                 callback_data=marriage_proposal_callback(MARRIAGE_REJECT, proposal_id),
+            ),
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def love_flower_callback(action: str, gift_id: int) -> str:
+    """Build the callback data for one Flower offer button.
+
+    ``gift_id`` is coerced with ``int()`` so an ORM id or a numeric string
+    cannot smuggle anything but a bare number into the payload.
+    """
+    if action not in LOVE_FLOWER_ACTIONS:
+        raise ValueError(f"Unknown flower gift action: {action!r}")
+    return f"{action}:{int(gift_id)}"
+
+
+def parse_love_flower_callback(data: Optional[str]) -> Optional[Tuple[str, int]]:
+    """Split ``'love_flower_<action>:<gift_id>'`` into ``(action, id)``.
+
+    Returns ``None`` for empty, unknown or malformed payloads - callers
+    MUST treat ``None`` as "not our button" and stop.
+    """
+    if not data:
+        return None
+    action, separator, raw_id = data.partition(":")
+    if not separator or action not in LOVE_FLOWER_ACTIONS:
+        return None
+    if not _ROW_ID_RE.fullmatch(raw_id):
+        return None
+    gift_id = int(raw_id)
+    if gift_id <= 0:
+        return None
+    return action, gift_id
+
+
+def get_flower_gift_keyboard(gift_id: int) -> InlineKeyboardMarkup:
+    """The «💐 قبول گل» / «❌ رد گل» pair attached to a pending Flower offer.
+
+    Shared group surface: everybody sees the card, but the domain only
+    lets the gift's receiver resolve it.
+    """
+    buttons: list[list[InlineKeyboardButton]] = [
+        [
+            success_button(
+                text="💐 قبول گل",
+                callback_data=love_flower_callback(LOVE_FLOWER_ACCEPT, gift_id),
+            ),
+            danger_button(
+                text="❌ رد گل",
+                callback_data=love_flower_callback(LOVE_FLOWER_REJECT, gift_id),
             ),
         ]
     ]

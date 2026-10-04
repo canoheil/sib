@@ -16,8 +16,15 @@ happens on «💔 بله، طلاق», through ``MarriageService.divorce``, whic
 owns the Love reset, the proposal/flower invalidation and the 24-hour
 remarriage cooldown.
 
-Deliberately NOT wired up here (later phases): flowers, love, profile,
-shop and marriage history screens.
+Phase 7.6 - FLOWER: «گل سیبی» as a REPLY to the spouse's message creates a
+pending FlowerGift and posts the «💐 قبول گل» / «❌ رد گل» card; the two
+buttons call ``LoveService.accept_flower`` / ``reject_flower``, which own
+the Love change, the clamping, the timestamps and the refund on rejection.
+The handler never computes Love itself and never rolls back a resolution
+because a Telegram edit failed.
+
+Deliberately NOT wired up here (later phases): daily Love decay,
+MaintenanceService, marriage history and profile/shop screens.
 
 Design rules this module follows:
 - Identity is NEVER taken from the text or from callback data. The
@@ -44,19 +51,37 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sib.core.logging import Events, log_event, logger
 from sib.core.text import safe_name
 from sib.database.connection import get_session
+from sib.database.models import FlowerGift
 from sib.keyboards.marriage import (
     DIVORCE_PANEL_TYPE,
+    LOVE_FLOWER_ACCEPT,
+    LOVE_FLOWER_REJECT,
     MARRIAGE_ACCEPT,
     MARRIAGE_DIVORCE_CANCEL,
     MARRIAGE_DIVORCE_CONFIRM,
     MARRIAGE_REJECT,
     get_divorce_confirmation_keyboard,
+    get_flower_gift_keyboard,
     get_marriage_proposal_keyboard,
+    parse_love_flower_callback,
     parse_marriage_divorce_callback,
     parse_marriage_proposal_callback,
 )
 from sib.services.config_store import ConfigService
 from sib.services.group import GroupService
+from sib.services.love import (
+    FlowerDailyLimitError,
+    FlowerGiftAlreadyResolvedError,
+    FlowerGiftMarriageInactiveError,
+    FlowerGiftNotFoundError,
+    FlowerLoveGainNotConfiguredError,
+    FlowerRequiredError,
+    LoveService,
+    NotFlowerGiftReceiverError,
+    NotMarriedError,
+    NotSpouseError,
+    SelfFlowerGiftError,
+)
 from sib.services.marriage import (
     MarriageAcceptanceRaceLostError,
     MarriageCooldownActiveError,
@@ -114,6 +139,14 @@ PROPOSAL_TRIGGER_PATTERN = (
 #:   Yeh variants of «سیبی»). It only ever OPENS a confirmation card.
 DIVORCE_TRIGGER_PATTERN = (
     r"^\s*طلاق\s+س" rf"{_YEH}ب{_YEH}" r"\s*[؟?]?\s*$"
+)
+
+#: Flower wake phrase, anchored the same way so an ordinary sentence that
+#: merely contains «گل» never hits this handler:
+#:   «گل سیبی» (with/without a trailing question mark and with Arabic Yeh
+#:   variants of «سیبی»). Must be a REPLY to the spouse's message.
+FLOWER_TRIGGER_PATTERN = (
+    r"^\s*گل\s+س" rf"{_YEH}ب{_YEH}" r"\s*[؟?]?\s*$"
 )
 
 # ---------------------------------------------------------------------------
@@ -219,6 +252,58 @@ DIVORCE_CANCEL_FORBIDDEN_TEXT = "💔 فقط کسی که این درخواست �
 LOVE_BAR_CELLS = 10
 LOVE_FILLED_CELL = "█"
 LOVE_EMPTY_CELL = "░"
+
+# --- Flower (7.6) -----------------------------------------------------------
+
+FLOWER_REPLY_REQUIRED_TEXT = (
+    "💐 برای هدیه دادن گل باید روی پیام همسرت ریپلای بزنی و بعد "
+    "«گل سیبی» رو بنویسی."
+)
+
+FLOWER_PRIVATE_CHAT_TEXT = "💐 هدیه دادن گل فقط داخل گروه‌های سیب معتبره. 🍏"
+
+FLOWER_TARGET_NOT_A_USER_TEXT = (
+    "💐 پیامی که ریپلای کردی از یک کاربر واقعی نیست؛ "
+    "روی پیام خودِ همسرت ریپلای بزن."
+)
+
+FLOWER_SELF_TEXT = "💐 نمی‌تونی به خودت گل هدیه بدی! روی پیام همسرت ریپلای بزن. 🍏"
+
+FLOWER_TARGET_IS_BOT_TEXT = "💐 گل فقط برای همسر سیبیه؛ ربات‌ها که عشق سیبی ندارن! 🍏"
+
+FLOWER_NOT_MARRIED_TEXT = "💐 فقط همسر سیبی می‌تونه گل هدیه بگیره؛ تو فعلاً ازدواج نکردی. 🍏"
+
+FLOWER_NOT_SPOUSE_TEXT = "💐 گل فقط برای همسر سیبی خودته؛ این سیبی همسرت نیست! 🍏"
+
+FLOWER_NO_FLOWER_TEXT = (
+    "💐 گلی تو موجودی‌ت نیست! از فروشگاه «💐 گل» بخر و دوباره امتحان کن. 🍏"
+)
+
+FLOWER_DAILY_LIMIT_TEXT = (
+    "💐 امروز قبلاً به همسرت گل هدیه دادی؛ فردا دوباره امتحان کن! 🍏"
+)
+
+FLOWER_SEND_FAILED_TEXT = (
+    "💐 نتونستم پیام گل رو تو گروه بفرستم؛ گل هدیه نشد و بهت برگشت. "
+    "یه لحظه‌ی دیگه دوباره امتحان کن."
+)
+
+FLOWER_GENERIC_FAILURE_TEXT = "💐 گل هدیه نشد. یه لحظه‌ی دیگه دوباره امتحان کن. 🍏"
+
+FLOWER_INVALID_BUTTON_TEXT = "💐 این دکمه معتبر نیست 🍏"
+
+FLOWER_NOT_YOUR_GIFT_TEXT = (
+    "💐 فقط کسی که گل براش فرستاده شده می‌تونه اونو قبول یا رد کنه 🍏"
+)
+
+FLOWER_ALREADY_RESOLVED_TEXT = "💐 این گل قبلاً قبول یا رد شده 🍏"
+
+FLOWER_MARRIAGE_INACTIVE_TEXT = "💐 این گل دیگه اعتباری نداره؛ ازدواج به پایان رسیده 🍏"
+
+FLOWER_GONE_TEXT = "💐 این گل دیگه وجود نداره 🍏"
+
+FLOWER_ACCEPT_ANSWER = "💐 گل قبول شد!"
+FLOWER_REJECT_ANSWER = "💐 گل رد شد."
 
 
 # ---------------------------------------------------------------------------
@@ -1155,3 +1240,441 @@ async def handle_marriage_proposal(message: Message) -> None:
             "message_id": int(sent_message_id),
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Flower (Phase 7.6)
+# ---------------------------------------------------------------------------
+#
+# A thin Telegram adapter over ``LoveService``. Every rule - marriage
+# validity, spouse check, self-send, Flower ownership, the directional daily
+# limit, the configured Love gain, the Love clamping and the refund on
+# rejection/invalidation - lives in the domain. This module only gathers the
+# two Telegram-authenticated identities, calls the service and renders what
+# it returns.
+
+
+def _flower_send_error_message(error: Exception) -> str:
+    """Persian copy for a failed SEND.
+
+    Mapped explicitly: the domain errors carry technical English text
+    (``"User 42 does not own a flower item."``) that must never reach a chat.
+    Order matters - the subclasses are tested before their bases.
+    """
+    if isinstance(error, SelfFlowerGiftError):
+        return FLOWER_SELF_TEXT
+    if isinstance(error, NotSpouseError):
+        return FLOWER_NOT_SPOUSE_TEXT
+    if isinstance(error, NotMarriedError):
+        return FLOWER_NOT_MARRIED_TEXT
+    if isinstance(error, FlowerRequiredError):
+        return FLOWER_NO_FLOWER_TEXT
+    if isinstance(error, FlowerDailyLimitError):
+        return FLOWER_DAILY_LIMIT_TEXT
+    if isinstance(error, FlowerLoveGainNotConfiguredError):
+        # A misconfigured bot is never the player's problem to diagnose.
+        return FLOWER_GENERIC_FAILURE_TEXT
+    return FLOWER_GENERIC_FAILURE_TEXT
+
+
+def _flower_resolve_error_message(error: Exception) -> str:
+    """Persian copy for a failed ACCEPT / REJECT (explicitly mapped)."""
+    if isinstance(error, NotFlowerGiftReceiverError):
+        return FLOWER_NOT_YOUR_GIFT_TEXT
+    if isinstance(error, FlowerGiftAlreadyResolvedError):
+        return FLOWER_ALREADY_RESOLVED_TEXT
+    if isinstance(error, FlowerGiftMarriageInactiveError):
+        return FLOWER_MARRIAGE_INACTIVE_TEXT
+    if isinstance(error, FlowerGiftNotFoundError):
+        return FLOWER_GONE_TEXT
+    return FLOWER_GENERIC_FAILURE_TEXT
+
+
+def _should_clear_flower_buttons(error: Exception) -> bool:
+    """True once the gift behind the card is definitively settled.
+
+    ``NotFlowerGiftReceiverError`` deliberately does NOT clear: a stranger
+    pressing the card must not be able to strip the buttons the recipient
+    still needs. A marriage-inactive gift IS settled (the domain already
+    invalidated and refunded it), so its buttons are dead.
+    """
+    return isinstance(
+        error,
+        (
+            FlowerGiftNotFoundError,
+            FlowerGiftAlreadyResolvedError,
+            FlowerGiftMarriageInactiveError,
+        ),
+    )
+
+
+def _flower_offer_card(snapshot: dict) -> str:
+    """The group card announcing a pending Flower."""
+    return (
+        "💐 **هدیه‌ی گل سیبی** 🍏\n\n"
+        f"{snapshot['sender_name']} برای {snapshot['receiver_name']} "
+        "یک گل فرستاده!\n\n"
+        f"{snapshot['receiver_name']} جان، اگه می‌خوای «قبول گل» رو بزن "
+        "و اگه نه «رد گل»."
+    )
+
+
+def _love_line(previous: int, new: int, percent: Optional[int]) -> str:
+    """The Love row of a resolved Flower card (numbers from the domain)."""
+    if percent is None:
+        return f"❤️ عشق سیبی: {fa_digits(previous)} → {fa_digits(new)}"
+    return (
+        f"❤️ عشق سیبی: {love_progress_bar(percent)} {fa_digits(new)}\n"
+        f"({fa_digits(previous)} → {fa_digits(new)})"
+    )
+
+
+def _flower_accept_card(snapshot: dict) -> str:
+    return "\n".join(
+        [
+            "💐 **گل قبول شد!** 🎉",
+            "",
+            f"{snapshot['receiver_name']} گل {snapshot['sender_name']} رو قبول کرد.",
+            _love_line(
+                snapshot["previous_love"], snapshot["new_love"], snapshot["love_percent"]
+            ),
+        ]
+    )
+
+
+def _flower_reject_card(snapshot: dict) -> str:
+    lines = [
+        "💐 **گل رد شد** 🍏",
+        "",
+        f"{snapshot['receiver_name']} گل {snapshot['sender_name']} رو رد کرد.",
+    ]
+    if snapshot["refunded"]:
+        lines.append(f"💐 گل به {snapshot['sender_name']} برگشت.")
+    lines.append(
+        _love_line(
+            snapshot["previous_love"], snapshot["new_love"], snapshot["love_percent"]
+        )
+    )
+    return "\n".join(lines)
+
+
+async def _clear_flower_buttons(callback: CallbackQuery, bot: Optional[Bot]) -> None:
+    """Strip the Flower pair from a settled card, leaving its text alone."""
+    if bot is None or callback.message is None:
+        return
+    chat = getattr(callback.message, "chat", None)
+    chat_id = getattr(chat, "id", None)
+    message_id = getattr(callback.message, "message_id", None)
+    if not chat_id or not message_id:
+        return
+    try:
+        await bot.edit_message_reply_markup(
+            chat_id=chat_id, message_id=message_id, reply_markup=None
+        )
+    except Exception as error:  # pragma: no cover - presentation must not break
+        logger.warning(f"Could not clear stale flower buttons: {error}")
+
+
+async def _discard_undelivered_gift(gift_id: int) -> None:
+    """Invalidate (and therefore REFUND) a Flower whose card never arrived.
+
+    A PENDING gift with no message on screen is unusable: the receiver
+    cannot see it. ``LoveService.invalidate_gift`` is the domain's existing
+    terminal transition for exactly this, and it gives the Flower back.
+    """
+    try:
+        async with get_session() as session:
+            await LoveService.invalidate_gift(session, gift_id)
+    except Exception as error:  # pragma: no cover - best-effort cleanup
+        logger.warning(
+            f"Could not roll back undelivered flower gift {gift_id}: {error}"
+        )
+        return
+
+    log_event(
+        Events.LOVE_EVENT,
+        {"action": "telegram_send_failed", "gift_id": gift_id},
+    )
+
+
+async def _persist_gift_message_id(
+    gift_id: int, chat_id: int, message_id: int
+) -> None:
+    """Attach the Telegram handle to the gift (best effort)."""
+    try:
+        async with get_session() as session:
+            gift = await session.get(FlowerGift, gift_id)
+            if gift is None:
+                return
+            gift.chat_id = int(chat_id)
+            gift.message_id = int(message_id)
+            await session.flush()
+    except Exception as error:
+        # The card is on screen and its buttons carry the gift id, so the
+        # gift stays resolvable - only later edits lose the handle.
+        logger.warning(
+            f"Could not persist message id {message_id} on flower gift "
+            f"{gift_id}: {error}"
+        )
+
+
+def _flower_snapshot(result, percent: Optional[int]) -> dict:
+    """Render-safe view of a ``FlowerGiftResult`` (no ORM objects escape)."""
+    sender = result.sender
+    receiver = result.receiver
+
+    def _name(user) -> str:
+        return safe_name(getattr(user, "display_name", None), "یک سیبی")
+
+    return {
+        "gift_id": int(result.gift.id),
+        "marriage_id": int(result.marriage_id),
+        "sender_id": int(result.sender_id),
+        "receiver_id": int(result.receiver_id),
+        "sender_name": _name(sender),
+        "receiver_name": _name(receiver),
+        "previous_love": int(result.previous_love),
+        "new_love": int(result.new_love),
+        "love_delta": int(result.love_delta),
+        "refunded": bool(result.refunded),
+        "love_percent": percent,
+    }
+
+
+@router.message(F.text.regexp(FLOWER_TRIGGER_PATTERN))
+async def handle_flower_send(message: Message) -> None:
+    """Send a Flower: «گل سیبی» typed as a REPLY to the spouse's message.
+
+    Every rule is the domain's. The handler only supplies the two
+    Telegram-authenticated identities (``from_user`` and the replied-to
+    user) plus the chat id, then renders the outcome.
+    """
+    if getattr(message.chat, "type", None) not in ("group", "supergroup"):
+        await message.reply(FLOWER_PRIVATE_CHAT_TEXT)
+        return
+
+    sender = message.from_user
+    if sender is None:
+        return
+
+    reply = message.reply_to_message
+    if reply is None:
+        await message.reply(FLOWER_REPLY_REQUIRED_TEXT)
+        return
+
+    target = getattr(reply, "from_user", None)
+    if target is None:
+        # Channel posts and anonymous admins have no user identity.
+        await message.reply(FLOWER_TARGET_NOT_A_USER_TEXT)
+        return
+
+    if getattr(target, "is_bot", False):
+        await message.reply(FLOWER_TARGET_IS_BOT_TEXT)
+        return
+
+    if target.id == sender.id:
+        await message.reply(FLOWER_SELF_TEXT)
+        return
+
+    error_message: Optional[str] = None
+    snapshot: Optional[dict] = None
+
+    async with get_session() as session:
+        await UserService.get_or_create_user(session, sender)
+        await UserService.get_or_create_user(session, target)
+        await GroupService.get_or_create_group(session, message.chat)
+
+        try:
+            result = await LoveService.send_flower(
+                session,
+                sender_user_id=sender.id,
+                receiver_user_id=target.id,
+                chat_id=message.chat.id,
+            )
+        except ProposalError as error:
+            # Deliberately NO rollback: the domain owns atomicity (the
+            # consume + insert live inside a savepoint) and some refusals
+            # WRITE ON PURPOSE before raising. get_session() commits on
+            # normal exit, so a refused send keeps nothing partial.
+            error_message = _flower_send_error_message(error)
+            result = None
+        except Exception as error:
+            await session.rollback()
+            logger.warning(f"Unexpected failure sending a flower: {error}")
+            error_message = FLOWER_GENERIC_FAILURE_TEXT
+            result = None
+
+        if result is not None:
+            minimum = await ConfigService.get(session, "love_min")
+            maximum = await ConfigService.get(session, "love_max")
+            percent = _love_percentage(
+                result.new_love,
+                _as_configured_int(minimum, "love_min"),
+                _as_configured_int(maximum, "love_max"),
+            )
+            snapshot = _flower_snapshot(result, percent)
+
+    # The transaction is closed: no row lock is held across the send below.
+    if error_message is not None:
+        await message.reply(error_message)
+        return
+    if snapshot is None:  # pragma: no cover - defensive
+        await message.reply(FLOWER_GENERIC_FAILURE_TEXT)
+        return
+
+    gift_id = snapshot["gift_id"]
+    try:
+        sent = await message.reply(
+            _flower_offer_card(snapshot),
+            reply_markup=get_flower_gift_keyboard(gift_id),
+            parse_mode="Markdown",
+        )
+    except Exception as error:
+        logger.warning(
+            f"Failed to send flower gift {gift_id} to chat {message.chat.id}: {error}"
+        )
+        sent = None
+
+    sent_message_id = getattr(sent, "message_id", None) if sent is not None else None
+    if not sent_message_id:
+        await _discard_undelivered_gift(gift_id)
+        await _safe_reply(message, FLOWER_SEND_FAILED_TEXT)
+        return
+
+    await _persist_gift_message_id(gift_id, message.chat.id, int(sent_message_id))
+
+    log_event(
+        Events.LOVE_EVENT,
+        {
+            "action": "telegram_announced",
+            "gift_id": gift_id,
+            "sender_id": sender.id,
+            "receiver_id": target.id,
+            "group_id": message.chat.id,
+            "message_id": int(sent_message_id),
+        },
+    )
+
+
+async def _resolve_flower_callback(
+    callback: CallbackQuery, bot: Optional[Bot], action: str
+) -> None:
+    """Shared body of the «💐 قبول گل» / «❌ رد گل» handlers.
+
+    Parse -> call the domain -> render. No business rule is decided here and
+    the handler takes no lock of its own.
+    """
+    parsed = parse_love_flower_callback(callback.data)
+    if parsed is None or parsed[0] != action:
+        await safe_answer_callback(callback, FLOWER_INVALID_BUTTON_TEXT, show_alert=True)
+        return
+
+    _parsed_action, gift_id = parsed
+    actor = callback.from_user
+    if actor is None:
+        return
+
+    error: Optional[Exception] = None
+    outcome = None
+    snapshot: Optional[dict] = None
+
+    async with get_session() as session:
+        try:
+            if action == LOVE_FLOWER_ACCEPT:
+                outcome = await LoveService.accept_flower(session, gift_id, actor.id)
+            else:
+                outcome = await LoveService.reject_flower(session, gift_id, actor.id)
+        except ProposalError as domain_error:
+            # NO rollback: the domain owns atomicity (all resolution
+            # mutations live inside a savepoint) and a refusal legitimately
+            # WRITES - an inactive marriage invalidates and REFUNDS the
+            # Flower before raising FlowerGiftMarriageInactiveError.
+            error = domain_error
+        except Exception as unexpected:
+            await session.rollback()
+            logger.warning(
+                f"Unexpected failure resolving flower gift {gift_id}: {unexpected}"
+            )
+            error = unexpected
+
+        if error is None and outcome is not None:
+            minimum = await ConfigService.get(session, "love_min")
+            maximum = await ConfigService.get(session, "love_max")
+            percent = _love_percentage(
+                outcome.new_love,
+                _as_configured_int(minimum, "love_min"),
+                _as_configured_int(maximum, "love_max"),
+            )
+            snapshot = _flower_snapshot(outcome, percent)
+
+    # Committed. From here on a Telegram failure can never undo the domain.
+    if error is not None:
+        await safe_answer_callback(
+            callback, _flower_resolve_error_message(error), show_alert=True
+        )
+        if _should_clear_flower_buttons(error):
+            await _clear_flower_buttons(callback, bot)
+        return
+
+    if snapshot is None:  # pragma: no cover - defensive
+        await safe_answer_callback(callback, FLOWER_GENERIC_FAILURE_TEXT, show_alert=True)
+        return
+
+    is_accept = action == LOVE_FLOWER_ACCEPT
+
+    await safe_answer_callback(
+        callback, FLOWER_ACCEPT_ANSWER if is_accept else FLOWER_REJECT_ANSWER
+    )
+    # Buttons are dropped with the rewrite: a resolved gift has no actions.
+    await safe_edit_callback_message(
+        callback,
+        bot,
+        _flower_accept_card(snapshot) if is_accept else _flower_reject_card(snapshot),
+        reply_markup=None,
+    )
+
+    if is_accept:
+        await _notify_group(
+            callback,
+            f"🔔 {snapshot['sender_name']} جان، "
+            f"{snapshot['receiver_name']} گل سیبی تو رو قبول کرد! 💐🎉",
+        )
+    else:
+        await _notify_group(
+            callback,
+            f"🔔 {snapshot['sender_name']} جان، "
+            f"{snapshot['receiver_name']} گل سیبی تو رو رد کرد؛ "
+            "گلت بهت برگشت. 🍏",
+        )
+
+    log_event(
+        Events.LOVE_EVENT,
+        {
+            "action": "telegram_accepted" if is_accept else "telegram_rejected",
+            "gift_id": snapshot["gift_id"],
+            "marriage_id": snapshot["marriage_id"],
+            "actor_id": actor.id,
+            "previous_love": snapshot["previous_love"],
+            "new_love": snapshot["new_love"],
+        },
+    )
+
+
+@router.callback_query(F.data.startswith(f"{LOVE_FLOWER_ACCEPT}:"))
+async def handle_flower_accept(callback: CallbackQuery, bot: Bot) -> None:
+    """«💐 قبول گل» — accept a pending Flower (receiver only, by domain rule).
+
+    The Love increase, the clamping, the timestamps and the concurrency
+    guard are all ``LoveService.accept_flower``'s job.
+    """
+    await _resolve_flower_callback(callback, bot, LOVE_FLOWER_ACCEPT)
+
+
+@router.callback_query(F.data.startswith(f"{LOVE_FLOWER_REJECT}:"))
+async def handle_flower_reject(callback: CallbackQuery, bot: Bot) -> None:
+    """«❌ رد گل» — reject a pending Flower (receiver only, by domain rule).
+
+    The Love penalty, the clamping and the Flower refund are all
+    ``LoveService.reject_flower``'s job.
+    """
+    await _resolve_flower_callback(callback, bot, LOVE_FLOWER_REJECT)

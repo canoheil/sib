@@ -669,21 +669,26 @@ def test_router_shape_creation_plus_resolution():
     callback_names = {
         handler.callback.__name__ for handler in marriage_router.callback_query.handlers
     }
-    # 7.2 proposal buttons + 7.3 divorce confirmation buttons.
+    # 7.2 proposal buttons + 7.3 divorce confirmation buttons
+    # + 7.6 flower buttons.
     assert callback_names == {
         "handle_marriage_accept",
         "handle_marriage_reject",
         "handle_marriage_divorce_confirm",
         "handle_marriage_divorce_cancel",
+        "handle_flower_accept",
+        "handle_flower_reject",
     }
 
-    # 7.1 proposal trigger + 7.3 divorce trigger (order is not guaranteed).
+    # 7.1 proposal trigger + 7.3 divorce trigger + 7.6 flower trigger
+    # (order is not guaranteed).
     message_names = {
         handler.callback.__name__ for handler in marriage_router.message.handlers
     }
     assert message_names == {
         "handle_marriage_proposal",
         "handle_marriage_divorce_request",
+        "handle_flower_send",
     }
 
 

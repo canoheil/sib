@@ -740,8 +740,13 @@ def test_both_resolution_handlers_are_registered():
         "handle_marriage_divorce_confirm",
         "handle_marriage_divorce_cancel",
     } <= names
-    # 7.1 proposal trigger + 7.3 divorce trigger.
-    assert len(marriage_router.message.handlers) == 2
+    # 7.6 flower buttons share the router too.
+    assert {
+        "handle_flower_accept",
+        "handle_flower_reject",
+    } <= names
+    # 7.1 proposal trigger + 7.3 divorce trigger + 7.6 flower trigger.
+    assert len(marriage_router.message.handlers) == 3
 
 
 def test_handlers_delegate_to_the_domain_api_without_adding_locks():

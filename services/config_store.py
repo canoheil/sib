@@ -126,6 +126,50 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     # Trading
     "trades_per_day": 1,
     "trade_expiration_hours": 24,
+    # Sib Love economy (finalized 2026-10-04 for the Flower UI).
+    #
+    # Love earned per ACCEPTED Flower, on the shared 0..100 Love scale
+    # (`love_min` / `love_max`). Chosen against the configured relationship
+    # pacing: `love_daily_decay` 1/day, `flower_reject_love_penalty` 1,
+    # `flower_daily_limit_per_direction` 1 (A->B and B->A are independent,
+    # so an engaged couple resolves up to 2 Flowers per day).
+    #
+    #   net Love/day = (accepted Flowers/day * gain) - love_daily_decay
+    #
+    #   gain  1 spouse sends    both spouses send   verdict
+    #   ----  ----------------  -----------------   --------------------------
+    #     1     +0/day  (never)   +1/day -> 100d    BROKEN: decay cancels a
+    #                                               lone sender entirely, so
+    #                                               Love could never grow
+    #                                               without perfect 2-sided
+    #                                               play, and one rejection
+    #                                               (-1) would erase a whole
+    #                                               accepted Flower.
+    #     2     +1/day -> 100d    +3/day -> ~33d    CHOSEN: smallest value
+    #                                               that still lets a single
+    #                                               active partner make
+    #                                               progress; ~1 month of
+    #                                               daily play for a couple.
+    #     3     +2/day -> 50d     +5/day -> 20d     noticeably faster, and a
+    #                                               rejection starts to sting
+    #                                               too little.
+    #     5     +4/day -> 25d     +9/day -> 11d     too fast to feel earned.
+    #    10     +9/day -> 11d    +19/day -> 5d      100 is meaningless.
+    #
+    # Why 2 specifically:
+    #   * It is the floor at which the feature still works one-sided, so a
+    #     couple with one keen partner is not hard-blocked.
+    #   * Rejection (-1) costs exactly half an accepted Flower and one day
+    #     of solo progress: a real but recoverable setback, symmetric with
+    #     the daily decay of 1.
+    #   * Cost of maxing Love: ~33-100 days x 30-60 Apples/day (Flower buy
+    #     price 30) = roughly 1000-3000 Apples for the couple - the same
+    #     order as the Wedding Ring (1000). The sustained relationship is
+    #     worth about as much as the marriage itself, and the Flower stays
+    #     a recurring sink instead of a one-off toll.
+    #   * The gain is snapshotted onto each FlowerGift (`love_delta`) at SEND
+    #     time, so rebalancing here never rewrites offers already in flight.
+    "flower_love_gain": 2,
     # "سیب" group wake-word claim (spec: 5 apples every 5 minutes)
     "sib_claim_amount": 5,
     "sib_claim_cooldown_seconds": 5 * 60,
