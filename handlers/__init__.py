@@ -26,6 +26,7 @@ from sib.handlers.admin_meta import router as admin_meta_router
 from sib.handlers.assets import router as assets_router
 from sib.handlers.admin_center import router as admin_center_router
 from sib.handlers.friendly import router as friendly_router
+from sib.handlers.marriage import router as marriage_router
 
 
 def register_all_handlers(dp: Dispatcher) -> None:
@@ -52,6 +53,7 @@ def register_all_handlers(dp: Dispatcher) -> None:
     dp.include_router(admin_center_router)
     dp.include_router(party_router)
     dp.include_router(friendly_router)
+    dp.include_router(marriage_router)
     dp.include_router(start_router)
 
 
@@ -62,6 +64,7 @@ __all__ = [
     "errors_router",
     "party_router",
     "friendly_router",
+    "marriage_router",
     "matchmaking_router",
     "rps_router",
     "high_card_router",
