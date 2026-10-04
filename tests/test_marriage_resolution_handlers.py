@@ -734,8 +734,14 @@ def test_both_resolution_handlers_are_registered():
     from sib.handlers import marriage_router
 
     names = {h.callback.__name__ for h in marriage_router.callback_query.handlers}
-    assert names == {"handle_marriage_accept", "handle_marriage_reject"}
-    assert len(marriage_router.message.handlers) == 1
+    assert {"handle_marriage_accept", "handle_marriage_reject"} <= names
+    # The divorce confirmation handlers (7.3) live on the same router.
+    assert {
+        "handle_marriage_divorce_confirm",
+        "handle_marriage_divorce_cancel",
+    } <= names
+    # 7.1 proposal trigger + 7.3 divorce trigger.
+    assert len(marriage_router.message.handlers) == 2
 
 
 def test_handlers_delegate_to_the_domain_api_without_adding_locks():

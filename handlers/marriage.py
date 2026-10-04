@@ -10,8 +10,14 @@ into the domain (``MarriageService.accept_proposal`` /
 domain returns. Nothing about rings, marriage state, cooldowns, Love or
 the invalidation of rival proposals is decided here.
 
-Deliberately NOT wired up here (later phases): divorce, flowers, love,
-profile, shop and marriage history screens.
+Phase 7.3 - DIVORCE: «طلاق سیبی» as a REPLY to the spouse's message only
+*opens a confirmation card*; it never divorces anybody. The divorce itself
+happens on «💔 بله، طلاق», through ``MarriageService.divorce``, which also
+owns the Love reset, the proposal/flower invalidation and the 24-hour
+remarriage cooldown.
+
+Deliberately NOT wired up here (later phases): flowers, love, profile,
+shop and marriage history screens.
 
 Design rules this module follows:
 - Identity is NEVER taken from the text or from callback data. The
@@ -28,6 +34,7 @@ Design rules this module follows:
 - The handler adds no locking of its own: concurrency is the domain's job.
 """
 
+from datetime import datetime, timezone
 from typing import Optional
 
 from aiogram import Bot, F, Router
@@ -37,9 +44,14 @@ from sib.core.logging import Events, log_event, logger
 from sib.core.text import safe_name
 from sib.database.connection import get_session
 from sib.keyboards.marriage import (
+    DIVORCE_PANEL_TYPE,
     MARRIAGE_ACCEPT,
+    MARRIAGE_DIVORCE_CANCEL,
+    MARRIAGE_DIVORCE_CONFIRM,
     MARRIAGE_REJECT,
+    get_divorce_confirmation_keyboard,
     get_marriage_proposal_keyboard,
+    parse_marriage_divorce_callback,
     parse_marriage_proposal_callback,
 )
 from sib.services.config_store import ConfigService
@@ -47,8 +59,12 @@ from sib.services.group import GroupService
 from sib.services.marriage import (
     MarriageAcceptanceRaceLostError,
     MarriageCooldownActiveError,
+    MarriageDivorceRaceLostError,
+    MarriageNotFoundError,
+    MarriageNotActiveError,
     MarriageParticipantAlreadyMarriedError,
     MarriageService,
+    NotMarriageSpouseError,
     ProposerAlreadyMarriedOnAcceptError,
     ProposalNotAcceptableError,
     TargetAlreadyMarriedOnAcceptError,
@@ -64,6 +80,7 @@ from sib.services.marriage_proposal import (
     ProposalNotFoundError,
     ProposalNotPendingError,
 )
+from sib.services.panel import PanelOwnershipService
 from sib.services.sib_claim import fa_digits
 from sib.services.telegram_ui import safe_answer_callback, safe_edit_callback_message
 from sib.services.user import UserService
@@ -88,6 +105,14 @@ PROPOSAL_TRIGGER_PATTERN = (
     rf"ازدواج\s+س{_YEH}ب{_YEH}"
     rf"|با\s+من\s+ازدواج\s+م{_YEH}{_OPTIONAL_SEP}{_KEH}ن{_YEH}"
     r")\s*[؟?]?\s*$"
+)
+
+#: Divorce wake phrase, anchored the same way so an ordinary sentence that
+#: merely contains «طلاق» never hits this handler:
+#:   «طلاق سیبی» (with/without a trailing question mark and with Arabic
+#:   Yeh variants of «سیبی»). It only ever OPENS a confirmation card.
+DIVORCE_TRIGGER_PATTERN = (
+    r"^\s*طلاق\s+س" rf"{_YEH}ب{_YEH}" r"\s*[؟?]?\s*$"
 )
 
 # ---------------------------------------------------------------------------
@@ -147,6 +172,43 @@ NOT_FOUND_TEXT = "💍 این پیشنهاد ازدواج پیدا نشد 🍏"
 ACCEPT_ANSWER = "ازدواج ثبت شد! 🎉💍"
 
 REJECT_ANSWER = "پیشنهاد رد شد."
+
+# --- Divorce (7.3) ----------------------------------------------------------
+
+DIVORCE_REPLY_REQUIRED_TEXT = (
+    "💔 برای طلاق باید روی پیام همسرت ریپلای بزنی و بعد «طلاق سیبی» رو بنویسی."
+)
+
+DIVORCE_PRIVATE_CHAT_TEXT = "💔 طلاق سیبی فقط داخل گروه‌های سیب انجام می‌شه. 🍏"
+
+NOT_MARRIED_TEXT = "💔 شما در حال حاضر متأهل نیستید که بخواید طلاق بگیرید 🍏"
+
+NOT_YOUR_SPOUSE_TEXT = "💔 این کاربر همسر شما نیست 🍏"
+
+DIVORCE_TARGET_NOT_A_USER_TEXT = (
+    "💔 پیامی که ریپلای کردی از یک کاربر واقعی نیست؛ روی پیام همسرت ریپلای بزن."
+)
+
+DIVORCE_ANSWER = "طلاق ثبت شد."
+
+DIVORCE_CANCEL_ANSWER = "از طلاق منصرف شدی 🍏"
+
+DIVORCE_CANCEL_CARD = (
+    "💔 **درخواست طلاق لغو شد** 🍏\n\n"
+    "ازدواجت دست‌نخورده موند؛ هر وقت خواستی می‌تونی دوباره امتحان کنی."
+)
+
+# A divorce card is stale once the marriage behind it is gone or already
+# over - the buttons must not survive a settled marriage.
+DIVORCE_GONE_TEXT = "💔 این ازدواج دیگه وجود نداره 🍏"
+
+DIVORCE_ALREADY_ENDED_TEXT = "💔 این ازدواج قبلاً به پایان رسیده 🍏"
+
+DIVORCE_RACE_LOST_TEXT = "💔 همسرت زودتر از تو طلاق رو ثبت کرد 🍏"
+
+DIVORCE_NOT_YOURS_TEXT = "💔 شما همسر این ازدواج نیستید 🍏"
+
+DIVORCE_CANCEL_FORBIDDEN_TEXT = "💔 فقط کسی که این درخواست رو باز کرده می‌تونه لغوش کنه 🍏"
 
 
 # ---------------------------------------------------------------------------
@@ -266,6 +328,47 @@ def _should_clear_buttons(error: Exception) -> bool:
             ProposalNotPendingError,
         ),
     )
+
+
+def _remaining_seconds(moment: datetime) -> int:
+    """Seconds from now until ``moment`` (never negative).
+
+    SQLite hands back naive datetimes and MariaDB aware ones, so the
+    comparison is normalized instead of assuming either. This only RENDERS
+    a value the domain already computed - the cooldown itself belongs to
+    ``MarriageService``.
+    """
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return max(0, int((moment - datetime.now(timezone.utc)).total_seconds()))
+
+
+def _divorce_error_message(error: Exception) -> str:
+    """Persian copy for a failed divorce confirmation.
+
+    Mapped explicitly rather than falling back to ``error.message``: the
+    divorce errors carry technical English text (``"Marriage 7 is not
+    ACTIVE (status=DIVORCED)."``) that must never reach a chat.
+    """
+    if isinstance(error, MarriageDivorceRaceLostError):
+        return DIVORCE_RACE_LOST_TEXT
+    if isinstance(error, MarriageNotFoundError):
+        return DIVORCE_GONE_TEXT
+    if isinstance(error, MarriageNotActiveError):
+        return DIVORCE_ALREADY_ENDED_TEXT
+    if isinstance(error, NotMarriageSpouseError):
+        return DIVORCE_NOT_YOURS_TEXT
+    return GENERIC_FAILURE_TEXT
+
+
+def _should_clear_divorce_buttons(error: Exception) -> bool:
+    """True once the marriage behind the card is gone or already over.
+
+    ``NotMarriageSpouseError`` deliberately does NOT clear: a stranger
+    pressing the card must not be able to strip the buttons the two
+    spouses still need.
+    """
+    return isinstance(error, (MarriageNotFoundError, MarriageNotActiveError))
 
 
 def _proposal_text(proposer, target, timeout_seconds: int) -> str:
@@ -549,6 +652,280 @@ async def handle_marriage_reject(callback: CallbackQuery, bot: Bot) -> None:
     proposal to its terminal REJECTED state.
     """
     await _resolve_proposal_callback(callback, bot, MARRIAGE_REJECT)
+
+
+# ---------------------------------------------------------------------------
+# Divorce (Phase 7.3)
+# ---------------------------------------------------------------------------
+
+
+def _divorce_card(snapshot: dict) -> str:
+    """The resolved confirmation card."""
+    lines = [
+        "💔 **طلاق انجام شد**",
+        "",
+        f"{snapshot['actor_name']} و {snapshot['spouse_name']} "
+        "دیگه همسر نیستن. 🍏",
+        f"❤️ عشق سیبی صفر شد: {fa_digits(snapshot['love_score'])}",
+    ]
+    if snapshot["cooldown_until"] is not None:
+        lines.append(f"⏳ تا {snapshot['cooldown_text']} دیگه نمی‌تونی دوباره ازدواج کنی.")
+    return "\n".join(lines)
+
+
+async def _claim_divorce_card(chat_id: int, message_id: int, user_id: int) -> None:
+    """Record who opened the confirmation card (best effort).
+
+    «❌ انصراف» is initiator-only, and that fact is resolved from THIS
+    server-side registry - never from the callback payload. The panel type
+    is deliberately not a personal one, so the panel guard still lets the
+    other spouse press «💔 بله، طلاق».
+    """
+    try:
+        async with get_session() as session:
+            await PanelOwnershipService.claim(
+                session,
+                chat_id=chat_id,
+                message_id=message_id,
+                user_id=user_id,
+                panel_type=DIVORCE_PANEL_TYPE,
+            )
+    except Exception as error:  # pragma: no cover - registration must not break
+        logger.warning(f"Could not claim the divorce confirmation card: {error}")
+
+
+async def _divorce_card_initiator(
+    callback: CallbackQuery,
+) -> Optional[int]:
+    """The user who opened this confirmation card, or ``None`` if unknown.
+
+    ``None`` means "cannot prove who initiated it", and callers MUST fail
+    closed rather than fall back to the presser.
+    """
+    if callback.message is None:
+        return None
+    chat = getattr(callback.message, "chat", None)
+    chat_id = getattr(chat, "id", None)
+    message_id = getattr(callback.message, "message_id", None)
+    if not chat_id or not message_id:
+        return None
+    try:
+        async with get_session() as session:
+            return await PanelOwnershipService.get_owner(session, chat_id, message_id)
+    except Exception as error:  # pragma: no cover - lookup must not break
+        logger.warning(f"Could not resolve the divorce card initiator: {error}")
+        return None
+
+
+@router.message(F.text.regexp(DIVORCE_TRIGGER_PATTERN))
+async def handle_marriage_divorce_request(message: Message) -> None:
+    """«طلاق سیبی» as a REPLY to the spouse - opens a confirmation card.
+
+    NOBODY IS DIVORCED HERE. This only resolves which marriage the reply is
+    about and renders the «💔 بله، طلاق» / «❌ انصراف» prompt; the divorce
+    itself happens in :func:`handle_marriage_divorce_confirm`.
+    """
+    if getattr(message.chat, "type", None) not in ("group", "supergroup"):
+        await message.reply(DIVORCE_PRIVATE_CHAT_TEXT)
+        return
+
+    actor = message.from_user
+    if actor is None:
+        return
+
+    reply = message.reply_to_message
+    if reply is None:
+        await message.reply(DIVORCE_REPLY_REQUIRED_TEXT)
+        return
+
+    target = getattr(reply, "from_user", None)
+    if target is None:
+        await message.reply(DIVORCE_TARGET_NOT_A_USER_TEXT)
+        return
+
+    if target.id == actor.id:
+        await message.reply(NOT_YOUR_SPOUSE_TEXT)
+        return
+
+    # Which marriage is this reply about? That is a routing question, not a
+    # business rule: the handler needs the id to build the buttons, while
+    # every actual precondition (is it ACTIVE, is the actor a spouse, ...)
+    # is re-checked by MarriageService.divorce on confirmation.
+    async with get_session() as session:
+        await UserService.get_or_create_user(session, actor)
+        await UserService.get_or_create_user(session, target)
+        marriage = await MarriageService.get_active_marriage_for_user(session, actor.id)
+
+        if marriage is None:
+            rejection = NOT_MARRIED_TEXT
+        elif marriage.spouse_of(int(target.id)) is None:
+            rejection = NOT_YOUR_SPOUSE_TEXT
+        else:
+            rejection = None
+            snapshot = {
+                "marriage_id": int(marriage.id),
+                "spouse_id": int(marriage.spouse_of(int(actor.id))),
+            }
+
+    if rejection is not None:
+        await message.reply(rejection)
+        return
+
+    text = (
+        "💔 **درخواست طلاق**\n\n"
+        f"{safe_name(actor.first_name)} می‌خواد ازدواجش با "
+        f"{safe_name(getattr(target, 'first_name', None))} رو به پایان برسونه.\n\n"
+        "عشق سیبی صفر می‌شه و هر دو نفر تا مدتی نمی‌تونن دوباره ازدواج کنن.\n"
+        "اگه مطمئنی «بله، طلاق» رو بزن؛ در غیر این صورت «انصراف»."
+    )
+    keyboard = get_divorce_confirmation_keyboard(snapshot["marriage_id"])
+
+    try:
+        sent = await message.reply(text, reply_markup=keyboard, parse_mode="Markdown")
+    except Exception as error:
+        logger.warning(f"Failed to send the divorce confirmation card: {error}")
+        await _safe_reply(message, GENERIC_FAILURE_TEXT)
+        return
+
+    sent_message_id = getattr(sent, "message_id", None) if sent is not None else None
+    if not sent_message_id:
+        await _safe_reply(message, GENERIC_FAILURE_TEXT)
+        return
+
+    await _claim_divorce_card(message.chat.id, int(sent_message_id), actor.id)
+
+    log_event(
+        Events.MARRIAGE_EVENT,
+        {
+            "action": "telegram_divorce_requested",
+            "marriage_id": snapshot["marriage_id"],
+            "actor_id": actor.id,
+            "spouse_id": snapshot["spouse_id"],
+            "group_id": message.chat.id,
+            "message_id": int(sent_message_id),
+        },
+    )
+
+
+@router.callback_query(F.data.startswith(f"{MARRIAGE_DIVORCE_CONFIRM}:"))
+async def handle_marriage_divorce_confirm(callback: CallbackQuery, bot: Bot) -> None:
+    """«💔 بله، طلاق» - end the marriage through ``MarriageService.divorce``.
+
+    The domain owns everything: the ACTIVE check, the spouse check, the
+    Love reset, proposal/flower invalidation, the remarriage cooldown and
+    the CAS that decides who wins a concurrent divorce.
+    """
+    parsed = parse_marriage_divorce_callback(callback.data)
+    if parsed is None or parsed[0] != MARRIAGE_DIVORCE_CONFIRM:
+        await safe_answer_callback(callback, INVALID_BUTTON_TEXT, show_alert=True)
+        return
+
+    _action, marriage_id = parsed
+    actor = callback.from_user
+    if actor is None:
+        return
+
+    error: Optional[Exception] = None
+    snapshot: Optional[dict] = None
+
+    async with get_session() as session:
+        try:
+            result = await MarriageService.divorce(session, marriage_id, actor.id)
+        except ProposalError as domain_error:
+            # MarriageError extends ProposalError. As in the resolution
+            # path, no rollback: the domain already wrapped its mutations
+            # in a savepoint and a lost race writes nothing of its own.
+            error = domain_error
+        except Exception as unexpected:
+            await session.rollback()
+            logger.warning(
+                f"Unexpected failure divorcing marriage {marriage_id}: {unexpected}"
+            )
+            error = unexpected
+
+        if error is None:
+            cooldown_until = result.cooldown_until
+            snapshot = {
+                "marriage_id": int(result.marriage_id),
+                "actor_name": safe_name(result.actor.display_name),
+                "spouse_name": safe_name(result.spouse.display_name),
+                "spouse_id": int(result.spouse_id),
+                "love_score": int(result.love_score),
+                "cooldown_until": cooldown_until,
+                "cooldown_text": (
+                    _format_duration(_remaining_seconds(cooldown_until))
+                    if cooldown_until is not None
+                    else None
+                ),
+            }
+
+    # The divorce is committed before any Telegram call below, so a failed
+    # edit or notification can never roll it back.
+    if error is not None:
+        await safe_answer_callback(
+            callback, _divorce_error_message(error), show_alert=True
+        )
+        if _should_clear_divorce_buttons(error):
+            await _clear_proposal_buttons(callback, bot)
+        return
+
+    if snapshot is None:  # pragma: no cover - defensive
+        await safe_answer_callback(callback, GENERIC_FAILURE_TEXT, show_alert=True)
+        return
+
+    await safe_answer_callback(callback, DIVORCE_ANSWER)
+    await safe_edit_callback_message(
+        callback, bot, _divorce_card(snapshot), reply_markup=None
+    )
+    await _notify_group(
+        callback,
+        f"🔔 {snapshot['actor_name']} و {snapshot['spouse_name']} "
+        "از هم جدا شدن. 💔🍏",
+    )
+    log_event(
+        Events.MARRIAGE_EVENT,
+        {
+            "action": "telegram_divorced",
+            "marriage_id": snapshot["marriage_id"],
+            "actor_id": actor.id,
+            "spouse_id": snapshot["spouse_id"],
+        },
+    )
+
+
+@router.callback_query(F.data.startswith(f"{MARRIAGE_DIVORCE_CANCEL}:"))
+async def handle_marriage_divorce_cancel(callback: CallbackQuery, bot: Bot) -> None:
+    """«❌ انصراف» - dismiss the confirmation card. The marriage is untouched."""
+    parsed = parse_marriage_divorce_callback(callback.data)
+    if parsed is None or parsed[0] != MARRIAGE_DIVORCE_CANCEL:
+        await safe_answer_callback(callback, INVALID_BUTTON_TEXT, show_alert=True)
+        return
+
+    actor = callback.from_user
+    if actor is None:
+        return
+
+    # Initiator-only, resolved server-side. An unknown owner fails closed
+    # instead of falling back to whoever pressed the button.
+    initiator_id = await _divorce_card_initiator(callback)
+    if initiator_id is None or initiator_id != actor.id:
+        await safe_answer_callback(
+            callback, DIVORCE_CANCEL_FORBIDDEN_TEXT, show_alert=True
+        )
+        return
+
+    await safe_answer_callback(callback, DIVORCE_CANCEL_ANSWER)
+    await safe_edit_callback_message(
+        callback, bot, DIVORCE_CANCEL_CARD, reply_markup=None
+    )
+    log_event(
+        Events.MARRIAGE_EVENT,
+        {
+            "action": "telegram_divorce_cancelled",
+            "marriage_id": parsed[1],
+            "actor_id": actor.id,
+        },
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -18,8 +18,11 @@ from sib.keyboards.leaderboard import (
     get_player_stats_keyboard,
 )
 from sib.keyboards.marriage import (
+    get_divorce_confirmation_keyboard,
     get_marriage_proposal_keyboard,
+    marriage_divorce_callback,
     marriage_proposal_callback,
+    parse_marriage_divorce_callback,
     parse_marriage_proposal_callback,
 )
 
@@ -38,4 +41,7 @@ __all__ = [
     "get_marriage_proposal_keyboard",
     "marriage_proposal_callback",
     "parse_marriage_proposal_callback",
+    "get_divorce_confirmation_keyboard",
+    "marriage_divorce_callback",
+    "parse_marriage_divorce_callback",
 ]

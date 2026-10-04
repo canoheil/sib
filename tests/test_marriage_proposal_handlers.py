@@ -663,18 +663,28 @@ def test_service_api_used_by_the_handler_is_unchanged():
 
 
 def test_router_shape_creation_plus_resolution():
-    """Scope guard: one creation trigger (7.1) + the two buttons (7.2)."""
+    """Scope guard: the router carries exactly the shipped handlers."""
     from sib.handlers import marriage_router
 
     callback_names = {
         handler.callback.__name__ for handler in marriage_router.callback_query.handlers
     }
-    assert callback_names == {"handle_marriage_accept", "handle_marriage_reject"}
+    # 7.2 proposal buttons + 7.3 divorce confirmation buttons.
+    assert callback_names == {
+        "handle_marriage_accept",
+        "handle_marriage_reject",
+        "handle_marriage_divorce_confirm",
+        "handle_marriage_divorce_cancel",
+    }
 
-    message_handlers = list(marriage_router.message.handlers)
-    assert len(message_handlers) == 1
-    # ...and the single message handler is the proposal trigger itself.
-    assert message_handlers[0].callback is handle_marriage_proposal
+    # 7.1 proposal trigger + 7.3 divorce trigger (order is not guaranteed).
+    message_names = {
+        handler.callback.__name__ for handler in marriage_router.message.handlers
+    }
+    assert message_names == {
+        "handle_marriage_proposal",
+        "handle_marriage_divorce_request",
+    }
 
 
 @pytest.mark.asyncio
