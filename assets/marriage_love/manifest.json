@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "library": "marriage_love_events",
+  "purpose": "Pre-generated scene artwork for the Sib Marriage & Love event messages (proposal, wedding, divorce, flower gift).",
+  "art_direction": "../../.agents/tasks/apple-battle-cinematic-narration/ART_DIRECTION.md",
+  "technical": {
+    "aspect": "1:1",
+    "dimensions": "1024x1024",
+    "format": "jpeg",
+    "encoding": "progressive jpeg, quality 85"
+  },
+  "usage": {
+    "note": "Inert provenance record. No runtime code loads this manifest or these files; Marriage/Love handlers are unchanged and currently send text-only messages. The artwork is staged here so it can be attached to the existing event messages without building a new asset system.",
+    "loaded_by": null
+  },
+  "generation": {
+    "mode": "pre-generated",
+    "runtime_generation": false,
+    "tool": "arena-agent image model (text-to-image with style reference)",
+    "created_at": "2026-10-04",
+    "license": "project-internal",
+    "style_reference": "assets/apple_battle/opening_01_crimson_green.jpg"
+  },
+  "casts": {
+    "crimson": {
+      "code": "sib_sorkh",
+      "name_en": "Red Apple",
+      "name_fa": "سیب سرخ"
+    },
+    "green": {
+      "code": "sib_sabz",
+      "name_en": "Green Apple",
+      "name_fa": "سیب سبز"
+    },
+    "gold": {
+      "code": "sib_talayi",
+      "name_en": "Golden Apple",
+      "name_fa": "سیب طلایی"
+    }
+  },
+  "scenes": [
+    {
+      "key": "proposal",
+      "file": "proposal.jpg",
+      "event": "marriage_proposal",
+      "description_en": "Marriage proposal — Red Apple kneeling and offering a golden ring to Golden Apple.",
+      "description_fa": "پیشنهاد ازدواج"
+    },
+    {
+      "key": "wedding",
+      "file": "wedding.jpg",
+      "event": "marriage_event",
+      "description_en": "Marriage accepted / wedding — the newlywed couple celebrating together.",
+      "description_fa": "ازدواج / جشن عروسی"
+    },
+    {
+      "key": "divorce",
+      "file": "divorce.jpg",
+      "event": "divorce",
+      "description_en": "Divorce — a humorous, friendly separation of two apple characters.",
+      "description_fa": "طلاق"
+    },
+    {
+      "key": "flower_gift",
+      "file": "flower_gift.jpg",
+      "event": "love_event",
+      "description_en": "Flower gift — one spouse offering a bouquet to the other.",
+      "description_fa": "هدیه دسته‌گل"
+    }
+  ]
+}
