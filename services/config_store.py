@@ -69,13 +69,47 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     "shop_rotation_hours": 168,
     "shop_pool_character_ids": [],
     # Generic item economy: presence in a price map == the property.
+    #
+    # Marriage & Love pricing (audited 2026-10-04 against the economy below):
+    #   * ``wedding_ring`` 1000 - a deliberate GATE, not a first-day buy.
+    #     Income baseline: a casual player earns ~85-135 Apples/day (garden
+    #     3 x 5 plots x 2 cycles = 30, plus the «سیب» claim at 5 per 5 min),
+    #     an invested one ~400-1700/day once special-apple drops are sold at
+    #     50 / 100 / 200. So the Ring is roughly 8-12 days of casual play but
+    #     only ~1 day for a fully invested garden - it discourages effortless
+    #     first-day marriages without walling the feature off.
+    #     Anchors: Magic Powder 40, costliest plot 2000, one late card-upgrade
+    #     step 1600, whole card-upgrade ladder 6200.
+    #   * ``flower`` 30 - RECURRING spend (``flower_daily_limit_per_direction``
+    #     is 1 per direction per UTC day), so it must stay payable from a
+    #     single day's income for every married player: ~25-35% of a casual
+    #     day, ~2% of an invested one. It sits BELOW Magic Powder (40) because
+    #     Powder is permanent progression while a Flower is consumed on send.
+    #     The Ring is ~33x a Flower, so Love stays affordable to nurture.
+    #   * Sell prices are the configured ``item_sell_price_ratio`` (0.5)
+    #     applied to the buy price: 1000 -> 500 and 30 -> 15. Rebalancing =
+    #     edit these two maps; no code change and no new config key.
+    #
+    # Adding an item to the shop = one `ITEM_CATALOG` entry + one price here.
+    # The marriage foundation's `wedding_ring_buy_price` / `flower_buy_price`
+    # keys deliberately stay unset: these two maps are the SINGLE source of
+    # truth the shop and `ItemService` read, so a second per-item price would
+    # only drift out of sync.
     # Buyable items (shop "Items" section): key -> buy price in Apples.
-    "item_buy_prices": {"magic_powder": 40},
+    "item_buy_prices": {
+        "magic_powder": 40,
+        "wedding_ring": 1000,
+        "flower": 30,
+    },
     # Sellable items (shop "Sell Items" section): key -> sell price in Apples.
+    # Magic Powder is deliberately absent: it is consumable progression, not a
+    # currency, so it can be bought but never sold back (see test_item_economy).
     "item_sell_prices": {
         "apple_gold": 50,
         "apple_diamond": 100,
         "apple_obsidian": 200,
+        "wedding_ring": 500,
+        "flower": 15,
     },
     # Friendly matches ("بازی با اعضای گروه"): Apple reward instead of the
     # competitive seedling. ALL THREE values are independent limits:
@@ -92,6 +126,89 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     # Trading
     "trades_per_day": 1,
     "trade_expiration_hours": 24,
+    # Marriage & Love system (foundation)
+    "marriage_proposal_timeout_seconds": 300,
+    "marriage_divorce_cooldown_seconds": 86400,
+    "love_min": 0,
+    "love_max": 100,
+    "love_initial": 0,
+    "flower_reject_love_penalty": 1,
+    "love_daily_decay": 1,
+    "flower_daily_limit_per_direction": 1,
+    # Economy-dependent Marriage & Love keys: explicitly registered as
+    # configurable keys (`None` until finalized in the economy review phase;
+    # `item_buy_prices` / `item_sell_prices` remain unchanged for Magic Powder).
+    #
+    # NOTE: `flower_love_gain` was finalized by the economy review and now
+    # lives in the "Sib Love economy" block below with its balance basis.
+    "wedding_ring_buy_price": None,
+    "flower_buy_price": None,
+    "item_sell_price_ratio": 0.5,
+    # Sib Love economy (finalized 2026-10-04 for the Flower UI).
+    #
+    # Love earned per ACCEPTED Flower, on the shared 0..100 Love scale
+    # (`love_min` / `love_max`). Chosen against the configured relationship
+    # pacing: `love_daily_decay` 1/day, `flower_reject_love_penalty` 1,
+    # `flower_daily_limit_per_direction` 1 (A->B and B->A are independent,
+    # so an engaged couple resolves up to 2 Flowers per day).
+    #
+    #   net Love/day = (accepted Flowers/day * gain) - love_daily_decay
+    #
+    #   gain  1 spouse sends    both spouses send   verdict
+    #   ----  ----------------  -----------------   --------------------------
+    #     1     +0/day  (never)   +1/day -> 100d    BROKEN: decay cancels a
+    #                                               lone sender entirely, so
+    #                                               Love could never grow
+    #                                               without perfect 2-sided
+    #                                               play, and one rejection
+    #                                               (-1) would erase a whole
+    #                                               accepted Flower.
+    #     2     +1/day -> 100d    +3/day -> ~33d    CHOSEN: smallest value
+    #                                               that still lets a single
+    #                                               active partner make
+    #                                               progress; ~1 month of
+    #                                               daily play for a couple.
+    #     3     +2/day -> 50d     +5/day -> 20d     noticeably faster, and a
+    #                                               rejection starts to sting
+    #                                               too little.
+    #     5     +4/day -> 25d     +9/day -> 11d     too fast to feel earned.
+    #    10     +9/day -> 11d    +19/day -> 5d      100 is meaningless.
+    #
+    # Why 2 specifically:
+    #   * It is the floor at which the feature still works one-sided, so a
+    #     couple with one keen partner is not hard-blocked.
+    #   * Rejection (-1) costs exactly half an accepted Flower and one day
+    #     of solo progress: a real but recoverable setback, symmetric with
+    #     the daily decay of 1.
+    #   * Cost of maxing Love: ~33-100 days x 30-60 Apples/day (Flower buy
+    #     price 30) = roughly 1000-3000 Apples for the couple - the same
+    #     order as the Wedding Ring (1000). The sustained relationship is
+    #     worth about as much as the marriage itself, and the Flower stays
+    #     a recurring sink instead of a one-off toll.
+    #   * The gain is snapshotted onto each FlowerGift (`love_delta`) at SEND
+    #     time, so rebalancing here never rewrites offers already in flight.
+    "flower_love_gain": 2,
+    # Lifetime of a PENDING FlowerGift. A gift nobody accepts or rejects is
+    # expired by MaintenanceService (periodic) and RecoveryService (startup)
+    # once `created_at + this many seconds` has passed:
+    #
+    #   * the gift transitions PENDING -> EXPIRED (CAS-guarded, so a
+    #     concurrent accept/reject/invalidate always wins instead of
+    #     double-refunding);
+    #   * exactly one Flower is refunded to the sender;
+    #   * Love is NEVER changed (`love_delta` stays 0) - expiry is a return of
+    #     the spent item, not a relationship event;
+    #   * already ACCEPTED / REJECTED / INVALIDATED gifts are never touched.
+    #
+    # 300s matches `marriage_proposal_timeout_seconds`: an unanswered Flower
+    # card is the same shape of interaction as an unanswered proposal card (a
+    # group card with «قبول / رد» buttons waiting on one person), so both
+    # windows are deliberately identical. Because expiry REFUNDS the Flower,
+    # a short window is the sender-safe choice: the item comes back instead
+    # of staying locked inside a card nobody is looking at any more. The
+    # lifetime is derived from `created_at` at sweep time, so rebalancing it
+    # never needs a migration and never rewrites offers already in flight.
+    "flower_gift_pending_timeout_seconds": 300,
     # "سیب" group wake-word claim (spec: 5 apples every 5 minutes)
     "sib_claim_amount": 5,
     "sib_claim_cooldown_seconds": 5 * 60,

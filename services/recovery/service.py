@@ -45,6 +45,9 @@ class RecoveryService:
             "expired_abandoned_matches": 0,
             "resumed_apple_battles": 0,
             "finalized_apple_battles": 0,
+            "expired_marriage_proposals": 0,
+            "love_decay_marriages": 0,
+            "expired_flower_gifts": 0,
         }
 
         # 0. Consistency repair FIRST: release parties/matches that block a
@@ -119,6 +122,35 @@ class RecoveryService:
         for m in expired_active:
             await TimeoutService._resolve_expired_active_match(session, m)
             stats["expired_abandoned_matches"] += 1
+
+        # 4. Marriage & Love: work that a downtime could have skipped.
+        #    - proposals that expired while the bot was offline
+        #    - daily Love decay for every UTC day that passed offline
+        #    - FlowerGifts left PENDING past their configured lifetime
+        #    All are pure delegation to the existing idempotent domain
+        #    sweeps - no Marriage/Love logic is reproduced here - and they
+        #    are called directly on the shared session, exactly like
+        #    ``SessionService.reconcile_stale_state`` and
+        #    ``AppleBattleService.recover_active_matches`` above. Running
+        #    recovery twice therefore changes nothing the second time, and
+        #    the periodic MaintenanceService sweep re-tries within seconds
+        #    anything this step could not finish, so a partial failure here
+        #    is self-healing rather than lost.
+        try:
+            from sib.services.love import LoveService
+            from sib.services.marriage_proposal import MarriageProposalService
+
+            expired_proposals = await MarriageProposalService.expire_overdue_proposals(
+                session, now=now
+            )
+            decayed = await LoveService.apply_daily_decay(session, now=now)
+            expired_gifts = await LoveService.expire_overdue_gifts(session, now=now)
+
+            stats["expired_marriage_proposals"] = len(expired_proposals)
+            stats["love_decay_marriages"] = decayed
+            stats["expired_flower_gifts"] = len(expired_gifts)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(f"Marriage/Love startup recovery failed: {exc}")
 
         await session.commit()
 

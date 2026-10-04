@@ -17,6 +17,17 @@ from sib.keyboards.leaderboard import (
     get_group_stats_keyboard,
     get_player_stats_keyboard,
 )
+from sib.keyboards.marriage import (
+    get_divorce_confirmation_keyboard,
+    get_flower_gift_keyboard,
+    get_marriage_proposal_keyboard,
+    love_flower_callback,
+    marriage_divorce_callback,
+    marriage_proposal_callback,
+    parse_love_flower_callback,
+    parse_marriage_divorce_callback,
+    parse_marriage_proposal_callback,
+)
 
 __all__ = [
     "get_membership_keyboard",
@@ -30,4 +41,13 @@ __all__ = [
     "get_leaderboard_keyboard",
     "get_group_stats_keyboard",
     "get_player_stats_keyboard",
+    "get_marriage_proposal_keyboard",
+    "marriage_proposal_callback",
+    "parse_marriage_proposal_callback",
+    "get_divorce_confirmation_keyboard",
+    "marriage_divorce_callback",
+    "parse_marriage_divorce_callback",
+    "get_flower_gift_keyboard",
+    "love_flower_callback",
+    "parse_love_flower_callback",
 ]
