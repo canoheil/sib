@@ -38,6 +38,13 @@ from sib.database.models import (
     AppleBattleStatus,
     SponsorChannel,
     ChannelType,
+    Marriage,
+    MarriageStatus,
+    MarriageProposal,
+    ProposalStatus,
+    FlowerGift,
+    FlowerGiftStatus,
+    canonical_spouse_ids,
 )
 
 __all__ = [
@@ -76,4 +83,11 @@ __all__ = [
     "AppleBattleStatus",
     "SponsorChannel",
     "ChannelType",
+    "Marriage",
+    "MarriageStatus",
+    "MarriageProposal",
+    "ProposalStatus",
+    "FlowerGift",
+    "FlowerGiftStatus",
+    "canonical_spouse_ids",
 ]

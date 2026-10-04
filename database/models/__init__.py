@@ -32,6 +32,15 @@ from sib.database.models.character import (
     CharacterBalanceVersion,
     ReleaseStatus,
 )
+from sib.database.models.marriage import (
+    FlowerGift,
+    FlowerGiftStatus,
+    Marriage,
+    MarriageProposal,
+    MarriageStatus,
+    ProposalStatus,
+    canonical_spouse_ids,
+)
 
 __all__ = [
     "Base",
@@ -78,4 +87,11 @@ __all__ = [
     "AppleBattle",
     "AppleBattleQueueEntry",
     "AppleBattleStatus",
+    "Marriage",
+    "MarriageStatus",
+    "MarriageProposal",
+    "ProposalStatus",
+    "FlowerGift",
+    "FlowerGiftStatus",
+    "canonical_spouse_ids",
 ]

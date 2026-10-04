@@ -39,6 +39,9 @@ class Events:
     SHOP_EVENT = "SHOP_EVENT"
     TRADE_EVENT = "TRADE_EVENT"
     APPLE_BATTLE_EVENT = "APPLE_BATTLE_EVENT"
+    MARRIAGE_PROPOSAL_EVENT = "MARRIAGE_PROPOSAL_EVENT"
+    MARRIAGE_EVENT = "MARRIAGE_EVENT"
+    LOVE_EVENT = "LOVE_EVENT"
     MATCH_CANCELLED = "MATCH_CANCELLED"
 
     # Friendly matches ("بازی با اعضای گروه") - a match type, not a game mode.

@@ -126,6 +126,24 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     # Trading
     "trades_per_day": 1,
     "trade_expiration_hours": 24,
+    # Marriage & Love system (foundation)
+    "marriage_proposal_timeout_seconds": 300,
+    "marriage_divorce_cooldown_seconds": 86400,
+    "love_min": 0,
+    "love_max": 100,
+    "love_initial": 0,
+    "flower_reject_love_penalty": 1,
+    "love_daily_decay": 1,
+    "flower_daily_limit_per_direction": 1,
+    # Economy-dependent Marriage & Love keys: explicitly registered as
+    # configurable keys (`None` until finalized in the economy review phase;
+    # `item_buy_prices` / `item_sell_prices` remain unchanged for Magic Powder).
+    #
+    # NOTE: `flower_love_gain` was finalized by the economy review and now
+    # lives in the "Sib Love economy" block below with its balance basis.
+    "wedding_ring_buy_price": None,
+    "flower_buy_price": None,
+    "item_sell_price_ratio": 0.5,
     # Sib Love economy (finalized 2026-10-04 for the Flower UI).
     #
     # Love earned per ACCEPTED Flower, on the shared 0..100 Love scale
