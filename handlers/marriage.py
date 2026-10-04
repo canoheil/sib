@@ -106,6 +106,7 @@ from sib.services.marriage_proposal import (
     ProposalNotFoundError,
     ProposalNotPendingError,
 )
+from sib.services.marriage_art import send_scene_answer, send_scene_reply
 from sib.services.panel import PanelOwnershipService
 from sib.services.sib_claim import fa_digits
 from sib.services.telegram_ui import safe_answer_callback, safe_edit_callback_message
@@ -575,12 +576,19 @@ async def _clear_proposal_buttons(callback: CallbackQuery, bot: Optional[Bot]) -
         logger.warning(f"Could not clear stale proposal buttons: {error}")
 
 
-async def _notify_group(callback: CallbackQuery, text: str) -> None:
-    """One short follow-up in the group so nobody misses the outcome."""
+async def _notify_group(
+    callback: CallbackQuery, text: str, scene: Optional[str] = None
+) -> None:
+    """One short follow-up in the group so nobody misses the outcome.
+
+    ``scene`` optionally decorates the follow-up with committed scene art.
+    Presentation only: the text is posted with or without the art, and a
+    failed upload degrades to the plain text follow-up.
+    """
     if callback.message is None:
         return
     try:
-        await callback.message.answer(text)
+        await send_scene_answer(callback.message, scene, text)
     except Exception as error:  # pragma: no cover - presentation must not break
         logger.warning(f"Could not post the marriage outcome to the group: {error}")
 
@@ -698,6 +706,7 @@ async def _resolve_proposal_callback(
             callback,
             f"🔔 {snapshot['proposer_name']} و {snapshot['accepter_name']} "
             "ازدواج کردن! 🎉💍",
+            scene="wedding",
         )
         log_event(
             Events.MARRIAGE_EVENT,
@@ -993,7 +1002,13 @@ async def handle_marriage_divorce_request(message: Message) -> None:
     keyboard = get_divorce_confirmation_keyboard(snapshot["marriage_id"])
 
     try:
-        sent = await message.reply(text, reply_markup=keyboard, parse_mode="Markdown")
+        sent = await send_scene_reply(
+            message,
+            "divorce",
+            text,
+            reply_markup=keyboard,
+            parse_mode="Markdown",
+        )
     except Exception as error:
         logger.warning(f"Failed to send the divorce confirmation card: {error}")
         await _safe_reply(message, GENERIC_FAILURE_TEXT)
@@ -1213,7 +1228,13 @@ async def handle_marriage_proposal(message: Message) -> None:
     keyboard = get_marriage_proposal_keyboard(proposal_id)
 
     try:
-        sent = await message.reply(text, reply_markup=keyboard, parse_mode="Markdown")
+        sent = await send_scene_reply(
+            message,
+            "proposal",
+            text,
+            reply_markup=keyboard,
+            parse_mode="Markdown",
+        )
     except Exception as error:
         logger.warning(
             f"Failed to send marriage proposal {proposal_id} to chat "
@@ -1524,7 +1545,9 @@ async def handle_flower_send(message: Message) -> None:
 
     gift_id = snapshot["gift_id"]
     try:
-        sent = await message.reply(
+        sent = await send_scene_reply(
+            message,
+            "flower_gift",
             _flower_offer_card(snapshot),
             reply_markup=get_flower_gift_keyboard(gift_id),
             parse_mode="Markdown",
