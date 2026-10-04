@@ -662,12 +662,14 @@ def test_service_api_used_by_the_handler_is_unchanged():
     assert hasattr(MarriageProposalService, "invalidate_proposal")
 
 
-def test_accept_and_reject_handlers_are_not_implemented_yet():
-    """Scope guard: this phase ships the BUTTONS, not their handlers."""
+def test_router_shape_creation_plus_resolution():
+    """Scope guard: one creation trigger (7.1) + the two buttons (7.2)."""
     from sib.handlers import marriage_router
 
-    callback_handlers = list(marriage_router.callback_query.handlers)
-    assert callback_handlers == []
+    callback_names = {
+        handler.callback.__name__ for handler in marriage_router.callback_query.handlers
+    }
+    assert callback_names == {"handle_marriage_accept", "handle_marriage_reject"}
 
     message_handlers = list(marriage_router.message.handlers)
     assert len(message_handlers) == 1

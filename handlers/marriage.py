@@ -1,42 +1,71 @@
-"""Telegram entry point for the marriage PROPOSAL flow (Phase 7.1).
+"""Telegram entry point for the marriage PROPOSAL flow (Phases 7.1 + 7.2).
 
-Scope: proposal CREATION only. The wake phrase is typed in a group as a
-REPLY to the intended partner's message; the domain creates the proposal
-and the bot posts the «قبول / رد» card.
+Phase 7.1 - CREATION: the wake phrase is typed in a group as a REPLY to the
+intended partner's message; the domain creates the proposal and the bot
+posts the «قبول / رد» card.
 
-Deliberately NOT wired up here (later phases): accept/reject callbacks,
-divorce, flowers, love, profile, shop and marriage history screens.
+Phase 7.2 - RESOLUTION: the two buttons on that card. Both call straight
+into the domain (``MarriageService.accept_proposal`` /
+``MarriageProposalService.reject_proposal``) and render whatever the
+domain returns. Nothing about rings, marriage state, cooldowns, Love or
+the invalidation of rival proposals is decided here.
+
+Deliberately NOT wired up here (later phases): divorce, flowers, love,
+profile, shop and marriage history screens.
 
 Design rules this module follows:
 - Identity is NEVER taken from the text or from callback data. The
   proposer is ``message.from_user`` and the target is
-  ``message.reply_to_message.from_user`` - both Telegram-authenticated.
+  ``message.reply_to_message.from_user`` - both Telegram-authenticated;
+  the callback actor is always ``callback.from_user.id``. Callback data
+  only ever names a proposal, never a person, so a forged or replayed
+  button cannot act as anybody else.
 - Business rules are NOT re-implemented here. The handler gathers the two
-  identities plus the chat id and lets ``MarriageProposalService`` decide;
-  domain errors are mapped to short Persian sentences.
+  identities plus the chat id and lets the domain decide; domain errors
+  are mapped to short Persian sentences.
 - The database transaction closes BEFORE any Telegram send, so a row lock
   is never held across network I/O.
+- The handler adds no locking of its own: concurrency is the domain's job.
 """
 
 from typing import Optional
 
-from aiogram import F, Router
-from aiogram.types import Message
+from aiogram import Bot, F, Router
+from aiogram.types import CallbackQuery, Message
 
 from sib.core.logging import Events, log_event, logger
 from sib.core.text import safe_name
 from sib.database.connection import get_session
-from sib.keyboards.marriage import get_marriage_proposal_keyboard
+from sib.keyboards.marriage import (
+    MARRIAGE_ACCEPT,
+    MARRIAGE_REJECT,
+    get_marriage_proposal_keyboard,
+    parse_marriage_proposal_callback,
+)
 from sib.services.config_store import ConfigService
 from sib.services.group import GroupService
-from sib.services.marriage import MarriageCooldownActiveError
+from sib.services.marriage import (
+    MarriageAcceptanceRaceLostError,
+    MarriageCooldownActiveError,
+    MarriageParticipantAlreadyMarriedError,
+    MarriageService,
+    ProposerAlreadyMarriedOnAcceptError,
+    ProposalNotAcceptableError,
+    TargetAlreadyMarriedOnAcceptError,
+    WeddingRingMissingAtAcceptanceError,
+)
 from sib.services.marriage_proposal import (
     DEFAULT_PROPOSAL_TIMEOUT_SECONDS,
     MarriageProposalService,
+    NotProposalTargetError,
     ProposalError,
+    ProposalExpiredError,
     ProposalInvalidReason,
+    ProposalNotFoundError,
+    ProposalNotPendingError,
 )
 from sib.services.sib_claim import fa_digits
+from sib.services.telegram_ui import safe_answer_callback, safe_edit_callback_message
 from sib.services.user import UserService
 
 router = Router(name="marriage")
@@ -84,6 +113,41 @@ PROPOSAL_SEND_FAILED_TEXT = (
 
 GENERIC_FAILURE_TEXT = "💍 پیشنهاد ازدواج ثبت نشد. یه لحظه‌ی دیگه دوباره امتحان کن.🍏"
 
+INVALID_BUTTON_TEXT = "💍 این دکمه معتبر نیست 🍏"
+
+# --- Resolution (7.2) -------------------------------------------------------
+
+# Product copy for the ring being sold between proposal and acceptance.
+RING_SOLD_TEXT = (
+    "💍 حلقه غیبش زد! 🍏\n\n"
+    "طرف حلقه رو فروخت قبل از اینکه تو بگی بله؛ این پیشنهاد باطل شد. 😄"
+)
+
+RACE_LOST_TEXT = (
+    "💍 یه لحظه دیر رسیدی 🍏\n\n"
+    "این پیشنهاد همین‌جا و همین الان از طرف یه عمل دیگه بسته شد."
+)
+
+EXPIRED_TEXT = "💍 مهلت این پیشنهاد ازدواج به پایان رسیده 🍏"
+
+NOT_ACCEPTABLE_TEXT = "💍 این پیشنهاد ازدواج دیگه قابل قبول نیست 🍏"
+
+ALREADY_RESOLVED_TEXT = "💍 این پیشنهاد ازدواج قبلاً بسته شده 🍏"
+
+TARGET_MARRIED_TEXT = "💍 شما الان متأهل هستید و نمی‌تونید این پیشنهاد رو قبول کنید 🍏"
+
+PROPOSER_MARRIED_TEXT = "💍 خواستگار تو این فاصله متأهل شده 🍏"
+
+SOMEONE_MARRIED_TEXT = "💍 یکی از طرفین الان متأهله 🍏"
+
+NOT_YOUR_PROPOSAL_TEXT = "💍 فقط مخاطب این پیشنهاد ازدواج می‌تونه به اون پاسخ بده 🍏"
+
+NOT_FOUND_TEXT = "💍 این پیشنهاد ازدواج پیدا نشد 🍏"
+
+ACCEPT_ANSWER = "ازدواج ثبت شد! 🎉💍"
+
+REJECT_ANSWER = "پیشنهاد رد شد."
+
 
 # ---------------------------------------------------------------------------
 # Formatting helpers
@@ -107,12 +171,30 @@ def _format_duration(seconds: int) -> str:
     return f"{fa_digits(secs)} ثانیه"
 
 
-def _cooldown_text(error: MarriageCooldownActiveError) -> str:
+def _cooldown_text(
+    error: MarriageCooldownActiveError, *, tail: str = "دوباره پیشنهاد ازدواج بدی"
+) -> str:
     wait = _format_duration(error.remaining_seconds)
     return (
         "💍 هنوز زوده 🍏\n\n"
-        f"بعد از طلاق باید {wait} صبر کنی تا بتونی دوباره پیشنهاد ازدواج بدی."
+        f"بعد از طلاق باید {wait} صبر کنی تا بتونی {tail}."
     )
+
+
+def _accept_cooldown_text(error: MarriageCooldownActiveError) -> str:
+    """Cooldown copy for the RESOLUTION path.
+
+    The actor is the target, so a proposer-side cooldown must be described
+    in the third person instead of telling the presser to wait.
+    """
+    wait = _format_duration(error.remaining_seconds)
+    if error.role == "proposer":
+        return (
+            "💍 هنوز زوده 🍏\n\n"
+            f"خواستگار تا {wait} دیگه نمی‌تونه ازدواج کنه؛ "
+            "این پیشنهاد فعلاً قابل قبول نیست."
+        )
+    return _cooldown_text(error, tail="دوباره ازدواج کنی")
 
 
 def _user_message_for(error: Exception) -> str:
@@ -130,6 +212,60 @@ def _user_message_for(error: Exception) -> str:
     if isinstance(message, str) and message.strip():
         return message.strip()
     return GENERIC_FAILURE_TEXT
+
+
+def _resolve_error_message(error: Exception) -> str:
+    """Persian copy for an ACCEPT/REJECT failure.
+
+    Several acceptance errors carry a technical English ``.message``
+    (``"Proposer 42 already has an active marriage."``), so the resolution
+    path cannot fall back to ``.message`` the way creation can - every
+    branch is mapped explicitly and the fallback stays generic.
+
+    Order matters: the subclasses are tested before their bases.
+    """
+    if isinstance(error, WeddingRingMissingAtAcceptanceError):
+        return RING_SOLD_TEXT
+    if isinstance(error, MarriageAcceptanceRaceLostError):
+        return RACE_LOST_TEXT
+    if isinstance(error, ProposalExpiredError):
+        return EXPIRED_TEXT
+    if isinstance(error, ProposalNotAcceptableError):
+        return NOT_ACCEPTABLE_TEXT
+    if isinstance(error, ProposalNotPendingError):
+        return ALREADY_RESOLVED_TEXT
+    if isinstance(error, MarriageCooldownActiveError):
+        return _accept_cooldown_text(error)
+    if isinstance(error, TargetAlreadyMarriedOnAcceptError):
+        return TARGET_MARRIED_TEXT
+    if isinstance(error, ProposerAlreadyMarriedOnAcceptError):
+        return PROPOSER_MARRIED_TEXT
+    if isinstance(error, MarriageParticipantAlreadyMarriedError):
+        return SOMEONE_MARRIED_TEXT
+    if isinstance(error, NotProposalTargetError):
+        return NOT_YOUR_PROPOSAL_TEXT
+    if isinstance(error, ProposalNotFoundError):
+        return NOT_FOUND_TEXT
+    return _user_message_for(error)
+
+
+def _should_clear_buttons(error: Exception) -> bool:
+    """True when the buttons are stale and should be stripped from the card.
+
+    Only a proposal that is definitively gone (or already settled) makes the
+    card stale. A live proposal keeps its buttons: an unauthorized presser
+    must not be able to deface somebody else's pending card, and a refusal
+    caused by a cooldown or a missing ring may well be retried.
+    """
+    return isinstance(
+        error,
+        (
+            ProposalNotFoundError,
+            ProposalExpiredError,
+            ProposalNotAcceptableError,
+            ProposalNotPendingError,
+        ),
+    )
 
 
 def _proposal_text(proposer, target, timeout_seconds: int) -> str:
@@ -213,6 +349,206 @@ async def _persist_message_id(proposal_id: int, message_id: int) -> None:
             f"Could not persist message id {message_id} on marriage proposal "
             f"{proposal_id}: {error}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Resolution helpers (Phase 7.2)
+# ---------------------------------------------------------------------------
+
+
+async def _clear_proposal_buttons(callback: CallbackQuery, bot: Optional[Bot]) -> None:
+    """Strip the «قبول / رد» pair from a stale card, leaving its text alone.
+
+    The text is deliberately NOT rewritten: an already-ACCEPTED proposal
+    must keep showing «ازدواج انجام شد!», so only the dead buttons go.
+    """
+    if bot is None or callback.message is None:
+        return
+    chat = getattr(callback.message, "chat", None)
+    chat_id = getattr(chat, "id", None)
+    message_id = getattr(callback.message, "message_id", None)
+    if not chat_id or not message_id:
+        return
+    try:
+        await bot.edit_message_reply_markup(
+            chat_id=chat_id, message_id=message_id, reply_markup=None
+        )
+    except Exception as error:  # pragma: no cover - presentation must not break
+        logger.warning(f"Could not clear stale proposal buttons: {error}")
+
+
+async def _notify_group(callback: CallbackQuery, text: str) -> None:
+    """One short follow-up in the group so nobody misses the outcome."""
+    if callback.message is None:
+        return
+    try:
+        await callback.message.answer(text)
+    except Exception as error:  # pragma: no cover - presentation must not break
+        logger.warning(f"Could not post the marriage outcome to the group: {error}")
+
+
+def _accept_card(snapshot: dict) -> str:
+    lines = [
+        "💍 **ازدواج انجام شد!** 🎉",
+        "",
+        f"{snapshot['proposer_name']} و {snapshot['accepter_name']} "
+        "از امروز زن و شوهر سیبی‌ان! 🍏",
+        f"❤️ عشق سیبی: {fa_digits(snapshot['love_score'])}",
+    ]
+    if snapshot["invalidated_count"]:
+        lines.append(
+            f"\n(پیشنهادهای دیگه‌ی این دو نفر باطل شد: "
+            f"{fa_digits(snapshot['invalidated_count'])})"
+        )
+    return "\n".join(lines)
+
+
+def _reject_card(snapshot: dict) -> str:
+    return (
+        "💍 **پیشنهاد رد شد** 🍏\n\n"
+        f"{snapshot['target_name']} پیشنهاد {snapshot['proposer_name']} رو رد کرد.\n"
+        f"💍 حلقه‌ی {snapshot['proposer_name']} دست‌نخورده موند."
+    )
+
+
+async def _resolve_proposal_callback(
+    callback: CallbackQuery, bot: Optional[Bot], action: str
+) -> None:
+    """Shared body of the «قبول» / «رد» handlers.
+
+    A thin Telegram adapter: parse -> call the domain -> render. No
+    business rule is decided here and no lock is taken by the handler.
+    """
+    parsed = parse_marriage_proposal_callback(callback.data)
+    if parsed is None or parsed[0] != action:
+        await safe_answer_callback(callback, INVALID_BUTTON_TEXT, show_alert=True)
+        return
+
+    parsed_action, proposal_id = parsed
+    actor = callback.from_user
+    if actor is None:
+        return
+
+    error: Optional[Exception] = None
+    outcome = None
+    snapshot: Optional[dict] = None
+
+    async with get_session() as session:
+        try:
+            if parsed_action == MARRIAGE_ACCEPT:
+                outcome = await MarriageService.accept_proposal(
+                    session, proposal_id, actor.id
+                )
+            else:
+                outcome = await MarriageProposalService.reject_proposal(
+                    session, proposal_id, actor.id
+                )
+        except ProposalError as domain_error:
+            # Deliberately NO rollback: the domain owns atomicity (all
+            # acceptance mutations live inside a savepoint, so a refusal
+            # leaves nothing partial behind) and some refusals WRITE ON
+            # PURPOSE - an overdue proposal is transitioned to EXPIRED and
+            # *then* raises ProposalExpiredError. Rolling back here would
+            # silently undo that transition and leave the row PENDING
+            # forever. ``get_session()`` commits on normal exit.
+            error = domain_error
+        except Exception as unexpected:
+            # Unknown failure: nothing is known to be safe to keep.
+            await session.rollback()
+            logger.warning(
+                f"Unexpected failure resolving marriage proposal "
+                f"{proposal_id}: {unexpected}"
+            )
+            error = unexpected
+
+        if error is None and outcome is not None:
+            if parsed_action == MARRIAGE_ACCEPT:
+                snapshot = {
+                    "proposal_id": int(outcome.proposal_id),
+                    "marriage_id": int(outcome.marriage_id),
+                    "proposer_name": safe_name(outcome.proposer.display_name),
+                    "accepter_name": safe_name(outcome.accepter.display_name),
+                    "love_score": int(outcome.love_score),
+                    "invalidated_count": int(outcome.invalidated_count),
+                }
+            else:
+                snapshot = {
+                    "proposal_id": int(outcome.id),
+                    "proposer_name": safe_name(outcome.proposer.display_name),
+                    "target_name": safe_name(outcome.target.display_name),
+                }
+
+    # The transaction is closed: no row lock is held across the renders below.
+    if error is not None:
+        await safe_answer_callback(
+            callback, _resolve_error_message(error), show_alert=True
+        )
+        if _should_clear_buttons(error):
+            await _clear_proposal_buttons(callback, bot)
+        return
+
+    if snapshot is None:  # pragma: no cover - defensive
+        await safe_answer_callback(callback, GENERIC_FAILURE_TEXT, show_alert=True)
+        return
+
+    if parsed_action == MARRIAGE_ACCEPT:
+        await safe_answer_callback(callback, ACCEPT_ANSWER)
+        await safe_edit_callback_message(
+            callback, bot, _accept_card(snapshot), reply_markup=None
+        )
+        await _notify_group(
+            callback,
+            f"🔔 {snapshot['proposer_name']} و {snapshot['accepter_name']} "
+            "ازدواج کردن! 🎉💍",
+        )
+        log_event(
+            Events.MARRIAGE_EVENT,
+            {
+                "action": "telegram_accepted",
+                "proposal_id": snapshot["proposal_id"],
+                "marriage_id": snapshot["marriage_id"],
+                "actor_id": actor.id,
+            },
+        )
+        return
+
+    await safe_answer_callback(callback, REJECT_ANSWER)
+    await safe_edit_callback_message(
+        callback, bot, _reject_card(snapshot), reply_markup=None
+    )
+    await _notify_group(
+        callback,
+        f"🔔 {snapshot['proposer_name']} جان، "
+        f"{snapshot['target_name']} پیشنهاد ازدواجت رو رد کرد. 🍏",
+    )
+    log_event(
+        Events.MARRIAGE_PROPOSAL_EVENT,
+        {
+            "action": "telegram_rejected",
+            "proposal_id": snapshot["proposal_id"],
+            "actor_id": actor.id,
+        },
+    )
+
+
+@router.callback_query(F.data.startswith(f"{MARRIAGE_ACCEPT}:"))
+async def handle_marriage_accept(callback: CallbackQuery, bot: Bot) -> None:
+    """«✅ قبول» - accept a pending proposal (target only, by domain rule).
+
+    Marriage creation, ring consumption, Love initialisation and the
+    invalidation of rival proposals are all ``MarriageService``'s job.
+    """
+    await _resolve_proposal_callback(callback, bot, MARRIAGE_ACCEPT)
+
+
+@router.callback_query(F.data.startswith(f"{MARRIAGE_REJECT}:"))
+async def handle_marriage_reject(callback: CallbackQuery, bot: Bot) -> None:
+    """«❌ رد» - reject a pending proposal (target only, by domain rule).
+
+    The Wedding Ring is never touched: ``reject_proposal`` only flips the
+    proposal to its terminal REJECTED state.
+    """
+    await _resolve_proposal_callback(callback, bot, MARRIAGE_REJECT)
 
 
 # ---------------------------------------------------------------------------
