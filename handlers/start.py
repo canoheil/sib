@@ -467,6 +467,11 @@ async def handle_apple_profile(callback: CallbackQuery, bot: Bot):
                     fav_photo = photo_arg(file_id, fs_path)
                 break
 
+        # The ACTIVE spouse + shared Love, straight from the marriage domain.
+        from sib.handlers.marriage import profile_marriage_lines
+
+        marriage_lines = await profile_marriage_lines(session, user.id)
+
     lines = [
         f"👤 **پروفایل سیبی {user.first_name or 'شما'}** 🍏",
         "",
@@ -476,6 +481,7 @@ async def handle_apple_profile(callback: CallbackQuery, bot: Bot):
         fav_text.strip() if fav_text else "⭐ کارت اصلی: انتخاب نشده",
         f"⚔️ نبردهای سیبی: `{battles or 0}` | برد: `{wins or 0}`",
     ]
+    lines.extend(marriage_lines)
 
     kb = get_profile_keyboard()
 
@@ -656,6 +662,11 @@ async def _open_sender_profile(message: Message) -> None:
                     fav_photo = photo_arg(file_id, fs_path)
                 break
 
+        # The ACTIVE spouse + shared Love, straight from the marriage domain.
+        from sib.handlers.marriage import profile_marriage_lines
+
+        marriage_lines = await profile_marriage_lines(session, user.id)
+
     lines = [
         f"👤 **پروفایل سیبی {user.first_name or 'شما'}** 🍏",
         "",
@@ -665,6 +676,7 @@ async def _open_sender_profile(message: Message) -> None:
         fav_text.strip() if fav_text else "⭐ کارت اصلی: انتخاب نشده",
         f"⚔️ نبردهای سیبی: `{battles or 0}` | برد: `{wins or 0}`",
     ]
+    lines.extend(marriage_lines)
     profile_text = "\n".join(lines)
     profile_kb = get_profile_keyboard()
     sent = None

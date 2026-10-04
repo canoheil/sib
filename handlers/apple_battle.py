@@ -555,6 +555,11 @@ async def cmd_profile(message: Message, bot: Bot):
             name = character.name_fa if character else "?"
             fav_text = f"⭐ کارت اصلی: **{name}** (سطح {favorite.level})\n"
 
+        # The ACTIVE spouse + shared Love, straight from the marriage domain.
+        from sib.handlers.marriage import profile_marriage_lines
+
+        marriage_lines = await profile_marriage_lines(session, user.id)
+
     lines = [
         f"👤 **پروفایل {user.full_name}**",
         "",
@@ -563,6 +568,7 @@ async def cmd_profile(message: Message, bot: Bot):
         fav_text.strip() if fav_text else "⭐ کارت اصلی: انتخاب نشده",
         f"⚔️ نبردهای سیبی: `{battles or 0}` | برد: `{wins or 0}`",
     ]
+    lines.extend(marriage_lines)
     from sib.keyboards.common import get_profile_keyboard
 
     fav_photo = None

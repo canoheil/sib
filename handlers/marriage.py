@@ -35,10 +35,11 @@ Design rules this module follows:
 """
 
 from datetime import datetime, timezone
-from typing import Optional
+from typing import List, Optional
 
 from aiogram import Bot, F, Router
 from aiogram.types import CallbackQuery, Message
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from sib.core.logging import Events, log_event, logger
 from sib.core.text import safe_name
@@ -209,6 +210,15 @@ DIVORCE_RACE_LOST_TEXT = "💔 همسرت زودتر از تو طلاق رو ث�
 DIVORCE_NOT_YOURS_TEXT = "💔 شما همسر این ازدواج نیستید 🍏"
 
 DIVORCE_CANCEL_FORBIDDEN_TEXT = "💔 فقط کسی که این درخواست رو باز کرده می‌تونه لغوش کنه 🍏"
+
+# --- Profile (7.4) ----------------------------------------------------------
+
+#: Cells in the profile Love gauge. The project had no progress-bar helper
+#: before this, so the gauge follows the shape used in the profile spec:
+#: ten cells, filled + empty, followed by the percentage.
+LOVE_BAR_CELLS = 10
+LOVE_FILLED_CELL = "█"
+LOVE_EMPTY_CELL = "░"
 
 
 # ---------------------------------------------------------------------------
@@ -652,6 +662,123 @@ async def handle_marriage_reject(callback: CallbackQuery, bot: Bot) -> None:
     proposal to its terminal REJECTED state.
     """
     await _resolve_proposal_callback(callback, bot, MARRIAGE_REJECT)
+
+
+# ---------------------------------------------------------------------------
+# Profile block (Phase 7.4)
+# ---------------------------------------------------------------------------
+
+
+def love_progress_bar(
+    percent: int, *, cells: int = LOVE_BAR_CELLS
+) -> str:
+    """The compact Love gauge, e.g. ``██████░░░░`` for 60%.
+
+    Pure presentation: it renders a percentage the domain already owns.
+    """
+    bounded = min(100, max(0, int(percent)))
+    filled = int(round(bounded * cells / 100))
+    filled = min(cells, max(0, filled))
+    return LOVE_FILLED_CELL * filled + LOVE_EMPTY_CELL * (cells - filled)
+
+
+def _love_percentage(score: object, minimum: int, maximum: int) -> Optional[int]:
+    """Normalize the domain Love score to 0..100, or ``None`` if unusable.
+
+    A stale or inconsistent row (``None``, a non-numeric value, or an
+    inverted range) yields ``None`` so the profile simply omits the gauge
+    instead of crashing or printing a nonsense number.
+    """
+    try:
+        value = int(score)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if maximum <= minimum:
+        return None
+    clamped = min(maximum, max(minimum, value))
+    return int(round((clamped - minimum) * 100 / (maximum - minimum)))
+
+
+def spouse_handle(user) -> str:
+    """«@username», or the project's display-name fallback when there is none.
+
+    Follows the existing ``(@{username})`` convention (admin_center) for the
+    handle and ``User.display_name`` + :func:`safe_name` for the fallback,
+    so a name can never break the profile's Markdown.
+    """
+    username = getattr(user, "username", None)
+    if username:
+        return f"@{safe_name(username)}"
+    return safe_name(getattr(user, "display_name", None), "یک سیبی")
+
+
+def _spouse_of(marriage, user_id: int):
+    spouse_id = marriage.spouse_of(int(user_id))
+    if spouse_id is None:
+        return None
+    if int(getattr(marriage, "user1_id", 0) or 0) == spouse_id:
+        return marriage.user1
+    if int(getattr(marriage, "user2_id", 0) or 0) == spouse_id:
+        return marriage.user2
+    return None
+
+
+async def profile_marriage_lines(
+    session: AsyncSession, user_id: int
+) -> List[str]:
+    """The marriage block for the EXISTING profile screen.
+
+    Returns ``[]`` for a user with no ACTIVE marriage, so the profile keeps
+    its current shape for single users and never mentions history, divorced
+    spouses or the remarriage cooldown.
+
+    Call this from inside the profile's own ``get_session()`` block: it adds
+    a single marriage query (plus two cheap config lookups) and reuses the
+    eagerly-loaded spouse row instead of issuing its own.
+
+    The Love score is READ from the shared ``Marriage`` row - the same field
+    ``LoveService.get_love_score`` returns - never recomputed here.
+    """
+    try:
+        marriage = await MarriageService.get_active_marriage_for_user(
+            session, int(user_id)
+        )
+    except Exception as error:
+        logger.warning(f"Could not load the marriage for profile {user_id}: {error}")
+        return []
+
+    if marriage is None:
+        return []
+
+    spouse = _spouse_of(marriage, int(user_id))
+    if spouse is None:
+        # Stale/inconsistent record: omit the block rather than guess.
+        return []
+
+    lines = [f"💍 همسر: {spouse_handle(spouse)}"]
+
+    minimum = await ConfigService.get(session, "love_min")
+    maximum = await ConfigService.get(session, "love_max")
+    percent = _love_percentage(
+        getattr(marriage, "love_score", None),
+        _as_configured_int(minimum, "love_min"),
+        _as_configured_int(maximum, "love_max"),
+    )
+    if percent is not None:
+        lines.append(f"❤️ عشق سیبی: {love_progress_bar(percent)} {percent}%")
+    return lines
+
+
+def _as_configured_int(value: object, key: str) -> int:
+    """Configured Love bound, falling back to the shipped default."""
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        fallback = ConfigService.default(key)
+        try:
+            return int(fallback)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return 0 if key == "love_min" else 100
 
 
 # ---------------------------------------------------------------------------
