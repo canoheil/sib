@@ -93,6 +93,8 @@ async def db_session():
     async with session_factory() as session:
         # Clean transient test data between tests to ensure test isolation
         from sqlalchemy import text
+        await session.execute(text("DELETE FROM player_xp_grants"))
+        await session.execute(text("DELETE FROM player_progressions"))
         await session.execute(text("DELETE FROM flower_gifts"))
         await session.execute(text("DELETE FROM marriages"))
         await session.execute(text("DELETE FROM marriage_proposals"))

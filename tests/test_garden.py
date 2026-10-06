@@ -13,6 +13,7 @@ from sib.database.models import PlotState
 from sib.services.apple_wallet import AppleWalletService
 from sib.services.config_store import ConfigService
 from sib.services.garden import GardenService
+from sib.services.player_xp import PlayerXPService
 from sib.services.seedling import SeedlingService
 from sib.tests.test_parties import create_test_user
 
@@ -65,6 +66,7 @@ async def test_planting_consumes_seedling_and_starts_growth(db_session):
     await db_session.commit()
 
     assert await SeedlingService.get_total(db_session, user.id) == 1
+    assert (await PlayerXPService.get_progress(db_session, user.id)).total_xp == 10
 
     views = GardenService.view(garden)
     assert views[0].state == PlotState.GROWING
@@ -124,6 +126,7 @@ async def test_harvest_pays_apples_and_restarts_cycle(db_session):
     assert outcome.apples == expected
     assert outcome.item_key is None  # currency outcome, not an inventory item
     assert await AppleWalletService.get_balance(db_session, user.id) == expected
+    assert (await PlayerXPService.get_progress(db_session, user.id)).total_xp == 15
 
     views = GardenService.view(garden)
     assert views[2].state == PlotState.MATURE  # new production cycle running
@@ -191,6 +194,8 @@ async def test_harvest_award_is_idempotent_per_cycle(db_session):
 
     # The already-paid cycle must not pay twice.
     assert balance_twice == balance_once
+    # Planting plus one harvest-cycle award; replaying the same cycle is a no-op.
+    assert (await PlayerXPService.get_progress(db_session, user.id)).total_xp == 15
 
     from sqlalchemy import select, func
     from sib.database.models import AppleTransaction
@@ -229,6 +234,7 @@ async def test_unlock_costs_apples_and_adds_one_plot(db_session):
     assert new_capacity == 6  # exactly ONE new plot
     assert await AppleWalletService.get_balance(db_session, user.id) == 1000 - cost
     assert len(garden.plots) == 6
+    assert (await PlayerXPService.get_progress(db_session, user.id)).total_xp == 15
 
     # The next plot costs the next configured price (escalating).
     garden = await GardenService.get_or_create(db_session, user.id)
@@ -253,3 +259,20 @@ async def test_plant_requires_empty_plot_and_seedling(db_session):
     await _give_seedlings_admin(db_session, user.id, 1)
     with pytest.raises(ValueError):
         await GardenService.plant(db_session, user.id, 0)
+
+
+@pytest.mark.asyncio
+async def test_magic_tree_level_increase_awards_ten_xp(db_session):
+    from sib.services.items import ItemService
+
+    user = await create_test_user(db_session, "باغبان جادویی")
+    await _give_seedlings_admin(db_session, user.id, 1)
+    await GardenService.get_or_create(db_session, user.id)
+    await db_session.commit()
+    await GardenService.plant(db_session, user.id, 0)
+    await ItemService.grant(db_session, user.id, "magic_powder", 1)
+    await db_session.commit()
+
+    assert await GardenService.apply_magic(db_session, user.id, 0) == 1
+    await db_session.commit()
+    assert (await PlayerXPService.get_progress(db_session, user.id)).total_xp == 20

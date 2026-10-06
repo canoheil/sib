@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 import sqlalchemy as sa
@@ -156,3 +157,150 @@ def test_bot_match_migration_backfills_historical_counters_portably():
         ).mappings().one()
     assert (human["matches_played"], human["wins"], human["losses"], human["draws"]) == (4, 3, 1, 0)
     assert (bot["matches_played"], bot["wins"], bot["losses"]) == (1, 0, 1)
+
+
+def test_player_xp_migration_starts_accounts_at_zero_and_marks_legacy_milestones():
+    """Rollout adds zero-XP rows and idempotency markers without backfill."""
+    from sib.services.config_store import CONFIG_DEFAULTS
+
+    # The approved migration's plot-index boundary matches Sib's shipped
+    # default (indices 0..4 free; index 5 is the first paid unlock).
+    assert CONFIG_DEFAULTS["garden_initial_plots"] == 5
+    path = REPO_ROOT / "database/migrations/versions/025_player_xp_progression.py"
+    spec = importlib.util.spec_from_file_location("migration_025", path)
+    assert spec and spec.loader
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    engine = sa.create_engine("sqlite://")
+    metadata = sa.MetaData()
+    users = sa.Table(
+        "users",
+        metadata,
+        sa.Column("id", sa.BigInteger, primary_key=True),
+    )
+    player_cards = sa.Table(
+        "player_cards",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("user_id", sa.BigInteger, nullable=False),
+        sa.Column("character_id", sa.BigInteger, nullable=False),
+    )
+    matches = sa.Table(
+        "matches",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("result_applied", sa.Boolean, nullable=False),
+    )
+    marriages = sa.Table(
+        "marriages",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("user1_id", sa.BigInteger, nullable=False),
+        sa.Column("user2_id", sa.BigInteger, nullable=False),
+    )
+    apple_transactions = sa.Table(
+        "apple_transactions",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("user_id", sa.BigInteger, nullable=False),
+        sa.Column("reason", sa.String(50), nullable=False),
+        sa.Column("idempotency_key", sa.String(100), nullable=True),
+    )
+    garden_plots = sa.Table(
+        "garden_plots",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("garden_id", sa.BigInteger, nullable=False),
+        sa.Column("plot_index", sa.Integer, nullable=False),
+        sa.Column("planted_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("magic_level", sa.Integer, nullable=False),
+    )
+    metadata.create_all(engine)
+
+    with engine.begin() as connection:
+        connection.execute(users.insert(), [{"id": 1}, {"id": 2}])
+        connection.execute(
+            matches.insert(),
+            [{"id": 1, "result_applied": True}, {"id": 2, "result_applied": False}],
+        )
+        connection.execute(
+            player_cards.insert(),
+            [
+                {"id": 1, "user_id": 1, "character_id": 101},
+                {"id": 2, "user_id": 2, "character_id": 102},
+            ],
+        )
+        connection.execute(
+            marriages.insert(),
+            [{"id": 1, "user1_id": 1, "user2_id": 2}],
+        )
+        connection.execute(
+            apple_transactions.insert(),
+            [
+                {
+                    "id": 1,
+                    "user_id": 1,
+                    "reason": "garden_plot_unlock",
+                    "idempotency_key": "garden_unlock:1:5",
+                }
+            ],
+        )
+        connection.execute(
+            garden_plots.insert(),
+            [
+                {
+                    "id": 1,
+                    "garden_id": 1,
+                    "plot_index": 0,
+                    "planted_at": datetime(2026, 1, 1),
+                    "magic_level": 1,
+                },
+                {
+                    "id": 2,
+                    "garden_id": 1,
+                    "plot_index": 5,
+                    "planted_at": None,
+                    "magic_level": 0,
+                },
+                {
+                    "id": 3,
+                    "garden_id": 1,
+                    "plot_index": 4,
+                    "planted_at": None,
+                    "magic_level": 0,
+                },
+            ],
+        )
+
+        with Operations.context(MigrationContext.configure(connection)):
+            migration.upgrade()
+
+        migrated_matches = sa.Table("matches", sa.MetaData(), autoload_with=connection)
+        match_xp_states = connection.execute(
+            sa.select(migrated_matches.c.xp_awarded).order_by(migrated_matches.c.id)
+        ).scalars().all()
+        assert match_xp_states == [True, False]
+
+        progression = sa.Table(
+            "player_progressions", sa.MetaData(), autoload_with=connection
+        )
+        rows = connection.execute(sa.select(progression).order_by(progression.c.user_id)).all()
+        assert [(row.user_id, row.total_xp) for row in rows] == [(1, 0), (2, 0)]
+
+        grants = sa.Table("player_xp_grants", sa.MetaData(), autoload_with=connection)
+        markers = connection.execute(
+            sa.select(grants.c.user_id, grants.c.source, grants.c.event_key, grants.c.amount)
+        ).all()
+        marker_set = {(row.user_id, row.source, row.event_key, row.amount) for row in markers}
+
+    assert marker_set == {
+        (1, "card_collection", "card_collection:101", 0),
+        (2, "card_collection", "card_collection:102", 0),
+        (1, "first_marriage", "first_marriage", 0),
+        (2, "first_marriage", "first_marriage", 0),
+        (1, "garden_plant", "garden_plant:1:0", 0),
+        (1, "garden_unlock", "garden_unlock:1:5", 0),
+        (1, "garden_magic", "garden_magic:1:0:1", 0),
+    }
+    assert all(amount == 0 for _uid, _source, _key, amount in marker_set)

@@ -635,11 +635,17 @@ async def _resolve_proposal_callback(
     if actor is None:
         return
 
+    from sib.services.player_xp import PlayerXPService
+
     error: Optional[Exception] = None
     outcome = None
     snapshot: Optional[dict] = None
 
     async with get_session() as session:
+        PlayerXPService.set_notification_chat(
+            session,
+            getattr(getattr(callback.message, "chat", None), "id", None),
+        )
         try:
             if parsed_action == MARRIAGE_ACCEPT:
                 outcome = await MarriageService.accept_proposal(
@@ -707,6 +713,10 @@ async def _resolve_proposal_callback(
             f"🔔 {snapshot['proposer_name']} و {snapshot['accepter_name']} "
             "ازدواج کردن! 🎉💍",
             scene="wedding",
+        )
+        await PlayerXPService.deliver_pending_notifications(
+            bot,
+            fallback_chat_id=getattr(getattr(callback.message, "chat", None), "id", None),
         )
         log_event(
             Events.MARRIAGE_EVENT,
@@ -1597,11 +1607,17 @@ async def _resolve_flower_callback(
     if actor is None:
         return
 
+    from sib.services.player_xp import PlayerXPService
+
     error: Optional[Exception] = None
     outcome = None
     snapshot: Optional[dict] = None
 
     async with get_session() as session:
+        PlayerXPService.set_notification_chat(
+            session,
+            getattr(getattr(callback.message, "chat", None), "id", None),
+        )
         try:
             if action == LOVE_FLOWER_ACCEPT:
                 outcome = await LoveService.accept_flower(session, gift_id, actor.id)
@@ -1681,6 +1697,12 @@ async def _resolve_flower_callback(
             "new_love": snapshot["new_love"],
         },
     )
+    if is_accept:
+        await PlayerXPService.deliver_pending_notifications(
+            bot,
+            fallback_chat_id=getattr(getattr(callback.message, "chat", None), "id", None),
+        )
+
 
 
 @router.callback_query(F.data.startswith(f"{LOVE_FLOWER_ACCEPT}:"))

@@ -580,7 +580,13 @@ async def handle_trade_ok(callback: CallbackQuery, bot: Bot):
         await safe_answer_callback(callback, "درخواست نامعتبر است 🍏", show_alert=True)
         return
 
+    from sib.services.player_xp import PlayerXPService
+
     async with get_session() as session:
+        PlayerXPService.set_notification_chat(
+            session,
+            getattr(getattr(callback.message, "chat", None), "id", None),
+        )
         try:
             trade = await TradeService.confirm(session, trade_id, user.id)
             await session.commit()
@@ -589,6 +595,10 @@ async def handle_trade_ok(callback: CallbackQuery, bot: Bot):
             return
 
     if trade.status == TradeStatus.COMPLETED:
+        await PlayerXPService.deliver_pending_notifications(
+            bot,
+            fallback_chat_id=getattr(getattr(callback.message, "chat", None), "id", None),
+        )
         answer = "مبادله انجام شد! 🎉"
     elif user.id == trade.proposer_id and trade.proposer_confirmed:
         answer = "تأیید شما ثبت شد؛ منتظر تأیید طرف مقابل."

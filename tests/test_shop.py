@@ -11,6 +11,7 @@ from sib.services.characters import CharacterService
 from sib.services.config_store import ConfigService
 from sib.services.player_cards import PlayerCardService
 from sib.services.shop import ShopError, ShopService
+from sib.services.player_xp import PlayerXPService
 from sib.tests.test_parties import create_test_user
 
 
@@ -100,6 +101,7 @@ async def test_purchase_deducts_apples_and_grants_card(db_session):
 
     assert card.character_id == character.id
     assert await AppleWalletService.get_balance(db_session, user.id) == 500 - price
+    assert (await PlayerXPService.get_progress(db_session, user.id)).total_xp == 25
 
     # Now marked as owned in listings.
     _, _, owned = (await ShopService.list_entries(db_session, user_id=user.id))[0]

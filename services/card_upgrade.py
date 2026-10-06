@@ -353,6 +353,16 @@ class CardUpgradeService:
 
         before = attributes_at_level(base_attributes(character), from_level)
         after = attributes_at_level(base_attributes(character), card.level)
+
+        from sib.services.player_xp import PlayerXPService
+
+        await PlayerXPService.award(
+            session,
+            user_id=user_id,
+            source="card_upgrade",
+            event_key=f"card_upgrade:{character.id}:{to_level}",
+        )
+
         log_event(
             Events.CHARACTER_EVENT,
             {

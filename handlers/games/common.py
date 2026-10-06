@@ -32,6 +32,7 @@ from sib.services.friendly import (
     viewer_audience,
 )
 from sib.services.match_result import MatchResultService
+from sib.services.player_xp import PlayerXPService
 from sib.services.ad.service import AdService
 from sib.services.telegram_ui import (
     REFRESH_CALLBACK_PREFIX,
@@ -435,6 +436,11 @@ async def process_game_action(
     # the player who is (or should be) on turn.
     if render_payload.get("is_friendly"):
         await _present_friendly_board(callback, bot, render_payload, user.id)
+        if finished:
+            await PlayerXPService.deliver_pending_notifications(
+                bot,
+                fallback_chat_id=render_payload["group1_id"] or render_payload["group2_id"],
+            )
         return
 
     def get_group_target_player_id(target_group_id: Optional[int]) -> int:
@@ -554,6 +560,8 @@ async def process_game_action(
         chat_id = getattr(chat, "id", None)
         final_text = build_post_match_text(chat_id)
         await safe_edit_callback_message(callback, bot, final_text, reply_markup=rematch_kb)
+
+    await PlayerXPService.deliver_pending_notifications(bot)
 
 
 async def _present_friendly_board(

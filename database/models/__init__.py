@@ -11,6 +11,7 @@ from sib.database.models.sponsor_channel import SponsorChannel, ChannelType
 from sib.database.models.party import Party, PartyMember, PartyStatus
 from sib.database.models.matchmaking import MatchmakingQueue
 from sib.database.models.player_stats import PlayerStats
+from sib.database.models.player_xp import PlayerProgression, PlayerXPGrant
 from sib.database.models.ad_campaign import AdCampaign, FrequencyMode
 from sib.database.models.panel import PanelOwner
 from sib.database.models.seedling import SeedlingInventory, SeedlingAward
@@ -60,6 +61,8 @@ __all__ = [
     "PartyStatus",
     "MatchmakingQueue",
     "PlayerStats",
+    "PlayerProgression",
+    "PlayerXPGrant",
     "AdCampaign",
     "FrequencyMode",
     "PanelOwner",

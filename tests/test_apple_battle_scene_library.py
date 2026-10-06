@@ -624,7 +624,21 @@ async def test_scene_director_survives_missing_manifest(db_session, monkeypatch)
         await AppleBattleService._narration_loop(bot, ctx["match_id"], beat_delay=0.0)
         await db_session.rollback()
         # The narration still happened (card art / placeholder / text only).
-        assert bot.send_photo.await_count + bot.send_message.await_count == len(ctx["plan"]) * 2
+        # Direct level-up notices are separate from those narrative beats.
+        narration_texts = {beat["text"] for beat in ctx["plan"]}
+        narration_sends = [
+            call.kwargs.get("caption")
+            for call in bot.send_photo.call_args_list
+            if call.kwargs.get("caption") in narration_texts
+        ]
+        for call in bot.send_message.call_args_list:
+            text = call.kwargs.get("text")
+            if text is None and len(call.args) > 1:
+                text = call.args[1]
+            if text in narration_texts:
+                narration_sends.append(text)
+        assert len(narration_sends) == len(ctx["plan"]) * 2
+        assert bot.send_message.await_count == 2  # committed Level-up notices
         match = await db_session.scalar(select(Match).where(Match.id == ctx["match_id"]))
         assert match.result_applied is True
     finally:

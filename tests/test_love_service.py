@@ -18,6 +18,7 @@ from sib.database.connection import get_async_sessionmaker
 from sib.tests.conftest import requires_row_locks
 from sib.services.config_store import ConfigService
 from sib.services.items import ItemService
+from sib.services.player_xp import PlayerXPService
 from sib.services.love import (
     FlowerDailyLimitError,
     FlowerGiftAlreadyResolvedError,
@@ -227,6 +228,8 @@ async def test_daily_directional_limit_pending_and_accepted_block_same_day(db_se
         db_session, 8101, 8102, now=day1
     )
     await db_session.commit()
+    assert (await PlayerXPService.get_progress(db_session, 8101)).total_xp == 0
+    assert (await PlayerXPService.get_progress(db_session, 8102)).total_xp == 0
 
     # 2. A -> B second gift while first is PENDING is blocked
     with pytest.raises(FlowerDailyLimitError):
@@ -248,6 +251,8 @@ async def test_daily_directional_limit_pending_and_accepted_block_same_day(db_se
         db_session, first_ab.id, 8102, now=day1 + timedelta(minutes=15)
     )
     await db_session.commit()
+    assert (await PlayerXPService.get_progress(db_session, 8101)).total_xp == 5
+    assert (await PlayerXPService.get_progress(db_session, 8102)).total_xp == 5
 
     with pytest.raises(FlowerDailyLimitError):
         await LoveService.send_flower(
@@ -285,6 +290,8 @@ async def test_rejected_and_invalidated_gifts_refund_flower_and_free_daily_slot(
     assert rej.flower_refunded is True
     assert rej.new_love == 9
     assert await ItemService.get_total(db_session, 8110, "flower") == 1
+    assert (await PlayerXPService.get_progress(db_session, 8110)).total_xp == 0
+    assert (await PlayerXPService.get_progress(db_session, 8111)).total_xp == 0
 
     # Attempt 2 (same day): allowed using the refunded Flower! Then invalidated (0 -> 1 flower)
     g2 = await LoveService.send_flower(
@@ -309,6 +316,8 @@ async def test_rejected_and_invalidated_gifts_refund_flower_and_free_daily_slot(
     assert acc.status == FlowerGiftStatus.ACCEPTED
     assert acc.new_love == 14
     assert await ItemService.get_total(db_session, 8110, "flower") == 0
+    assert (await PlayerXPService.get_progress(db_session, 8110)).total_xp == 5
+    assert (await PlayerXPService.get_progress(db_session, 8111)).total_xp == 5
 
 
 # ---------------------------------------------------------------------------
