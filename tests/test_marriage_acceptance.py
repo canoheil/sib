@@ -16,6 +16,7 @@ from sib.database import (
 )
 from sib.database.connection import get_async_sessionmaker
 from sib.services.config_store import ConfigService
+from sib.services.player_xp import PlayerXPService
 from sib.services.items import ItemService
 from sib.services.marriage import (
     MarriageAcceptanceRaceLostError,
@@ -93,6 +94,8 @@ async def test_basic_acceptance_creates_marriage_with_canonical_ids(db_session):
         now=t0,
     )
     await db_session.commit()
+    assert (await PlayerXPService.get_progress(db_session, proposer.id)).total_xp == 0
+    assert (await PlayerXPService.get_progress(db_session, target.id)).total_xp == 0
 
     accept_time = t0 + timedelta(seconds=40)
     result = await MarriageService.accept_proposal(
@@ -117,6 +120,8 @@ async def test_basic_acceptance_creates_marriage_with_canonical_ids(db_session):
     assert result.accepter.id == target.id
     assert result.other_proposals_invalidated is False
     assert result.invalidated_proposals == ()
+    assert (await PlayerXPService.get_progress(db_session, proposer.id)).total_xp == 50
+    assert (await PlayerXPService.get_progress(db_session, target.id)).total_xp == 50
 
     married_utc = (
         result.married_at

@@ -188,7 +188,14 @@ async def handle_card_upgrade_do(callback: CallbackQuery, bot: Bot):
 
     toast: str = ""
     alert = False
+    result = None
+    from sib.services.player_xp import PlayerXPService
+
     async with get_session() as session:
+        PlayerXPService.set_notification_chat(
+            session,
+            getattr(getattr(callback.message, "chat", None), "id", None),
+        )
         try:
             result = await CardUpgradeService.upgrade(
                 session, actor, card_id, expected_level=seen_level
@@ -200,6 +207,13 @@ async def handle_card_upgrade_do(callback: CallbackQuery, bot: Bot):
             toast = str(exc)
         except CardUpgradeError as exc:
             toast, alert = str(exc), True
+
+    # XP notices are sent only after the paid upgrade and its XP row commit.
+    if result is not None:
+        await PlayerXPService.deliver_pending_notifications(
+            bot,
+            fallback_chat_id=getattr(getattr(callback.message, "chat", None), "id", None),
+        )
 
     # Always re-render from the authoritative state (also after refusals).
     view = await _upgrade_view(actor, card_id)

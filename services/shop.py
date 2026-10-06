@@ -282,6 +282,12 @@ class ShopService:
             # Race backstop: re-raise so the transaction rolls back the debit.
             raise ShopError("شما قبلاً این شخصیت را دارید!")
 
+        from sib.services.player_xp import PlayerXPService
+
+        await PlayerXPService.award_character_collection(
+            session, user_id=user_id, character_id=character.id
+        )
+
         log_event(
             Events.SHOP_EVENT,
             {

@@ -462,6 +462,7 @@ async def test_finalize_match_awards_via_shared_match_result(db_session):
     """Full-flow reward: shared apply_match_result + apples (idempotent)."""
     from sib.database.models import Game
     from sib.services.group import GroupService
+    from sib.services.player_xp import PlayerXPService
 
     class _Chat:
         def __init__(self, cid, title):
@@ -504,6 +505,8 @@ async def test_finalize_match_awards_via_shared_match_result(db_session):
     assert await SeedlingService.get_total(db_session, loser_id) == 0
     assert await AppleWalletService.get_balance(db_session, winner_id) == 5
     assert await AppleWalletService.get_balance(db_session, loser_id) == 0
+    assert (await PlayerXPService.get_progress(db_session, winner_id)).total_xp == 125
+    assert (await PlayerXPService.get_progress(db_session, loser_id)).total_xp == 100
 
     match = await _reload_match(db_session, match.id)
     assert match.result_applied is True
@@ -1209,6 +1212,7 @@ async def test_timeout_already_finalized_is_noop(db_session):
 async def test_finalize_match_called_multiple_times_grants_one_reward_set(db_session):
     """Idempotency test: finalize_match called multiple times grants exactly one reward set."""
     from sib.database.models import AppleTransaction, PlayerStats, SeedlingAward
+    from sib.services.player_xp import PlayerXPService
 
     match, state, u1, u2, _c1, _c2 = await _setup_active_apple_battle(
         db_session, "idem_multi", cursor=5
@@ -1225,6 +1229,9 @@ async def test_finalize_match_called_multiple_times_grants_one_reward_set(db_ses
 
     assert await SeedlingService.get_total(db_session, persisted_winner) == 1
     assert await AppleWalletService.get_balance(db_session, persisted_winner) == 5
+    assert (await PlayerXPService.get_progress(db_session, persisted_winner)).total_xp == 125
+    other_id = u1.id if persisted_winner == u2.id else u2.id
+    assert (await PlayerXPService.get_progress(db_session, other_id)).total_xp == 100
 
     awards = list(
         (

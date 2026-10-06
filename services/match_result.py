@@ -156,6 +156,71 @@ class MatchResultService:
                     party.status = PartyStatus.CANCELLED
 
     @classmethod
+    async def _award_match_xp_safely(
+        cls,
+        session: AsyncSession,
+        match: Match,
+        *,
+        started: bool,
+    ) -> bool:
+        """Keep result settlement durable if XP fails; retry via ``xp_awarded``.
+
+        The savepoint keeps a grant, progression increment, and match retry
+        marker atomic with one another. A failed XP-side operation rolls back
+        only that savepoint, so the already-applied game result can still be
+        committed and the maintenance worker can retry it later.
+        """
+        if not started:
+            match.xp_awarded = True
+            return True
+
+        try:
+            async with session.begin_nested():
+                from sib.services.player_xp import PlayerXPService
+
+                await PlayerXPService.award_match_results(
+                    session, match, started=True
+                )
+                match.xp_awarded = True
+                await session.flush()
+            return True
+        except Exception:
+            match.xp_awarded = False
+            logger.exception(
+                "Account XP settlement failed for completed match %s; "
+                "the finished result is preserved and XP will be retried",
+                match.id,
+            )
+            await session.flush()
+            return False
+
+    @classmethod
+    async def retry_pending_xp_awards(
+        cls, session: AsyncSession, *, limit: int = 100
+    ) -> int:
+        """Retry completed matches whose XP savepoint previously failed."""
+        pending = list(
+            (
+                await session.scalars(
+                    select(Match)
+                    .where(
+                        Match.result_applied == True,  # noqa: E712
+                        Match.state == MatchState.FINISHED,
+                        Match.xp_awarded == False,  # noqa: E712
+                    )
+                    .order_by(Match.id.asc())
+                    .limit(max(1, int(limit)))
+                    .with_for_update()
+                )
+            ).all()
+        )
+        succeeded = 0
+        for match in pending:
+            if await cls._award_match_xp_safely(session, match, started=True):
+                succeeded += 1
+        return succeeded
+
+    @classmethod
     async def apply_match_result(
         cls,
         session: AsyncSession,
@@ -163,6 +228,11 @@ class MatchResultService:
         result: GameResult,
     ) -> Match:
         """Atomically apply a match outcome. GUARANTEED IDEMPOTENT."""
+        # Eligibility requires a match that actually reached ACTIVE. Keep
+        # this snapshot before the state is moved to FINISHED below so
+        # pre-play acceptance timeouts/cancellations can never earn XP.
+        started = match.state == MatchState.ACTIVE
+
         # 1. Idempotency guard: never apply the same result twice.
         if match.result_applied:
             logger.warning(
@@ -270,4 +340,11 @@ class MatchResultService:
 
         await cls._free_parties(session, match)
         await session.flush()
+
+        # Account XP has one authoritative match hook: this covers normal,
+        # friendly, bot-fallback, timeout/forfeit, and Apple Battle results.
+        # The grant and retry marker are committed together in a savepoint;
+        # an XP-side failure cannot roll back the already-applied game result.
+        # Apple Battle's later narration settlement cannot pay a second award.
+        await cls._award_match_xp_safely(session, match, started=started)
         return match

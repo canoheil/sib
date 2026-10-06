@@ -283,6 +283,27 @@ class TradeService:
         trade.status = TradeStatus.COMPLETED
         trade.completed_at = datetime.now(timezone.utc)
         await session.flush()
+
+        from sib.services.player_xp import PlayerXPService
+
+        # The incoming character is a one-time collection milestone for its
+        # new owner. Existing owners (including launch-era cards marked by
+        # the migration) are protected by the per-user/character event key.
+        incoming = [
+            (recipient_owner, proposer_card.character_id),
+            (proposer_owner, recipient_card.character_id),
+        ]
+        for owner_id, character_id in sorted(incoming, key=lambda item: item[0]):
+            await PlayerXPService.award_character_collection(
+                session, user_id=owner_id, character_id=character_id
+            )
+            await PlayerXPService.award(
+                session,
+                user_id=owner_id,
+                source="trade",
+                event_key=f"trade:{trade.id}",
+            )
+
         log_event(
             Events.TRADE_EVENT,
             {"action": "completed", "trade_id": trade.id},

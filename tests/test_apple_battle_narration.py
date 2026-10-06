@@ -643,11 +643,22 @@ async def test_narration_continues_as_text_when_no_photo_is_available(db_session
         narration_module.AppleBattleNarrationArt.placeholder = original_placeholder
     await db_session.rollback()
 
-    # The narration itself still reached both groups as separate messages.
-    assert bot.send_message.await_count == len(ctx["plan"]) * 2
-    texts = [c.args[1] for c in bot.send_message.call_args_list]
+    # Narration still reaches both groups as separate messages. The two
+    # additional direct messages are the new, post-settlement Level-up notices.
+    texts = []
+    for call in bot.send_message.call_args_list:
+        text = call.kwargs.get("text")
+        if text is None and len(call.args) > 1:
+            text = call.args[1]
+        texts.append(text)
+    narration_texts = {beat["text"] for beat in ctx["plan"]}
+    narration_sends = [text for text in texts if text in narration_texts]
+    level_up_notices = [text for text in texts if text not in narration_texts]
+    assert len(narration_sends) == len(ctx["plan"]) * 2
     for beat in ctx["plan"]:
-        assert texts.count(beat["text"]) == 2
+        assert narration_sends.count(beat["text"]) == 2
+    assert len(level_up_notices) == 2
+    assert all("تبریک" in text and "سطح" in text for text in level_up_notices)
     assert bot.edit_message_text.await_count == 2  # final report, text-only
 
 

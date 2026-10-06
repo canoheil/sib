@@ -422,6 +422,7 @@ async def handle_apple_profile(callback: CallbackQuery, bot: Bot):
     from sib.services.apple_wallet import AppleWalletService
     from sib.services.seedling import SeedlingService
     from sib.services.player_cards import PlayerCardService
+    from sib.services.player_xp import PlayerXPService
 
     user = callback.from_user
     if not user:
@@ -471,9 +472,11 @@ async def handle_apple_profile(callback: CallbackQuery, bot: Bot):
         from sib.handlers.marriage import profile_marriage_lines
 
         marriage_lines = await profile_marriage_lines(session, user.id)
+        account_progress = await PlayerXPService.get_progress(session, user.id)
 
     lines = [
         f"👤 **پروفایل سیبی {user.first_name or 'شما'}** 🍏",
+        PlayerXPService.format_profile_progress(account_progress),
         "",
         f"🍎 سیب: `{apples}`",
         f"🌱 نهال: `{seedlings}`",
@@ -624,6 +627,7 @@ async def _open_sender_profile(message: Message) -> None:
     from sib.services.apple_wallet import AppleWalletService
     from sib.services.player_cards import PlayerCardService
     from sib.services.seedling import SeedlingService
+    from sib.services.player_xp import PlayerXPService
 
     async with get_session() as session:
         await UserService.get_or_create_user(session, user)
@@ -666,9 +670,11 @@ async def _open_sender_profile(message: Message) -> None:
         from sib.handlers.marriage import profile_marriage_lines
 
         marriage_lines = await profile_marriage_lines(session, user.id)
+        account_progress = await PlayerXPService.get_progress(session, user.id)
 
     lines = [
         f"👤 **پروفایل سیبی {user.first_name or 'شما'}** 🍏",
+        PlayerXPService.format_profile_progress(account_progress),
         "",
         f"🍎 سیب: `{apples}`",
         f"🌱 نهال: `{seedlings}`",

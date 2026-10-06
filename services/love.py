@@ -627,6 +627,18 @@ class LoveService:
         assert loaded_gift is not None
         assert loaded_marriage is not None
 
+        from sib.services.player_xp import PlayerXPService
+
+        for participant_id in sorted(
+            (int(loaded_gift.sender_id), int(loaded_gift.receiver_id))
+        ):
+            await PlayerXPService.award(
+                session,
+                user_id=participant_id,
+                source="flower",
+                event_key=f"flower:{loaded_gift.id}",
+            )
+
         log_event(
             Events.LOVE_EVENT,
             {

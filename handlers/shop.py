@@ -294,12 +294,23 @@ async def handle_shop_buy(callback: CallbackQuery, bot: Bot):
     if not actor or actor != user.id:
         return
 
+    from sib.services.player_xp import PlayerXPService
+
     async with get_session() as session:
+        PlayerXPService.set_notification_chat(
+            session,
+            getattr(getattr(callback.message, "chat", None), "id", None),
+        )
         try:
             await ShopService.purchase(session, actor, entry_id)
         except ShopError as e:
             await safe_answer_callback(callback, str(e), show_alert=True)
             return
+
+    await PlayerXPService.deliver_pending_notifications(
+        bot,
+        fallback_chat_id=getattr(getattr(callback.message, "chat", None), "id", None),
+    )
 
     from sib.services.banner import render_banner
 

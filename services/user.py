@@ -4,7 +4,7 @@ from aiogram.types import User as TelegramUser
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sib.core.logging import log_event, Events
-from sib.database.models import User
+from sib.database.models import PlayerProgression, User
 
 
 class UserService:
@@ -27,6 +27,8 @@ class UserService:
                 is_active=True,
             )
             session.add(user)
+            await session.flush()
+            session.add(PlayerProgression(user_id=user.id, total_xp=0))
             await session.flush()
             log_event(
                 Events.USER_REGISTERED,

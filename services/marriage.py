@@ -767,6 +767,17 @@ class MarriageService:
         assert loaded_marriage is not None
         assert loaded_proposal is not None
 
+        from sib.services.player_xp import PlayerXPService
+
+        for participant_id in sorted((proposer_id, target_id)):
+            await PlayerXPService.award(
+                session,
+                user_id=participant_id,
+                source="first_marriage",
+                event_key="first_marriage",
+                notification_chat_id=loaded_marriage.origin_group_id,
+            )
+
         log_event(
             Events.MARRIAGE_EVENT,
             {

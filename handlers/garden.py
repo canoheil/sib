@@ -68,6 +68,24 @@ def format_percent(weight: float, total: float) -> str:
     return f"{round(value)}%" if abs(value - round(value)) < 0.05 else f"{value:.1f}%"
 
 
+def _capture_xp_notification_chat(session, callback: CallbackQuery) -> None:
+    from sib.services.player_xp import PlayerXPService
+
+    chat_id = getattr(getattr(callback.message, "chat", None), "id", None)
+    PlayerXPService.set_notification_chat(session, chat_id)
+
+
+async def _deliver_xp_notifications(
+    bot: Bot, callback: CallbackQuery, *, fallback_chat_id: Optional[int] = None
+) -> None:
+    from sib.services.player_xp import PlayerXPService
+
+    chat_id = fallback_chat_id or getattr(
+        getattr(callback.message, "chat", None), "id", None
+    )
+    await PlayerXPService.deliver_pending_notifications(bot, fallback_chat_id=chat_id)
+
+
 async def _render_garden(user_id: int, session) -> tuple[str, InlineKeyboardMarkup]:
     from sib.database.models import User
 
@@ -338,6 +356,7 @@ async def handle_garden_magic(callback: CallbackQuery, bot: Bot):
     level = 0
     async with get_session() as session:
         try:
+            _capture_xp_notification_chat(session, callback)
             level = await GardenService.apply_magic(session, subject_id, plot_index)
         except ValueError as e:
             error = str(e)
@@ -349,6 +368,7 @@ async def handle_garden_magic(callback: CallbackQuery, bot: Bot):
         callback, bot, plot_index,
         answer=f"درخت جادویی‌تر شد! سطح جدید: {level} ✨",
     )
+    await _deliver_xp_notifications(bot, callback)
 
 
 # ---------------------------------------------------------------------------
@@ -378,6 +398,7 @@ async def handle_garden_plant(callback: CallbackQuery, bot: Bot):
     error = None
     async with get_session() as session:
         try:
+            _capture_xp_notification_chat(session, callback)
             await GardenService.plant(session, subject_id, plot_index)
         except ValueError as e:
             error = str(e)
@@ -386,6 +407,7 @@ async def handle_garden_plant(callback: CallbackQuery, bot: Bot):
         await _rerender_tree(callback, bot, plot_index, answer=error)
         return
     await _rerender_tree(callback, bot, plot_index, answer="نهال کاشته شد! 🌱")
+    await _deliver_xp_notifications(bot, callback)
 
 
 def _harvest_answer(outcome) -> str:
@@ -418,6 +440,7 @@ async def handle_garden_harvest(callback: CallbackQuery, bot: Bot):
     outcome = None
     async with get_session() as session:
         try:
+            _capture_xp_notification_chat(session, callback)
             outcome = await GardenService.harvest(session, subject_id, plot_index)
         except ValueError as e:
             error = str(e)
@@ -427,6 +450,7 @@ async def handle_garden_harvest(callback: CallbackQuery, bot: Bot):
         return
 
     await _rerender_tree(callback, bot, plot_index, answer=_harvest_answer(outcome))
+    await _deliver_xp_notifications(bot, callback)
 
     # Celebration art for special Apples (graceful: missing art never
     # breaks the flow; the toast above already carried the news). The
@@ -466,6 +490,7 @@ async def handle_garden_harvest_all(callback: CallbackQuery, bot: Bot):
     outcomes = []
     async with get_session() as session:
         try:
+            _capture_xp_notification_chat(session, callback)
             outcomes = await GardenService.harvest_all(session, subject_id)
         except ValueError as e:
             error = str(e)
@@ -483,6 +508,7 @@ async def handle_garden_harvest_all(callback: CallbackQuery, bot: Bot):
     parts += [f"{item_emoji(k)}×{q}" for k, q in items.items()]
     answer = "برداشت همه: " + " + ".join(parts)
     await _rerender(callback, bot, answer=answer)
+    await _deliver_xp_notifications(bot, callback)
 
     # One celebration per distinct special Apple (never spam duplicates).
     # Each asset keeps its own (rarity-escalating) caption.
@@ -514,6 +540,7 @@ async def handle_garden_unlock(callback: CallbackQuery, bot: Bot):
     capacity = 0
     async with get_session() as session:
         try:
+            _capture_xp_notification_chat(session, callback)
             capacity = await GardenService.unlock_plot(session, subject_id)
         except ValueError as e:
             error = str(e)
@@ -524,3 +551,4 @@ async def handle_garden_unlock(callback: CallbackQuery, bot: Bot):
     await _rerender(
         callback, bot, answer=f"قطعه جدید باز شد! ظرفیت باغ: {capacity} قطعه 🌳"
     )
+    await _deliver_xp_notifications(bot, callback)

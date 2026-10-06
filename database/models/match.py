@@ -72,6 +72,12 @@ class Match(Base, TimestampMixin):
     # Result application tracking (idempotency). No Elo/rating exists.
     is_bot_match: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     result_applied: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # XP settlement is part of the result transaction when possible. This
+    # retry marker lets a transient XP-side failure leave the finished game
+    # intact while the maintenance worker retries the idempotent award.
+    xp_awarded: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", nullable=False
+    )
 
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

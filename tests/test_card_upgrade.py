@@ -22,6 +22,7 @@ from sib.services.card_upgrade import (
     InsufficientResourcesError,
     StaleUpgradeError,
 )
+from sib.services.player_xp import PlayerXPService
 from sib.services.characters import CharacterService
 from sib.services.items import ItemService
 from sib.services.player_cards import PlayerCardService
@@ -93,6 +94,7 @@ async def test_level_1_to_2_then_2_to_3(db_session):
     assert first.before == CardAttributes(22, 20, 18)
     assert first.after == CardAttributes(32, 30, 28)
     assert await _level(db_session, card.id) == 2
+    assert (await PlayerXPService.get_progress(db_session, user.id)).total_xp == 10
 
     second = await CardUpgradeService.upgrade(db_session, user.id, card.id)
     await db_session.commit()
@@ -100,6 +102,7 @@ async def test_level_1_to_2_then_2_to_3(db_session):
     assert second.after == CardAttributes(42, 40, 38)
     assert await _level(db_session, card.id) == 3
     assert card_attributes(card, character).total == 120
+    assert (await PlayerXPService.get_progress(db_session, user.id)).total_xp == 20
 
 
 @pytest.mark.asyncio

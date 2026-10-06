@@ -1123,6 +1123,13 @@ class AppleBattleService:
                         for group_id, _msg_id in report_targets
                     }
 
+                # XP awards are committed with the result. Deliver their
+                # optional level-up notices before refreshing the final board,
+                # preserving the existing presentation contract that board
+                # edits are the final Telegram actions for this narration.
+                from sib.services.player_xp import PlayerXPService
+
+                await PlayerXPService.deliver_pending_notifications(bot)
                 await cls._edit_boards(
                     bot, report_targets, report_texts, engine, match_id, True
                 )

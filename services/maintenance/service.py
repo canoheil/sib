@@ -306,6 +306,18 @@ class MaintenanceService:
                 resolved_ids = []
                 logger.exception("Maintenance cycle failed")
 
+        # A transient Account XP failure is isolated by a savepoint in match
+        # settlement. Retry those committed results before publishing notices.
+        try:
+            from sib.services.match_result import MatchResultService
+
+            async with get_session() as session:
+                retried_xp = await MatchResultService.retry_pending_xp_awards(session)
+            if retried_xp:
+                logger.info("Retried Account XP for %s completed matches", retried_xp)
+        except Exception:  # pragma: no cover - background recovery
+            logger.exception("Could not retry pending match XP awards")
+
         # Marriage & Love DB work (proposal expiration + daily Love decay).
         # It runs as its own isolated transaction, still BEFORE the bot-turn
         # scheduling below, so every DB work of the cycle is committed first
@@ -332,6 +344,16 @@ class MaintenanceService:
                 logger.exception("Could not render bot fallback match screen")
         if resolved_ids and cls._bot is not None:
             await cls._sync_resolved_matches(resolved_ids)
+
+        # Every source commits level-up state into the XP ledger before this
+        # post-transaction publisher runs; this also retries temporary
+        # Telegram delivery failures without replaying the source action.
+        try:
+            from sib.services.player_xp import PlayerXPService
+
+            await PlayerXPService.deliver_pending_notifications(cls._bot)
+        except Exception:  # pragma: no cover - background presentation
+            logger.exception("Could not deliver pending XP level-up notices")
 
     @classmethod
     async def _sync_resolved_matches(cls, resolved_ids: list) -> None:

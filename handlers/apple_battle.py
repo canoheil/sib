@@ -532,6 +532,7 @@ async def cmd_profile(message: Message, bot: Bot):
 
     from sib.services.apple_wallet import AppleWalletService
     from sib.services.seedling import SeedlingService
+    from sib.services.player_xp import PlayerXPService
 
     async with get_session() as session:
         cards = await PlayerCardService.list_cards(session, user.id)
@@ -559,9 +560,11 @@ async def cmd_profile(message: Message, bot: Bot):
         from sib.handlers.marriage import profile_marriage_lines
 
         marriage_lines = await profile_marriage_lines(session, user.id)
+        account_progress = await PlayerXPService.get_progress(session, user.id)
 
     lines = [
         f"👤 **پروفایل {user.full_name}**",
+        PlayerXPService.format_profile_progress(account_progress),
         "",
         f"🌱 نهال‌ها: `{seedlings}` | 🍎 سیب‌ها: `{apples}`",
         f"🎴 کارت‌ها: `{len(cards)}`",

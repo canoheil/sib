@@ -11,6 +11,7 @@ from sib.database.models import PlayerCard, Trade, TradeStatus
 from sib.services.characters import CharacterService
 from sib.services.player_cards import PlayerCardService
 from sib.services.trading import TradeError, TradeService
+from sib.services.player_xp import PlayerXPService
 from sib.tests.test_parties import create_test_user
 
 
@@ -68,6 +69,8 @@ async def test_double_confirmation_swaps_ownership_atomically(db_session):
     assert trade.status == TradeStatus.PENDING
     await db_session.refresh(card_a)
     assert card_a.user_id == alice.id
+    assert (await PlayerXPService.get_progress(db_session, alice.id)).total_xp == 0
+    assert (await PlayerXPService.get_progress(db_session, bob.id)).total_xp == 0
 
     # Second confirmation executes.
     await TradeService.confirm(db_session, trade.id, bob.id)
@@ -78,6 +81,10 @@ async def test_double_confirmation_swaps_ownership_atomically(db_session):
     await db_session.refresh(card_b)
     assert card_a.user_id == bob.id
     assert card_b.user_id == alice.id
+    # Each participant receives the trade reward and a one-time collection
+    # milestone for the character received in the completed swap.
+    assert (await PlayerXPService.get_progress(db_session, alice.id)).total_xp == 35
+    assert (await PlayerXPService.get_progress(db_session, bob.id)).total_xp == 35
 
 
 @pytest.mark.asyncio
@@ -166,6 +173,8 @@ async def test_cancelled_trade_frees_the_cards_but_still_counts_for_the_day(db_s
     # Cards are free again (no pending trade on them) — but the daily
     # quota was consumed (cancelled trades still count).
     assert not await TradeService.can_trade_today(db_session, alice.id)
+    assert (await PlayerXPService.get_progress(db_session, alice.id)).total_xp == 0
+    assert (await PlayerXPService.get_progress(db_session, bob.id)).total_xp == 0
 
 
 @pytest.mark.asyncio
@@ -189,6 +198,8 @@ async def test_expired_trade_cannot_be_confirmed(db_session):
         await TradeService.confirm(db_session, trade.id, alice.id)
     await db_session.refresh(trade)
     assert trade.status == TradeStatus.EXPIRED
+    assert (await PlayerXPService.get_progress(db_session, alice.id)).total_xp == 0
+    assert (await PlayerXPService.get_progress(db_session, bob.id)).total_xp == 0
 
 
 @pytest.mark.asyncio

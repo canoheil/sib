@@ -258,6 +258,15 @@ class GardenService:
         inv.total -= 1
         await session.flush()
 
+        from sib.services.player_xp import PlayerXPService
+
+        await PlayerXPService.award(
+            session,
+            user_id=user_id,
+            source="garden_plant",
+            event_key=f"garden_plant:{garden.user_id}:{plot.plot_index}",
+        )
+
         log_event(
             Events.GARDEN_EVENT,
             {"user_id": user_id, "action": "planted", "plot": plot_index},
@@ -324,10 +333,22 @@ class GardenService:
                 asset=entry.get("asset"),
             )
 
-        # Restart the production cycle of the mature tree.
+        # Restart the production cycle of the mature tree. The stable event
+        # key uses the one-based harvest number, captured before any retry can
+        # advance this plot again.
+        harvest_number = int(plot.cycle_count) + 1
         plot.cycle_count += 1
         plot.fruit_ready_at = now + timedelta(seconds=fruit)
         await session.flush()
+
+        from sib.services.player_xp import PlayerXPService
+
+        await PlayerXPService.award(
+            session,
+            user_id=user_id,
+            source="garden_harvest",
+            event_key=f"garden:{plot.id}:{harvest_number}",
+        )
 
         log_event(
             Events.GARDEN_EVENT,
@@ -417,6 +438,17 @@ class GardenService:
         plot.magic_level += 1
         await session.flush()
 
+        from sib.services.player_xp import PlayerXPService
+
+        await PlayerXPService.award(
+            session,
+            user_id=user_id,
+            source="garden_magic",
+            event_key=(
+                f"garden_magic:{garden.user_id}:{plot.plot_index}:{plot.magic_level}"
+            ),
+        )
+
         log_event(
             Events.GARDEN_EVENT,
             {
@@ -478,6 +510,15 @@ class GardenService:
         garden.capacity_plots += 1
         await session.flush()
         await session.refresh(garden, ["plots"])
+
+        from sib.services.player_xp import PlayerXPService
+
+        await PlayerXPService.award(
+            session,
+            user_id=user_id,
+            source="garden_unlock",
+            event_key=f"garden_unlock:{user_id}:{next_index}",
+        )
 
         log_event(
             Events.GARDEN_EVENT,
