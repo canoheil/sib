@@ -352,14 +352,21 @@ async def test_my_sib_word_opens_profile_not_balance(db_session):
 
     msg = _group_message(tg_user, "سیب من")
     await handle_sib_profile_word(msg, MagicMock())
-    assert msg.reply.called
-    profile_text = msg.reply.call_args.args[0]
+    # The profile screen carries the player's Level artwork, so its text
+    # normally rides as a PHOTO caption; plain text only when no artwork
+    # could be loaded. Either way it is the PROFILE, never the balance.
+    assert msg.reply_photo.called or msg.reply.called
+    if msg.reply_photo.called:
+        profile_text = msg.reply_photo.call_args.kwargs["caption"]
+        sent = msg.reply_photo.return_value
+    else:
+        profile_text = msg.reply.call_args.args[0]
+        sent = msg.reply.return_value
     assert "پروفایل سیبی" in profile_text
     # NOT the balance screen.
     assert "موجودی سیب شما" not in profile_text
 
     # The profile panel is claimed to the sender (the one profile system).
-    sent = msg.reply.return_value
     owner = await PanelOwnershipService.get_owner(db_session, sent.chat.id, sent.message_id)
     assert owner == tg_user.id
 

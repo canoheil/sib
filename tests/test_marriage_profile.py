@@ -11,6 +11,11 @@ None of them was replaced. Each one appends whatever
 single user's profile is byte-for-byte what it was before and a married
 user gains exactly two lines.
 
+The profile screen now carries the player's Level artwork, so that same
+text is normally delivered as a PHOTO caption rather than a text message
+(see ``tests/test_player_level_art.py``); ``_profile_text`` reads it from
+whichever rendering the flow used.
+
 The marriage block is read-only presentation: the spouse comes from
 ``MarriageService.get_active_marriage_for_user`` and the Love score is the
 shared ``Marriage.love_score`` — the same value ``LoveService.get_love_score``
@@ -134,19 +139,38 @@ async def _marry(db_session, a: int, b: int, *, love_score: int = 0) -> int:
     return int(marriage.id)
 
 
+def _profile_text(msg: MagicMock) -> str:
+    """The rendered profile text, from a photo caption or a text message.
+
+    The profile screen carries the player's Level artwork, so its text
+    normally travels as a PHOTO caption; the plain-text send only happens
+    when no artwork could be loaded. The marriage assertions below are about
+    the TEXT, which is identical either way.
+    """
+    if msg.reply_photo.await_count:
+        return msg.reply_photo.await_args.kwargs["caption"]
+    return msg.reply.await_args.args[0]
+
+
 async def _wake_word_profile(db_session, user: TelegramUser) -> str:
     msg = _profile_message(user)
     await handle_sib_profile_word(msg, MagicMock())
-    return msg.reply.call_args.args[0]
+    return _profile_text(msg)
 
 
 async def _panel_profile(db_session, user: TelegramUser) -> str:
-    """The «👤 پروفایل من» panel text (whichever edit path was used)."""
+    """The «👤 پروفایل من» panel text (whichever render path was used)."""
     cb = _profile_callback(user)
     bot = MagicMock()
     bot.edit_message_text = AsyncMock(return_value=True)
     bot.edit_message_caption = AsyncMock(return_value=True)
+    # The Level artwork makes this a TEXT → PHOTO transition, which the
+    # screen engine performs by sending a new photo message.
+    bot.send_photo = AsyncMock(return_value=_sent())
+    bot.delete_message = AsyncMock()
     await handle_apple_profile(cb, bot)
+    if bot.send_photo.await_count:
+        return bot.send_photo.await_args.kwargs["caption"]
     call = bot.edit_message_text.call_args or bot.edit_message_caption.call_args
     return call.args[0] if call.args else call.kwargs.get("text", "")
 
@@ -399,7 +423,7 @@ async def test_married_user_profile_via_the_profile_command(db_session):
     msg = _profile_message(_tg(OWNER_ID, "سارا"), text="/profile")
     await cmd_profile(msg, MagicMock())
 
-    text = msg.reply.call_args.args[0]
+    text = _profile_text(msg)
     assert "💍 همسر: @sib\\_spouse" in text
     assert "❤️ عشق سیبی: " + "░" * LOVE_BAR_CELLS + " 0%" in text
 
