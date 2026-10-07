@@ -488,6 +488,13 @@ async def handle_apple_profile(callback: CallbackQuery, bot: Bot):
 
     kb = get_profile_keyboard()
 
+    # The MAIN profile photo is the artwork of the player's CURRENT Level
+    # (assets/player_levels/level_NN.jpg); the Favorite Card art stays as
+    # the fallback when that asset is unavailable.
+    from sib.services.player_level_art import profile_photo
+
+    main_photo = profile_photo(account_progress, fav_photo)
+
     await callback.answer()
     if callback.message:
         await safe_edit_callback_message(
@@ -495,7 +502,7 @@ async def handle_apple_profile(callback: CallbackQuery, bot: Bot):
             bot,
             "\n".join(lines),
             reply_markup=kb,
-            photo=fav_photo,
+            photo=main_photo,
         )
     await _claim_panel(callback, "profile", prev_message_id)
 
@@ -685,11 +692,18 @@ async def _open_sender_profile(message: Message) -> None:
     lines.extend(marriage_lines)
     profile_text = "\n".join(lines)
     profile_kb = get_profile_keyboard()
+
+    # The MAIN profile photo is the artwork of the player's CURRENT Level
+    # (assets/player_levels/level_NN.jpg); the Favorite Card art stays as
+    # the fallback when that asset is unavailable.
+    from sib.services.player_level_art import profile_photo
+
+    main_photo = profile_photo(account_progress, fav_photo)
     sent = None
-    if fav_photo is not None:
+    if main_photo is not None:
         try:
             sent = await message.reply_photo(
-                fav_photo, caption=profile_text, reply_markup=profile_kb, parse_mode="Markdown"
+                main_photo, caption=profile_text, reply_markup=profile_kb, parse_mode="Markdown"
             )
         except Exception:
             sent = None

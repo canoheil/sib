@@ -585,10 +585,17 @@ async def cmd_profile(message: Message, bot: Bot):
                 fav_photo = photo_arg(file_id, fs_path)
     text = "\n".join(lines)
     kb = get_profile_keyboard()
-    if fav_photo is not None:
+
+    # The MAIN profile photo is the artwork of the player's CURRENT Level
+    # (assets/player_levels/level_NN.jpg); the Favorite Card art stays as
+    # the fallback when that asset is unavailable.
+    from sib.services.player_level_art import profile_photo
+
+    main_photo = profile_photo(account_progress, fav_photo)
+    if main_photo is not None:
         try:
             await message.reply_photo(
-                fav_photo, caption=text, reply_markup=kb, parse_mode="Markdown"
+                main_photo, caption=text, reply_markup=kb, parse_mode="Markdown"
             )
             return
         except Exception:
