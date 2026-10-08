@@ -28,6 +28,8 @@ from sib.handlers.admin_center import router as admin_center_router
 from sib.handlers.friendly import router as friendly_router
 from sib.handlers.marriage import router as marriage_router
 from sib.handlers.invasion import router as invasion_router
+from sib.handlers.sib_hug import router as sib_hug_router
+from sib.handlers.sib_kiss import router as sib_kiss_router
 
 
 def register_all_handlers(dp: Dispatcher) -> None:
@@ -55,6 +57,8 @@ def register_all_handlers(dp: Dispatcher) -> None:
     dp.include_router(party_router)
     dp.include_router(friendly_router)
     dp.include_router(marriage_router)
+    dp.include_router(sib_hug_router)
+    dp.include_router(sib_kiss_router)
     dp.include_router(invasion_router)
     dp.include_router(start_router)
 

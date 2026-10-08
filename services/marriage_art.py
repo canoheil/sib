@@ -32,6 +32,15 @@ SCENES = {
     "flower_gift": "flower_gift.jpg",
 }
 
+# Scenes for other Sib features that reuse this delivery path (photo +
+# caption, file_id cache, text fallback). They live under assets/ in their
+# own folder and stay out of ``SCENES``, which is the marriage flow contract.
+GROUP_SCENES = {
+    "hug": "sib_hug/hug.jpg",  # Sib Hug («بغل سیبی»); art arrives in Phase 4
+    "kiss": "sib_kiss/kiss.jpg",  # Sib Kiss («بوس سیبی»); art arrives in Phase 4
+}
+_ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
+
 # Per-process file_id cache: after the first upload Telegram returns a
 # file_id that makes later sends fast (no re-upload).
 _file_id_cache: dict[str, str] = {}
@@ -39,9 +48,14 @@ _file_id_cache: dict[str, str] = {}
 
 def scene_path(key: Optional[str]) -> Optional[Path]:
     """Path of a committed scene asset, or None when it is unknown/absent."""
-    if not key or not SCENES.get(key):
+    if not key:
         return None
-    path = _SCENE_DIR / SCENES[key]
+    if key in SCENES:
+        path = _SCENE_DIR / SCENES[key]
+    elif key in GROUP_SCENES:
+        path = _ASSETS_DIR / GROUP_SCENES[key]
+    else:
+        return None
     if path.is_file():
         return path
     return None
