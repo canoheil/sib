@@ -162,7 +162,7 @@ def validate_source_rules(seed_cards: list[dict]) -> None:
     assert WAVE_COUNT == 2
     assert (MIN_CARD_LEVEL, MAX_CARD_LEVEL, ATTRIBUTE_STEP) == (1, 10, 10)
     assert (BRACE_BASE_CONTRIBUTION, BRACE_POWER_DIVISOR) == (1, 10)
-    assert (int(CONFIG_DEFAULTS["invasion_occurrence_interval_seconds"])) == 8 * 60 * 60
+    assert (int(CONFIG_DEFAULTS["invasion_occurrence_interval_seconds"])) == 4 * 60 * 60
     assert (int(CONFIG_DEFAULTS["invasion_event_duration_seconds"])) == 20 * 60
     assert OUTCOME_REWARDS == {
         InvasionOutcome.TOTAL_VICTORY: 10,
