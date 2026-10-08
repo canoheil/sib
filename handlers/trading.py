@@ -29,6 +29,7 @@ from sib.database.connection import get_session
 from sib.database.models import Character, PlayerCard, Trade, TradeStatus
 from sib.services.card_progression import card_attributes
 from sib.services.nav import back_label_for, back_target, parse_callback
+from sib.services.player_cards import PlayerCardService
 from sib.services.telegram_ui import safe_answer_callback, safe_edit_callback_message
 from sib.services.trading import TradeError, TradeService
 
@@ -54,11 +55,17 @@ async def _cards_of_level(session, user_id: int, level: Optional[int] = None) ->
     stmt = (
         select(PlayerCard)
         .where(PlayerCard.user_id == user_id)
-        .order_by(PlayerCard.is_favorite.desc(), PlayerCard.id.desc())
+        .order_by(PlayerCard.id.desc())
     )
     cards = list((await session.scalars(stmt)).all())
     if level is not None:
         cards = [c for c in cards if c.level == level]
+
+    main_card = await PlayerCardService.get_main_card(session, user_id)
+    if main_card is not None:
+        # Keep the Main Card first as before, but don't promote multiple raw
+        # favorite flags if legacy data contains duplicates.
+        cards.sort(key=lambda card: card.id != main_card.id)
     return cards
 
 

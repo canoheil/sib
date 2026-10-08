@@ -52,6 +52,13 @@ async def test_double_confirmation_swaps_ownership_atomically(db_session):
     bob = await create_test_user(db_session, "مبادله‌کار د")
     card_a = await _card_for(db_session, alice, "trade_c")
     card_b = await _card_for(db_session, bob, "trade_d")
+    await PlayerCardService.set_favorite(
+        db_session, alice.id, card_a.id, expected_main_card_id=0
+    )
+    await PlayerCardService.set_favorite(
+        db_session, bob.id, card_b.id, expected_main_card_id=0
+    )
+    await db_session.commit()
 
     trade = await TradeService.create(
         db_session,
@@ -81,6 +88,12 @@ async def test_double_confirmation_swaps_ownership_atomically(db_session):
     await db_session.refresh(card_b)
     assert card_a.user_id == bob.id
     assert card_b.user_id == alice.id
+    # A favorite/Main Card is cleared when its card is transferred; it never
+    # follows the card to the other owner.
+    assert card_a.is_favorite is False
+    assert card_b.is_favorite is False
+    assert await PlayerCardService.get_main_card(db_session, alice.id) is None
+    assert await PlayerCardService.get_main_card(db_session, bob.id) is None
     # Each participant receives the trade reward and a one-time collection
     # milestone for the character received in the completed swap.
     assert (await PlayerXPService.get_progress(db_session, alice.id)).total_xp == 35

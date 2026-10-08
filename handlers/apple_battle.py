@@ -536,6 +536,7 @@ async def cmd_profile(message: Message, bot: Bot):
 
     async with get_session() as session:
         cards = await PlayerCardService.list_cards(session, user.id)
+        main_card = await PlayerCardService.get_main_card(session, user.id)
         seedlings = await SeedlingService.get_total(session, user.id)
         apples = await AppleWalletService.get_balance(session, user.id)
         wins = await session.scalar(
@@ -549,12 +550,11 @@ async def cmd_profile(message: Message, bot: Bot):
                 & (AppleBattle.status == AppleBattleStatus.COMPLETED)
             )
         )
-        favorite = next((c for c in cards if c.is_favorite), None)
         fav_text = ""
-        if favorite:
-            character = await session.get(Character, favorite.character_id)
+        if main_card is not None:
+            character = await session.get(Character, main_card.character_id)
             name = character.name_fa if character else "?"
-            fav_text = f"⭐ کارت اصلی: **{name}** (سطح {favorite.level})\n"
+            fav_text = f"⭐ کارت اصلی: **{name}** (سطح {main_card.level})\n"
 
         # The ACTIVE spouse + shared Love, straight from the marriage domain.
         from sib.handlers.marriage import profile_marriage_lines
@@ -575,9 +575,9 @@ async def cmd_profile(message: Message, bot: Bot):
     from sib.keyboards.common import get_profile_keyboard
 
     fav_photo = None
-    if favorite:
+    if main_card is not None:
         async with get_session() as session:
-            character = await session.get(Character, favorite.character_id)
+            character = await session.get(Character, main_card.character_id)
             if character is not None:
                 from sib.services.character_art import photo_arg, resolve_character_photo
 
@@ -587,7 +587,7 @@ async def cmd_profile(message: Message, bot: Bot):
     kb = get_profile_keyboard()
 
     # The MAIN profile photo is the artwork of the player's CURRENT Level
-    # (assets/player_levels/level_NN.jpg); the Favorite Card art stays as
+    # (assets/player_levels/level_NN.jpg); the Main Card art stays as
     # the fallback when that asset is unavailable.
     from sib.services.player_level_art import profile_photo
 

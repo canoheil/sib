@@ -28,6 +28,7 @@ class RecoveryService:
         session: AsyncSession,
         *,
         bot: Any = None,
+        now: datetime | None = None,
     ) -> Dict[str, Any]:
         """
         Execute recovery routines on bot startup:
@@ -35,10 +36,16 @@ class RecoveryService:
         2. Clean up stale matchmaking queue entries and restore parties.
         3. Recover interrupted Apple Battle matches from persisted state/cursor.
         4. Terminate stale/abandoned active matches.
+        5. Apply one bounded due Invasion transition per event through the
+           existing DB-only MaintenanceService step.
         """
         from sib.services.apple_battle import AppleBattleService
 
-        now = datetime.now(timezone.utc)
+        now = now or datetime.now(timezone.utc)
+        if now.tzinfo is None or now.utcoffset() is None:
+            now = now.replace(tzinfo=timezone.utc)
+        else:
+            now = now.astimezone(timezone.utc)
         stats = {
             "expired_acceptance_matches": 0,
             "cleared_queue_entries": 0,
@@ -48,6 +55,12 @@ class RecoveryService:
             "expired_marriage_proposals": 0,
             "love_decay_marriages": 0,
             "expired_flower_gifts": 0,
+            "invasions_scheduled": 0,
+            "duplicate_invasion_occurrences": 0,
+            "invasions_started": 0,
+            "invasion_wave_transitions": 0,
+            "invasions_resolved": 0,
+            "invasion_failures": 0,
         }
 
         # 0. Consistency repair FIRST: release parties/matches that block a
@@ -153,6 +166,23 @@ class RecoveryService:
             logger.warning(f"Marriage/Love startup recovery failed: {exc}")
 
         await session.commit()
+
+        # Invasions use the same bounded, DB-only transition step as periodic
+        # maintenance. Run it after this recovery transaction commits so each
+        # event can be isolated in its own session; no Bot/Telegram dependency
+        # is passed, and ongoing work remains with MaintenanceService.
+        try:
+            from sib.services.maintenance.service import MaintenanceService
+
+            stats.update(
+                await MaintenanceService.run_invasion_cycle(
+                    now=now,
+                    schedule_occurrences=False,
+                )
+            )
+        except Exception:
+            stats["invasion_failures"] += 1
+            logger.exception("Invasion startup recovery failed")
 
         for match_id in apple_recovery["resumed"]:
             AppleBattleService.schedule_narration(match_id, bot=bot)

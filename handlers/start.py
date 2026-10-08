@@ -338,6 +338,8 @@ async def handle_apple_cards(callback: CallbackQuery, bot: Bot):
 
         text, total_pages = await CollectionService.render_collection(session, user.id, page=page)
         cards = await PlayerCardService.list_cards(session, user.id)
+        main_card = await PlayerCardService.get_main_card(session, user.id)
+        main_card_id = main_card.id if main_card is not None else None
         character_ids = sorted({c.character_id for c in cards})
         characters = {
             ch.id: ch
@@ -355,7 +357,7 @@ async def handle_apple_cards(callback: CallbackQuery, bot: Bot):
     for card in page_cards:
         character = characters.get(card.character_id)
         name = character.name_fa if character else "کارت"
-        star = "⭐ " if card.is_favorite else ""
+        star = "⭐ " if card.id == main_card_id else ""
         card_rows.append((card.id, f"🍎 {star}{name} — سطح {card.level}"))
 
     kb = get_cards_keyboard(
@@ -431,6 +433,7 @@ async def handle_apple_profile(callback: CallbackQuery, bot: Bot):
     prev_message_id = getattr(callback.message, "message_id", None)
     async with get_session() as session:
         cards = await PlayerCardService.list_cards(session, user.id)
+        main_card = await PlayerCardService.get_main_card(session, user.id)
         seedlings = await SeedlingService.get_total(session, user.id)
         apples = await AppleWalletService.get_balance(session, user.id)
 
@@ -454,19 +457,17 @@ async def handle_apple_profile(callback: CallbackQuery, bot: Bot):
         fav_photo = None
         from sib.database.models import Character
 
-        for card in cards:
-            if getattr(card, "is_favorite", False):
-                character = await session.get(Character, card.character_id)
-                if character:
-                    fav_text = character.name_fa
-                    from sib.services.character_art import (
-                        photo_arg,
-                        resolve_character_photo,
-                    )
+        if main_card is not None:
+            character = await session.get(Character, main_card.character_id)
+            if character:
+                fav_text = character.name_fa
+                from sib.services.character_art import (
+                    photo_arg,
+                    resolve_character_photo,
+                )
 
-                    file_id, fs_path = await resolve_character_photo(session, character)
-                    fav_photo = photo_arg(file_id, fs_path)
-                break
+                file_id, fs_path = await resolve_character_photo(session, character)
+                fav_photo = photo_arg(file_id, fs_path)
 
         # The ACTIVE spouse + shared Love, straight from the marriage domain.
         from sib.handlers.marriage import profile_marriage_lines
@@ -489,7 +490,7 @@ async def handle_apple_profile(callback: CallbackQuery, bot: Bot):
     kb = get_profile_keyboard()
 
     # The MAIN profile photo is the artwork of the player's CURRENT Level
-    # (assets/player_levels/level_NN.jpg); the Favorite Card art stays as
+    # (assets/player_levels/level_NN.jpg); the Main Card art stays as
     # the fallback when that asset is unavailable.
     from sib.services.player_level_art import profile_photo
 
@@ -639,6 +640,7 @@ async def _open_sender_profile(message: Message) -> None:
     async with get_session() as session:
         await UserService.get_or_create_user(session, user)
         cards = await PlayerCardService.list_cards(session, user.id)
+        main_card = await PlayerCardService.get_main_card(session, user.id)
         seedlings = await SeedlingService.get_total(session, user.id)
         apples = await AppleWalletService.get_balance(session, user.id)
         wins = await session.scalar(
@@ -657,21 +659,19 @@ async def _open_sender_profile(message: Message) -> None:
         )
         fav_text = None
         fav_photo = None
-        for card in cards:
-            if getattr(card, "is_favorite", False):
-                from sib.database.models import Character
+        if main_card is not None:
+            from sib.database.models import Character
 
-                character = await session.get(Character, card.character_id)
-                if character:
-                    fav_text = character.name_fa
-                    from sib.services.character_art import (
-                        photo_arg,
-                        resolve_character_photo,
-                    )
+            character = await session.get(Character, main_card.character_id)
+            if character:
+                fav_text = character.name_fa
+                from sib.services.character_art import (
+                    photo_arg,
+                    resolve_character_photo,
+                )
 
-                    file_id, fs_path = await resolve_character_photo(session, character)
-                    fav_photo = photo_arg(file_id, fs_path)
-                break
+                file_id, fs_path = await resolve_character_photo(session, character)
+                fav_photo = photo_arg(file_id, fs_path)
 
         # The ACTIVE spouse + shared Love, straight from the marriage domain.
         from sib.handlers.marriage import profile_marriage_lines
@@ -694,7 +694,7 @@ async def _open_sender_profile(message: Message) -> None:
     profile_kb = get_profile_keyboard()
 
     # The MAIN profile photo is the artwork of the player's CURRENT Level
-    # (assets/player_levels/level_NN.jpg); the Favorite Card art stays as
+    # (assets/player_levels/level_NN.jpg); the Main Card art stays as
     # the fallback when that asset is unavailable.
     from sib.services.player_level_art import profile_photo
 

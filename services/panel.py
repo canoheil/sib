@@ -46,6 +46,7 @@ OWNER_SCOPED_CALLBACKS: Tuple[str, ...] = (
     "shop_sell_all:",
     "shop_sell_all_ok:",
     "card_panel:",
+    "card_main_set:",
     "card_upgrade:",
     "card_upgrade_do:",
     # Apple-battle (private battle hub)

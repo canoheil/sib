@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sib.database.models import AppleBattleQueueEntry, PlayerCard
 from sib.handlers import cards as cards_handlers
 from sib.handlers.cards import (
+    handle_card_main_set,
     handle_card_panel,
     handle_card_upgrade_do,
     handle_card_upgrade_screen,
@@ -21,6 +22,9 @@ from sib.keyboards.cards import get_card_detail_keyboard, get_card_upgrade_keybo
 from sib.services.card_progression import MAX_CARD_LEVEL
 from sib.services.card_upgrade import CardUpgradeService
 from sib.services.card_upgrade_render import ART_KEY, render_upgrade_screen
+from sib.services.characters import CharacterService
+from sib.services.player_cards import PlayerCardService
+from sib.tests.test_parties import create_test_user
 from sib.services.panel import OWNER_SCOPED_CALLBACKS, is_owner_scoped_callback
 from sib.tests.test_card_upgrade import _fund, _holdings, _level, _new_card
 from sib.tests.test_nav_root_fixes import _all_buttons, _callback, _rows
@@ -53,22 +57,125 @@ def _texts(kb):
 
 
 # ---------------------------------------------------------------------------
-# Card detail: view-only with ONE upgrade button
+# Card detail: Main Card selection, upgrade and navigation
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_card_detail_is_view_only_with_a_single_upgrade_button(db_session, edit):
+async def test_card_detail_shows_main_card_selector_and_upgrade(db_session, edit):
     user, _c, card = await _new_card(db_session)
     cb = await _press(handle_card_panel, user.id, f"card_panel:{card.id}")
     cb.answer.assert_awaited()
     text, kb, _photo = _shown(edit)
 
     assert "سطح" in text and "`22`" in text and "`20`" in text and "`18`" in text
+    assert "کارت اصلی هنوز انتخاب نشده" in text
+    main_buttons = [b for b in _all_buttons(kb) if b.callback_data.startswith("card_main_set:")]
+    assert [(b.text, b.callback_data) for b in main_buttons] == [
+        ("⭐ انتخاب به‌عنوان کارت اصلی", f"card_main_set:{card.id}:0")
+    ]
     upgrade = [b for b in _all_buttons(kb) if b.callback_data.startswith("card_upgrade")]
     assert [(b.text, b.callback_data) for b in upgrade] == [
         ("⬆️ ارتقای کارت", f"card_upgrade:{card.id}")
     ]
-    assert len(_all_buttons(kb)) == 2  # upgrade + back, no allocation controls
+    assert len(_all_buttons(kb)) == 3  # Main Card, upgrade, back; no allocation controls
     assert _rows(kb)[-1] == ["apple_cards"]
+
+
+@pytest.mark.asyncio
+async def test_selected_main_card_status_has_no_redundant_selector(db_session, edit):
+    user, _character, card = await _new_card(db_session, code="main_ui_selected")
+    await PlayerCardService.set_favorite(
+        db_session, user.id, card.id, expected_main_card_id=0
+    )
+    await db_session.commit()
+
+    await _press(handle_card_panel, user.id, f"card_panel:{card.id}")
+    text, kb, _photo = _shown(edit)
+    assert "این کارت، کارت اصلی شماست" in text
+    assert not any(
+        button.callback_data.startswith("card_main_set:") for button in _all_buttons(kb)
+    )
+    assert len(_all_buttons(kb)) == 2  # upgrade + back
+
+
+@pytest.mark.asyncio
+async def test_main_card_callback_duplicate_is_idempotent(db_session, edit):
+    user, _character, card = await _new_card(db_session, code="main_ui_duplicate")
+    callback_data = f"card_main_set:{card.id}:0"
+
+    first = await _press(handle_card_main_set, user.id, callback_data)
+    second = await _press(handle_card_main_set, user.id, callback_data)
+    assert first.answer.await_args.args[0] == "کارت اصلی شما به‌روزرسانی شد ⭐"
+    assert second.answer.await_args.args[0] == "کارت اصلی شما به‌روزرسانی شد ⭐"
+
+    await db_session.refresh(card)
+    assert card.is_favorite is True
+    assert (await PlayerCardService.get_main_card(db_session, user.id)).id == card.id
+    text, kb, _photo = _shown(edit)
+    assert "این کارت، کارت اصلی شماست" in text
+    assert not any(
+        button.callback_data.startswith("card_main_set:") for button in _all_buttons(kb)
+    )
+
+
+@pytest.mark.asyncio
+async def test_main_card_callback_rejects_stale_selection(db_session, edit):
+    user, _character, current = await _new_card(db_session, code="main_ui_stale_a")
+    next_character = await CharacterService.create(
+        db_session,
+        code="main_ui_stale_b",
+        name_fa="قهرمان انتخاب قدیمی",
+        power=20,
+        speed=20,
+        intelligence=20,
+    )
+    stale_target = await PlayerCardService.acquire(db_session, user.id, next_character.id)
+    await db_session.commit()
+    await PlayerCardService.set_favorite(
+        db_session, user.id, current.id, expected_main_card_id=0
+    )
+    await db_session.commit()
+
+    callback = await _press(
+        handle_card_main_set,
+        user.id,
+        f"card_main_set:{stale_target.id}:0",
+    )
+    assert callback.answer.await_args.kwargs.get("show_alert") is True
+    assert "از وقتی این صفحه را باز کردی تغییر کرده" in callback.answer.await_args.args[0]
+
+    await db_session.refresh(current)
+    await db_session.refresh(stale_target)
+    assert current.is_favorite is True
+    assert stale_target.is_favorite is False
+
+
+@pytest.mark.asyncio
+async def test_main_card_callback_rejects_unowned_card(db_session, edit):
+    owner, _character, card = await _new_card(db_session, code="main_ui_unowned")
+    stranger = await create_test_user(db_session, "کارت‌ندار")
+
+    callback = await _press(
+        handle_card_main_set,
+        stranger.id,
+        f"card_main_set:{card.id}:0",
+    )
+    assert callback.answer.await_args.kwargs.get("show_alert") is True
+    assert "متعلق به شما نیست" in callback.answer.await_args.args[0]
+    assert await PlayerCardService.get_main_card(db_session, owner.id) is None
+    assert await PlayerCardService.get_main_card(db_session, stranger.id) is None
+
+
+@pytest.mark.asyncio
+async def test_main_card_callback_rejects_missing_card(db_session, edit):
+    user, _character, _card = await _new_card(db_session, code="main_ui_missing")
+    callback = await _press(
+        handle_card_main_set,
+        user.id,
+        "card_main_set:999999999:0",
+    )
+    assert callback.answer.await_args.kwargs.get("show_alert") is True
+    assert "متعلق به شما نیست" in callback.answer.await_args.args[0]
+    assert await PlayerCardService.get_main_card(db_session, user.id) is None
 
 
 @pytest.mark.asyncio
@@ -77,6 +184,18 @@ async def test_detail_keyboard_has_no_legacy_controls():
     data = [b.callback_data for b in _all_buttons(kb)]
     assert not any(d.startswith("card_up:") for d in data)
     assert not any("reallocate" in d or "boost" in d for d in data)
+
+    selected = get_card_detail_keyboard(7, current_main_card_id=7)
+    assert not any(
+        button.callback_data.startswith("card_main_set:") for button in _all_buttons(selected)
+    )
+    large_ids = get_card_detail_keyboard(
+        9_223_372_036_854_775_807,
+        current_main_card_id=9_223_372_036_854_775_806,
+    )
+    assert all(
+        len(button.callback_data.encode()) <= 64 for button in _all_buttons(large_ids)
+    )
 
 
 @pytest.mark.asyncio
@@ -219,8 +338,6 @@ async def test_successful_upgrade_updates_the_screen_and_charges_once(db_session
 @pytest.mark.asyncio
 async def test_not_the_owner_cannot_use_the_handlers(db_session, edit):
     _owner, _c, card = await _new_card(db_session)
-    from sib.tests.test_parties import create_test_user
-
     thief = await create_test_user(db_session, "مزاحم")
     await _fund(db_session, thief, apples=9_999, gold=50)
     before = await _holdings(db_session, thief)
@@ -236,6 +353,9 @@ async def test_not_the_owner_cannot_use_the_handlers(db_session, edit):
     [
         (handle_card_panel, "card_panel:abc"),
         (handle_card_panel, "card_panel:"),
+        (handle_card_main_set, "card_main_set:x:0"),
+        (handle_card_main_set, "card_main_set:1:-1"),
+        (handle_card_main_set, "card_main_set:9223372036854775808:0"),
         (handle_card_upgrade_screen, "card_upgrade:1:2"),
         (handle_card_upgrade_do, "card_upgrade_do:1"),
         (handle_card_upgrade_do, "card_upgrade_do:x:y"),
@@ -286,7 +406,7 @@ def test_upgrade_keyboard_is_small_and_uses_the_shared_back_helper():
 
 
 def test_new_callbacks_are_owner_scoped_and_old_ones_are_gone():
-    for prefix in ("card_panel:", "card_upgrade:", "card_upgrade_do:"):
+    for prefix in ("card_panel:", "card_main_set:", "card_upgrade:", "card_upgrade_do:"):
         assert prefix in OWNER_SCOPED_CALLBACKS
         assert is_owner_scoped_callback(prefix + "1")
     assert "card_up:" not in OWNER_SCOPED_CALLBACKS
