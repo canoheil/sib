@@ -71,6 +71,12 @@ def get_private_welcome_keyboard(bot_username: str) -> InlineKeyboardMarkup:
             ],
             [
                 primary_button(
+                    text="🎁 صندوقچه گنج روزانه",
+                    callback_data="apple_chest",
+                ),
+            ],
+            [
+                primary_button(
                     text="👤 پروفایل من",
                     callback_data="apple_profile",
                 ),

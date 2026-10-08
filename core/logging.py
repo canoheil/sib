@@ -60,6 +60,7 @@ class Events:
     
     ADMIN_COMMAND_EXECUTED = "ADMIN_COMMAND_EXECUTED"
     SYSTEM_RESTART_RECOVERY = "SYSTEM_RESTART_RECOVERY"
+    DAILY_CHEST_CLAIMED = "DAILY_CHEST_CLAIMED"
 
 
 def setup_logging(log_level: str = "INFO") -> logging.Logger:

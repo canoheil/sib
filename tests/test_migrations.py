@@ -3,10 +3,10 @@
 The complete historical Alembic ancestry includes MariaDB-specific DDL that
 SQLite cannot execute. The chain-head test therefore uses a standalone stamped
 database; a focused test below stamps a minimal 024 baseline and runs Alembic
-through revisions 025-029 on SQLite to verify progression, Invasion, and
-profile-skin schema changes, constraints, indexes, foreign keys, and supported
-downgrades. This does not replace a live MySQL/MariaDB migration run.
-Portable data migrations are tested directly too.
+through revisions 025-030 on SQLite to verify progression, Invasion,
+profile-skin and daily-chest schema changes, constraints, indexes, foreign
+keys, and supported downgrades. This does not replace a live MySQL/MariaDB
+migration run. Portable data migrations are tested directly too.
 """
 
 import importlib.util
@@ -60,7 +60,7 @@ def test_alembic_current_revision():
     assert "head" in current.stdout
 
 
-def test_migrations_025_through_029_and_downgrade_on_sqlite():
+def test_migrations_025_through_030_and_downgrade_on_sqlite():
     """Run the Alembic path from a minimal 024 baseline and inspect its schema."""
     with tempfile.TemporaryDirectory() as tmp:
         db_url = f"sqlite:///{Path(tmp) / 'invasion_migrations.db'}"
@@ -86,12 +86,12 @@ def test_migrations_025_through_029_and_downgrade_on_sqlite():
         stamp = _run_alembic("stamp", "024_marriage_and_love", db_url=db_url)
         assert stamp.returncode == 0, f"{stamp.stdout}\n{stamp.stderr}"
         upgrade = _run_alembic(
-            "upgrade", "029_profile_skins", db_url=db_url
+            "upgrade", "030_daily_chest", db_url=db_url
         )
         assert upgrade.returncode == 0, f"{upgrade.stdout}\n{upgrade.stderr}"
         current = _run_alembic("current", db_url=db_url)
         assert current.returncode == 0
-        assert "029_profile_skins" in current.stdout
+        assert "030_daily_chest" in current.stdout
 
         engine = sa.create_engine(db_url)
         with engine.connect() as connection:
@@ -105,6 +105,7 @@ def test_migrations_025_through_029_and_downgrade_on_sqlite():
                 "invasion_participants",
                 "invasion_contributions",
                 "invasion_defense_actions",
+                "daily_chest_claims",
             } <= tables
             progressions = sa.Table(
                 "player_progressions", sa.MetaData(), autoload_with=connection
@@ -214,6 +215,20 @@ def test_migrations_025_through_029_and_downgrade_on_sqlite():
                 ("invasion_waves", "CASCADE"),
                 ("invasion_contributions", "CASCADE"),
             }
+
+            assert "uq_daily_chest_claim_user_day" in unique_names(
+                "daily_chest_claims"
+            )
+            assert "ck_daily_chest_claim_quantity" in check_names(
+                "daily_chest_claims"
+            )
+            assert "ix_daily_chest_claims_user_id" in index_names(
+                "daily_chest_claims"
+            )
+            assert {
+                (fk["referred_table"], fk["options"].get("ondelete"))
+                for fk in foreign_keys("daily_chest_claims")
+            } == {("users", "CASCADE")}
         engine.dispose()
 
         downgrade = _run_alembic(
@@ -235,6 +250,7 @@ def test_migrations_025_through_029_and_downgrade_on_sqlite():
                 "invasion_participants",
                 "invasion_contributions",
                 "invasion_defense_actions",
+                "daily_chest_claims",
             } & remaining
         engine.dispose()
 
