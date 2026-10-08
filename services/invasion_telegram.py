@@ -4,6 +4,13 @@ The maintenance path calls this adapter only after the event transaction has
 committed. Telegram failures are best-effort presentation failures: the next
 maintenance pass retries announcements that still have no persisted message id.
 The domain's Invasion rows, not Telegram message history, remain authoritative.
+
+A freshly persisted announcement message is also pinned in its Group (quietly,
+so pinning never spams a service message). Pinning is presentation-only: the
+previous Sib Invasion announcement of the Group - identified solely through
+ids Sib itself persisted - is unpinned first so pinned announcements do not
+accumulate, and every pin/unpin failure is logged without touching the
+Invasion, its transaction, or the persisted announcement id.
 """
 
 from dataclasses import dataclass
@@ -339,6 +346,101 @@ async def _try_delete_message(bot, chat_id: int, message_id: int) -> None:
         )
 
 
+async def _previous_announcement_message_id(
+    group_id: int,
+    *,
+    exclude_invasion_id: int,
+    exclude_message_id: int,
+) -> Optional[int]:
+    """Latest announcement id Sib itself persisted for another Invasion here.
+
+    Only ids stored on this Group's own Invasion rows are considered, so the
+    result can never name an unrelated admin/user message. The newest other
+    occurrence is the one the previous pin most likely still points at.
+    """
+    async with get_session() as session:
+        value = await session.scalar(
+            select(Invasion.announcement_message_id)
+            .where(
+                Invasion.group_id == group_id,
+                Invasion.id != exclude_invasion_id,
+                Invasion.announcement_message_id.is_not(None),
+                Invasion.announcement_message_id != exclude_message_id,
+            )
+            .order_by(Invasion.scheduled_at.desc(), Invasion.id.desc())
+            .limit(1)
+        )
+    return int(value) if value is not None else None
+
+
+async def _pin_announcement(
+    bot,
+    snapshot: InvasionScreenSnapshot,
+    message_id: int,
+) -> bool:
+    """Pin a freshly persisted announcement; presentation-only, never raises.
+
+    The previous Sib Invasion announcement of this Group is unpinned first so
+    pinned announcements do not accumulate. That unpin is targeted at an id
+    Sib itself persisted for this Group: the current pinned message is never
+    unpinned blindly and an unrelated admin/user message is never touched.
+    Pin/unpin failures (API errors, missing Bot permissions) are logged and
+    swallowed: the Invasion stays valid, the committed announcement id stays
+    usable, and no transaction is rolled back. Successful pinning is not a
+    domain requirement.
+    """
+    try:
+        previous_id = await _previous_announcement_message_id(
+            snapshot.group_id,
+            exclude_invasion_id=snapshot.invasion_id,
+            exclude_message_id=message_id,
+        )
+    except Exception:  # pragma: no cover - defensive
+        logger.exception(
+            "Could not load the previous Invasion announcement "
+            "group_id=%s invasion_id=%s",
+            snapshot.group_id,
+            snapshot.invasion_id,
+        )
+        previous_id = None
+
+    if previous_id is not None:
+        try:
+            await bot.unpin_chat_message(
+                chat_id=snapshot.group_id,
+                message_id=previous_id,
+            )
+        except Exception as error:
+            logger.warning(
+                "Could not unpin the previous Invasion announcement "
+                "chat_id=%s message_id=%s invasion_id=%s: %s",
+                snapshot.group_id,
+                previous_id,
+                snapshot.invasion_id,
+                error,
+            )
+
+    try:
+        # Quiet pin: a notification service message every cadence slot would
+        # spam the Group; the pinned announcement itself is the notice.
+        await bot.pin_chat_message(
+            chat_id=snapshot.group_id,
+            message_id=message_id,
+            disable_notification=True,
+        )
+        return True
+    except Exception as error:
+        logger.warning(
+            "Could not pin the Invasion announcement chat_id=%s message_id=%s "
+            "invasion_id=%s: %s",
+            snapshot.group_id,
+            message_id,
+            snapshot.invasion_id,
+            error,
+        )
+        return False
+
+
 async def _send_announcement(bot, snapshot: InvasionScreenSnapshot) -> bool:
     text = render_invasion_status(snapshot)
     keyboard = invasion_status_keyboard(snapshot)
@@ -365,6 +467,9 @@ async def _send_announcement(bot, snapshot: InvasionScreenSnapshot) -> bool:
     )
     if saved:
         _ANNOUNCEMENT_RETRY_AFTER.pop(snapshot.invasion_id, None)
+        # Presentation-only follow-up: a pin failure never invalidates the
+        # committed announcement or the Invasion itself.
+        await _pin_announcement(bot, snapshot, message_id)
     return saved
 
 
@@ -387,11 +492,16 @@ async def _edit_announcement(bot, snapshot: InvasionScreenSnapshot) -> bool:
     )
     if replacement_id is not None:
         if replacement_id != current_message_id:
-            return await _persist_announcement_id(
+            saved = await _persist_announcement_id(
                 snapshot,
                 replacement_id,
                 expected_message_id=current_message_id,
             )
+            if saved:
+                # safe_edit_screen replaced (and deleted) the pinned message;
+                # the replacement is the announcement from now on.
+                await _pin_announcement(bot, snapshot, replacement_id)
+            return saved
         return True
 
     # The stored message may have been deleted or become uneditable. Recover
@@ -426,6 +536,9 @@ async def _edit_announcement(bot, snapshot: InvasionScreenSnapshot) -> bool:
     )
     if saved:
         await _try_delete_message(bot, snapshot.group_id, current_message_id)
+        # The replacement message is the announcement from now on; the
+        # deleted message loses its pin, so re-pin the replacement.
+        await _pin_announcement(bot, snapshot, new_message_id)
     return saved
 
 
@@ -526,6 +639,20 @@ class InvasionTelegramService:
             new_message_id,
             expected_message_id=expected_message_id,
         )
+
+    @staticmethod
+    async def pin_announcement(
+        bot,
+        snapshot: InvasionScreenSnapshot,
+        message_id: int,
+    ) -> bool:
+        """Best-effort pin of an announcement whose id was just persisted.
+
+        Presentation-only: never raises, never rolls anything back, and a
+        failure is only logged. Callers use it after a replacement message
+        (which deletes the previously pinned one) became the announcement.
+        """
+        return await _pin_announcement(bot, snapshot, message_id)
 
     @staticmethod
     async def send_group_notice(bot, group_id: int, text: str) -> None:

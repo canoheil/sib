@@ -133,10 +133,11 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     "invasion_reward_narrow_defense_apples": 5,
     "invasion_reward_defeat_apples": 1,
     # Invasion scheduling (Phase 5). Intervals are UTC-slot aligned: the
-    # default 8-hour cadence yields three occurrences per active Group per day.
-    # Event timing is snapshotted onto each Invasion when it is created, so a
-    # later config change never rewrites an occurrence already in progress.
-    "invasion_occurrence_interval_seconds": 8 * 60 * 60,
+    # default 4-hour cadence yields six occurrences per active Group per day
+    # (00:00, 04:00, 08:00, 12:00, 16:00, 20:00 UTC). Event timing is
+    # snapshotted onto each Invasion when it is created, so a later config
+    # change never rewrites an occurrence already in progress.
+    "invasion_occurrence_interval_seconds": 4 * 60 * 60,
     "invasion_event_duration_seconds": 20 * 60,
     # Trading
     "trades_per_day": 1,

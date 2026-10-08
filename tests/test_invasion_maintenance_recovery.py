@@ -74,7 +74,7 @@ async def _make_scheduled_invasion(
             matches_played=matches_played,
             slot_epoch=slot_epoch,
             scheduled_at=scheduled_at,
-            interval_seconds=8 * 60 * 60,
+            interval_seconds=4 * 60 * 60,
             duration_seconds=20 * 60,
         )
     )
@@ -119,7 +119,7 @@ async def test_scheduler_uses_active_groups_stable_utc_slots_and_frozen_specs(db
     assert first["invasions_scheduled"] == 2
     assert first["invasions_started"] == 2
     assert first["invasion_failures"] == 0
-    assert CONFIG_DEFAULTS["invasion_occurrence_interval_seconds"] == 8 * 60 * 60
+    assert CONFIG_DEFAULTS["invasion_occurrence_interval_seconds"] == 4 * 60 * 60
     assert CONFIG_DEFAULTS["invasion_event_duration_seconds"] == 20 * 60
 
     db_session.expire_all()
@@ -144,7 +144,7 @@ async def test_scheduler_uses_active_groups_stable_utc_slots_and_frozen_specs(db
         assert invasion.enemy_power == expected_power
         config = json.loads(invasion.event_config_json)
         assert config["schema_version"] == 1
-        assert config["occurrence_interval_seconds"] == 8 * 60 * 60
+        assert config["occurrence_interval_seconds"] == 4 * 60 * 60
         assert config["duration_seconds"] == 20 * 60
         assert config["enemy_power_base"] == 100
         assert config["enemy_power_activity_bonus_cap"] == 100
@@ -500,3 +500,149 @@ async def test_concurrent_workers_advance_one_persisted_wave_safely(db_session):
     persisted = await _reload_invasion(db_session, invasion_id)
     assert persisted.status == InvasionStatus.FINISHED
     assert persisted.outcome in InvasionOutcome.ALL
+
+
+def test_default_cadence_is_four_hours_with_six_utc_aligned_slots():
+    interval = int(CONFIG_DEFAULTS["invasion_occurrence_interval_seconds"])
+    duration = int(CONFIG_DEFAULTS["invasion_event_duration_seconds"])
+    assert interval == 4 * 60 * 60
+    assert duration == 20 * 60
+
+    day = datetime(2026, 10, 8, 0, 0, tzinfo=UTC)
+    slot_epochs = []
+    for slot_index in range(6):
+        now = day + timedelta(hours=4 * slot_index, minutes=5)
+        slot_epoch, scheduled_at = MaintenanceService._slot_start(
+            now, interval, duration
+        )
+        assert scheduled_at == day + timedelta(hours=4 * slot_index)
+        slot_epochs.append(slot_epoch)
+
+    # Exactly six UTC-aligned slots per day: 00:00, 04:00, ..., 20:00.
+    assert [
+        datetime.fromtimestamp(epoch, tz=UTC) for epoch in slot_epochs
+    ] == [day + timedelta(hours=4 * index) for index in range(6)]
+    assert len(set(slot_epochs)) == 6
+
+    # Occurrence keys remain unique across the six daily slots.
+    keys = {
+        MaintenanceService._occurrence_key(-100700, epoch) for epoch in slot_epochs
+    }
+    assert len(keys) == 6
+
+
+@pytest.mark.asyncio
+async def test_default_invasion_timing_config_is_four_hour_cadence(db_session):
+    interval, duration = await MaintenanceService._invasion_timing_config(db_session)
+    assert interval == 4 * 60 * 60
+    assert duration == 20 * 60
+
+
+@pytest.mark.asyncio
+async def test_scheduler_creates_one_occurrence_per_four_hour_slot_per_day(db_session):
+    group = await _make_group(db_session)
+    group_id = group.id
+    day = datetime(2026, 10, 8, 0, 0, tzinfo=UTC)
+
+    for slot_index in range(6):
+        stats = await MaintenanceService.run_invasion_cycle(
+            now=day + timedelta(hours=4 * slot_index, minutes=5)
+        )
+        assert stats["invasions_scheduled"] == 1
+        assert stats["invasion_failures"] == 0
+
+    db_session.expire_all()
+    invasions = list(
+        (
+            await db_session.scalars(
+                select(Invasion)
+                .where(Invasion.group_id == group_id)
+                .order_by(Invasion.scheduled_at.asc())
+            )
+        ).all()
+    )
+    assert len(invasions) == 6
+    assert [_utc(invasion.scheduled_at) for invasion in invasions] == [
+        day + timedelta(hours=4 * index) for index in range(6)
+    ]
+    occurrence_keys = [invasion.occurrence_key for invasion in invasions]
+    assert len(set(occurrence_keys)) == 6
+    for invasion in invasions:
+        config = json.loads(invasion.event_config_json)
+        assert config["occurrence_interval_seconds"] == 4 * 60 * 60
+        assert config["duration_seconds"] == 20 * 60
+
+
+@pytest.mark.asyncio
+async def test_missed_slots_are_not_backfilled_after_an_outage(db_session):
+    group = await _make_group(db_session)
+    group_id = group.id
+    # The 08:00 slot window (20 minutes) has fully passed when the bot wakes
+    # up: the scheduler must target the NEXT 4-hour slot instead of backfilling
+    # the missed one with an already-expired event.
+    now = datetime(2026, 10, 7, 8, 25, tzinfo=UTC)
+    stats = await MaintenanceService.run_invasion_cycle(now=now)
+
+    assert stats["invasions_scheduled"] == 1
+    assert stats["invasions_started"] == 0
+    assert stats["invasion_failures"] == 0
+
+    db_session.expire_all()
+    invasion = await db_session.scalar(
+        select(Invasion).where(Invasion.group_id == group_id)
+    )
+    assert invasion is not None
+    assert _utc(invasion.scheduled_at) == datetime(2026, 10, 7, 12, 0, tzinfo=UTC)
+    assert invasion.status == InvasionStatus.SCHEDULED
+    assert invasion.occurrence_key == MaintenanceService._occurrence_key(
+        group_id, int(datetime(2026, 10, 7, 12, 0, tzinfo=UTC).timestamp())
+    )
+    missed_key = MaintenanceService._occurrence_key(
+        group_id, int(datetime(2026, 10, 7, 8, 0, tzinfo=UTC).timestamp())
+    )
+    assert (
+        await db_session.scalar(
+            select(func.count(Invasion.id)).where(
+                Invasion.occurrence_key == missed_key
+            )
+        )
+        == 0
+    )
+
+
+@pytest.mark.asyncio
+async def test_restart_and_recovery_do_not_create_duplicate_invasions(db_session):
+    group = await _make_group(db_session)
+    group_id = group.id
+    now = datetime(2026, 10, 7, 8, 5, tzinfo=UTC)
+
+    first = await MaintenanceService.run_invasion_cycle(now=now)
+    assert first["invasions_scheduled"] == 1
+    assert first["invasions_started"] == 1
+
+    # A restart replays the same maintenance cycle: the occurrence key keeps
+    # exactly one Invasion per Group and slot.
+    second = await MaintenanceService.run_invasion_cycle(now=now)
+    assert second["invasions_scheduled"] == 0
+    assert second["duplicate_invasion_occurrences"] == 1
+    assert second["invasions_started"] == 0
+
+    # Startup recovery replays transitions but never schedules duplicates.
+    recovered = await RecoveryService.recover_on_startup(db_session, now=now)
+    assert recovered["invasions_scheduled"] == 0
+    assert recovered["duplicate_invasion_occurrences"] == 0
+
+    db_session.expire_all()
+    assert (
+        await db_session.scalar(
+            select(func.count(Invasion.id)).where(Invasion.group_id == group_id)
+        )
+        == 1
+    )
+    invasion = await db_session.scalar(
+        select(Invasion).where(Invasion.group_id == group_id)
+    )
+    assert invasion.status == InvasionStatus.ACTIVE
+    assert invasion.occurrence_key == MaintenanceService._occurrence_key(
+        group_id, int(datetime(2026, 10, 7, 8, 0, tzinfo=UTC).timestamp())
+    )

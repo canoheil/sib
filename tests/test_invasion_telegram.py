@@ -59,6 +59,9 @@ MESSAGE_ID = 9001
 
 
 async def _make_group(session, group_id: int = GROUP_ID) -> Group:
+    existing = await session.get(Group, group_id)
+    if existing is not None:
+        return existing
     group = Group(id=group_id, title=f"Invasion UX group {group_id}", is_active=True)
     session.add(group)
     await session.flush()
@@ -189,6 +192,8 @@ def _bot(*, send_message_id: int = 9100) -> MagicMock:
     bot.edit_message_text = AsyncMock(return_value=True)
     bot.edit_message_media = AsyncMock(return_value=True)
     bot.delete_message = AsyncMock(return_value=True)
+    bot.pin_chat_message = AsyncMock(return_value=True)
+    bot.unpin_chat_message = AsyncMock(return_value=True)
     return bot
 
 
@@ -1560,3 +1565,324 @@ def test_plain_status_renderer_shows_scheduled_and_terminal_states():
     assert "زمان تا آغاز" in text
     assert "۱ از ۲ پس از آغاز" in text
     assert "مشخص نشده" in text
+
+
+@pytest.mark.asyncio
+async def test_announcement_is_pinned_after_send_and_persisted_id(db_session):
+    invasion = await _make_event(db_session, announcement_message_id=None)
+    invasion_id = int(invasion.id)
+    bot = _bot(send_message_id=9317)
+
+    published = await InvasionTelegramService.publish_maintenance_updates(bot, [])
+
+    assert published == 1
+    bot.send_photo.assert_awaited_once()
+    bot.pin_chat_message.assert_awaited_once()
+    assert bot.pin_chat_message.await_args.kwargs["chat_id"] == GROUP_ID
+    assert bot.pin_chat_message.await_args.kwargs["message_id"] == 9317
+    # No previous Sib announcement exists in this Group: nothing is unpinned.
+    bot.unpin_chat_message.assert_not_awaited()
+
+    db_session.expire_all()
+    persisted = await db_session.get(Invasion, invasion_id)
+    assert persisted.announcement_message_id == 9317
+    assert persisted.status == InvasionStatus.ACTIVE
+
+
+@pytest.mark.asyncio
+async def test_pin_failure_does_not_fail_invasion_or_announcement(db_session, caplog):
+    invasion = await _make_event(db_session, announcement_message_id=None)
+    invasion_id = int(invasion.id)
+    bot = _bot(send_message_id=9321)
+    bot.pin_chat_message = AsyncMock(side_effect=RuntimeError("telegram api down"))
+
+    published = await InvasionTelegramService.publish_maintenance_updates(bot, [])
+
+    # The announcement itself was sent and persisted: pinning is
+    # presentation-only and its failure must not fail the publication.
+    assert published == 1
+    bot.pin_chat_message.assert_awaited_once()
+    assert "Could not pin the Invasion announcement" in caplog.text
+
+    db_session.expire_all()
+    persisted = await db_session.get(Invasion, invasion_id)
+    assert persisted.status == InvasionStatus.ACTIVE
+    assert persisted.started_at is not None
+    assert persisted.announcement_message_id == 9321
+
+    # The announcement remains usable: the next pass edits it in place
+    # instead of re-sending or losing the persisted pointer.
+    caplog.clear()
+    edited = await InvasionTelegramService.publish_maintenance_updates(
+        bot,
+        [invasion_id],
+    )
+    assert edited == 1
+    bot.edit_message_media.assert_awaited_once()
+    db_session.expire_all()
+    persisted = await db_session.get(Invasion, invasion_id)
+    assert persisted.announcement_message_id == 9321
+    assert persisted.status == InvasionStatus.ACTIVE
+
+
+@pytest.mark.asyncio
+async def test_missing_pin_permission_does_not_fail_invasion(db_session, caplog):
+    invasion = await _make_event(db_session, announcement_message_id=None)
+    invasion_id = int(invasion.id)
+    bot = _bot(send_message_id=9322)
+    bot.pin_chat_message = AsyncMock(
+        side_effect=TelegramBadRequest(
+            method=None,
+            message="Bad Request: not enough rights to pin messages in this chat",
+        )
+    )
+
+    published = await InvasionTelegramService.publish_maintenance_updates(bot, [])
+
+    assert published == 1
+    bot.pin_chat_message.assert_awaited_once()
+    assert "Could not pin the Invasion announcement" in caplog.text
+
+    db_session.expire_all()
+    persisted = await db_session.get(Invasion, invasion_id)
+    assert persisted.status == InvasionStatus.ACTIVE
+    assert persisted.announcement_message_id == 9322
+
+    # The announcement remains usable after the permission failure.
+    edited = await InvasionTelegramService.publish_maintenance_updates(
+        bot,
+        [invasion_id],
+    )
+    assert edited == 1
+    bot.edit_message_media.assert_awaited_once()
+    db_session.expire_all()
+    persisted = await db_session.get(Invasion, invasion_id)
+    assert persisted.announcement_message_id == 9322
+    assert persisted.status == InvasionStatus.ACTIVE
+
+
+@pytest.mark.asyncio
+async def test_previous_sib_announcement_is_unpinned_before_the_new_pin(db_session):
+    previous = await _make_event(
+        db_session,
+        group_id=GROUP_ID,
+        status=InvasionStatus.FINISHED,
+        announcement_message_id=8801,
+        wave_count=2,
+    )
+    previous_id = int(previous.id)
+    invasion = await _make_event(db_session, announcement_message_id=None)
+    invasion_id = int(invasion.id)
+    bot = _bot(send_message_id=9317)
+
+    published = await InvasionTelegramService.publish_maintenance_updates(bot, [])
+
+    assert published == 1
+    # The previous Sib announcement (persisted by Sib for this Group) is
+    # unpinned so pinned announcements do not accumulate...
+    bot.unpin_chat_message.assert_awaited_once()
+    assert bot.unpin_chat_message.await_args.kwargs == {
+        "chat_id": GROUP_ID,
+        "message_id": 8801,
+    }
+    # ...and the fresh announcement is pinned instead.
+    bot.pin_chat_message.assert_awaited_once()
+    assert bot.pin_chat_message.await_args.kwargs["chat_id"] == GROUP_ID
+    assert bot.pin_chat_message.await_args.kwargs["message_id"] == 9317
+    call_names = [call[0] for call in bot.mock_calls]
+    assert call_names.index("unpin_chat_message") < call_names.index("pin_chat_message")
+
+    db_session.expire_all()
+    persisted = await db_session.get(Invasion, invasion_id)
+    assert persisted.announcement_message_id == 9317
+    assert persisted.status == InvasionStatus.ACTIVE
+    # The previous occurrence's persisted announcement id is not corrupted.
+    previous_row = await db_session.get(Invasion, previous_id)
+    assert previous_row.announcement_message_id == 8801
+    assert previous_row.status == InvasionStatus.FINISHED
+
+
+@pytest.mark.asyncio
+async def test_unpin_failure_of_previous_announcement_still_pins_and_keeps_invasion_valid(
+    db_session,
+    caplog,
+):
+    await _make_event(
+        db_session,
+        group_id=GROUP_ID,
+        status=InvasionStatus.FINISHED,
+        announcement_message_id=8801,
+        wave_count=2,
+    )
+    invasion = await _make_event(db_session, announcement_message_id=None)
+    invasion_id = int(invasion.id)
+    bot = _bot(send_message_id=9323)
+    bot.unpin_chat_message = AsyncMock(
+        side_effect=TelegramBadRequest(
+            method=None,
+            message="Bad Request: message to unpin not found",
+        )
+    )
+
+    published = await InvasionTelegramService.publish_maintenance_updates(bot, [])
+
+    assert published == 1
+    bot.unpin_chat_message.assert_awaited_once()
+    bot.pin_chat_message.assert_awaited_once()
+    assert bot.pin_chat_message.await_args.kwargs["message_id"] == 9323
+    assert "Could not unpin the previous Invasion announcement" in caplog.text
+
+    db_session.expire_all()
+    persisted = await db_session.get(Invasion, invasion_id)
+    assert persisted.status == InvasionStatus.ACTIVE
+    assert persisted.announcement_message_id == 9323
+
+
+@pytest.mark.asyncio
+async def test_unrelated_pinned_messages_are_never_unpinned(db_session):
+    unrelated_admin_message_id = 4242
+    other_group_id = GROUP_ID - 60
+    # A Sib announcement persisted for ANOTHER Group must not be unpinned
+    # when this Group's announcement is pinned.
+    await _make_event(
+        db_session,
+        group_id=other_group_id,
+        status=InvasionStatus.FINISHED,
+        announcement_message_id=8899,
+        wave_count=2,
+    )
+    # The previous Sib announcement of THIS Group is the only unpin candidate.
+    await _make_event(
+        db_session,
+        group_id=GROUP_ID,
+        status=InvasionStatus.FINISHED,
+        announcement_message_id=8801,
+        wave_count=2,
+    )
+    invasion = await _make_event(db_session, announcement_message_id=None)
+    invasion_id = int(invasion.id)
+    bot = _bot(send_message_id=9317)
+
+    published = await InvasionTelegramService.publish_maintenance_updates(bot, [])
+
+    assert published == 1
+    unpinned_ids = [
+        call.kwargs["message_id"]
+        for call in bot.unpin_chat_message.await_args_list
+    ]
+    # Only the id Sib itself persisted for this Group is unpinned: the other
+    # Group's announcement and any unrelated admin/user message stay pinned.
+    assert unpinned_ids == [8801]
+    assert unrelated_admin_message_id not in unpinned_ids
+    assert 8899 not in unpinned_ids
+    bot.pin_chat_message.assert_awaited_once()
+    assert bot.pin_chat_message.await_args.kwargs["message_id"] == 9317
+
+    db_session.expire_all()
+    persisted = await db_session.get(Invasion, invasion_id)
+    assert persisted.announcement_message_id == 9317
+
+    # A Group without any previous Sib announcement never unpins anything,
+    # even when an unrelated message is pinned there.
+    lonely_group_id = GROUP_ID - 61
+    lonely = await _make_event(
+        db_session,
+        group_id=lonely_group_id,
+        announcement_message_id=None,
+    )
+    lonely_id = int(lonely.id)
+    lonely_bot = _bot(send_message_id=9330)
+    lonely_published = await InvasionTelegramService.publish_maintenance_updates(
+        lonely_bot,
+        [],
+    )
+    assert lonely_published == 1
+    lonely_bot.unpin_chat_message.assert_not_awaited()
+    lonely_bot.pin_chat_message.assert_awaited_once()
+    assert lonely_bot.pin_chat_message.await_args.kwargs["chat_id"] == lonely_group_id
+    assert lonely_bot.pin_chat_message.await_args.kwargs["message_id"] == 9330
+    db_session.expire_all()
+    persisted_lonely = await db_session.get(Invasion, lonely_id)
+    assert persisted_lonely.announcement_message_id == 9330
+
+
+@pytest.mark.asyncio
+async def test_announcement_retry_does_not_duplicate_messages_or_corrupt_announcement_state(
+    db_session,
+):
+    previous = await _make_event(
+        db_session,
+        group_id=GROUP_ID,
+        status=InvasionStatus.FINISHED,
+        announcement_message_id=8801,
+        wave_count=2,
+    )
+    previous_id = int(previous.id)
+    invasion = await _make_event(db_session, announcement_message_id=None)
+    invasion_id = int(invasion.id)
+    bot = _bot(send_message_id=9317)
+
+    first = await InvasionTelegramService.publish_maintenance_updates(bot, [])
+    assert first == 1
+    assert bot.send_photo.await_count == 1
+    assert bot.send_message.await_count == 0
+    bot.pin_chat_message.assert_awaited_once()
+    bot.unpin_chat_message.assert_awaited_once()
+
+    # A retry pass must not send or pin a second announcement: the persisted
+    # id routes the update through the in-place edit path.
+    second = await InvasionTelegramService.publish_maintenance_updates(
+        bot,
+        [invasion_id],
+    )
+    assert second == 1
+    assert bot.send_photo.await_count == 1
+    assert bot.send_message.await_count == 0
+    bot.edit_message_media.assert_awaited_once()
+    bot.pin_chat_message.assert_awaited_once()
+    bot.unpin_chat_message.assert_awaited_once()
+
+    db_session.expire_all()
+    persisted = await db_session.get(Invasion, invasion_id)
+    assert persisted.announcement_message_id == 9317
+    assert persisted.status == InvasionStatus.ACTIVE
+    previous_row = await db_session.get(Invasion, previous_id)
+    assert previous_row.announcement_message_id == 8801
+    assert await db_session.scalar(
+        select(func.count(Invasion.id)).where(Invasion.group_id == GROUP_ID)
+    ) == 2
+
+
+@pytest.mark.asyncio
+async def test_status_refresh_replacement_repins_the_new_announcement(db_session):
+    invasion = await _make_event(db_session)
+    invasion_id = int(invasion.id)
+    user = await _make_user(db_session, 70201)
+    await db_session.commit()
+
+    bot = _bot()
+    bot.edit_message_media = AsyncMock(
+        side_effect=TelegramBadRequest(
+            method=None,
+            message="there is no media in the message to edit",
+        )
+    )
+    bot.send_photo = AsyncMock(return_value=SimpleNamespace(message_id=9611))
+    bot.send_message = AsyncMock(return_value=SimpleNamespace(message_id=9611))
+    callback = _callback(
+        user.id,
+        invasion_callback_data("status", invasion_id),
+        callback_id="status-replacement-pin",
+    )
+    await handle_invasion_callback(callback, bot)
+
+    # The replacement message deleted the previously pinned announcement, so
+    # the persisted replacement is pinned again (best-effort, never fatal).
+    bot.pin_chat_message.assert_awaited_once()
+    assert bot.pin_chat_message.await_args.kwargs["chat_id"] == GROUP_ID
+    assert bot.pin_chat_message.await_args.kwargs["message_id"] == 9611
+    bot.delete_message.assert_awaited_with(GROUP_ID, MESSAGE_ID)
+    db_session.expire_all()
+    persisted = await db_session.get(Invasion, invasion_id)
+    assert persisted.announcement_message_id == 9611
+    assert persisted.status == InvasionStatus.ACTIVE

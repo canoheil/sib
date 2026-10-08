@@ -205,6 +205,15 @@ async def _refresh_status_message(
                 expected_message_id,
                 new_message_id,
             )
+        else:
+            # The replacement deleted the previously pinned message; keep the
+            # announcement pinned. Best-effort: a pin failure never fails the
+            # refresh that already succeeded.
+            await InvasionTelegramService.pin_announcement(
+                bot,
+                snapshot,
+                new_message_id,
+            )
     return True
 
 
