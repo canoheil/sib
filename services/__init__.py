@@ -14,6 +14,25 @@ from sib.services.marriage import (
     MarriageDivorceResult,
     MarriageService,
 )
+from sib.services.invasion import (
+    ContributionResult,
+    InvasionDefenseActionAlreadyUsedError,
+    InvasionDefenseActionCode,
+    InvasionDefenseActionResult,
+    InvasionDefenseActionAvailability,
+    InvasionResolutionResult,
+    InvasionService,
+)
+from sib.services.invasion_rewards import (
+    InvasionNotCompletedError,
+    InvasionParticipantReward,
+    InvasionRewardConfigurationError,
+    InvasionRewardLedgerConflictError,
+    InvasionRewardService,
+    InvasionSettlementError,
+    InvasionSettlementOutcomeError,
+    InvasionSettlementResult,
+)
 
 __all__ = [
     "MembershipService",
@@ -29,4 +48,19 @@ __all__ = [
     "MarriageDivorceResult",
     "LoveService",
     "FlowerGiftResult",
+    "InvasionService",
+    "ContributionResult",
+    "InvasionDefenseActionCode",
+    "InvasionDefenseActionResult",
+    "InvasionDefenseActionAlreadyUsedError",
+    "InvasionDefenseActionAvailability",
+    "InvasionResolutionResult",
+    "InvasionRewardService",
+    "InvasionParticipantReward",
+    "InvasionSettlementResult",
+    "InvasionSettlementError",
+    "InvasionNotCompletedError",
+    "InvasionSettlementOutcomeError",
+    "InvasionRewardConfigurationError",
+    "InvasionRewardLedgerConflictError",
 ]

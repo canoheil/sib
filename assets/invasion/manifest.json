@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "library": "moon_descendant_invasion",
+  "purpose": "Pre-generated V1 artwork for the Moon Descendants faction and Invasion announcement.",
+  "art_direction": "../../.agents/tasks/moon-descendant-invasion/ART_DIRECTION.md",
+  "technical": {
+    "aspect": "1:1",
+    "dimensions": "1024x1024",
+    "format": "jpeg",
+    "encoding": "progressive jpeg, quality 85"
+  },
+  "usage": {
+    "note": "Pre-generated event artwork. The manifest is a provenance record, not a runtime asset framework. The Invasion key art is the default Telegram announcement photo; photo-send failures remain presentation-only and fall back to text.",
+    "loaded_by": [
+      "services/invasion_telegram.py",
+      "handlers/invasion.py"
+    ],
+    "default_announcement": "moon_descendant_invasion"
+  },
+  "generation": {
+    "mode": "pre-generated",
+    "runtime_generation": false,
+    "tool": "arena-agent image model (reference-guided text-to-image)",
+    "created_at": "2026-10-08",
+    "license": "project-internal",
+    "style_reference": "moon_descendant_queen.jpg",
+    "identity_reference": "../characters_raw/sib_mahi.jpg"
+  },
+  "art_direction_summary": {
+    "mood": "mature dark fantasy; regal, ancient, supernatural, mysterious, beautiful and intimidating",
+    "palette": [
+      "midnight blue #10182B",
+      "near-black #090B12",
+      "moon-silver #B9C6DA",
+      "cold violet #665A9D"
+    ],
+    "motifs": [
+      "crescent moons",
+      "silver celestial filigree",
+      "moonstone and crystalline architecture",
+      "gothic lunar halls and ancient territory"
+    ],
+    "avoid": [
+      "childlike or chibi proportions",
+      "cute presentation",
+      "generic monsters",
+      "gore or graphic horror",
+      "warm gold",
+      "text, frames, borders, logos or watermarks"
+    ]
+  },
+  "scenes": [
+    {
+      "id": "moon_descendant_queen",
+      "role": "Queen",
+      "file": "moon_descendant_queen.jpg",
+      "status": "ready",
+      "description_en": "The beautiful, ancient and intimidating Moon Descendant Queen stands beneath a crescent moon in her crystalline throne hall; primary faction style anchor."
+    },
+    {
+      "id": "moon_descendant_knight",
+      "role": "Knight",
+      "file": "moon_descendant_knight.jpg",
+      "status": "ready",
+      "description_en": "A disciplined adult Moon Descendant Knight in ceremonial midnight plate stands before the realm's moonlit gate with a crescent polearm."
+    },
+    {
+      "id": "moon_descendant_oracle",
+      "role": "Oracle",
+      "file": "moon_descendant_oracle.jpg",
+      "status": "ready",
+      "description_en": "An ancient veiled Oracle regards the viewer from a lunar observatory, holding a moonstone astrolabe and an eclipse-lit crystal."
+    },
+    {
+      "id": "moon_descendant_huntress",
+      "role": "Huntress",
+      "file": "moon_descendant_huntress.jpg",
+      "status": "ready",
+      "description_en": "A poised adult Huntress tracks the viewer through her midnight forest with a silver crescent bow and moonstone arrow."
+    },
+    {
+      "id": "moon_descendant_reaper",
+      "role": "Reaper",
+      "file": "moon_descendant_reaper.jpg",
+      "status": "ready",
+      "description_en": "A silent, masked royal Reaper with a black-silver crescent scythe stands before an eclipse and distant lunar spires."
+    },
+    {
+      "id": "moon_descendant_court",
+      "role": "Royal Court",
+      "file": "moon_descendant_court.jpg",
+      "status": "ready",
+      "description_en": "The Queen presides over her disciplined court, flanked by the Knight, Oracle and Huntress in a vast moonlit throne hall."
+    },
+    {
+      "id": "moon_descendant_temple",
+      "role": "Temple",
+      "file": "moon_descendant_temple.jpg",
+      "status": "ready",
+      "description_en": "A monumental lunar temple of dark stone, silver arches, moonstone crystals, reflecting water and veiled guardian statues."
+    },
+    {
+      "id": "moon_descendant_invasion",
+      "role": "Invasion announcement key art",
+      "file": "moon_descendant_invasion.jpg",
+      "status": "ready",
+      "default_announcement_art": true,
+      "description_en": "The Queen and her court face a breach at the ancient lunar gates as a beam of cold moonlight awakens the realm and tiny intruders approach."
+    }
+  ]
+}

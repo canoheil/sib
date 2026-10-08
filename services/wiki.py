@@ -76,15 +76,17 @@ class CollectionService:
     ) -> Tuple[str, int]:
         """(text, total_pages) for the My Cards panel.
 
-        Structure: summary header (count, favorite, total attributes) then
+        Structure: summary header (count, Main Card, total attributes) then
         one compact line per card. Each card is opened from the panel's
         buttons (view screen with the ⬆️ upgrade action).
         """
         cards = await PlayerCardService.list_cards(session, user_id)
+        main_card = await PlayerCardService.get_main_card(session, user_id)
         if not cards:
             return (
                 "🎴 **کارت‌های من**\n\n"
-                "هنوز کارتی نداری! از فروشگاه 🍏 یه شخصیت بخر تا شروع کنی.",
+                "هنوز کارتی نداری و کارت اصلی‌ای هم انتخاب نشده! "
+                "از فروشگاه 🍏 یه شخصیت بخر تا شروع کنی.",
                 1,
             )
 
@@ -109,16 +111,22 @@ class CollectionService:
             if c.character_id in characters
         }
         total_budget = sum(a.total for a in stats_by_card.values())
-        favorite = next((c for c in cards if c.is_favorite), None)
-        fav_name = None
-        if favorite is not None:
-            fav_char = characters.get(favorite.character_id)
-            fav_name = fav_char.name_fa if fav_char else None
+        main_character = (
+            characters.get(main_card.character_id) if main_card is not None else None
+        )
+        main_name = main_character.name_fa if main_character else "نامشخص"
 
         lines = ["🎴 **کارت‌های من**\n"]
-        summary = [f"🗂 تعداد کارت‌ها: `{len(cards)}`", f"📊 مجموع امتیازها: `{total_budget}`"]
-        if fav_name:
-            summary.insert(1, f"⭐ کارت اصلی: **{fav_name}**")
+        main_summary = (
+            f"⭐ کارت اصلی: **{main_name}**"
+            if main_card is not None
+            else "⭐ کارت اصلی: انتخاب نشده"
+        )
+        summary = [
+            f"🗂 تعداد کارت‌ها: `{len(cards)}`",
+            main_summary,
+            f"📊 مجموع امتیازها: `{total_budget}`",
+        ]
         lines.append(" | ".join(summary))
 
         if total_pages > 1:
@@ -128,7 +136,7 @@ class CollectionService:
         for card in page_cards:
             character = characters.get(card.character_id)
             name = character.name_fa if character else "نامشخص"
-            star = "⭐ " if card.is_favorite else ""
+            star = "⭐ " if main_card is not None and card.id == main_card.id else ""
             stats = stats_by_card.get(card.id)
             stats_text = (
                 f"💪{stats.power} ⚡{stats.speed} 🧠{stats.intelligence} | مجموع `{stats.total}`"
@@ -142,13 +150,25 @@ class CollectionService:
         return "\n".join(lines), total_pages
 
     @staticmethod
-    async def render_card_detail(session: AsyncSession, user_id: int, card_id: int) -> Optional[str]:
+    async def render_card_detail(
+        session: AsyncSession, user_id: int, card_id: int
+    ) -> Optional[str]:
+        detail, _main_card_id = await CollectionService.render_card_detail_with_main_card(
+            session, user_id, card_id
+        )
+        return detail
+
+    @staticmethod
+    async def render_card_detail_with_main_card(
+        session: AsyncSession, user_id: int, card_id: int
+    ) -> Tuple[Optional[str], Optional[int]]:
+        """Return detail text and the same-snapshot Main Card id for its keyboard."""
         card = await PlayerCardService.get_card(session, card_id)
         if not card or card.user_id != user_id:
-            return None
+            return None, None
         character = await session.get(Character, card.character_id)
         if not character:
-            return None
+            return None, None
 
         faction = await FactionService.get_for_character(session, character)
         stats = card_attributes(card, character)
@@ -158,6 +178,16 @@ class CollectionService:
             *attribute_lines(stats),
             f"📊 مجموع ویژگی‌ها: `{stats.total}`",
         ]
+        main_card = await PlayerCardService.get_main_card(session, user_id)
+        main_card_id = main_card.id if main_card is not None else None
+        if main_card is None:
+            lines.extend(["", "⭐ کارت اصلی هنوز انتخاب نشده است."])
+        elif main_card.id == card.id:
+            lines.extend(["", "⭐ این کارت، کارت اصلی شماست."])
+        else:
+            main_character = await session.get(Character, main_card.character_id)
+            main_name = main_character.name_fa if main_character else "نامشخص"
+            lines.extend(["", f"⭐ کارت اصلی فعلی شما: **{main_name}**"])
         if faction is not None:
             lines.append("")
             lines.append(f"🎖 **{faction.name_fa}** {faction.symbol or ''}".rstrip())
@@ -167,4 +197,4 @@ class CollectionService:
             "",
             "برای دیدن داستان و جزئیات شخصیت، به ویکی شخصیت‌ها سر بزن.",
         ]
-        return "\n".join(lines)
+        return "\n".join(lines), main_card_id

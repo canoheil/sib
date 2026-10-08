@@ -1,10 +1,12 @@
 """Tests for database migrations.
 
-The migration DDL itself targets MariaDB (ALTER TABLE constraints),
-which SQLite cannot execute; the chain is therefore validated against a
-standalone stamped database instead of a live `upgrade head` run. The
-bot-result data migration is tested directly against SQLite because its
-portable SQL should work on both supported test and production dialects.
+The complete historical Alembic ancestry includes MariaDB-specific DDL that
+SQLite cannot execute. The chain-head test therefore uses a standalone stamped
+database; a focused test below stamps a minimal 024 baseline and runs Alembic
+through revisions 025-028 on SQLite to verify the progression/Invasion schema
+path, constraints, indexes, foreign keys, and supported downgrades. This does
+not replace a live MySQL/MariaDB migration run. Portable data migrations are
+tested directly too.
 """
 
 import importlib.util
@@ -58,7 +60,179 @@ def test_alembic_current_revision():
     assert "head" in current.stdout
 
 
+def test_invasion_migration_path_025_through_028_and_downgrade_on_sqlite():
+    """Run the Alembic path from a minimal 024 baseline and inspect its schema."""
+    with tempfile.TemporaryDirectory() as tmp:
+        db_url = f"sqlite:///{Path(tmp) / 'invasion_migrations.db'}"
+        engine = sa.create_engine(db_url)
+        metadata = sa.MetaData()
+        users = sa.Table(
+            "users",
+            metadata,
+            sa.Column("id", sa.BigInteger(), primary_key=True),
+        )
+        groups = sa.Table(
+            "groups",
+            metadata,
+            sa.Column("id", sa.BigInteger(), primary_key=True),
+        )
+        metadata.create_all(engine)
+        with engine.begin() as connection:
+            connection.execute(users.insert(), [{"id": 7}])
+        engine.dispose()
+
+        # The full pre-025 database ancestry has MariaDB-only DDL. Stamp only
+        # that baseline, then let Alembic itself execute every target revision.
+        stamp = _run_alembic("stamp", "024_marriage_and_love", db_url=db_url)
+        assert stamp.returncode == 0, f"{stamp.stdout}\n{stamp.stderr}"
+        upgrade = _run_alembic(
+            "upgrade", "028_invasion_defense_actions", db_url=db_url
+        )
+        assert upgrade.returncode == 0, f"{upgrade.stdout}\n{upgrade.stderr}"
+        current = _run_alembic("current", db_url=db_url)
+        assert current.returncode == 0
+        assert "028_invasion_defense_actions" in current.stdout
+
+        engine = sa.create_engine(db_url)
+        with engine.connect() as connection:
+            inspector = sa.inspect(connection)
+            tables = set(inspector.get_table_names())
+            assert {
+                "player_progressions",
+                "player_xp_grants",
+                "invasions",
+                "invasion_waves",
+                "invasion_participants",
+                "invasion_contributions",
+                "invasion_defense_actions",
+            } <= tables
+            progressions = sa.Table(
+                "player_progressions", sa.MetaData(), autoload_with=connection
+            )
+            assert connection.execute(
+                sa.select(progressions.c.user_id, progressions.c.total_xp)
+            ).all() == [(7, 0)]
+
+            def unique_names(table_name):
+                return {
+                    constraint["name"]
+                    for constraint in inspector.get_unique_constraints(table_name)
+                }
+
+            def check_names(table_name):
+                return {
+                    constraint["name"]
+                    for constraint in inspector.get_check_constraints(table_name)
+                }
+
+            def index_names(table_name):
+                return {index["name"] for index in inspector.get_indexes(table_name)}
+
+            def foreign_keys(table_name):
+                return inspector.get_foreign_keys(table_name)
+
+            assert "uq_invasions_occurrence_key" in unique_names("invasions")
+            assert {
+                "ck_invasions_status",
+                "ck_invasions_outcome",
+            } <= check_names("invasions")
+            assert {
+                "ix_invasions_group_status",
+                "ix_invasions_status_next_transition_at",
+            } <= index_names("invasions")
+            assert {
+                (fk["referred_table"], fk["options"].get("ondelete"))
+                for fk in foreign_keys("invasions")
+            } == {("groups", "CASCADE")}
+
+            assert "uq_invasion_waves_invasion_sequence" in unique_names(
+                "invasion_waves"
+            )
+            assert "ck_invasion_waves_status" in check_names("invasion_waves")
+            assert "ix_invasion_waves_status_next_transition_at" in index_names(
+                "invasion_waves"
+            )
+            assert {
+                (fk["referred_table"], fk["options"].get("ondelete"))
+                for fk in foreign_keys("invasion_waves")
+            } == {("invasions", "CASCADE")}
+
+            assert "uq_invasion_participants_invasion_user" in unique_names(
+                "invasion_participants"
+            )
+            assert (
+                "ck_invasion_participants_main_card_snapshot_complete"
+                in check_names("invasion_participants")
+            )
+            assert {
+                (fk["referred_table"], fk["options"].get("ondelete"))
+                for fk in foreign_keys("invasion_participants")
+            } == {("invasions", "CASCADE"), ("users", "CASCADE")}
+
+            assert "uq_invasion_contributions_invasion_key" in unique_names(
+                "invasion_contributions"
+            )
+            assert {
+                "ck_invasion_contributions_positive_amount",
+                "ck_invasion_contributions_wave_sequence",
+            } <= check_names("invasion_contributions")
+            assert {
+                (fk["referred_table"], fk["options"].get("ondelete"))
+                for fk in foreign_keys("invasion_contributions")
+            } == {
+                ("invasions", "CASCADE"),
+                ("invasion_participants", "CASCADE"),
+                ("invasion_waves", "CASCADE"),
+            }
+
+            assert {
+                "uq_invasion_defense_actions_invasion_key",
+                "uq_invasion_defense_actions_contribution",
+            } <= unique_names("invasion_defense_actions")
+            assert {
+                "ck_invasion_defense_actions_wave_sequence",
+                "ck_invasion_defense_actions_version",
+                "ck_invasion_defense_actions_positive_contribution",
+                "ck_invasion_defense_actions_power_snapshot",
+                "ck_invasion_defense_actions_totals",
+            } <= check_names("invasion_defense_actions")
+            assert {
+                "ix_invasion_defense_actions_participant_created",
+                "ix_invasion_defense_actions_wave_created",
+            } <= index_names("invasion_defense_actions")
+            assert {
+                (fk["referred_table"], fk["options"].get("ondelete"))
+                for fk in foreign_keys("invasion_defense_actions")
+            } == {
+                ("invasions", "CASCADE"),
+                ("invasion_participants", "CASCADE"),
+                ("invasion_waves", "CASCADE"),
+                ("invasion_contributions", "CASCADE"),
+            }
+        engine.dispose()
+
+        downgrade = _run_alembic(
+            "downgrade", "024_marriage_and_love", db_url=db_url
+        )
+        assert downgrade.returncode == 0, f"{downgrade.stdout}\n{downgrade.stderr}"
+        engine = sa.create_engine(db_url)
+        with engine.connect() as connection:
+            remaining = set(sa.inspect(connection).get_table_names())
+            assert {"groups", "users"} <= remaining
+            assert not {
+                "player_progressions",
+                "player_xp_grants",
+                "invasions",
+                "invasion_waves",
+                "invasion_participants",
+                "invasion_contributions",
+                "invasion_defense_actions",
+            } & remaining
+        engine.dispose()
+
+
 def test_bot_match_migration_backfills_historical_counters_portably():
+
     """Legacy finalized bot outcomes leave PvP counters and remain auditable."""
     path = REPO_ROOT / "database/migrations/versions/021_bot_fallback_matchmaking.py"
     spec = importlib.util.spec_from_file_location("migration_021", path)

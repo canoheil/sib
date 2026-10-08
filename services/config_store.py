@@ -123,6 +123,21 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     "friendly_reward_max_matches_per_day": 5,
     "friendly_reward_apples_per_match": 10,
     "friendly_reward_daily_apple_cap": 50,
+    # Invasion V1 settlement (Phase 9): every persisted participant receives
+    # the outcome-based Apple amount, independent of contribution, Brace, or
+    # Main Card. Defaults are intentionally modest versus the existing
+    # +5 Apple Apple-Battle win / +10 Apple friendly-match reward: total
+    # victory 10, narrow defense 5, defeat consolation 1. The settlement
+    # ledger preserves each participant's first amount across retries.
+    "invasion_reward_total_victory_apples": 10,
+    "invasion_reward_narrow_defense_apples": 5,
+    "invasion_reward_defeat_apples": 1,
+    # Invasion scheduling (Phase 5). Intervals are UTC-slot aligned: the
+    # default 8-hour cadence yields three occurrences per active Group per day.
+    # Event timing is snapshotted onto each Invasion when it is created, so a
+    # later config change never rewrites an occurrence already in progress.
+    "invasion_occurrence_interval_seconds": 8 * 60 * 60,
+    "invasion_event_duration_seconds": 20 * 60,
     # Trading
     "trades_per_day": 1,
     "trade_expiration_hours": 24,

@@ -20,6 +20,12 @@ from sib.services.card_upgrade import (
     InsufficientResourcesError,
     StaleUpgradeError,
 )
+from sib.services.player_cards import (
+    MAX_SIGNED_BIGINT,
+    CardError,
+    PlayerCardService,
+    StaleMainCardSelectionError,
+)
 from sib.services.card_upgrade_render import (
     missing_alert_text,
     remember_art,
@@ -102,7 +108,9 @@ async def _claim(callback: CallbackQuery, user_id: int, prev_message_id) -> None
 async def _card_view(user_id: int, card_id: int):
     """(text, keyboard, photo) of the view-only card screen."""
     async with get_session() as session:
-        detail = await CollectionService.render_card_detail(session, user_id, card_id)
+        detail, main_card_id = await CollectionService.render_card_detail_with_main_card(
+            session, user_id, card_id
+        )
         photo = None
         if detail:
             card = await session.get(PlayerCard, card_id)
@@ -112,7 +120,7 @@ async def _card_view(user_id: int, card_id: int):
                 photo = photo_arg(file_id, fs_path)
     if not detail:
         return NOT_FOUND_TEXT, InlineKeyboardMarkup(inline_keyboard=[]), None
-    return detail, get_card_detail_keyboard(card_id), photo
+    return detail, get_card_detail_keyboard(card_id, main_card_id), photo
 
 
 async def _upgrade_view(user_id: int, card_id: int):
@@ -143,7 +151,7 @@ async def _show(callback: CallbackQuery, bot: Bot, user_id: int, view) -> None:
 # ---------------------------------------------------------------------------
 @router.callback_query(F.data.startswith("card_panel:"))
 async def handle_card_panel(callback: CallbackQuery, bot: Bot):
-    """View-only card screen (+ the single ⬆️ Card Upgrade action)."""
+    """Card detail screen with Main Card selection, upgrade and navigation."""
     ids = _parse_ids(callback.data, 1)
     user = callback.from_user
     if not user or ids is None:
@@ -154,6 +162,46 @@ async def handle_card_panel(callback: CallbackQuery, bot: Bot):
         return
     view = await _card_view(actor, ids[0])
     await safe_answer_callback(callback)
+    await _show(callback, bot, actor, view)
+
+
+@router.callback_query(F.data.startswith("card_main_set:"))
+async def handle_card_main_set(callback: CallbackQuery, bot: Bot):
+    """Set the owned card as Main Card, then refresh the detail screen."""
+    ids = _parse_ids(callback.data, 2)
+    user = callback.from_user
+    if (
+        not user
+        or ids is None
+        or not 0 < ids[0] <= MAX_SIGNED_BIGINT
+        or not 0 <= ids[1] <= MAX_SIGNED_BIGINT
+    ):
+        await safe_answer_callback(callback, NOT_FOUND_TEXT, show_alert=True)
+        return
+
+    actor = await _card_actor(callback)
+    if not actor or actor != user.id:
+        return
+
+    card_id, expected_main_card_id = ids
+    toast = "کارت اصلی شما به‌روزرسانی شد ⭐"
+    alert = False
+    async with get_session() as session:
+        try:
+            await PlayerCardService.set_favorite(
+                session,
+                actor,
+                card_id,
+                True,
+                expected_main_card_id=expected_main_card_id,
+            )
+        except StaleMainCardSelectionError as exc:
+            toast, alert = str(exc), True
+        except CardError as exc:
+            toast, alert = str(exc), True
+
+    view = await _card_view(actor, card_id)
+    await safe_answer_callback(callback, toast, show_alert=alert)
     await _show(callback, bot, actor, view)
 
 

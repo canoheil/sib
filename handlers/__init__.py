@@ -27,6 +27,7 @@ from sib.handlers.assets import router as assets_router
 from sib.handlers.admin_center import router as admin_center_router
 from sib.handlers.friendly import router as friendly_router
 from sib.handlers.marriage import router as marriage_router
+from sib.handlers.invasion import router as invasion_router
 
 
 def register_all_handlers(dp: Dispatcher) -> None:
@@ -54,6 +55,7 @@ def register_all_handlers(dp: Dispatcher) -> None:
     dp.include_router(party_router)
     dp.include_router(friendly_router)
     dp.include_router(marriage_router)
+    dp.include_router(invasion_router)
     dp.include_router(start_router)
 
 
@@ -73,4 +75,5 @@ __all__ = [
     "battleship_router",
     "ads_router",
     "leaderboard_router",
+    "invasion_router",
 ]

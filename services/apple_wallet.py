@@ -89,25 +89,72 @@ class AppleWalletService:
         if await cls._ledger_already_applied(session, idempotency_key):
             return await cls.get_balance(session, user_id)
 
-        wallet = await cls._get_or_create(session, user_id)
-        wallet.balance += amount
-        session.add(
-            AppleTransaction(
-                user_id=user_id,
-                amount=amount,
-                reason=reason,
-                ref_type=ref_type,
-                ref_id=ref_id,
-                idempotency_key=idempotency_key,
-                balance_after=wallet.balance,
+        async def credit_and_flush() -> AppleWallet:
+            wallet = await cls._get_or_create(session, user_id)
+            wallet.balance += amount
+            session.add(
+                AppleTransaction(
+                    user_id=user_id,
+                    amount=amount,
+                    reason=reason,
+                    ref_type=ref_type,
+                    ref_id=ref_id,
+                    idempotency_key=idempotency_key,
+                    balance_after=wallet.balance,
+                )
             )
-        )
-        try:
             await session.flush()
-        except IntegrityError:
-            await session.rollback()
-            logger.warning(f"Duplicate apple transaction key={idempotency_key}")
-            return await cls.get_balance(session, user_id)
+            return wallet
+
+        if idempotency_key and session.get_bind().dialect.name != "sqlite":
+            # Keep a concurrent unique-key collision inside a savepoint. A
+            # wallet reward service must not roll back unrelated work owned by
+            # its caller; the unique Apple ledger key still decides the winner.
+            # SQLite's legacy transaction mode can release a savepoint as the
+            # outermost transaction, so use its ordinary caller-owned
+            # transaction instead (SQLite row-lock races are not supported).
+            try:
+                async with session.begin_nested():
+                    wallet = await credit_and_flush()
+            except IntegrityError:
+                if not await cls._ledger_already_applied(session, idempotency_key):
+                    raise
+                logger.warning(f"Duplicate apple transaction key={idempotency_key}")
+                wallet = await session.scalar(
+                    select(AppleWallet)
+                    .where(AppleWallet.user_id == user_id)
+                    .execution_options(populate_existing=True)
+                )
+                return wallet.balance if wallet is not None else 0
+        elif idempotency_key:
+            try:
+                wallet = await credit_and_flush()
+            except IntegrityError:
+                # Never roll back the caller's transaction to recover a
+                # SQLite/unsupported-dialect keyed earn conflict.
+                raise
+        else:
+            # Preserve the existing unkeyed operation path; idempotent reward
+            # callers use the savepoint/caller-owned path above.
+            wallet = await cls._get_or_create(session, user_id)
+            wallet.balance += amount
+            session.add(
+                AppleTransaction(
+                    user_id=user_id,
+                    amount=amount,
+                    reason=reason,
+                    ref_type=ref_type,
+                    ref_id=ref_id,
+                    idempotency_key=None,
+                    balance_after=wallet.balance,
+                )
+            )
+            try:
+                await session.flush()
+            except IntegrityError:
+                await session.rollback()
+                logger.warning(f"Duplicate apple transaction key={idempotency_key}")
+                return await cls.get_balance(session, user_id)
 
         log_event(
             Events.APPLE_TRANSACTION,

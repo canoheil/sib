@@ -127,6 +127,7 @@ async def test_other_user_cannot_use_personal_panel(db_session):
         ("garden_harvest:1", 801),
         ("garden_refresh", 801),
         ("card_panel:5", 805),
+        ("card_main_set:5:0", 805),
         ("shop_buy:3", 803),
         ("trade_refresh", 804),
         ("ab_pick:1", 806),

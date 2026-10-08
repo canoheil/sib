@@ -6,6 +6,7 @@ spend/earn, idempotency keys, and history lookups.
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from sib.database.models import AppleTransaction
 from sib.services.apple_wallet import (
@@ -138,3 +139,39 @@ async def test_admin_adjustment_is_audited(db_session):
         )
     ).all()
     assert any(r.reason == "admin_correction" and r.ref_type == "admin" for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_keyed_earn_integrity_error_keeps_callers_transaction(db_session, monkeypatch):
+    """A keyed earn error never rolls back caller-owned work."""
+    user = await create_test_user(db_session, "کیفدار savepoint")
+
+    async def fail_wallet_create(_session, _user_id):
+        raise IntegrityError("injected", {}, RuntimeError("injected constraint failure"))
+
+    monkeypatch.setattr(
+        AppleWalletService,
+        "_get_or_create",
+        staticmethod(fail_wallet_create),
+    )
+    with pytest.raises(IntegrityError, match="injected constraint failure"):
+        await AppleWalletService.earn(
+            db_session,
+            user.id,
+            2,
+            reason="savepoint_test",
+            idempotency_key="savepoint-test:1",
+        )
+
+    # A caller-owned write remains usable and can commit after the isolated
+    # Apple error; no Apple wallet/ledger row was written by the failed call.
+    user.first_name = "Caller transaction still active"
+    await db_session.commit()
+    await db_session.refresh(user)
+    assert user.first_name == "Caller transaction still active"
+    assert await AppleWalletService.get_balance(db_session, user.id) == 0
+    assert await db_session.scalar(
+        select(AppleTransaction.id).where(
+            AppleTransaction.idempotency_key == "savepoint-test:1"
+        )
+    ) is None
