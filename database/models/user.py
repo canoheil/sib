@@ -17,6 +17,14 @@ class User(Base, TimestampMixin):
     language_code: Mapped[str] = mapped_column(String(10), default="fa", nullable=False)
     is_bot: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Presentation preference only; the profile-skin service normalizes any
+    # unsupported legacy/imported value back to Green Apple at read time.
+    profile_skin: Mapped[str] = mapped_column(
+        String(32),
+        default="green_apple",
+        server_default="green_apple",
+        nullable=False,
+    )
 
     @property
     def display_name(self) -> str:

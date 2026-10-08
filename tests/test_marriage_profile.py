@@ -7,9 +7,9 @@ The project has three profile renderers that all build the same screen:
 * ``handlers/apple_battle.py::cmd_profile``     — the ``/profile`` command
 
 None of them was replaced. Each one appends whatever
-``profile_marriage_lines`` returns to the lines it already builds, so a
-single user's profile is byte-for-byte what it was before and a married
-user gains exactly two lines.
+``profile_marriage_lines`` returns to the lines it already builds, so the
+marriage feature adds no lines for a single user and a married user gains
+exactly the two marriage lines.
 
 The profile screen now carries the player's Level artwork, so that same
 text is normally delivered as a PHOTO caption rather than a text message
@@ -365,8 +365,8 @@ async def test_no_internal_details_leak_from_the_block(db_session):
 
 
 @pytest.mark.asyncio
-async def test_single_user_profile_is_unchanged(db_session):
-    """The existing profile content must survive byte-for-byte."""
+async def test_single_user_profile_has_no_marriage_block(db_session):
+    """A single user's profile receives no spouse or Love lines."""
     await _mk_user(db_session, OWNER_ID)
     await db_session.commit()
 

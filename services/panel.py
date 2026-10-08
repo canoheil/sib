@@ -36,6 +36,9 @@ OWNER_SCOPED_CALLBACKS: Tuple[str, ...] = (
     "garden_unlock",
     "garden_harvest_all",
     "garden_refresh",
+    # Profile preferences (persistent, presentation-only)
+    "profile_skin",
+    "profile_skin_select:",
     # Shop / cards / trading (spend apples or change ownership)
     "shop_buy:",
     "shop_good:",

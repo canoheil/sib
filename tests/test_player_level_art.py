@@ -343,7 +343,7 @@ async def test_profile_artwork_tracks_the_players_current_level(db_session):
 
 
 # ---------------------------------------------------------------------------
-# 5. Graceful degradation + unchanged profile text
+# 5. Graceful degradation + preserved profile content
 # ---------------------------------------------------------------------------
 
 
@@ -388,8 +388,8 @@ async def test_missing_level_artwork_without_favorite_card_falls_back_to_text(
 
 @pytest.mark.asyncio
 async def test_level_artwork_does_not_change_the_profile_text(db_session):
-    """The Level/XP, wallet, seedling, card, favorite, battle and marriage
-    lines are exactly what the profile already produced."""
+    """The profile keeps its Level/XP, wallet, seedling, card, favorite,
+    battle and marriage content alongside the selected-skin line."""
     from sib.handlers.start import handle_sib_profile_word
 
     user, character = await _favorite_card_owner(db_session)

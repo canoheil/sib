@@ -16,6 +16,7 @@ from sib.middleware.panel_guard import PanelGuardMiddleware
 from sib.services.panel import (
     LOCKED_MESSAGE,
     PanelOwnershipService,
+    is_owner_scoped_callback,
     is_personal_panel,
 )
 
@@ -50,6 +51,11 @@ def test_personal_panel_classification():
         assert not is_personal_panel(t)
 
 
+def test_profile_skin_callbacks_are_owner_scoped():
+    assert is_owner_scoped_callback("profile_skin")
+    assert is_owner_scoped_callback("profile_skin_select:moon_apple")
+
+
 @pytest.mark.asyncio
 async def test_non_owner_cannot_press_anything_on_personal_panel(db_session):
     # A opens their garden - the message is claimed as a personal panel.
@@ -66,6 +72,8 @@ async def test_non_owner_cannot_press_anything_on_personal_panel(db_session):
         "garden_plant:3",
         "main_menu",
         "apple_profile",
+        "profile_skin",
+        "profile_skin_select:moon_apple",
         "join_party:9",
     ):
         result, called = await _run_guard(_callback(222, data))

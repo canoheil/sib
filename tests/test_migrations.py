@@ -3,10 +3,10 @@
 The complete historical Alembic ancestry includes MariaDB-specific DDL that
 SQLite cannot execute. The chain-head test therefore uses a standalone stamped
 database; a focused test below stamps a minimal 024 baseline and runs Alembic
-through revisions 025-028 on SQLite to verify the progression/Invasion schema
-path, constraints, indexes, foreign keys, and supported downgrades. This does
-not replace a live MySQL/MariaDB migration run. Portable data migrations are
-tested directly too.
+through revisions 025-029 on SQLite to verify progression, Invasion, and
+profile-skin schema changes, constraints, indexes, foreign keys, and supported
+downgrades. This does not replace a live MySQL/MariaDB migration run.
+Portable data migrations are tested directly too.
 """
 
 import importlib.util
@@ -60,7 +60,7 @@ def test_alembic_current_revision():
     assert "head" in current.stdout
 
 
-def test_invasion_migration_path_025_through_028_and_downgrade_on_sqlite():
+def test_migrations_025_through_029_and_downgrade_on_sqlite():
     """Run the Alembic path from a minimal 024 baseline and inspect its schema."""
     with tempfile.TemporaryDirectory() as tmp:
         db_url = f"sqlite:///{Path(tmp) / 'invasion_migrations.db'}"
@@ -86,12 +86,12 @@ def test_invasion_migration_path_025_through_028_and_downgrade_on_sqlite():
         stamp = _run_alembic("stamp", "024_marriage_and_love", db_url=db_url)
         assert stamp.returncode == 0, f"{stamp.stdout}\n{stamp.stderr}"
         upgrade = _run_alembic(
-            "upgrade", "028_invasion_defense_actions", db_url=db_url
+            "upgrade", "029_profile_skins", db_url=db_url
         )
         assert upgrade.returncode == 0, f"{upgrade.stdout}\n{upgrade.stderr}"
         current = _run_alembic("current", db_url=db_url)
         assert current.returncode == 0
-        assert "028_invasion_defense_actions" in current.stdout
+        assert "029_profile_skins" in current.stdout
 
         engine = sa.create_engine(db_url)
         with engine.connect() as connection:
@@ -112,6 +112,11 @@ def test_invasion_migration_path_025_through_028_and_downgrade_on_sqlite():
             assert connection.execute(
                 sa.select(progressions.c.user_id, progressions.c.total_xp)
             ).all() == [(7, 0)]
+            users_table = sa.Table("users", sa.MetaData(), autoload_with=connection)
+            assert users_table.c.profile_skin.nullable is False
+            assert connection.execute(
+                sa.select(users_table.c.profile_skin).where(users_table.c.id == 7)
+            ).scalar_one() == "green_apple"
 
             def unique_names(table_name):
                 return {
@@ -219,6 +224,9 @@ def test_invasion_migration_path_025_through_028_and_downgrade_on_sqlite():
         with engine.connect() as connection:
             remaining = set(sa.inspect(connection).get_table_names())
             assert {"groups", "users"} <= remaining
+            assert "profile_skin" not in {
+                column["name"] for column in sa.inspect(connection).get_columns("users")
+            }
             assert not {
                 "player_progressions",
                 "player_xp_grants",
