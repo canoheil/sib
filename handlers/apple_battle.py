@@ -533,6 +533,8 @@ async def cmd_profile(message: Message, bot: Bot):
     from sib.services.apple_wallet import AppleWalletService
     from sib.services.seedling import SeedlingService
     from sib.services.player_xp import PlayerXPService
+    from sib.services.profile_skin import ProfileSkinService, profile_skin_label
+    from sib.services.panel import PanelOwnershipService
 
     async with get_session() as session:
         cards = await PlayerCardService.list_cards(session, user.id)
@@ -561,10 +563,12 @@ async def cmd_profile(message: Message, bot: Bot):
 
         marriage_lines = await profile_marriage_lines(session, user.id)
         account_progress = await PlayerXPService.get_progress(session, user.id)
+        selected_skin = await ProfileSkinService.get_selected_skin(session, user.id)
 
     lines = [
         f"👤 **پروفایل {user.full_name}**",
         PlayerXPService.format_profile_progress(account_progress),
+        f"🎨 **Change Skin / تغییر پوسته**: {profile_skin_label(selected_skin)}",
         "",
         f"🌱 نهال‌ها: `{seedlings}` | 🍎 سیب‌ها: `{apples}`",
         f"🎴 کارت‌ها: `{len(cards)}`",
@@ -586,18 +590,30 @@ async def cmd_profile(message: Message, bot: Bot):
     text = "\n".join(lines)
     kb = get_profile_keyboard()
 
-    # The MAIN profile photo is the artwork of the player's CURRENT Level
-    # (assets/player_levels/level_NN.jpg); the Main Card art stays as
-    # the fallback when that asset is unavailable.
-    from sib.services.player_level_art import profile_photo
+    # Green Apple delegates to its original Level-specific art resolver.
+    from sib.services.profile_artwork import ProfileArtworkResolver
 
-    main_photo = profile_photo(account_progress, fav_photo)
+    main_photo = ProfileArtworkResolver.profile_photo(
+        account_progress, skin=selected_skin, fallback_photo=fav_photo
+    )
+    sent = None
     if main_photo is not None:
         try:
-            await message.reply_photo(
+            sent = await message.reply_photo(
                 main_photo, caption=text, reply_markup=kb, parse_mode="Markdown"
             )
-            return
         except Exception:
-            pass
-    await message.reply(text, reply_markup=kb, parse_mode="Markdown")
+            sent = None
+    if sent is None:
+        sent = await message.reply(text, reply_markup=kb, parse_mode="Markdown")
+
+    if sent is not None and sent.message_id:
+        async with get_session() as session:
+            await PanelOwnershipService.claim(
+                session,
+                chat_id=sent.chat.id,
+                message_id=sent.message_id,
+                user_id=user.id,
+                panel_type="profile",
+            )
+            await session.commit()

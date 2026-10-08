@@ -298,6 +298,12 @@ def get_profile_keyboard(origin: Optional[str] = None) -> InlineKeyboardMarkup:
             ],
             [
                 primary_button(
+                    text="🎨 تغییر پوسته",
+                    callback_data="profile_skin",
+                )
+            ],
+            [
+                primary_button(
                     text="🌳 باغ من",
                     callback_data="apple_garden",
                 )
@@ -312,3 +318,32 @@ def get_profile_keyboard(origin: Optional[str] = None) -> InlineKeyboardMarkup:
     )
     keyboard.inline_keyboard.extend(nav_back_row(back_label_for(origin), back_target(origin)))
     return keyboard
+
+
+def get_profile_skin_keyboard(selected_skin) -> InlineKeyboardMarkup:
+    """Skin picker with the active choice clearly marked and a profile Back."""
+    from sib.services.profile_skin import (
+        PROFILE_SKINS,
+        normalize_profile_skin,
+        profile_skin_label,
+    )
+
+    active_skin = normalize_profile_skin(selected_skin)
+    rows: list[list[InlineKeyboardButton]] = []
+    options = []
+    for skin in PROFILE_SKINS:
+        is_active = skin is active_skin
+        label = profile_skin_label(skin)
+        text = f"✅ {label} · فعال" if is_active else f"🍎 {label}"
+        button = InlineKeyboardButton(
+            text=text,
+            callback_data=f"profile_skin_select:{skin.value}",
+            style="success" if is_active else "primary",
+        )
+        options.append(button)
+
+    for index in range(0, len(options), 2):
+        rows.append(options[index : index + 2])
+
+    rows.extend(nav_back_row("↩️ بازگشت به پروفایل", "apple_profile"))
+    return InlineKeyboardMarkup(inline_keyboard=rows)

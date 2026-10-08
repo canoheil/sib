@@ -16,6 +16,7 @@ from sib.keyboards.common import (
     get_group_welcome_keyboard,
     get_cards_keyboard,
     get_profile_keyboard,
+    get_profile_skin_keyboard,
     nav_back_row,
 )
 from sib.services.nav import back_label_for, back_target, parse_callback, with_origin
@@ -425,6 +426,7 @@ async def handle_apple_profile(callback: CallbackQuery, bot: Bot):
     from sib.services.seedling import SeedlingService
     from sib.services.player_cards import PlayerCardService
     from sib.services.player_xp import PlayerXPService
+    from sib.services.profile_skin import ProfileSkinService, profile_skin_label
 
     user = callback.from_user
     if not user:
@@ -474,10 +476,12 @@ async def handle_apple_profile(callback: CallbackQuery, bot: Bot):
 
         marriage_lines = await profile_marriage_lines(session, user.id)
         account_progress = await PlayerXPService.get_progress(session, user.id)
+        selected_skin = await ProfileSkinService.get_selected_skin(session, user.id)
 
     lines = [
         f"👤 **پروفایل سیبی {user.first_name or 'شما'}** 🍏",
         PlayerXPService.format_profile_progress(account_progress),
+        f"🎨 **Change Skin / تغییر پوسته**: {profile_skin_label(selected_skin)}",
         "",
         f"🍎 سیب: `{apples}`",
         f"🌱 نهال: `{seedlings}`",
@@ -489,12 +493,12 @@ async def handle_apple_profile(callback: CallbackQuery, bot: Bot):
 
     kb = get_profile_keyboard()
 
-    # The MAIN profile photo is the artwork of the player's CURRENT Level
-    # (assets/player_levels/level_NN.jpg); the Main Card art stays as
-    # the fallback when that asset is unavailable.
-    from sib.services.player_level_art import profile_photo
+    # Green Apple delegates to its original Level-specific art resolver.
+    from sib.services.profile_artwork import ProfileArtworkResolver
 
-    main_photo = profile_photo(account_progress, fav_photo)
+    main_photo = ProfileArtworkResolver.profile_photo(
+        account_progress, skin=selected_skin, fallback_photo=fav_photo
+    )
 
     await callback.answer()
     if callback.message:
@@ -504,6 +508,95 @@ async def handle_apple_profile(callback: CallbackQuery, bot: Bot):
             "\n".join(lines),
             reply_markup=kb,
             photo=main_photo,
+        )
+    await _claim_panel(callback, "profile", prev_message_id)
+
+
+@router.callback_query(F.data == "profile_skin")
+async def handle_profile_skin(callback: CallbackQuery, bot: Bot):
+    """Open the Change Skin choices for the profile owner."""
+    user = callback.from_user
+    if not user:
+        return
+
+    from sib.services.profile_skin import ProfileSkinService, profile_skin_label
+
+    prev_message_id = getattr(callback.message, "message_id", None)
+    async with get_session() as session:
+        # The selector can also repair an account first seen through a
+        # profile callback, following the existing account-registration path.
+        await UserService.get_or_create_user(session, user)
+        selected_skin = await ProfileSkinService.get_selected_skin(session, user.id)
+
+    text = (
+        "🎨 **Change Skin / تغییر پوسته**\n\n"
+        f"پوسته‌ی فعلی: **{profile_skin_label(selected_skin)}**\n\n"
+        "یکی از چهار پوسته را انتخاب کن. این انتخاب فقط ظاهر پروفایل را عوض می‌کند "
+        "و روی XP یا Level اثری ندارد."
+    )
+    keyboard = get_profile_skin_keyboard(selected_skin)
+
+    await safe_answer_callback(callback)
+    if callback.message:
+        await safe_edit_callback_message(
+            callback, bot, text, reply_markup=keyboard
+        )
+    await _claim_panel(callback, "profile", prev_message_id)
+
+
+@router.callback_query(F.data.startswith("profile_skin_select:"))
+async def handle_profile_skin_selection(callback: CallbackQuery, bot: Bot):
+    """Persist a selected skin and refresh the active choice in the picker."""
+    user = callback.from_user
+    if not user:
+        return
+
+    from sib.services.panel import (
+        LOCKED_MESSAGE,
+        PanelAuthorizationError,
+        resolve_personal_actor,
+    )
+    from sib.services.profile_skin import (
+        ProfileSkinService,
+        profile_skin_label,
+        require_profile_skin,
+    )
+
+    _prefix, _separator, requested_value = (callback.data or "").partition(":")
+    try:
+        requested_skin = require_profile_skin(requested_value)
+    except ValueError:
+        await safe_answer_callback(
+            callback, "این پوسته در دسترس نیست.", show_alert=True
+        )
+        return
+
+    try:
+        actor_id, _message_id = await resolve_personal_actor(callback)
+    except PanelAuthorizationError:
+        await safe_answer_callback(callback, LOCKED_MESSAGE, show_alert=True)
+        return
+
+    prev_message_id = getattr(callback.message, "message_id", None)
+    async with get_session() as session:
+        await UserService.get_or_create_user(session, user)
+        selected_skin = await ProfileSkinService.set_selected_skin(
+            session, actor_id, requested_skin
+        )
+
+    text = (
+        "🎨 **Change Skin / تغییر پوسته**\n\n"
+        f"پوسته‌ی فعلی: **{profile_skin_label(selected_skin)}**\n\n"
+        "انتخابت ذخیره شد؛ XP و Level بدون تغییر باقی می‌مانند."
+    )
+    keyboard = get_profile_skin_keyboard(selected_skin)
+
+    await safe_answer_callback(
+        callback, f"{profile_skin_label(selected_skin)} فعال شد."
+    )
+    if callback.message:
+        await safe_edit_callback_message(
+            callback, bot, text, reply_markup=keyboard
         )
     await _claim_panel(callback, "profile", prev_message_id)
 
@@ -636,6 +729,7 @@ async def _open_sender_profile(message: Message) -> None:
     from sib.services.player_cards import PlayerCardService
     from sib.services.seedling import SeedlingService
     from sib.services.player_xp import PlayerXPService
+    from sib.services.profile_skin import ProfileSkinService, profile_skin_label
 
     async with get_session() as session:
         await UserService.get_or_create_user(session, user)
@@ -678,10 +772,12 @@ async def _open_sender_profile(message: Message) -> None:
 
         marriage_lines = await profile_marriage_lines(session, user.id)
         account_progress = await PlayerXPService.get_progress(session, user.id)
+        selected_skin = await ProfileSkinService.get_selected_skin(session, user.id)
 
     lines = [
         f"👤 **پروفایل سیبی {user.first_name or 'شما'}** 🍏",
         PlayerXPService.format_profile_progress(account_progress),
+        f"🎨 **Change Skin / تغییر پوسته**: {profile_skin_label(selected_skin)}",
         "",
         f"🍎 سیب: `{apples}`",
         f"🌱 نهال: `{seedlings}`",
@@ -693,12 +789,12 @@ async def _open_sender_profile(message: Message) -> None:
     profile_text = "\n".join(lines)
     profile_kb = get_profile_keyboard()
 
-    # The MAIN profile photo is the artwork of the player's CURRENT Level
-    # (assets/player_levels/level_NN.jpg); the Main Card art stays as
-    # the fallback when that asset is unavailable.
-    from sib.services.player_level_art import profile_photo
+    # Green Apple delegates to its original Level-specific art resolver.
+    from sib.services.profile_artwork import ProfileArtworkResolver
 
-    main_photo = profile_photo(account_progress, fav_photo)
+    main_photo = ProfileArtworkResolver.profile_photo(
+        account_progress, skin=selected_skin, fallback_photo=fav_photo
+    )
     sent = None
     if main_photo is not None:
         try:
