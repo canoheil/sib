@@ -51,6 +51,7 @@ from sib.database.models.invasion import (
 )
 from sib.database.models.invasion_contribution import InvasionContribution
 from sib.database.models.invasion_defense_action import InvasionDefenseAction
+from sib.database.models.daily_chest import DailyChestClaim
 
 __all__ = [
     "Base",
@@ -113,4 +114,5 @@ __all__ = [
     "InvasionOutcome",
     "InvasionContribution",
     "InvasionDefenseAction",
+    "DailyChestClaim",
 ]

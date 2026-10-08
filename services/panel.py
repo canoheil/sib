@@ -36,6 +36,8 @@ OWNER_SCOPED_CALLBACKS: Tuple[str, ...] = (
     "garden_unlock",
     "garden_harvest_all",
     "garden_refresh",
+    # Daily chest panel (consumes the once-per-day claim)
+    "daily_chest:open",
     # Profile preferences (persistent, presentation-only)
     "profile_skin",
     "profile_skin_select:",
@@ -90,6 +92,7 @@ PERSONAL_PANEL_TYPES = frozenset(
         "trade",
         "card_panel",
         "apple_battle",
+        "chest",
         "panel_guard_personal",
     }
 )

@@ -114,3 +114,54 @@ class SeedlingService:
         )
         await session.flush()
         return inv.total
+
+    @classmethod
+    async def award_daily_chest(
+        cls,
+        session: AsyncSession,
+        user_id: int,
+        amount: int,
+        *,
+        claim_id: int,
+    ) -> int:
+        """Grant daily-chest seedlings idempotently per (claim, user).
+
+        Same award ledger and inventory as match wins and Apple-Battle wins
+        (``source='chest'`` names the grant source; ``source_ref_id`` is the
+        owning ``daily_chest_claims.id``). The (source, source_ref_id,
+        user_id) unique constraint makes any duplicate delivery a no-op.
+        """
+        if amount < 1:
+            raise ValueError("seedling amount must be positive")
+        existing = await session.scalar(
+            select(SeedlingAward.id).where(
+                SeedlingAward.source == "chest",
+                SeedlingAward.source_ref_id == claim_id,
+                SeedlingAward.user_id == user_id,
+            )
+        )
+        if existing is not None:
+            logger.warning(
+                f"Seedling chest award already issued for claim={claim_id} "
+                f"user={user_id}; skipping duplicate."
+            )
+            return await cls.get_total(session, user_id)
+
+        inv = await cls._get_or_create_inventory(session, user_id)
+        inv.total += amount
+        session.add(
+            SeedlingAward(
+                match_id=None,
+                user_id=user_id,
+                amount=amount,
+                reason="daily_chest",
+                source="chest",
+                source_ref_id=claim_id,
+            )
+        )
+        await session.flush()
+        log_event(
+            Events.SEEDLING_AWARDED,
+            {"claim_id": claim_id, "user_id": user_id, "amount": amount},
+        )
+        return inv.total

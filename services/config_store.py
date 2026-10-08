@@ -235,6 +235,73 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     # "بوس سیبی" (Sib Kiss): independent of hug, claim, and received kisses.
     "sib_kiss_amount": 10,
     "sib_kiss_cooldown_seconds": 10 * 60,
+    # Daily Sib Treasure Chest («صندوقچه گنج روزانه»): one claim per player
+    # per UTC calendar day (the established daily boundary: trades_per_day,
+    # flower_daily_limit_per_direction and the XP daily caps all reset at
+    # UTC midnight). The claim is a DB row keyed (user_id, claim_day).
+    #
+    # Reward pool — RELATIVE WEIGHTS, normalized at roll time (validated
+    # first: known keys only, finite weights >= 0, total > 0). The default
+    # row is in rising rarity order and sums to 100, so each weight is the
+    # probability in percent:
+    #
+    #   apples       70.00 %   common outcome, 15-25 Apples (see below)
+    #   seedlings    20.00 %   1-2 seedlings (one match win = 1 seedling)
+    #   apple_gold    6.00 %   1-2 Golden Apples
+    #   apple_diamond 2.50 %   1 Diamond Apple
+    #   apple_obsidian 1.45 %  1 Obsidian Apple
+    #   card          0.05 %   1 collectible card — the JACKPOT (1 in 2,000)
+    #
+    # Balance basis (audited 2026-10-08 against the economy blocks below):
+    #   * apples 15-25 (avg 20) is one «سیب» wake-word claim (5 per 5 min)
+    #     to a third of a casual day (85-135/day): a welcome bonus, never
+    #     the main income. Pays through AppleWalletService with a
+    #     per-(user, day) idempotency key and a reason='daily_chest' ledger
+    #     entry.
+    #   * seedlings 1-2 matches one eligible group-game win (exactly 1).
+    #   * Golden 1-2 / Diamond 1 / Obsidian 1 sit just under a single
+    #     garden drop unit; sell values 50/100/200 Apples keep the special
+    #     apples' per-tier upgrade ladder pacing intact.
+    #   * card weight 0.05 (0.05% = 1 in 2,000 chests) is deliberately
+    #     EXTREMELY low: cards are the collection jackpot also served by
+    #     the weekly shop (character.price) and one-trade-per-day trading,
+    #     and a free daily card source must not erode that scarcity. It is
+    #     ~29x rarer than the chest's own Obsidian Apple and rarer than the
+    #     garden's legendary Obsidian lore rate (1 in 1,000 rolls). At
+    #     0.05% the expected value is < 0.5 Apple/day (a card is worth
+    #     hundreds of Apples) so the jackpot cannot inflate the economy,
+    #     while float-weighted selection keeps it a real, hittable outcome.
+    #     Rebalancing = edit this map (or override it in system_config).
+    "daily_chest_enabled": True,
+    "daily_chest_weights": {
+        "apples": 70.0,
+        "seedlings": 20.0,
+        "apple_gold": 6.0,
+        "apple_diamond": 2.5,
+        "apple_obsidian": 1.45,
+        "card": 0.05,
+    },
+    # Quantity per outcome: a fixed int or an inclusive {"min","max"} range
+    # (validated: integers >= 1, min <= max). Cards are always exactly one.
+    "daily_chest_quantities": {
+        "apples": {"min": 15, "max": 25},
+        "seedlings": {"min": 1, "max": 2},
+        "apple_gold": {"min": 1, "max": 2},
+        "apple_diamond": 1,
+        "apple_obsidian": 1,
+        "card": 1,
+    },
+    # Progression hook on the EXISTING Account Level (player_xp): each
+    # configured tier adds +apples_per_tier to the apples outcome only.
+    # Levels 10/20 -> at most +10 Apples on a 15-25 base; odds and every
+    # other outcome are untouched, so the rarity order can never invert and
+    # higher levels never see cards/items more often. Disable with
+    # "enabled": False or an empty tier list.
+    "daily_chest_progression": {
+        "enabled": True,
+        "apples_per_tier": 5,
+        "tier_levels": [10, 20],
+    },
     # Harvest drop model (spec: special-apple drops).
     # Presentation per outcome key. "asset" references a bot_assets key
     # (or a bundled assets/items/<key>.jpg file) for celebration media.
