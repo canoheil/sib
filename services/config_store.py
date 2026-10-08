@@ -228,6 +228,13 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     # "سیب" group wake-word claim (spec: 5 apples every 5 minutes)
     "sib_claim_amount": 5,
     "sib_claim_cooldown_seconds": 5 * 60,
+    # "بغل سیبی" (Sib Hug): both participants receive the amount; only the
+    # sender's successful hugs start the cooldown (see services/sib_hug.py).
+    "sib_hug_amount": 10,
+    "sib_hug_cooldown_seconds": 10 * 60,
+    # "بوس سیبی" (Sib Kiss): independent of hug, claim, and received kisses.
+    "sib_kiss_amount": 10,
+    "sib_kiss_cooldown_seconds": 10 * 60,
     # Harvest drop model (spec: special-apple drops).
     # Presentation per outcome key. "asset" references a bot_assets key
     # (or a bundled assets/items/<key>.jpg file) for celebration media.

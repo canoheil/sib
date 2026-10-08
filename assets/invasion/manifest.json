@@ -23,10 +23,11 @@
     "tool": "arena-agent image model (reference-guided text-to-image)",
     "created_at": "2026-10-08",
     "license": "project-internal",
-    "style_reference": "moon_descendant_queen.jpg",
+    "style_reference": "moon_descendant_invasion.jpg",
     "identity_reference": "../characters_raw/sib_mahi.jpg"
   },
   "art_direction_summary": {
+    "identity": "Sib chibi apple characters: apple-shaped bodies with stems and leaves, faces integrated into the apple skin, not humans in apple costumes. The frightening tone is an atmospheric treatment of this style.",
     "mood": "mature dark fantasy; regal, ancient, supernatural, mysterious, beautiful and intimidating",
     "palette": [
       "midnight blue #10182B",
@@ -41,8 +42,8 @@
       "gothic lunar halls and ancient territory"
     ],
     "avoid": [
-      "childlike or chibi proportions",
-      "cute presentation",
+      "childish or comic exaggeration of chibi proportions",
+      "cheerful or cute presentation that undermines the frightening mood",
       "generic monsters",
       "gore or graphic horror",
       "warm gold",
@@ -55,49 +56,49 @@
       "role": "Queen",
       "file": "moon_descendant_queen.jpg",
       "status": "ready",
-      "description_en": "The beautiful, ancient and intimidating Moon Descendant Queen stands beneath a crescent moon in her crystalline throne hall; primary faction style anchor."
+      "description_en": "A chibi Moon Apple queen with a stem and leaf and a silver crescent crown stands in a crystalline gothic throne hall, beneath a tall window framing a crescent moon; primary faction style anchor, Sib apple rendering."
     },
     {
       "id": "moon_descendant_knight",
       "role": "Knight",
       "file": "moon_descendant_knight.jpg",
       "status": "ready",
-      "description_en": "A disciplined adult Moon Descendant Knight in ceremonial midnight plate stands before the realm's moonlit gate with a crescent polearm."
+      "description_en": "A chibi Moon Apple knight in midnight plate with crescent engravings stands before a moonlit gothic gate, holding a crescent polearm, with a distant spired city beyond."
     },
     {
       "id": "moon_descendant_oracle",
       "role": "Oracle",
       "file": "moon_descendant_oracle.jpg",
       "status": "ready",
-      "description_en": "An ancient veiled Oracle regards the viewer from a lunar observatory, holding a moonstone astrolabe and an eclipse-lit crystal."
+      "description_en": "A veiled chibi Moon Apple oracle with glowing silver eyes works in a lunar observatory, holding a moonstone astrolabe and an eclipse-lit crystal sphere."
     },
     {
       "id": "moon_descendant_huntress",
       "role": "Huntress",
       "file": "moon_descendant_huntress.jpg",
       "status": "ready",
-      "description_en": "A poised adult Huntress tracks the viewer through her midnight forest with a silver crescent bow and moonstone arrow."
+      "description_en": "A hooded chibi Moon Apple huntress draws a silver crescent bow with a moonstone arrow in a misty midnight forest under a crescent moon."
     },
     {
       "id": "moon_descendant_reaper",
       "role": "Reaper",
       "file": "moon_descendant_reaper.jpg",
       "status": "ready",
-      "description_en": "A silent, masked royal Reaper with a black-silver crescent scythe stands before an eclipse and distant lunar spires."
+      "description_en": "A masked chibi Moon Apple reaper with glowing violet eyes stands before a huge eclipse moon, holding a black-silver crescent scythe, with shadowy hooded intruders near misty lunar spires."
     },
     {
       "id": "moon_descendant_court",
       "role": "Royal Court",
       "file": "moon_descendant_court.jpg",
       "status": "ready",
-      "description_en": "The Queen presides over her disciplined court, flanked by the Knight, Oracle and Huntress in a vast moonlit throne hall."
+      "description_en": "The chibi Moon Apple queen presides from a dark stone dais in a moonlit throne hall, flanked by the Knight with his polearm, the Oracle with her astrolabe, and the Huntress with her bow."
     },
     {
       "id": "moon_descendant_temple",
       "role": "Temple",
       "file": "moon_descendant_temple.jpg",
       "status": "ready",
-      "description_en": "A monumental lunar temple of dark stone, silver arches, moonstone crystals, reflecting water and veiled guardian statues."
+      "description_en": "A monumental lunar temple of dark stone with silver arches, a crescent-carved gate, violet moonstone crystals and a reflecting pool, guarded by two veiled apple statues; a location with no main character."
     },
     {
       "id": "moon_descendant_invasion",
@@ -105,7 +106,7 @@
       "file": "moon_descendant_invasion.jpg",
       "status": "ready",
       "default_announcement_art": true,
-      "description_en": "The Queen and her court face a breach at the ancient lunar gates as a beam of cold moonlight awakens the realm and tiny intruders approach."
+      "description_en": "A chibi Moon Apple queen with a stem and leaf stands before breached gothic gates as a beam of cold moonlight pours out under a crescent moon, while small shadowy intruders with glowing eyes approach from both sides. Sib-style chibi apple rendering."
     }
   ]
 }

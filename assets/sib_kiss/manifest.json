@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "library": "sib_kiss",
+  "purpose": "Scene artwork for the Sib Kiss group interaction (بوس سیبی).",
+  "usage": {
+    "loaded_by": "services/marriage_art.py (GROUP_SCENES['kiss'])",
+    "note": "Sent through the shared scene helper as a photo with the Persian caption. A missing or failed upload falls back to the text message."
+  },
+  "technical": {
+    "aspect": "1:1",
+    "dimensions": "1024x1024",
+    "format": "jpeg",
+    "encoding": "progressive jpeg, quality 85, 4:2:0 subsampling, sRGB"
+  },
+  "generation": {
+    "mode": "pre-generated",
+    "runtime_generation": false,
+    "tool": "arena-agent image model (text-to-image with in-game character and scene references)",
+    "created_at": "2026-10-09",
+    "license": "project-internal",
+    "style_reference": [
+      "assets/characters/sib_sabz.jpg",
+      "assets/characters/sib_sorkh.jpg",
+      "assets/marriage_love/flower_gift.jpg",
+      "assets/apple_battle/opening_01_crimson_green.jpg"
+    ]
+  },
+  "scenes": [
+    {
+      "key": "kiss",
+      "file": "kiss.jpg",
+      "event": "group_kiss",
+      "description_en": "One anthropomorphic apple (red) kisses the cheek of another (gold), who blushes, in an orchard.",
+      "description_fa": "بوس سیبی"
+    }
+  ]
+}
