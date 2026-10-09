@@ -9,29 +9,41 @@ alerts. The private-chat chest flow is covered at the end and stays unchanged.
 """
 
 import asyncio
+import functools
 import json
 import struct
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import CallbackQuery, Chat as TelegramChat, FSInputFile, Message, User as TelegramUser
+from aiogram.types import (
+    CallbackQuery,
+    Chat as TelegramChat,
+    FSInputFile,
+    Message,
+    MessageEntity,
+    User as TelegramUser,
+)
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 
-from sib.database.models import DailyChestClaim
+from sib.database.connection import get_session
+from sib.database.models import DailyChestClaim, SystemConfig
 from sib.database.models.daily_chest import REWARD_APPLES, REWARD_CARD
 from sib.database.models.panel import PanelOwner
 from sib.handlers import daily_chest as chest
 from sib.keyboards.common import get_group_welcome_keyboard, get_private_welcome_keyboard
 from sib.middleware.panel_guard import PanelGuardMiddleware
+from sib.services import daily_chest as daily_chest_service
 from sib.services import marriage_art
 from sib.services.apple_wallet import AppleWalletService
 from sib.services.config_store import ConfigService
-from sib.services.daily_chest import ChestClaimResult, DailyChestService, utc_day
+from sib.services.daily_chest import ChestClaimResult, DailyChestService, GroupSlotContention, utc_day
 from sib.services.panel import is_owner_scoped_callback
+from sib.services.sib_claim import fa_digits
 from sib.services.telegram_ui import CAPTION_LIMIT, caption_length
 from sib.tests.conftest import requires_row_locks
 from sib.tests.test_daily_chest import StubRng
@@ -87,6 +99,18 @@ def fixed_reward(monkeypatch):
         )
 
     monkeypatch.setattr(DailyChestService, "claim", claim_15_apples)
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    """Move the pinned chest clock forward inside one test (cooldown windows)."""
+    state = {"now": FIXED_NOW}
+    monkeypatch.setattr(chest, "_utc_now", lambda: state["now"])
+
+    def advance(seconds: float) -> None:
+        state["now"] = state["now"] + timedelta(seconds=seconds)
+
+    return SimpleNamespace(advance=advance)
 
 
 # ---------------------------------------------------------------------------
@@ -207,45 +231,19 @@ def test_callback_parser_accepts_only_the_canonical_forms():
         assert chest.parse_group_chest_callback(bad) is None, bad
 
 
-def test_group_chest_callbacks_reach_only_the_chest_handler():
-    """Production routing: no other router may capture the group chest callbacks.
+@pytest.mark.asyncio
+async def test_group_chest_callbacks_reach_only_the_chest_handler():
+    """Production routing: no other router may capture the group chest callbacks."""
 
-    Walks the router tree that ``register_all_handlers`` builds. Routers are
-    recorded through a patched ``include_router`` (aiogram refuses to attach one
-    router to two dispatchers), so nothing is attached here.
-    """
-    from aiogram import Dispatcher
-
-    from sib.handlers import register_all_handlers
-
-    included: list = []
-    with patch.object(Dispatcher, "include_router", side_effect=included.append):
-        register_all_handlers(Dispatcher())
-
-    def walk(router):
-        yield router
-        for sub in router.sub_routers:
-            yield from walk(sub)
-
-    def reached_by(data: str) -> list:
+    async def reached_by(data: str) -> list:
         event = SimpleNamespace(data=data, from_user=None, message=None)
-        names = []
-        for root in included:
-            for router in walk(root):
-                for handler in router.callback_query.handlers:
-                    try:
-                        matched = all(flt.callback(event) for flt in handler.filters)
-                    except Exception:  # a filter needing more context cannot match data
-                        matched = False
-                    if matched:
-                        names.append(handler.callback.__name__)
-        return names
+        return await _reached_by("callback_query", event)
 
-    assert reached_by(chest.GROUP_CHEST_CALLBACK) == ["handle_group_chest"]
-    assert reached_by(OPEN_DATA) == ["handle_group_chest"]
+    assert await reached_by(chest.GROUP_CHEST_CALLBACK) == ["handle_group_chest"]
+    assert await reached_by(OPEN_DATA) == ["handle_group_chest"]
     # The private entry points keep their own handlers.
-    assert reached_by("apple_chest") == ["handle_apple_chest"]
-    assert reached_by("daily_chest:open") == ["handle_chest_open"]
+    assert await reached_by("apple_chest") == ["handle_apple_chest"]
+    assert await reached_by("daily_chest:open") == ["handle_chest_open"]
 
 
 # ---------------------------------------------------------------------------
@@ -318,7 +316,7 @@ async def test_post_that_cannot_be_sent_at_all_gets_a_generic_alert(db_session):
 
 
 @pytest.mark.asyncio
-async def test_posted_photo_is_cached_by_file_id_for_later_posts(db_session):
+async def test_posted_photo_is_cached_by_file_id_for_later_posts(db_session, clock):
     member = await create_test_user(db_session, "کش")
     bot = _bot()
     bot.send_photo = AsyncMock(
@@ -326,6 +324,7 @@ async def test_posted_photo_is_cached_by_file_id_for_later_posts(db_session):
     )
 
     await chest.handle_group_chest(_callback(member, "group_chest"), bot)
+    clock.advance(30)  # the second post in this group waits out the 30 s cooldown
     await chest.handle_group_chest(_callback(member, "group_chest"), bot)
 
     assert bot.send_photo.call_args_list[0].args[1] != "FILE-CHEST"  # first: the file
@@ -744,3 +743,618 @@ async def test_private_open_survives_a_refused_screen_edit(db_session, fixed_rew
     assert [(c.user_id, c.quantity) for c in claims] == [(member.id, 15)]
     assert await _apples(db_session, member.id) == 15
     assert _alert(open_cb) == (chest.OPEN_TOAST, False)
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers for the anti-spam and shortcut sections
+# ---------------------------------------------------------------------------
+def _text(user, text: str, *, chat_type: str = "supergroup", chat_id: int = GROUP_ID) -> MagicMock:
+    """A text message from ``user`` as the handler receives it; ``reply`` is recorded."""
+    message = MagicMock(spec=Message)
+    message.text = text
+    message.message_id = 7001
+    message.from_user = TelegramUser(id=user.id, is_bot=False, first_name=user.first_name)
+    message.chat = TelegramChat(
+        id=chat_id, type=chat_type, title=None if chat_type == "private" else GROUP_TITLE
+    )
+    message.reply = AsyncMock()
+    return message
+
+
+def _message_event(text: str, *, chat_type: str = "supergroup", entities=None) -> Message:
+    """A real aiogram Message, used only to evaluate dispatch filters."""
+    return Message(
+        message_id=7001,
+        date=FIXED_NOW,
+        chat=TelegramChat(
+            id=GROUP_ID, type=chat_type, title=None if chat_type == "private" else GROUP_TITLE
+        ),
+        from_user=TelegramUser(id=777, is_bot=False, first_name="عضو"),
+        text=text,
+        entities=entities,
+    )
+
+
+def _slot_key(chat_id: int = GROUP_ID) -> str:
+    return f"group_chest_post:{chat_id}"
+
+
+async def _slot_value(session, chat_id: int = GROUP_ID):
+    await session.commit()  # fresh snapshot: the handler committed in its own session
+    return await session.scalar(
+        select(SystemConfig.value).where(SystemConfig.key == _slot_key(chat_id))
+    )
+
+
+async def _write_slot(session, raw: str, chat_id: int = GROUP_ID) -> None:
+    session.add(SystemConfig(key=_slot_key(chat_id), value=raw))
+    await session.commit()
+
+
+async def _set_setting(session, key: str, value) -> None:
+    await ConfigService.set(session, key, value)
+    await session.commit()
+
+
+def _window_text(seconds: int) -> str:
+    return chest.GROUP_COOLDOWN_TEXT.format(seconds=fa_digits(seconds))
+
+
+@functools.lru_cache(maxsize=1)
+def _included_routers() -> tuple:
+    """Top-level routers ``register_all_handlers`` includes, in include order.
+
+    Recorded through a patched ``include_router``: aiogram refuses to attach one
+    router to two dispatchers, so nothing is attached here.
+    """
+    from aiogram import Dispatcher
+
+    from sib.handlers import register_all_handlers
+
+    included: list = []
+    with patch.object(Dispatcher, "include_router", side_effect=included.append):
+        register_all_handlers(Dispatcher())
+    return tuple(included)
+
+
+def _walk(router):
+    yield router
+    for sub in router.sub_routers:
+        yield from _walk(sub)
+
+
+async def _reached_by(observer: str, event) -> list:
+    """Names of the handlers matching ``event`` in dispatch order (first one wins).
+
+    ``observer`` is the aiogram event name: ``"message"`` or ``"callback_query"``.
+    Filters run through aiogram's own ``FilterObject.call``, so async filters
+    (such as ``Command``) are awaited and receive only the arguments they declare.
+    """
+    names = []
+    for root in _included_routers():
+        for router in _walk(root):
+            for handler in getattr(router, observer).handlers:
+                matched = True
+                try:
+                    for flt in handler.filters:
+                        if not await flt.call(event, bot=None):
+                            matched = False
+                            break
+                except Exception:  # a filter that needs more context cannot match
+                    matched = False
+                if matched:
+                    names.append(handler.callback.__name__)
+    return names
+
+
+# ---------------------------------------------------------------------------
+# 10. Anti-spam: one interface per group per cooldown, shared by both entries
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_menu_press_inside_the_cooldown_posts_nothing_and_answers_privately(db_session, clock):
+    member = await create_test_user(db_session, "صف")
+    bot = _bot()
+    await chest.handle_group_chest(_callback(member, "group_chest", message_id=MENU_MESSAGE_ID), bot)
+    clock.advance(29)
+
+    cb = _callback(member, "group_chest", message_id=MENU_MESSAGE_ID)
+    await chest.handle_group_chest(cb, bot)
+
+    assert bot.send_photo.await_count == 1
+    assert bot.send_message.await_count == 0
+    assert _alert(cb) == (_window_text(1), False)  # a private toast, never a group message
+
+
+@pytest.mark.asyncio
+async def test_the_cooldown_lasts_exactly_thirty_seconds(db_session, clock):
+    member = await create_test_user(db_session, "مرز")
+    bot = _bot()
+    await chest.handle_group_chest(_callback(member, "group_chest"), bot)
+
+    clock.advance(29.999)
+    await chest.handle_group_chest(_callback(member, "group_chest"), bot)
+    assert bot.send_photo.await_count == 1  # one millisecond still to wait
+
+    clock.advance(0.001)
+    await chest.handle_group_chest(_callback(member, "group_chest"), bot)
+    assert bot.send_photo.await_count == 2  # the window has passed
+
+
+@pytest.mark.asyncio
+async def test_shortcut_and_menu_button_share_one_cooldown(db_session, clock):
+    member = await create_test_user(db_session, "هم‌زمان")
+    bot = _bot()
+    await chest.handle_chest_shortcut(_text(member, "سیب صندوق"), bot)
+    assert bot.send_photo.await_count == 1
+
+    clock.advance(5)
+    cb = _callback(member, "group_chest")
+    await chest.handle_group_chest(cb, bot)  # menu inside the window: refused privately
+    assert _alert(cb) == (_window_text(25), False)
+    assert bot.send_photo.await_count == 1
+
+    clock.advance(5)
+    first_refusal = _text(member, "سیب صندوق")
+    await chest.handle_chest_shortcut(first_refusal, bot)  # shortcut: refused and voiced once
+    first_refusal.reply.assert_awaited_once_with(_window_text(20))
+    assert bot.send_photo.await_count == 1
+
+    clock.advance(3)
+    repeat = _text(member, "سیب صندوق")
+    await chest.handle_chest_shortcut(repeat, bot)  # same window: already voiced, so silent
+    repeat.reply.assert_not_awaited()
+    assert bot.send_photo.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_a_new_window_voices_its_first_refusal_again(db_session, clock):
+    member = await create_test_user(db_session, "پنجره")
+    bot = _bot()
+    await chest.handle_chest_shortcut(_text(member, "سیب صندوق"), bot)  # posts at t=0
+
+    clock.advance(30)
+    await chest.handle_chest_shortcut(_text(member, "سیب صندوق"), bot)  # posts at t=30
+    assert bot.send_photo.await_count == 2
+
+    clock.advance(10)
+    refused = _text(member, "سیب صندوق")
+    await chest.handle_chest_shortcut(refused, bot)  # first refusal of the new window
+    refused.reply.assert_awaited_once_with(_window_text(20))
+
+
+@pytest.mark.asyncio
+async def test_each_group_has_its_own_cooldown(db_session):
+    member = await create_test_user(db_session, "دو گروه")
+    bot = _bot()
+    await chest.handle_chest_shortcut(_text(member, "سیب صندوق", chat_id=GROUP_ID), bot)
+    await chest.handle_group_chest(_callback(member, "group_chest", chat_id=GROUP_ID + 1), bot)
+
+    assert [call.args[0] for call in bot.send_photo.await_args_list] == [GROUP_ID, GROUP_ID + 1]
+
+
+@pytest.mark.asyncio
+async def test_simultaneous_menu_and_shortcut_presses_post_exactly_one_interface(db_session):
+    members = [await create_test_user(db_session, f"هم{i}") for i in range(6)]
+    await db_session.commit()
+    bot = _bot()
+    calls = []
+    for index, member in enumerate(members):
+        if index % 2:
+            calls.append(chest.handle_group_chest(_callback(member, "group_chest"), bot))
+        else:
+            calls.append(chest.handle_chest_shortcut(_text(member, "سیب صندوق"), bot))
+
+    await asyncio.gather(*calls)
+
+    assert bot.send_photo.await_count == 1
+    assert bot.send_message.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_two_contenders_on_the_same_expired_slot_cannot_both_win(
+    db_session, clock, monkeypatch
+):
+    member = await create_test_user(db_session, "اول")
+    bot = _bot()
+    await chest.handle_chest_shortcut(_text(member, "سیب صندوق"), bot)  # posts at t=0
+    clock.advance(31)
+    await db_session.commit()
+    now = FIXED_NOW + timedelta(seconds=31)
+
+    original_swap = daily_chest_service._swap_group_post
+    both_read = asyncio.Event()
+    reads = []
+
+    async def rendezvous_swap(session, key, expected, new):
+        reads.append(expected)
+        if len(reads) == 2:
+            both_read.set()
+        await both_read.wait()  # neither swaps until both have read the expired slot
+        return await original_swap(session, key, expected, new)
+
+    monkeypatch.setattr(daily_chest_service, "_swap_group_post", rendezvous_swap)
+
+    async def contend():
+        try:
+            async with get_session() as session:
+                return await DailyChestService.reserve_group_post(
+                    session, GROUP_ID, now=now, notify=False
+                )
+        except GroupSlotContention as error:
+            return error
+
+    outcomes = await asyncio.gather(contend(), contend())
+
+    assert sorted(type(outcome).__name__ for outcome in outcomes) == [
+        "GroupPostSlot",
+        "GroupSlotContention",
+    ]
+    assert json.loads(await _slot_value(db_session))["posted_at"] == now.isoformat()
+
+
+@pytest.mark.asyncio
+async def test_failed_photo_with_text_fallback_still_holds_the_cooldown(db_session, clock):
+    member = await create_test_user(db_session, "فال‌بک")
+    bot = _bot()
+    bot.send_photo = AsyncMock(side_effect=Exception("upload refused"))
+    await chest.handle_group_chest(_callback(member, "group_chest"), bot)
+    assert bot.send_message.await_count == 1  # the text fallback is the post
+
+    clock.advance(5)
+    cb = _callback(member, "group_chest")
+    await chest.handle_group_chest(cb, bot)
+    assert bot.send_message.await_count == 1  # still one interface in the window
+    assert _alert(cb)[1] is False
+
+
+@pytest.mark.asyncio
+async def test_when_nothing_can_be_sent_the_slot_is_freed_for_the_next_press(db_session):
+    member = await create_test_user(db_session, "رها")
+    bot = _bot()
+    bot.send_photo = AsyncMock(side_effect=_telegram_refusal("gone"))
+    bot.send_message = AsyncMock(side_effect=_telegram_refusal("gone too"))
+    cb = _callback(member, "group_chest", message_id=MENU_MESSAGE_ID)
+    await chest.handle_group_chest(cb, bot)
+
+    assert _alert(cb) == (chest.CHEST_FAILURE_TEXT, True)
+    assert await _slot_value(db_session) is None  # nothing was posted, so nothing is held
+
+    bot.send_photo = AsyncMock(return_value=MagicMock(message_id=POST_MESSAGE_ID, photo=None))
+    await chest.handle_group_chest(_callback(member, "group_chest"), bot)  # same instant
+    assert bot.send_photo.await_count == 1  # Telegram recovered: the group was never locked
+
+
+@pytest.mark.asyncio
+async def test_an_unexpected_send_error_also_frees_the_slot(db_session, monkeypatch):
+    member = await create_test_user(db_session, "خطای‌ناشناس")
+    bot = _bot()
+    original_send = chest.safe_send_screen
+    monkeypatch.setattr(chest, "safe_send_screen", AsyncMock(side_effect=RuntimeError("boom")))
+    cb = _callback(member, "group_chest", message_id=MENU_MESSAGE_ID)
+    await chest.handle_group_chest(cb, bot)  # must not raise
+
+    assert _alert(cb) == (chest.CHEST_FAILURE_TEXT, True)
+    assert await _slot_value(db_session) is None  # nothing reached the group, so nothing is held
+
+    monkeypatch.setattr(chest, "safe_send_screen", original_send)
+    await chest.handle_group_chest(_callback(member, "group_chest"), bot)  # same instant
+    assert bot.send_photo.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_shortcut_that_cannot_post_replies_generically_and_frees_the_slot(db_session):
+    member = await create_test_user(db_session, "میانبر‌خراب")
+    bot = _bot()
+    bot.send_photo = AsyncMock(side_effect=_telegram_refusal("gone"))
+    bot.send_message = AsyncMock(side_effect=_telegram_refusal("gone too"))
+    message = _text(member, "سیب صندوق")
+
+    await chest.handle_chest_shortcut(message, bot)
+
+    message.reply.assert_awaited_once_with(chest.CHEST_FAILURE_TEXT)
+    assert await _slot_value(db_session) is None
+
+
+@pytest.mark.asyncio
+async def test_a_transient_database_error_is_retried_and_does_not_block_the_post(
+    db_session, monkeypatch
+):
+    member = await create_test_user(db_session, "تکرار")
+    bot = _bot()
+    real_reserve = DailyChestService.reserve_group_post
+    attempts = []
+
+    async def flaky_reserve(session, chat_id, **kwargs):
+        attempts.append(chat_id)
+        if len(attempts) == 1:
+            raise OperationalError("SELECT", {}, Exception("database is locked"))
+        return await real_reserve(session, chat_id, **kwargs)
+
+    monkeypatch.setattr(DailyChestService, "reserve_group_post", flaky_reserve)
+
+    await chest.handle_chest_shortcut(_text(member, "سیب صندوق"), bot)
+
+    assert len(attempts) == 2
+    assert bot.send_photo.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_a_reservation_that_keeps_failing_fails_safely_without_posting(
+    db_session, monkeypatch
+):
+    member = await create_test_user(db_session, "قفل")
+    bot = _bot()
+
+    async def always_locked(session, chat_id, **kwargs):
+        raise OperationalError("SELECT", {}, Exception("database is locked"))
+
+    monkeypatch.setattr(DailyChestService, "reserve_group_post", always_locked)
+    cb = _callback(member, "group_chest")
+
+    await chest.handle_group_chest(cb, bot)
+
+    assert bot.send_photo.await_count == 0
+    assert _alert(cb) == (chest.CHEST_FAILURE_TEXT, True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "not json",
+        "[]",
+        '{"posted_at": "soon"}',
+        '{"posted_at": "2026-10-09T12:00:00"}',  # no timezone: unreadable
+        '{"posted_at": "2026-10-09T13:00:00+00:00"}',  # an hour ahead: not a real post
+    ],
+)
+async def test_an_unreadable_or_far_future_slot_never_locks_a_group(db_session, raw):
+    member = await create_test_user(db_session, "قفل‌نشو")
+    await _write_slot(db_session, raw)
+    bot = _bot()
+
+    await chest.handle_group_chest(_callback(member, "group_chest"), bot)
+
+    assert bot.send_photo.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_a_slot_a_few_seconds_ahead_of_the_clock_still_holds_the_group(db_session):
+    member = await create_test_user(db_session, "کمی‌جلوتر")
+    ahead = (FIXED_NOW + timedelta(seconds=10)).isoformat()
+    await _write_slot(db_session, json.dumps({"posted_at": ahead, "notified": False}))
+    bot = _bot()
+    cb = _callback(member, "group_chest")
+
+    await chest.handle_group_chest(cb, bot)
+
+    assert bot.send_photo.await_count == 0  # clock skew cannot open a second window
+    assert _alert(cb) == (_window_text(30), False)
+
+
+@pytest.mark.asyncio
+async def test_the_cooldown_length_comes_from_configuration(db_session, clock):
+    member = await create_test_user(db_session, "تنظیم")
+    await _set_setting(db_session, "group_chest_cooldown_seconds", 5)
+    bot = _bot()
+    await chest.handle_group_chest(_callback(member, "group_chest"), bot)
+
+    clock.advance(4)
+    await chest.handle_group_chest(_callback(member, "group_chest"), bot)
+    assert bot.send_photo.await_count == 1
+
+    clock.advance(1)
+    await chest.handle_group_chest(_callback(member, "group_chest"), bot)
+    assert bot.send_photo.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_a_zero_cooldown_setting_means_no_spacing(db_session):
+    member = await create_test_user(db_session, "بی‌فاصله")
+    await _set_setting(db_session, "group_chest_cooldown_seconds", 0)
+    bot = _bot()
+
+    await chest.handle_group_chest(_callback(member, "group_chest"), bot)
+    await chest.handle_group_chest(_callback(member, "group_chest"), bot)
+
+    assert bot.send_photo.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_value", ["soon", -5])
+async def test_an_invalid_cooldown_setting_falls_back_to_the_default(db_session, clock, bad_value):
+    member = await create_test_user(db_session, "تنظیم‌نادرست")
+    await _set_setting(db_session, "group_chest_cooldown_seconds", bad_value)
+    bot = _bot()
+    await chest.handle_group_chest(_callback(member, "group_chest"), bot)
+
+    clock.advance(29)
+    await chest.handle_group_chest(_callback(member, "group_chest"), bot)
+    assert bot.send_photo.await_count == 1  # still inside the default 30 s window
+
+    clock.advance(1)
+    await chest.handle_group_chest(_callback(member, "group_chest"), bot)
+    assert bot.send_photo.await_count == 2  # a bad value never switches the guard off
+
+
+@pytest.mark.asyncio
+async def test_release_only_frees_the_reservation_it_made(db_session):
+    async with get_session() as session:
+        slot = await DailyChestService.reserve_group_post(
+            session, GROUP_ID, now=FIXED_NOW, notify=False
+        )
+    assert slot.status == daily_chest_service.GROUP_POST_RESERVED
+
+    async with get_session() as session:  # some other reservation's token: not ours
+        assert not await DailyChestService.release_group_post(session, GROUP_ID, "other")
+    assert await _slot_value(db_session) is not None
+
+    async with get_session() as session:
+        assert await DailyChestService.release_group_post(session, GROUP_ID, slot.token)
+    assert await _slot_value(db_session) is None
+
+
+@pytest.mark.asyncio
+async def test_open_stays_open_to_every_member_during_the_cooldown(db_session, clock, fixed_reward):
+    opener = await create_test_user(db_session, "صاحب")
+    first = await create_test_user(db_session, "اول‌باز")
+    second = await create_test_user(db_session, "دوم‌باز")
+    bot = _bot()
+    open_data = await _menu_press(bot, opener)
+
+    clock.advance(5)
+    await chest.handle_chest_shortcut(_text(first, "سیب صندوق"), bot)  # a new post is refused
+    assert bot.send_photo.await_count == 1
+
+    for member in (first, second):  # ...but the existing post stays open for everyone
+        cb = await _open(bot, member, open_data)
+        assert _alert(cb)[0] == chest.OPEN_TOAST
+    claims = await _claims(db_session)
+    assert sorted(claim.user_id for claim in claims) == sorted([first.id, second.id])
+
+
+@pytest.mark.asyncio
+async def test_a_shortcut_reply_that_telegram_refuses_never_raises(db_session):
+    member = await create_test_user(db_session, "پاسخ‌نرفت")
+    bot = _bot()
+    await chest.handle_chest_shortcut(_text(member, "سیب صندوق"), bot)  # posts
+    refused = _text(member, "سیب صندوق")
+    refused.reply.side_effect = _telegram_refusal("not allowed to reply")
+
+    await chest.handle_chest_shortcut(refused, bot)  # cooldown refusal; the reply fails
+
+    assert bot.send_photo.await_count == 1
+
+
+# ---------------------------------------------------------------------------
+# 11. «سیب صندوق»: exact phrase, same group flow, private chest in private
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_shortcut_in_a_group_posts_the_same_interface_as_the_menu(db_session):
+    member = await create_test_user(db_session, "میانبر")
+    bot = _bot()
+    message = _text(member, "سیب صندوق")
+
+    await chest.handle_chest_shortcut(message, bot)
+
+    assert bot.send_photo.await_count == 1
+    assert bot.send_photo.await_args.args[0] == GROUP_ID
+    buttons = _buttons(bot.send_photo.await_args.kwargs["reply_markup"])
+    assert [(button.text, button.callback_data) for button in buttons] == [(OPEN_LABEL, OPEN_DATA)]
+    message.reply.assert_not_awaited()  # the post itself is the answer
+
+
+@pytest.mark.asyncio
+async def test_shortcut_in_private_chat_opens_the_private_chest_like_the_command(
+    db_session, fixed_reward
+):
+    member = await create_test_user(db_session, "خصوصی")
+    bot = _bot()
+    shortcut = _text(member, "سیب صندوق", chat_type="private", chat_id=member.id)
+    command = _text(member, "/chest", chat_type="private", chat_id=member.id)
+
+    await chest.handle_chest_shortcut(shortcut, bot)
+    await chest.cmd_chest(command)
+
+    bot.send_photo.assert_not_awaited()  # no group post in a private chat
+    shortcut.reply.assert_awaited_once()
+    command.reply.assert_awaited_once()
+    assert shortcut.reply.await_args == command.reply.await_args  # same screen and keyboard
+    open_buttons = [b.callback_data for b in _buttons(shortcut.reply.await_args.kwargs["reply_markup"])]
+    assert "daily_chest:open" in open_buttons
+
+
+@pytest.mark.asyncio
+async def test_disabled_chest_answers_the_shortcut_without_posting(db_session):
+    member = await create_test_user(db_session, "بسته")
+    await _set_setting(db_session, "daily_chest_enabled", False)
+    bot = _bot()
+    message = _text(member, "سیب صندوق")
+
+    await chest.handle_chest_shortcut(message, bot)
+
+    bot.send_photo.assert_not_awaited()
+    message.reply.assert_awaited_once_with(chest.CHEST_DISABLED_TEXT)
+    assert await _slot_value(db_session) is None  # a disabled chest reserves nothing
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "سیب صندوق",
+        "سيب صندوق",  # Arabic yeh
+        "  سیب صندوق  ",
+        "\tسيب   صندوق\n",
+    ],
+)
+@pytest.mark.asyncio
+async def test_shortcut_phrase_variants_reach_the_shortcut_first(text):
+    for chat_type in ("group", "supergroup", "private"):
+        event = _message_event(text, chat_type=chat_type)
+        assert (await _reached_by("message", event))[0] == "handle_chest_shortcut", (text, chat_type)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "سیب صندوقچه",  # a different word
+        "امروز سیب صندوق رو باز کردم",  # the phrase inside a longer sentence
+        "سیب صندوق خوبه",
+        "صندوق سیب",
+        "سیب",  # the wake word stays with start
+        "سیب بازی",
+        "بغل سیبی",
+    ],
+)
+@pytest.mark.asyncio
+async def test_longer_or_unrelated_messages_do_not_open_the_shortcut(text):
+    assert "handle_chest_shortcut" not in await _reached_by("message", _message_event(text))
+
+
+@pytest.mark.asyncio
+async def test_existing_text_and_command_triggers_keep_their_handlers():
+    command = _message_event(
+        "/chest", entities=[MessageEntity(type="bot_command", offset=0, length=6)]
+    )
+    assert (await _reached_by("message", command))[0] == "cmd_chest"
+    assert (await _reached_by("message", _message_event("بغل سیبی")))[0] == "handle_sib_hug"
+    assert (await _reached_by("message", _message_event("بوس سیبی")))[0] == "handle_sib_kiss"
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_during_a_failing_post_does_not_hold_the_group(db_session):
+    """A refusal voiced while a post is still in flight must not keep that post's slot.
+
+    The refused request marks the window as notified mid-send. When the send then
+    fails, the release still matches the reservation by its token and frees it.
+    """
+    member = await create_test_user(db_session, "در‌حال‌ارسال")
+    refused = _text(member, "سیب صندوق")
+    bot = _bot()
+
+    async def photo_fails_while_another_request_arrives(*args, **kwargs):
+        await chest.handle_chest_shortcut(refused, bot)  # arrives during the send
+        raise _telegram_refusal("gone")
+
+    bot.send_photo = AsyncMock(side_effect=photo_fails_while_another_request_arrives)
+    bot.send_message = AsyncMock(side_effect=_telegram_refusal("gone too"))
+
+    await chest.handle_chest_shortcut(_text(member, "سیب صندوق"), bot)
+
+    refused.reply.assert_awaited_once_with(_window_text(30))  # voiced once, mid-send
+    assert await _slot_value(db_session) is None  # the failed post freed its own slot
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chat_type", ["group", "supergroup"])
+async def test_shortcut_and_menu_serve_basic_groups_and_supergroups_alike(db_session, chat_type):
+    member = await create_test_user(db_session, "گروه‌ساده")
+    bot = _bot()
+
+    await chest.handle_chest_shortcut(_text(member, "سیب صندوق", chat_type=chat_type), bot)
+    cb = _callback(member, "group_chest", chat_type=chat_type)
+    await chest.handle_group_chest(cb, bot)
+
+    assert bot.send_photo.await_count == 1  # one interface, shared by both entries
+    assert bot.send_photo.await_args.args[0] == GROUP_ID
+    assert _alert(cb) == (_window_text(30), False)  # the menu press is refused privately

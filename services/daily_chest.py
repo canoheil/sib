@@ -21,13 +21,15 @@ Selection is a single weighted roll over float weights (the repo's
 weights (the 0.05% card) stay selectable without integer rounding.
 """
 
+import json
 import math
 import random
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -37,6 +39,7 @@ from sib.database.models import (
     DailyChestClaim,
     PlayerCard,
     ReleaseStatus,
+    SystemConfig,
     User,
 )
 from sib.database.models.daily_chest import (
@@ -411,6 +414,103 @@ def format_claimed_line(claim: DailyChestClaim) -> str:
     return f"{emoji} {count} تا {label}"
 
 
+# ---------------------------------------------------------------------------
+# Group post slot (anti-spam): one chest post per group per cooldown
+# ---------------------------------------------------------------------------
+# State lives in one ``system_config`` row per group: key
+# ``group_chest_post:<chat_id>``, JSON value ``{"posted_at", "notified",
+# "token"}``. ``token`` is a fresh random id per reservation, so every write
+# changes the stored value. Every change is a compare-and-swap on the exact
+# value the transaction read, or an insert that the primary key can reject.
+# That does not depend on whether a driver reports matched or changed rows,
+# and it is atomic on MariaDB and SQLite alike, so it holds across workers and
+# restarts with no process-local lock, cache, or migration. A release frees
+# only the reservation whose token it holds. The menu button and the
+# «سیب صندوق» shortcut both use this row, so they share one cooldown.
+GROUP_POST_COOLDOWN_KEY = "group_chest_cooldown_seconds"
+GROUP_POST_COOLDOWN_DEFAULT = 30
+GROUP_POST_KEY_PREFIX = "group_chest_post:"
+
+GROUP_POST_RESERVED = "reserved"
+GROUP_POST_COOLDOWN = "cooldown"
+GROUP_POST_DISABLED = "disabled"
+
+
+class GroupSlotContention(RuntimeError):
+    """Another request changed the group's slot first; re-read and decide again."""
+
+
+@dataclass(frozen=True)
+class GroupPostSlot:
+    """Result of one reservation attempt, to be committed by the caller.
+
+    RESERVED sets ``token``, the id a release needs. COOLDOWN sets
+    ``remaining`` (seconds left). ``notify`` is True at most once per window,
+    so a refusal is voiced in the chat at most once.
+    """
+
+    status: str
+    remaining: float = 0.0
+    notify: bool = False
+    token: Optional[str] = None
+
+
+def _group_post_key(chat_id: int) -> str:
+    return f"{GROUP_POST_KEY_PREFIX}{int(chat_id)}"
+
+
+def _encode_group_post(posted_at: datetime, notified: bool, token: str) -> str:
+    return json.dumps(
+        {"posted_at": posted_at.isoformat(), "notified": bool(notified), "token": token},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _decode_group_post(raw: Optional[str]) -> Optional[Tuple[datetime, bool, str]]:
+    """(posted_at, notified, token) of a stored slot; None when absent or unreadable."""
+    if raw is None:
+        return None
+    try:
+        data = json.loads(raw)
+        posted_at = datetime.fromisoformat(data["posted_at"])
+    except (TypeError, ValueError, KeyError):
+        return None
+    if posted_at.tzinfo is None:
+        return None
+    token = data.get("token")
+    return (
+        posted_at.astimezone(timezone.utc),
+        bool(data.get("notified", False)),
+        token if isinstance(token, str) else "",
+    )
+
+
+def _group_post_remaining(posted_at: datetime, now: datetime, cooldown: int) -> Optional[float]:
+    """Seconds left in the window, or None once it has passed.
+
+    A stored time more than one whole cooldown ahead of ``now`` cannot come
+    from a real post, so it counts as unreadable and never locks a group.
+    """
+    if posted_at > now + timedelta(seconds=cooldown):
+        return None
+    elapsed = (now - posted_at).total_seconds()
+    if elapsed >= cooldown:
+        return None
+    return cooldown - max(elapsed, 0.0)
+
+
+async def _swap_group_post(session: AsyncSession, key: str, expected: str, new: str) -> bool:
+    """Write ``new`` only while the row still holds ``expected``."""
+    result = await session.execute(
+        update(SystemConfig)
+        .where(SystemConfig.key == key, SystemConfig.value == expected)
+        .values(value=new)
+        .execution_options(synchronize_session=False)
+    )
+    return result.rowcount == 1
+
+
 class DailyChestService:
     """Persistent daily chest: eligibility, one roll, canonical delivery."""
 
@@ -655,3 +755,88 @@ class DailyChestService:
             ).all()
         )
         return [c for c in characters if c.id not in owned_ids]
+
+    # ------------------------------------------------------------------
+    # Group post slot (menu button and «سیب صندوق» share it)
+    # ------------------------------------------------------------------
+    @classmethod
+    async def group_post_cooldown(cls, session: AsyncSession) -> int:
+        """Seconds between two posts in one group (``group_chest_cooldown_seconds``).
+
+        A missing, non-numeric, or negative value falls back to the default, so
+        a bad setting never switches the guard off. An explicit 0 means no spacing.
+        """
+        try:
+            seconds = int(await ConfigService.get(session, GROUP_POST_COOLDOWN_KEY))
+        except (TypeError, ValueError, OverflowError):
+            return GROUP_POST_COOLDOWN_DEFAULT
+        return seconds if seconds >= 0 else GROUP_POST_COOLDOWN_DEFAULT
+
+    @classmethod
+    async def reserve_group_post(
+        cls,
+        session: AsyncSession,
+        chat_id: int,
+        *,
+        now: datetime,
+        notify: bool,
+    ) -> GroupPostSlot:
+        """Reserve the group's post slot, or report the cooldown holding it.
+
+        Runs inside the caller's transaction, which the caller commits before
+        any Telegram call. ``now`` is an aware instant. Two requests that read
+        the same state cannot both win: the swap only matches the state this
+        transaction read, so the loser gets ``GroupSlotContention`` and the
+        caller re-reads and decides again. A disabled chest reserves nothing.
+        """
+        config = await cls.load_config(session)
+        if not config.enabled:
+            return GroupPostSlot(status=GROUP_POST_DISABLED)
+
+        now = now.astimezone(timezone.utc)
+        cooldown = await cls.group_post_cooldown(session)
+        key = _group_post_key(chat_id)
+        stored = await session.scalar(select(SystemConfig.value).where(SystemConfig.key == key))
+        state = _decode_group_post(stored)
+        if state is not None:
+            posted_at, notified, token = state
+            remaining = _group_post_remaining(posted_at, now, cooldown)
+            if remaining is not None:
+                if notify and not notified:
+                    marked = _encode_group_post(posted_at, True, token)
+                    if not await _swap_group_post(session, key, stored, marked):
+                        raise GroupSlotContention(key)
+                    return GroupPostSlot(GROUP_POST_COOLDOWN, remaining=remaining, notify=True)
+                return GroupPostSlot(GROUP_POST_COOLDOWN, remaining=remaining)
+
+        reservation = uuid.uuid4().hex
+        value = _encode_group_post(now, False, reservation)
+        if stored is None:
+            session.add(SystemConfig(key=key, value=value))
+            await session.flush()  # IntegrityError: another request inserted first
+        elif not await _swap_group_post(session, key, stored, value):
+            raise GroupSlotContention(key)
+        return GroupPostSlot(GROUP_POST_RESERVED, token=reservation)
+
+    @classmethod
+    async def release_group_post(cls, session: AsyncSession, chat_id: int, token: str) -> bool:
+        """Free the slot this reservation holds, if no newer reservation replaced it.
+
+        Used only when the post could not be sent at all. A notice mark keeps
+        the token, so it does not stop the release; a different token means a
+        newer reservation, which is left alone.
+        """
+        key = _group_post_key(chat_id)
+        for _ in range(3):
+            stored = await session.scalar(select(SystemConfig.value).where(SystemConfig.key == key))
+            state = _decode_group_post(stored)
+            if state is None or not token or state[2] != token:
+                return False
+            result = await session.execute(
+                delete(SystemConfig)
+                .where(SystemConfig.key == key, SystemConfig.value == stored)
+                .execution_options(synchronize_session=False)
+            )
+            if result.rowcount == 1:
+                return True
+        return False

@@ -18,19 +18,29 @@ of an already-made claim and the next UTC reset. «باز کردن صندوقچ�
 open``) is OWNER-SCOPED through the shared panel guard and delegates every
 rule to ``DailyChestService``; the handler never rolls rewards itself.
 
+Group shortcut «سیب صندوق» (text, exact phrase): in a group it runs the menu
+button's flow, so both share ONE cooldown per group (``group_chest_cooldown_seconds``,
+default 30 s). The slot is a compare-and-swap row in ``system_config``, so it
+holds across workers and restarts. The cooldown limits only creating a post;
+opening is never throttled. In private chat the shortcut opens the private
+chest exactly like ``/chest``.
+
 Failure policy (same as Sib Hug): ``get_session()`` rolls the transaction
 back before any error reply, so a failed open never leaves a consumed claim
 or a half-delivered reward. Stale/duplicate presses are answered by the
 already-claimed screen — never a second reward.
 """
 
+import math
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional, Tuple
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from sib.core.logging import logger
 from sib.core.text import safe_name
@@ -38,10 +48,14 @@ from sib.database.connection import get_session
 from sib.database.models import DailyChestClaim
 from sib.keyboards.common import danger_button, primary_button
 from sib.services.daily_chest import (
+    GROUP_POST_COOLDOWN,
+    GROUP_POST_DISABLED,
     ChestClaimResult,
     ChestConfigError,
     DailyChestError,
     DailyChestService,
+    GroupPostSlot,
+    GroupSlotContention,
     format_claimed_line,
     format_next_reset,
     format_open_result,
@@ -56,6 +70,7 @@ from sib.services.panel import (
     PanelOwnershipService,
     resolve_personal_actor,
 )
+from sib.services.sib_claim import fa_digits
 from sib.services.telegram_ui import (
     safe_answer_callback,
     safe_edit_callback_message,
@@ -105,6 +120,22 @@ GROUP_INVALID_TEXT = "این دکمه معتبر نیست؛ صندوقچه‌ی 
 GROUP_EXPIRED_TEXT = (
     "این صندوقچه مال روز قبله و منقضی شده؛ از منوی گروه یه صندوقچه‌ی تازه بگیر. 🍏"
 )
+
+
+# «سیب صندوق» (text shortcut). Persian «ی» and Arabic «ي» both match.
+_YEH = "[\\u06cc\\u064a]"
+GROUP_SHORTCUT_PATTERN = r"^\s*س" + _YEH + r"ب\s+صندوق\s*$"
+GROUP_COOLDOWN_TEXT = (
+    "⏳ صندوقچه‌ی این گروه همین الان پست شده؛ {seconds} ثانیه‌ی دیگه دوباره امتحان کن. 🍏"
+)
+# A slot race is re-read in a fresh transaction. A request that keeps losing
+# fails safely (no post, no reward) instead of waiting.
+GROUP_SLOT_ATTEMPTS = 5
+GROUP_OUTCOME_POSTED = "posted"
+GROUP_OUTCOME_COOLDOWN = "cooldown"
+GROUP_OUTCOME_DISABLED = "disabled"
+GROUP_OUTCOME_CONFIG_ERROR = "config_error"
+GROUP_OUTCOME_FAILED = "failed"
 
 
 def _keyboard(*, can_open: bool) -> InlineKeyboardMarkup:
@@ -190,9 +221,8 @@ async def _panel_subject(callback: CallbackQuery) -> Optional[int]:
 # ---------------------------------------------------------------------------
 # Entry points
 # ---------------------------------------------------------------------------
-@router.message(Command("chest"))
-async def cmd_chest(message: Message) -> None:
-    """/chest — open the sender's daily chest screen."""
+async def _send_private_chest(message: Message) -> None:
+    """The sender's private chest screen: ``/chest`` and «سیب صندوق» in private."""
     user = message.from_user
     if user is None:
         return
@@ -208,6 +238,12 @@ async def cmd_chest(message: Message) -> None:
         await message.reply(CHEST_FAILURE_TEXT)
         return
     await message.reply(text, reply_markup=kb)
+
+
+@router.message(Command("chest"))
+async def cmd_chest(message: Message) -> None:
+    """/chest — open the sender's daily chest screen."""
+    await _send_private_chest(message)
 
 
 @router.callback_query(F.data == "apple_chest")
@@ -345,39 +381,132 @@ def _group_reward_notice(user, result: ChestClaimResult) -> str:
     return f"🎁 {_mention(user.id, user.first_name)}، صندوقچه‌ی امروزت باز شد!\n{reward}"
 
 
-async def _post_group_chest(callback: CallbackQuery, bot: Bot, chat_id: int) -> None:
-    """Group menu press: post the shared closed-chest message in this group."""
+@dataclass(frozen=True)
+class _GroupPostOutcome:
+    status: str
+    remaining: float = 0.0
+    notify: bool = False
+
+
+def _group_cooldown_text(remaining: float) -> str:
+    return GROUP_COOLDOWN_TEXT.format(seconds=fa_digits(max(1, math.ceil(remaining))))
+
+
+async def _reserve_group_slot(chat_id: int, *, now: datetime, notify: bool) -> GroupPostSlot:
+    """Reserve in a short transaction of its own; a race is re-read in a fresh one."""
+    for attempt in range(1, GROUP_SLOT_ATTEMPTS + 1):
+        try:
+            async with get_session() as session:
+                return await DailyChestService.reserve_group_post(
+                    session, chat_id, now=now, notify=notify
+                )
+        except (IntegrityError, OperationalError, GroupSlotContention):
+            if attempt == GROUP_SLOT_ATTEMPTS:
+                raise
+            logger.info(f"group chest slot raced in chat {chat_id} (attempt {attempt})")
+    raise GroupSlotContention(str(chat_id))  # unreachable: the loop returns or raises
+
+
+async def _release_group_slot(chat_id: int, token: Optional[str]) -> None:
+    if token is None:
+        return
     try:
         async with get_session() as session:
-            config = await DailyChestService.load_config(session)
-    except ChestConfigError:
-        await safe_answer_callback(callback, CHEST_CONFIG_ERROR_TEXT, show_alert=True)
-        return
+            await DailyChestService.release_group_post(session, chat_id, token)
     except Exception:
-        logger.exception("daily chest group screen failed")
-        await safe_answer_callback(callback, CHEST_FAILURE_TEXT, show_alert=True)
-        return
-    if not config.enabled:
-        await safe_answer_callback(callback, CHEST_DISABLED_TEXT, show_alert=True)
-        return
+        # Not fatal: the cooldown simply runs out on its own.
+        logger.exception("daily chest group slot release failed")
+
+
+async def _post_group_interface(bot: Bot, chat_id: int, *, notify: bool) -> _GroupPostOutcome:
+    """Post the group's shared chest, at most once per cooldown.
+
+    The reservation commits before any Telegram call, so no database lock is
+    held across a send. If nothing reaches the group, the reservation is
+    released, so a transient failure cannot lock the group. The menu button
+    (``notify=False``) and «سیب صندوق» (``notify=True``) both come through here.
+    """
+    now = _utc_now()
+    try:
+        slot = await _reserve_group_slot(chat_id, now=now, notify=notify)
+    except ChestConfigError:
+        return _GroupPostOutcome(GROUP_OUTCOME_CONFIG_ERROR)
+    except Exception:
+        logger.exception("daily chest group slot reservation failed")
+        return _GroupPostOutcome(GROUP_OUTCOME_FAILED)
+    if slot.status == GROUP_POST_DISABLED:
+        return _GroupPostOutcome(GROUP_OUTCOME_DISABLED)
+    if slot.status == GROUP_POST_COOLDOWN:
+        return _GroupPostOutcome(
+            GROUP_OUTCOME_COOLDOWN, remaining=slot.remaining, notify=slot.notify
+        )
 
     # Photo first. safe_send_screen degrades to the same caption and button as
-    # plain text when the artwork is missing or the upload fails.
-    day = utc_day(_utc_now())
-    sent = await safe_send_screen(
-        bot,
-        chat_id,
-        GROUP_CHEST_TEXT,
-        photo=scene_photo(GROUP_CHEST_SCENE),
-        reply_markup=_group_open_keyboard(day),
-        parse_mode=None,
-    )
+    # plain text when the artwork is missing or the upload fails. Any other
+    # error still reaches the release below, so it can never hold the group.
+    try:
+        sent = await safe_send_screen(
+            bot,
+            chat_id,
+            GROUP_CHEST_TEXT,
+            photo=scene_photo(GROUP_CHEST_SCENE),
+            reply_markup=_group_open_keyboard(utc_day(now)),
+            parse_mode=None,
+        )
+    except Exception:
+        logger.exception(f"daily chest group post raised in chat {chat_id}")
+        sent = None
     if sent is None:
         logger.warning(f"daily chest post could not be sent in chat {chat_id}")
-        await safe_answer_callback(callback, CHEST_FAILURE_TEXT, show_alert=True)
-        return
+        await _release_group_slot(chat_id, slot.token)
+        return _GroupPostOutcome(GROUP_OUTCOME_FAILED)
     remember_scene_file_id(GROUP_CHEST_SCENE, sent)
-    await safe_answer_callback(callback)
+    return _GroupPostOutcome(GROUP_OUTCOME_POSTED)
+
+
+async def _post_group_chest(callback: CallbackQuery, bot: Bot, chat_id: int) -> None:
+    """Group menu press: the shared post, with the outcome answered privately."""
+    outcome = await _post_group_interface(bot, chat_id, notify=False)
+    if outcome.status == GROUP_OUTCOME_POSTED:
+        await safe_answer_callback(callback)
+    elif outcome.status == GROUP_OUTCOME_COOLDOWN:
+        await safe_answer_callback(callback, _group_cooldown_text(outcome.remaining))
+    elif outcome.status == GROUP_OUTCOME_DISABLED:
+        await safe_answer_callback(callback, CHEST_DISABLED_TEXT, show_alert=True)
+    elif outcome.status == GROUP_OUTCOME_CONFIG_ERROR:
+        await safe_answer_callback(callback, CHEST_CONFIG_ERROR_TEXT, show_alert=True)
+    else:
+        await safe_answer_callback(callback, CHEST_FAILURE_TEXT, show_alert=True)
+
+
+async def _safe_reply(message: Message, text: str) -> None:
+    """Reply in the chat without letting a Telegram error escape the handler."""
+    try:
+        await message.reply(text)
+    except Exception as error:
+        logger.warning(f"group chest reply failed: {error}")
+
+
+@router.message(F.text.regexp(GROUP_SHORTCUT_PATTERN))
+async def handle_chest_shortcut(message: Message, bot: Bot) -> None:
+    """«سیب صندوق»: the group's shared chest, or the private chest in private.
+
+    In a group it runs the menu button's flow, so both share one cooldown.
+    Only refusals are voiced, and a cooldown refusal at most once per window.
+    """
+    if getattr(message.chat, "type", None) not in GROUP_CHAT_TYPES:
+        await _send_private_chest(message)
+        return
+    outcome = await _post_group_interface(bot, message.chat.id, notify=True)
+    if outcome.status == GROUP_OUTCOME_COOLDOWN:
+        if outcome.notify:
+            await _safe_reply(message, _group_cooldown_text(outcome.remaining))
+    elif outcome.status == GROUP_OUTCOME_DISABLED:
+        await _safe_reply(message, CHEST_DISABLED_TEXT)
+    elif outcome.status == GROUP_OUTCOME_CONFIG_ERROR:
+        await _safe_reply(message, CHEST_CONFIG_ERROR_TEXT)
+    elif outcome.status != GROUP_OUTCOME_POSTED:
+        await _safe_reply(message, CHEST_FAILURE_TEXT)
 
 
 async def _open_group_chest(
