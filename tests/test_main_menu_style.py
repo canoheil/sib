@@ -48,3 +48,4 @@ def test_other_main_menu_buttons_keep_their_styles():
     assert by_text["🛒 فروشگاه"].style == "primary"
     assert by_text["👤 پروفایل من"].style == "primary"
     assert by_text["🏆 رتبه و آمار گروه"].style == "primary"
+    assert by_text["🎁 صندوقچه گنج روزانه"].style == "primary"

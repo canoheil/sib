@@ -14,9 +14,10 @@ import struct
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery, Chat as TelegramChat, FSInputFile, Message, User as TelegramUser
 from sqlalchemy import select
 
@@ -142,6 +143,11 @@ def _notices(bot) -> list:
     return [call.args[1] for call in bot.send_message.await_args_list]
 
 
+def _telegram_refusal(message: str) -> TelegramBadRequest:
+    """A real aiogram API error, as Telegram returns for a refused or stale call."""
+    return TelegramBadRequest(method=MagicMock(), message=message)
+
+
 async def _claims(session) -> list:
     await session.commit()  # fresh snapshot: the handler committed in its own session
     return list((await session.scalars(select(DailyChestClaim))).all())
@@ -201,6 +207,47 @@ def test_callback_parser_accepts_only_the_canonical_forms():
         assert chest.parse_group_chest_callback(bad) is None, bad
 
 
+def test_group_chest_callbacks_reach_only_the_chest_handler():
+    """Production routing: no other router may capture the group chest callbacks.
+
+    Walks the router tree that ``register_all_handlers`` builds. Routers are
+    recorded through a patched ``include_router`` (aiogram refuses to attach one
+    router to two dispatchers), so nothing is attached here.
+    """
+    from aiogram import Dispatcher
+
+    from sib.handlers import register_all_handlers
+
+    included: list = []
+    with patch.object(Dispatcher, "include_router", side_effect=included.append):
+        register_all_handlers(Dispatcher())
+
+    def walk(router):
+        yield router
+        for sub in router.sub_routers:
+            yield from walk(sub)
+
+    def reached_by(data: str) -> list:
+        event = SimpleNamespace(data=data, from_user=None, message=None)
+        names = []
+        for root in included:
+            for router in walk(root):
+                for handler in router.callback_query.handlers:
+                    try:
+                        matched = all(flt.callback(event) for flt in handler.filters)
+                    except Exception:  # a filter needing more context cannot match data
+                        matched = False
+                    if matched:
+                        names.append(handler.callback.__name__)
+        return names
+
+    assert reached_by(chest.GROUP_CHEST_CALLBACK) == ["handle_group_chest"]
+    assert reached_by(OPEN_DATA) == ["handle_group_chest"]
+    # The private entry points keep their own handlers.
+    assert reached_by("apple_chest") == ["handle_apple_chest"]
+    assert reached_by("daily_chest:open") == ["handle_chest_open"]
+
+
 # ---------------------------------------------------------------------------
 # 2. Selecting the button shows the closed chest in the same group
 # ---------------------------------------------------------------------------
@@ -254,6 +301,20 @@ async def test_post_without_artwork_is_a_text_post_that_still_opens(db_session, 
     args, kwargs = bot.send_message.call_args
     assert args[1] == chest.GROUP_CHEST_TEXT
     assert [b.callback_data for b in _buttons(kwargs["reply_markup"])] == [OPEN_DATA]
+
+
+@pytest.mark.asyncio
+async def test_post_that_cannot_be_sent_at_all_gets_a_generic_alert(db_session):
+    member = await create_test_user(db_session, "ارسال‌نشد")
+    bot = _bot()
+    bot.send_photo = AsyncMock(side_effect=_telegram_refusal("upload refused"))
+    bot.send_message = AsyncMock(side_effect=_telegram_refusal("chat unavailable"))
+
+    cb = _callback(member, "group_chest", message_id=MENU_MESSAGE_ID)
+    await chest.handle_group_chest(cb, bot)  # must not raise
+
+    assert _alert(cb) == (chest.CHEST_FAILURE_TEXT, True)  # no Telegram internals
+    assert await _claims(db_session) == []
 
 
 @pytest.mark.asyncio
@@ -415,6 +476,28 @@ async def test_stale_eligibility_read_cannot_pay_twice_from_the_post(db_session,
 
 
 @pytest.mark.asyncio
+async def test_simultaneous_presses_pay_at_most_once_on_any_engine(db_session, fixed_reward):
+    """Four simultaneous presses, each on its own database connection.
+
+    SQLite queues the writers on its database lock here; MySQL/MariaDB queues
+    them on the per-user row lock (see the row-lock test below). Either way one
+    press commits the day's claim and every other press is answered
+    already-claimed, so the member gets exactly one reward.
+    """
+    member = await create_test_user(db_session, "همزمان‌سیب")
+    open_data = await _menu_press(_bot(), member)
+
+    async def press():
+        await chest.handle_group_chest(_callback(member, open_data), _bot())
+
+    await asyncio.gather(*(press() for _ in range(4)))
+
+    claims = await _claims(db_session)
+    assert len(claims) == 1
+    assert await _apples(db_session, member.id) == 15
+
+
+@pytest.mark.asyncio
 @requires_row_locks
 async def test_concurrent_presses_from_one_member_pay_exactly_once(db_session, fixed_reward):
     """True concurrency (MySQL/MariaDB row locks): simultaneous presses, one reward."""
@@ -529,6 +612,22 @@ async def test_unexpected_failure_shows_a_generic_alert_without_internals(db_ses
 
 
 @pytest.mark.asyncio
+async def test_a_refused_callback_answer_never_costs_or_doubles_the_reward(db_session, fixed_reward):
+    member = await create_test_user(db_session, "پاسخ‌نرفت")
+    bot = _bot()
+    open_data = await _menu_press(bot, member)
+    cb = _callback(member, open_data)
+    cb.answer = AsyncMock(side_effect=_telegram_refusal("query is too old"))
+
+    await chest.handle_group_chest(cb, bot)  # must not raise
+
+    assert cb.answer.await_count == 1  # the refused answer really happened
+    assert len(await _claims(db_session)) == 1
+    assert await _apples(db_session, member.id) == 15
+    assert len(_notices(bot)) == 1  # the public line still goes out
+
+
+@pytest.mark.asyncio
 async def test_failed_group_notice_never_undoes_the_committed_reward(db_session, fixed_reward):
     member = await create_test_user(db_session, "اعلان‌نرفت")
     bot = _bot()
@@ -623,6 +722,24 @@ async def test_private_chest_flow_is_unchanged(db_session, fixed_reward):
     open_cb = _callback(member, "daily_chest:open", chat_type="private", chat_id=member.id, message_id=501)
     await chest.handle_chest_open(open_cb, bot)
 
+    claims = await _claims(db_session)
+    assert [(c.user_id, c.quantity) for c in claims] == [(member.id, 15)]
+    assert await _apples(db_session, member.id) == 15
+    assert _alert(open_cb) == (chest.OPEN_TOAST, False)
+
+
+@pytest.mark.asyncio
+async def test_private_open_survives_a_refused_screen_edit(db_session, fixed_reward):
+    member = await create_test_user(db_session, "ویرایش‌نرفت‌خصوصی")
+    bot = _bot()
+    menu_cb = _callback(member, "apple_chest", chat_type="private", chat_id=member.id, message_id=503)
+    await chest.handle_apple_chest(menu_cb, bot)  # binds the panel to this member
+    bot.edit_message_text = AsyncMock(side_effect=_telegram_refusal("message to edit not found"))
+
+    open_cb = _callback(member, "daily_chest:open", chat_type="private", chat_id=member.id, message_id=503)
+    await chest.handle_chest_open(open_cb, bot)  # must not raise
+
+    assert bot.edit_message_text.await_count >= 1  # the refused edit really happened
     claims = await _claims(db_session)
     assert [(c.user_id, c.quantity) for c in claims] == [(member.id, 15)]
     assert await _apples(db_session, member.id) == 15
