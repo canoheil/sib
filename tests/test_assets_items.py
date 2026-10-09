@@ -138,7 +138,7 @@ async def test_summary_line(db_session):
     assert line == "—"
     await ItemService.grant(db_session, 42, "apple_gold", 2)
     line = await ItemService.summary_line(db_session, 42)
-    assert "🪙×2" in line
+    assert "🌕×2" in line
 
 
 @pytest.mark.asyncio

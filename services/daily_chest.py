@@ -71,7 +71,7 @@ KNOWN_REWARDS: Tuple[str, ...] = (
 REWARD_EMOJI: Dict[str, str] = {
     REWARD_APPLES: "🍎",
     REWARD_SEEDLINGS: "🌱",
-    REWARD_GOLD: "🪙",
+    REWARD_GOLD: "🌕",
     REWARD_DIAMOND: "💎",
     REWARD_OBSIDIAN: "🌑",
     REWARD_CARD: "🎴",

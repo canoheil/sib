@@ -50,7 +50,7 @@ from sib.services.invasion import (  # noqa: E402
     BRACE_BASE_CONTRIBUTION,
     BRACE_POWER_DIVISOR,
 )
-from sib.services.invasion_rewards import APPLE_REWARD_CONFIG_KEYS  # noqa: E402
+from sib.services.invasion_rewards import REWARD_CONFIG_KEYS  # noqa: E402
 from sib.services.maintenance.service import MaintenanceService  # noqa: E402
 
 
@@ -58,7 +58,7 @@ GROUP_SIZES = (1, 2, 3, 5, 10, 20, 30, 50)
 PARTICIPATION_PCTS = (10, 25, 50, 75, 100)
 ENEMY_POWER_POINTS = (100, 125, 150, 175, 200)
 ENEMY_POWER_RANGE = range(100, 201)
-WAVE_COUNT = MaintenanceService.INVASION_WAVE_COUNT
+WAVE_COUNT = MaintenanceService.INVASION_LEGACY_WAVE_COUNT
 UTC = timezone.utc
 
 BRACE_PROFILES: dict[str, tuple[tuple[int, float], ...]] = {
@@ -79,13 +79,13 @@ BRACE_PROFILE_DESCRIPTIONS = {
 
 OUTCOME_REWARDS = {
     InvasionOutcome.TOTAL_VICTORY: int(
-        CONFIG_DEFAULTS[APPLE_REWARD_CONFIG_KEYS[InvasionOutcome.TOTAL_VICTORY]]
+        CONFIG_DEFAULTS[REWARD_CONFIG_KEYS[InvasionOutcome.TOTAL_VICTORY]]
     ),
     InvasionOutcome.NARROW_DEFENSE: int(
-        CONFIG_DEFAULTS[APPLE_REWARD_CONFIG_KEYS[InvasionOutcome.NARROW_DEFENSE]]
+        CONFIG_DEFAULTS[REWARD_CONFIG_KEYS[InvasionOutcome.NARROW_DEFENSE]]
     ),
     InvasionOutcome.DEFEAT: int(
-        CONFIG_DEFAULTS[APPLE_REWARD_CONFIG_KEYS[InvasionOutcome.DEFEAT]]
+        CONFIG_DEFAULTS[REWARD_CONFIG_KEYS[InvasionOutcome.DEFEAT]]
     ),
 }
 
@@ -138,19 +138,29 @@ def production_enemy_snapshot(enemy_power: int) -> tuple[dict, list[dict]]:
     scheduled_at = datetime(2026, 10, 8, 0, 0, tzinfo=UTC)
     interval = int(CONFIG_DEFAULTS["invasion_occurrence_interval_seconds"])
     duration = int(CONFIG_DEFAULTS["invasion_event_duration_seconds"])
+    # Reproduce the V1 (two-wave, legacy) snapshot rule used by the analysis.
+    # The production builder now serves four-wave battles, so the legacy
+    # arithmetic is restated here and checked against the enemy-power rule.
     matches_played = enemy_power - MaintenanceService.INVASION_BASE_POWER
-    computed, config, _spec, waves = MaintenanceService._build_invasion_snapshot(
-        group_id=1,
-        matches_played=matches_played,
-        slot_epoch=int(scheduled_at.timestamp()),
-        scheduled_at=scheduled_at,
-        interval_seconds=interval,
-        duration_seconds=duration,
-    )
+    computed = MaintenanceService._enemy_power_for_activity(matches_played)
+    base_duration, extra_seconds = divmod(duration, WAVE_COUNT)
+    wave_durations = [
+        base_duration + (1 if index < extra_seconds else 0) for index in range(WAVE_COUNT)
+    ]
+    wave_base, remainder = divmod(enemy_power, WAVE_COUNT)
+    waves = [
+        {
+            "wave_sequence": sequence,
+            "enemy_power": wave_base + (1 if sequence <= remainder else 0),
+        }
+        for sequence in range(1, WAVE_COUNT + 1)
+    ]
+    config = {"wave_durations_seconds": wave_durations}
     assert computed == enemy_power
     assert sum(wave["enemy_power"] for wave in waves) == enemy_power
     assert len(waves) == WAVE_COUNT
     assert config["wave_durations_seconds"] == [duration // WAVE_COUNT] * WAVE_COUNT
+    assert interval > 0 and scheduled_at.tzinfo is not None
     return config, waves
 
 

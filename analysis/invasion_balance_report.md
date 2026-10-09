@@ -1,5 +1,12 @@
 # V1 Invasion balance — repository-grounded analysis
 
+> **Status (superseded for new battles).** This analysis describes the legacy
+> two-wave V1 battles, which keep their original timeline. New battles are
+> four-wave; see `docs/invasion-four-wave-battles.md` for the current timing,
+> balance formula (enemy power scaled by waves / 2, so each wave keeps the legacy
+> strength), and reward rules. Correction: the default occurrence cadence is 4
+> hours (six slots per day), not the 8 hours stated below.
+
 **Scope:** read-only balance analysis as of 2026-10-08. No gameplay, balance, reward, formula, schedule, schema, or production behavior was changed. All runtime conclusions below are based on the checked-in V1 implementation and defaults; conditional scenario results are not claims about current players.
 
 ## Bottom line

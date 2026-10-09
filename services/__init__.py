@@ -27,7 +27,6 @@ from sib.services.invasion_rewards import (
     InvasionNotCompletedError,
     InvasionParticipantReward,
     InvasionRewardConfigurationError,
-    InvasionRewardLedgerConflictError,
     InvasionRewardService,
     InvasionSettlementError,
     InvasionSettlementOutcomeError,
@@ -62,5 +61,4 @@ __all__ = [
     "InvasionNotCompletedError",
     "InvasionSettlementOutcomeError",
     "InvasionRewardConfigurationError",
-    "InvasionRewardLedgerConflictError",
 ]

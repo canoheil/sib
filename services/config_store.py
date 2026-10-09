@@ -123,22 +123,40 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     "friendly_reward_max_matches_per_day": 5,
     "friendly_reward_apples_per_match": 10,
     "friendly_reward_daily_apple_cap": 50,
-    # Invasion V1 settlement (Phase 9): every persisted participant receives
-    # the outcome-based Apple amount, independent of contribution, Brace, or
-    # Main Card. Defaults are intentionally modest versus the existing
-    # +5 Apple Apple-Battle win / +10 Apple friendly-match reward: total
-    # victory 10, narrow defense 5, defeat consolation 1. The settlement
-    # ledger preserves each participant's first amount across retries.
-    "invasion_reward_total_victory_apples": 10,
-    "invasion_reward_narrow_defense_apples": 5,
-    "invasion_reward_defeat_apples": 1,
-    # Invasion scheduling (Phase 5). Intervals are UTC-slot aligned: the
-    # default 4-hour cadence yields six occurrences per active Group per day
-    # (00:00, 04:00, 08:00, 12:00, 16:00, 20:00 UTC). Event timing is
-    # snapshotted onto each Invasion when it is created, so a later config
-    # change never rewrites an occurrence already in progress.
+    # Invasion settlement: each DEFENDER (a participant with at least one
+    # persisted successful defense action in that Invasion) receives the
+    # outcome-based amount of real Golden Apple inventory items (apple_gold).
+    # Joining alone never qualifies. Amounts are read at settlement time and
+    # are paid exactly once per Invasion.
+    "invasion_reward_total_victory_golden_apples": 10,
+    "invasion_reward_narrow_defense_golden_apples": 5,
+    "invasion_reward_defeat_golden_apples": 1,
+    # Invasion scheduling. Intervals are UTC-slot aligned: the default 4-hour
+    # cadence yields six occurrences per active Group per day (00:00, 04:00,
+    # 08:00, 12:00, 16:00, 20:00 UTC). An occurrence may activate only inside
+    # its first battle window [slot start, slot start + battle window); it is
+    # never announced before activation and missed slots are never backfilled.
+    # Battle parameters are snapshotted onto each Invasion when it activates,
+    # so a later config change never rewrites a battle already in progress.
     "invasion_occurrence_interval_seconds": 4 * 60 * 60,
+    # Superseded by invasion_wave_count x invasion_wave_duration_seconds for
+    # new battles. Kept so existing rows stay valid; legacy 2-wave events keep
+    # their own snapshot and do not read this key.
     "invasion_event_duration_seconds": 20 * 60,
+    # Four-wave battle timing: every wave lasts wave_duration seconds, measured
+    # from the battle's actual activation time (a 20-minute battle by default).
+    "invasion_wave_count": 4,
+    "invasion_wave_duration_seconds": 5 * 60,
+    # Enemy strength: base + min(Group matches played, activity cap), scaled
+    # by wave_count / 2 so each wave keeps the strength of a legacy wave.
+    "invasion_enemy_base_power": 100,
+    "invasion_enemy_activity_bonus_cap": 100,
+    # Downtime recovery budget per battle. A bot stall longer than the 30 s
+    # heartbeat tolerance is compensated by extending the active wave, but the
+    # total compensation for one battle may not exceed this many seconds. A
+    # stall that would exceed it finalizes the battle as interrupted (no
+    # outcome, no reward). Snapshotted per battle at activation.
+    "invasion_downtime_compensation_max_seconds": 20 * 60,
     # Trading
     "trades_per_day": 1,
     "trade_expiration_hours": 24,
@@ -317,9 +335,9 @@ CONFIG_DEFAULTS: dict[str, Any] = {
             "message": "🍎 سیب‌های معمولی برداشت شد.",
         },
         "apple_gold": {
-            "message": "✨ شانست گرفت!\n🪙 یک سیب طلایی پیدا کردی!",
+            "message": "✨ شانست گرفت!\n🌕 یک سیب طلایی پیدا کردی!",
             "caption": (
-                "🪙 **سیب طلایی!**\n"
+                "🌕 **سیب طلایی!**\n"
                 "شانس در باغت را زد؛ یک سیب طلاییِ درخشان برداشت کردی. ✨"
             ),
             "asset": "golden_apple",

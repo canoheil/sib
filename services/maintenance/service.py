@@ -2,14 +2,29 @@
 
 import asyncio
 import json
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import DBAPIError
 
 from sib.core.logging import logger
 from sib.database.connection import get_session
+from sib.services.invasion import LEGACY_WAVE_COUNT, MAX_SIGNED_INTEGER
 from sib.services.timeout import TimeoutService
+
+
+@dataclass(frozen=True)
+class InvasionBattleConfig:
+    """Validated battle configuration read once per scheduling pass."""
+
+    interval_seconds: int
+    wave_count: int
+    wave_seconds: int
+    enemy_base_power: int
+    enemy_activity_cap: int
+    max_compensation_seconds: int
 
 
 class MaintenanceService:
@@ -197,13 +212,17 @@ class MaintenanceService:
             schedule_bot_turn(match_id, bot=bot)
 
     # ------------------------------------------------------------------
-    # Invasion scheduling and durable lifecycle (Phase 5)
+    # Invasion scheduling and durable lifecycle
     # ------------------------------------------------------------------
     # This is a step of the existing maintenance sweep, not a new worker.
-    # Occurrence identity and all event timing/configuration live in the DB;
-    # this class only asks InvasionService to perform state transitions.
+    # Occurrence identity lives in the DB. Four-wave battles activate inside
+    # their slot's first battle window and run on an activation-relative
+    # timeline (InvasionService.advance_battle). Legacy Phase-5 events keep
+    # their original two-wave timeline; they are never reinterpreted.
     INVASION_ENEMY_FACTION = "moon_descendants"
-    INVASION_WAVE_COUNT = 2
+    # Legacy (Phase-5) constants, kept for legacy events and the balance
+    # analysis that documents them. Four-wave battles read configuration.
+    INVASION_LEGACY_WAVE_COUNT = 2
     INVASION_BASE_POWER = 100
     INVASION_MAX_ACTIVITY_BONUS = 100
     INVASION_LEGACY_WAVE_SECONDS = 10 * 60
@@ -218,24 +237,23 @@ class MaintenanceService:
         return value.astimezone(cls._UTC)
 
     @classmethod
-    async def _invasion_timing_config(cls, session) -> tuple[int, int]:
-        """Read the two tunable values, falling back safely on invalid config."""
+    async def _battle_config(cls, session) -> "InvasionBattleConfig":
+        """Read and validate the battle configuration, falling back safely.
+
+        Each value is range-checked; an invalid value logs a warning and uses
+        its default. The battle window must fit twice inside one cadence slot,
+        because a battle may activate as late as the end of its window and run
+        a full window longer. If the configured pair violates that, the default
+        pair is used; the cadence is widened only if even the defaults do not fit.
+        """
         from sib.services.config_store import CONFIG_DEFAULTS, ConfigService
 
-        interval_default = int(
-            CONFIG_DEFAULTS["invasion_occurrence_interval_seconds"]
-        )
-        duration_default = int(CONFIG_DEFAULTS["invasion_event_duration_seconds"])
-
-        async def configured_int(
-            key: str, default: int, minimum: int, maximum: int
-        ) -> int:
+        async def configured_int(key: str, minimum: int, maximum: int) -> int:
+            default = int(CONFIG_DEFAULTS[key])
             try:
                 value = await ConfigService.get_int(session, key)
             except (TypeError, ValueError, OverflowError):
-                logger.warning(
-                    "Invalid Invasion setting %s; using default %s", key, default
-                )
+                logger.warning("Invalid Invasion setting %s; using default %s", key, default)
                 return default
             if value < minimum or value > maximum:
                 logger.warning(
@@ -248,48 +266,65 @@ class MaintenanceService:
             return value
 
         interval = await configured_int(
-            "invasion_occurrence_interval_seconds",
-            interval_default,
-            60,
+            "invasion_occurrence_interval_seconds", 60, 31 * 24 * 60 * 60
+        )
+        wave_count = await configured_int(
+            "invasion_wave_count", 1, MAX_SIGNED_INTEGER
+        )
+        wave_seconds = await configured_int(
+            "invasion_wave_duration_seconds", 60, interval
+        )
+        if 2 * wave_count * wave_seconds > interval:
+            logger.warning(
+                "Invasion battle window (%ss x2) does not fit the %ss cadence; "
+                "using default wave configuration",
+                wave_count * wave_seconds,
+                interval,
+            )
+            wave_count = int(CONFIG_DEFAULTS["invasion_wave_count"])
+            wave_seconds = int(CONFIG_DEFAULTS["invasion_wave_duration_seconds"])
+            if 2 * wave_count * wave_seconds > interval:
+                interval = max(interval, 2 * wave_count * wave_seconds)
+
+        base_power = await configured_int(
+            "invasion_enemy_base_power", 1, MAX_SIGNED_INTEGER
+        )
+        activity_cap = await configured_int(
+            "invasion_enemy_activity_bonus_cap", 0, MAX_SIGNED_INTEGER
+        )
+        max_compensation = await configured_int(
+            "invasion_downtime_compensation_max_seconds",
+            0,
             31 * 24 * 60 * 60,
         )
-        duration = await configured_int(
-            "invasion_event_duration_seconds",
-            duration_default,
-            cls.INVASION_WAVE_COUNT,
-            24 * 60 * 60,
+        return InvasionBattleConfig(
+            interval_seconds=interval,
+            wave_count=wave_count,
+            wave_seconds=wave_seconds,
+            enemy_base_power=base_power,
+            enemy_activity_cap=activity_cap,
+            max_compensation_seconds=max_compensation,
         )
-        if interval < duration:
-            # Avoid overlapping occurrences for one Group if an admin enters
-            # a cadence shorter than the complete event duration.
-            logger.warning(
-                "Invasion cadence (%ss) is shorter than event duration (%ss); "
-                "using a safe non-overlapping interval",
-                interval,
-                duration,
-            )
-            interval = max(interval_default, duration)
-        return interval, duration
 
-    @classmethod
-    def _slot_start(
-        cls,
+    @staticmethod
+    def _eligible_slot(
         now: datetime,
         interval_seconds: int,
-        duration_seconds: int,
-    ) -> tuple[int, datetime]:
-        """Return the current UTC slot, or the next one if this event expired.
+        window_seconds: int,
+    ) -> Optional[tuple[int, datetime]]:
+        """Return the UTC slot that may activate now, or None.
 
-        The polling loop can wake a few seconds after a slot boundary, so the
-        current slot remains eligible through its configured event window. If
-        that whole window has passed (for example, startup after a long outage),
-        choose the next slot rather than manufacturing an already-expired event.
+        Boundary policy (half-open window): a slot at epoch ``S`` may activate at
+        any instant ``t`` with ``S <= t < S + window``. At exactly ``S`` the
+        battle activates; at exactly ``S + window`` the slot is already closed.
+        Outside every window nothing is created, so no future battle is ever
+        pre-created or announced ahead of time. Missed slots are not backfilled.
         """
-        epoch_seconds = int(cls._as_utc(now).timestamp())
-        slot_epoch = (epoch_seconds // interval_seconds) * interval_seconds
-        if epoch_seconds >= slot_epoch + duration_seconds:
-            slot_epoch += interval_seconds
-        return slot_epoch, datetime.fromtimestamp(slot_epoch, tz=cls._UTC)
+        ts = MaintenanceService._as_utc(now).timestamp()
+        slot_epoch = (int(ts) // interval_seconds) * interval_seconds
+        if slot_epoch <= ts < slot_epoch + window_seconds:
+            return slot_epoch, datetime.fromtimestamp(slot_epoch, tz=MaintenanceService._UTC)
+        return None
 
     @classmethod
     def _occurrence_key(cls, group_id: int, slot_epoch: int) -> str:
@@ -301,83 +336,84 @@ class MaintenanceService:
 
     @classmethod
     def _enemy_power_for_activity(cls, matches_played: int) -> int:
-        """Provisional, bounded activity scaling isolated for future rebalance.
-
-        GroupStats.matches_played is a trustworthy competitive-activity
-        counter, but it is not a calibrated combat score. The intentionally
-        conservative v1 rule adds at most one base-power's worth of activity;
-        the relationship between match history, Group size, and Invasion
-        contribution units remains an explicit balancing decision.
-        """
+        """Legacy (Phase-5) rule for two-wave events, kept for compatibility."""
         activity = max(0, int(matches_played or 0))
         return cls.INVASION_BASE_POWER + min(
             activity, cls.INVASION_MAX_ACTIVITY_BONUS
         )
 
     @classmethod
-    def _build_invasion_snapshot(
+    def _battle_enemy_power(cls, cfg: "InvasionBattleConfig", matches_played: int) -> int:
+        """Enemy strength for a four-wave battle.
+
+        ``(base + min(matches, cap)) * wave_count / 2``: each wave keeps the
+        strength of a legacy wave, so the defense-to-enemy ratio, and therefore
+        the outcome curve for a given participation, is unchanged by adding
+        waves. Integer floor division.
+        """
+        activity = max(0, int(matches_played or 0))
+        scaled_base = cfg.enemy_base_power + min(activity, cfg.enemy_activity_cap)
+        return scaled_base * cfg.wave_count // LEGACY_WAVE_COUNT
+
+    @classmethod
+    def _build_battle_snapshot(
         cls,
         *,
         group_id: int,
         matches_played: int,
         slot_epoch: int,
         scheduled_at: datetime,
-        interval_seconds: int,
-        duration_seconds: int,
+        activated_at: datetime,
+        cfg: "InvasionBattleConfig",
     ) -> tuple[int, dict, dict, list[dict]]:
-        """Freeze complete event and two-wave configuration before creation."""
-        wave_count = cls.INVASION_WAVE_COUNT
-        base_duration, extra_seconds = divmod(duration_seconds, wave_count)
-        wave_durations = [
-            base_duration + (1 if sequence < extra_seconds else 0)
-            for sequence in range(wave_count)
-        ]
-        elapsed = 0
-        wave_deadlines = []
-        for wave_duration in wave_durations:
-            elapsed += wave_duration
-            wave_deadlines.append(
-                (scheduled_at + timedelta(seconds=elapsed))
-                .astimezone(cls._UTC)
-                .isoformat(timespec="seconds")
-                .replace("+00:00", "Z")
-            )
+        """Freeze the four-wave event configuration at activation.
 
-        enemy_power = cls._enemy_power_for_activity(matches_played)
-        wave_base, remainder = divmod(enemy_power, wave_count)
+        Wave deadlines are deliberately NOT stored here: they are derived from
+        the persisted activation time and the wave duration, so one definition
+        governs every boundary and nothing can drift from the activation instant.
+        """
+        enemy_power = cls._battle_enemy_power(cfg, matches_played)
+        wave_base, remainder = divmod(enemy_power, cfg.wave_count)
         wave_compositions = [
             {
                 "enemy_faction_code": cls.INVASION_ENEMY_FACTION,
                 "wave_sequence": sequence,
                 "enemy_power": wave_base + (1 if sequence <= remainder else 0),
             }
-            for sequence in range(1, wave_count + 1)
+            for sequence in range(1, cfg.wave_count + 1)
         ]
+        activity = max(0, int(matches_played or 0))
         event_config = {
-            "schema_version": 1,
+            "schema_version": 2,
+            "timing_basis": "activation",
             "occurrence_slot_epoch": slot_epoch,
             "slot_start_utc": scheduled_at.isoformat(timespec="seconds").replace(
                 "+00:00", "Z"
             ),
-            "occurrence_interval_seconds": interval_seconds,
-            "duration_seconds": duration_seconds,
-            "wave_count": wave_count,
-            "wave_durations_seconds": wave_durations,
-            "wave_deadlines_utc": wave_deadlines,
-            "planned_end_at_utc": wave_deadlines[-1],
-            "group_matches_played_snapshot": max(0, int(matches_played or 0)),
-            "enemy_power_rule": "base_100_plus_matches_played_capped_at_100_v1",
-            "enemy_power_base": cls.INVASION_BASE_POWER,
-            "enemy_power_activity_bonus_cap": cls.INVASION_MAX_ACTIVITY_BONUS,
+            "activated_at_utc": activated_at.isoformat(timespec="seconds").replace(
+                "+00:00", "Z"
+            ),
+            "occurrence_interval_seconds": cfg.interval_seconds,
+            "battle_window_seconds": cfg.wave_count * cfg.wave_seconds,
+            "wave_count": cfg.wave_count,
+            "wave_duration_seconds": cfg.wave_seconds,
+            "group_matches_played_snapshot": activity,
+            "enemy_power_rule": "scaled_base_plus_matches_capped_v2",
+            "enemy_power_base": cfg.enemy_base_power,
+            "enemy_power_activity_bonus_cap": cfg.enemy_activity_cap,
             "enemy_power": enemy_power,
+            # Total heartbeat downtime this battle may be compensated for.
+            "downtime_compensation_max_seconds": cfg.max_compensation_seconds,
+            # Settlement pays only persisted defenders (see InvasionRewardService).
+            "reward_rule": "defender",
         }
         event_spec = {
             "event_type": cls.INVASION_ENEMY_FACTION,
             "group_id": group_id,
             "occurrence_slot_epoch": slot_epoch,
-            "wave_count": wave_count,
-            "wave_durations_seconds": wave_durations,
-            "group_matches_played_snapshot": max(0, int(matches_played or 0)),
+            "wave_count": cfg.wave_count,
+            "wave_duration_seconds": cfg.wave_seconds,
+            "group_matches_played_snapshot": activity,
         }
         return enemy_power, event_config, event_spec, wave_compositions
 
@@ -400,14 +436,14 @@ class MaintenanceService:
         now: datetime,
         presentation_ids: list[int] | None = None,
     ) -> dict[str, int]:
-        """Create at most the current deterministic slot for each active Group.
+        """Activate the current slot's battle for each active Group, if eligible.
 
-        Missed historical slots are intentionally not backfilled after a long
-        outage. An unexpired current window is eligible; once it has ended, the
-        next UTC slot is targeted. The unique key handles retries and competing
-        maintenance instances.
+        A battle is created already ACTIVE, at the tick that first observes its
+        slot inside the battle window, and is announced only then. A Group that
+        still has an unfinished battle is skipped, so two battles of one Group
+        can never overlap; the Group row lock serializes that check per Group.
         """
-        from sib.database.models import Group, GroupStats, Invasion
+        from sib.database.models import Group, GroupStats, Invasion, InvasionStatus
         from sib.services.invasion import (
             InvasionGroupNotFoundError,
             InvasionOccurrenceConflictError,
@@ -417,15 +453,20 @@ class MaintenanceService:
         stats = {
             "invasions_scheduled": 0,
             "duplicate_invasion_occurrences": 0,
+            "invasions_skipped_overlap": 0,
             "invasion_failures": 0,
         }
         async with get_session() as session:
-            interval_seconds, duration_seconds = await cls._invasion_timing_config(
-                session
-            )
-            slot_epoch, scheduled_at = cls._slot_start(
-                now, interval_seconds, duration_seconds
-            )
+            cfg = await cls._battle_config(session)
+        eligible = cls._eligible_slot(now, cfg.interval_seconds, cfg.wave_count * cfg.wave_seconds)
+        if eligible is None:
+            # Outside every slot's battle window: nothing to create, nothing
+            # to announce, and no future slot is pre-created.
+            return stats
+        slot_epoch, scheduled_at = eligible
+        activated_at = cls._as_utc(now)
+
+        async with get_session() as session:
             group_rows = list(
                 (
                     await session.execute(
@@ -447,8 +488,6 @@ class MaintenanceService:
             cls._occurrence_key(int(group_id), slot_epoch)
             for group_id, _matches_played in group_rows
         ]
-        # Keep the IN list below SQLite's traditional parameter limit while
-        # avoiding a per-Group transaction when the slot already exists.
         existing_keys = set()
         for offset in range(0, len(occurrence_keys), 500):
             key_batch = occurrence_keys[offset : offset + 500]
@@ -472,22 +511,24 @@ class MaintenanceService:
                 continue
 
             enemy_power, event_config, event_spec, wave_compositions = (
-                cls._build_invasion_snapshot(
+                cls._build_battle_snapshot(
                     group_id=group_id,
                     matches_played=matches_played,
                     slot_epoch=slot_epoch,
                     scheduled_at=scheduled_at,
-                    interval_seconds=interval_seconds,
-                    duration_seconds=duration_seconds,
+                    activated_at=activated_at,
+                    cfg=cfg,
                 )
             )
             try:
                 async with get_session() as session:
-                    # Re-check eligibility in the write transaction. A Group
-                    # deactivated since the initial scan does not get a new
-                    # occurrence; existing Invasions continue independently.
+                    # Serialize scheduling per Group, then re-check everything the
+                    # decision depends on: active flag, duplicate key, and any
+                    # unfinished battle of this Group.
                     active = await session.scalar(
-                        select(Group.is_active).where(Group.id == group_id)
+                        select(Group.is_active)
+                        .where(Group.id == group_id)
+                        .with_for_update()
                     )
                     if active is not True:
                         continue
@@ -499,6 +540,17 @@ class MaintenanceService:
                     if existing_id is not None:
                         stats["duplicate_invasion_occurrences"] += 1
                         continue
+                    unfinished_id = await session.scalar(
+                        select(Invasion.id)
+                        .where(
+                            Invasion.group_id == group_id,
+                            Invasion.status != InvasionStatus.FINISHED,
+                        )
+                        .limit(1)
+                    )
+                    if unfinished_id is not None:
+                        stats["invasions_skipped_overlap"] += 1
+                        continue
                     invasion = await InvasionService.create(
                         session,
                         group_id=group_id,
@@ -509,24 +561,27 @@ class MaintenanceService:
                         event_config=event_config,
                         event_spec=event_spec,
                         wave_compositions=wave_compositions,
+                        activated_at=activated_at,
+                        wave_duration_seconds=cfg.wave_seconds,
                     )
                     invasion_id = invasion.id
                 stats["invasions_scheduled"] += 1
                 if presentation_ids is not None:
                     presentation_ids.append(int(invasion_id))
                 logger.info(
-                    "Scheduled Invasion id=%s group_id=%s occurrence_key=%s "
-                    "enemy_power=%s",
+                    "Activated Invasion id=%s group_id=%s occurrence_key=%s "
+                    "enemy_power=%s waves=%s wave_seconds=%s",
                     invasion_id,
                     group_id,
                     occurrence_key,
                     enemy_power,
+                    cfg.wave_count,
+                    cfg.wave_seconds,
                 )
             except (DBAPIError, InvasionOccurrenceConflictError):
                 # A concurrent worker may win after our pre-check. Rollback is
                 # handled by get_session; the persisted unique key is the final
-                # duplicate boundary. Treat a matching key as success/duplicate
-                # and never abort unrelated Group scheduling.
+                # duplicate boundary.
                 try:
                     if await cls._occurrence_exists(occurrence_key):
                         stats["duplicate_invasion_occurrences"] += 1
@@ -563,7 +618,7 @@ class MaintenanceService:
 
     @classmethod
     def _deadline_for_wave(cls, invasion, wave) -> datetime:
-        """Read a frozen deadline, or derive a stable legacy deadline once."""
+        """Legacy (two-wave) deadline: frozen snapshot or stable legacy fallback."""
         try:
             event_config = json.loads(invasion.event_config_json)
         except (TypeError, ValueError) as exc:
@@ -601,15 +656,17 @@ class MaintenanceService:
             ):
                 raise ValueError("persisted wave duration must be a positive integer")
         else:
-            # Phase-4 scheduled rows did not yet snapshot wave timing. Freeze a
-            # conservative 10-minute per-wave fallback into the wave deadline
-            # on its first transition; all Phase-5 occurrences persist an exact
-            # per-wave deadline above.
             duration = cls.INVASION_LEGACY_WAVE_SECONDS
         return cls._as_utc(anchor) + timedelta(seconds=duration)
 
     @classmethod
-    async def _due_invasion_candidates(cls, now: datetime) -> list[tuple]:
+    async def _candidate_invasions(cls, now: datetime) -> list[tuple]:
+        """Every ACTIVE battle (heartbeat refresh) plus legacy due SCHEDULED rows.
+
+        Active battles are always visited, not only when a boundary is due,
+        because each visit refreshes the heartbeat that outage restoration
+        depends on. Stalest heartbeats come first.
+        """
         from sib.database.models import Invasion, InvasionStatus
 
         due = or_(
@@ -617,13 +674,7 @@ class MaintenanceService:
                 Invasion.status == InvasionStatus.SCHEDULED,
                 Invasion.scheduled_at <= now,
             ),
-            and_(
-                Invasion.status == InvasionStatus.ACTIVE,
-                or_(
-                    Invasion.next_transition_at <= now,
-                    Invasion.current_wave_sequence.is_(None),
-                ),
-            ),
+            Invasion.status == InvasionStatus.ACTIVE,
         )
         async with get_session() as session:
             rows = list(
@@ -638,7 +689,9 @@ class MaintenanceService:
                         )
                         .where(due)
                         .order_by(
-                            Invasion.next_transition_at.asc(), Invasion.id.asc()
+                            Invasion.heartbeat_at.asc(),
+                            Invasion.next_transition_at.asc(),
+                            Invasion.id.asc(),
                         )
                         .limit(cls.MAX_INVASION_EVENTS_PER_CYCLE)
                     )
@@ -647,9 +700,38 @@ class MaintenanceService:
         return rows
 
     @classmethod
-    async def _process_due_invasion(
-        cls, invasion_id: int, now: datetime
-    ) -> str | None:
+    async def _process_invasion(cls, invasion_id: int, now: datetime) -> list[str]:
+        """Advance one Invasion; return the committed action tokens."""
+        from sib.database.models import InvasionStatus
+        from sib.services.invasion import InvasionService
+
+        async with get_session() as session:
+            invasion = await InvasionService.get(session, invasion_id)
+            if (
+                invasion.status == InvasionStatus.ACTIVE
+                and InvasionService._battle_timing(invasion) is not None
+            ):
+                result = await InvasionService.advance_battle(
+                    session, invasion_id, now=now
+                )
+                actions: list[str] = []
+                if result.paused_seconds:
+                    actions.append("restored")
+                for item in result.transitions:
+                    if item == "interrupted":
+                        actions.append("interrupted")
+                    elif item == "resolved":
+                        actions.append("resolved")
+                    else:
+                        actions.append("wave_started")
+                return actions
+
+        action = await cls._process_legacy_invasion(invasion_id, now)
+        return [action] if action else []
+
+    @classmethod
+    async def _process_legacy_invasion(cls, invasion_id: int, now: datetime) -> str | None:
+        """Original two-wave timeline, unchanged for pre-existing events."""
         from sib.database.models import InvasionStatus
         from sib.services.invasion import InvasionService
 
@@ -662,6 +744,13 @@ class MaintenanceService:
                 if wave is None:
                     raise ValueError("scheduled Invasion has no current wave")
                 deadline = cls._deadline_for_wave(invasion, wave)
+                if now >= deadline:
+                    # The whole first window passed before anyone could join (for
+                    # example after an outage). It is closed without a defeat.
+                    voided = await InvasionService.void_missed_legacy_battle(
+                        session, invasion_id, now=now
+                    )
+                    return "voided" if voided else None
                 await InvasionService.start(
                     session,
                     invasion_id,
@@ -719,6 +808,54 @@ class MaintenanceService:
             )
 
     @classmethod
+    async def _settle_pending_rewards(cls, now: datetime) -> tuple[int, int]:
+        """Pay each finished, unsettled Invasion once; return (settled, failed).
+
+        Every event is settled in its own transaction. The settled marker is
+        written with the Golden Apple item grants, so a failed grant leaves the
+        event pending and it is retried on a later pass. The marker check under
+        the Invasion lock makes a repeat after a crash a no-op. Only events with
+        an approved outcome qualify, so interrupted (outcome NULL) battles are
+        never paid.
+        """
+        from sib.database.models import Invasion, InvasionStatus, InvasionOutcome
+        from sib.services.invasion_rewards import InvasionRewardService
+
+        async with get_session() as session:
+            ids = list(
+                (
+                    await session.scalars(
+                        select(Invasion.id)
+                        .where(
+                            Invasion.status == InvasionStatus.FINISHED,
+                            Invasion.outcome.in_(InvasionOutcome.ALL),
+                            Invasion.rewards_settled_at.is_(None),
+                        )
+                        .order_by(Invasion.ended_at.asc(), Invasion.id.asc())
+                        .limit(cls.MAX_INVASION_EVENTS_PER_CYCLE)
+                    )
+                ).all()
+            )
+        settled = 0
+        failed = 0
+        for invasion_id in ids:
+            try:
+                async with get_session() as session:
+                    await InvasionRewardService.settle_completed_invasion(
+                        session,
+                        int(invasion_id),
+                        now=now,
+                    )
+                settled += 1
+            except Exception:
+                failed += 1
+                logger.exception(
+                    "Invasion reward settlement failed; will retry invasion_id=%s",
+                    invasion_id,
+                )
+        return settled, failed
+
+    @classmethod
     async def run_invasion_cycle(
         cls,
         now: datetime | None = None,
@@ -728,18 +865,22 @@ class MaintenanceService:
     ) -> dict[str, int]:
         """Run one DB-only Invasion step in the existing maintenance sweep.
 
-        Each occurrence and each transition has its own short transaction.
-        Processing is one lifecycle transition per Invasion per pass (plus
-        final resolution), so a long outage is caught up over later passes
-        instead of an unbounded historical loop. No Bot/Telegram object is used.
+        Order: activate the current slot's battle (if eligible) -> advance every
+        ACTIVE battle and any due legacy row -> settle finished battles. Each
+        Invasion has its own short transaction. No Bot/Telegram object is used.
         """
         now_utc = cls._as_utc(now or datetime.now(cls._UTC))
         stats = {
             "invasions_scheduled": 0,
             "duplicate_invasion_occurrences": 0,
+            "invasions_skipped_overlap": 0,
             "invasions_started": 0,
+            "invasions_voided": 0,
+            "invasion_heartbeat_restores": 0,
             "invasion_wave_transitions": 0,
             "invasions_resolved": 0,
+            "invasions_interrupted": 0,
+            "invasion_rewards_settled": 0,
             "invasion_failures": 0,
         }
 
@@ -756,7 +897,7 @@ class MaintenanceService:
                 logger.exception("Invasion occurrence scheduling scan failed")
 
         try:
-            candidates = await cls._due_invasion_candidates(now_utc)
+            candidates = await cls._candidate_invasions(now_utc)
         except Exception:
             stats["invasion_failures"] += 1
             logger.exception("Invasion due-state scan failed")
@@ -764,23 +905,33 @@ class MaintenanceService:
 
         for invasion_id, group_id, occurrence_key, status, current_wave in candidates:
             try:
-                action = await cls._process_due_invasion(int(invasion_id), now_utc)
-                if action == "started":
-                    stats["invasions_started"] += 1
-                elif action in ("wave_started", "wave_finished"):
-                    stats["invasion_wave_transitions"] += 1
-                elif action == "wave_finished_and_resolved":
-                    stats["invasion_wave_transitions"] += 1
-                    stats["invasions_resolved"] += 1
-                elif action == "resolved":
-                    stats["invasions_resolved"] += 1
-                if action:
-                    if presentation_ids is not None:
-                        presentation_ids.append(int(invasion_id))
+                actions = await cls._process_invasion(int(invasion_id), now_utc)
+                for action in actions:
+                    if action == "started":
+                        stats["invasions_started"] += 1
+                    elif action == "restored":
+                        stats["invasion_heartbeat_restores"] += 1
+                    elif action == "voided":
+                        stats["invasions_voided"] += 1
+                    elif action in ("wave_started", "wave_finished"):
+                        stats["invasion_wave_transitions"] += 1
+                    elif action == "wave_finished_and_resolved":
+                        stats["invasion_wave_transitions"] += 1
+                        stats["invasions_resolved"] += 1
+                    elif action == "resolved":
+                        stats["invasions_resolved"] += 1
+                    elif action == "interrupted":
+                        stats["invasions_interrupted"] += 1
+                if actions and presentation_ids is not None:
+                    # Any committed change (including a restored deadline) must
+                    # refresh the pinned screen; stage notices are decided by the
+                    # presentation step from persisted state.
+                    presentation_ids.append(int(invasion_id))
+                if actions:
                     logger.info(
-                        "Invasion maintenance action=%s invasion_id=%s group_id=%s "
+                        "Invasion maintenance actions=%s invasion_id=%s group_id=%s "
                         "occurrence_key=%s",
-                        action,
+                        actions,
                         invasion_id,
                         group_id,
                         occurrence_key,
@@ -797,16 +948,15 @@ class MaintenanceService:
                     current_wave,
                 )
 
-        if any(
-            stats[key]
-            for key in (
-                "invasions_scheduled",
-                "invasions_started",
-                "invasion_wave_transitions",
-                "invasions_resolved",
-                "invasion_failures",
-            )
-        ):
+        try:
+            settled, failed = await cls._settle_pending_rewards(now_utc)
+            stats["invasion_rewards_settled"] += settled
+            stats["invasion_failures"] += failed
+        except Exception:
+            stats["invasion_failures"] += 1
+            logger.exception("Invasion reward settlement scan failed")
+
+        if any(stats.values()):
             logger.info("Invasion maintenance: %s", stats)
         return stats
 

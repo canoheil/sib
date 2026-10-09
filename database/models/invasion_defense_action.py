@@ -36,6 +36,14 @@ class InvasionDefenseAction(Base, TimestampMixin):
             "contribution_id",
             name="uq_invasion_defense_actions_contribution",
         ),
+        # At most one defense action per participant per Wave: enforced by the
+        # database, so simultaneous callbacks cannot both commit.
+        UniqueConstraint(
+            "participant_id",
+            "wave_id",
+            "action_code",
+            name="uq_invasion_defense_actions_participant_wave_action",
+        ),
         CheckConstraint(
             "wave_sequence > 0",
             name="ck_invasion_defense_actions_wave_sequence",

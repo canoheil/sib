@@ -65,6 +65,11 @@ class Invasion(Base, TimestampMixin):
             "status",
             "next_transition_at",
         ),
+        Index(
+            "ix_invasions_status_rewards_settled_at",
+            "status",
+            "rewards_settled_at",
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
@@ -97,6 +102,23 @@ class Invasion(Base, TimestampMixin):
     announcement_message_id: Mapped[Optional[int]] = mapped_column(
         BigInteger, nullable=True
     )
+    # Last maintenance/action instant at which this ACTIVE battle was brought
+    # up to date. A gap larger than the heartbeat tolerance is treated as bot
+    # downtime and compensated within the battle's downtime budget. A stall
+    # beyond that budget finalizes the battle as interrupted (four-wave only).
+    heartbeat_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Set in the same transaction as the Golden Apple item grants (defenders
+    # only). NULL on a FINISHED outcome means "settlement still pending". An
+    # interrupted battle (outcome NULL) stamps it at interruption: nothing owed.
+    rewards_settled_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Highest Telegram presentation stage already delivered: 1..N = wave N
+    # started, N+1 = final result. NULL marks legacy events, which keep the
+    # original edit-only presentation.
+    presentation_stage: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     # Optional stable region metadata only; no Region/Territory entity is implied.
     target_region_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)

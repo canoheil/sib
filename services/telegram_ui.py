@@ -290,15 +290,27 @@ async def safe_answer_callback(
         logger.warning(f"Failed to answer callback query: {e}")
 
 
-async def _send_fallback(bot, chat_id, text, reply_markup=None, parse_mode="Markdown"):
-    """Send a plain text message (retrying without parse_mode on failure)."""
+async def _send_fallback(
+    bot,
+    chat_id,
+    text,
+    reply_markup=None,
+    parse_mode="Markdown",
+    disable_notification: bool = False,
+):
+    """Send a plain text message (retrying without parse_mode on failure).
+
+    ``disable_notification`` is forwarded only when set, so existing callers
+    keep exactly the same Bot API call shape.
+    """
+    extra = {"disable_notification": True} if disable_notification else {}
     try:
         return await bot.send_message(
-            chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode
+            chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode, **extra
         )
     except Exception:
         return await bot.send_message(
-            chat_id, text, reply_markup=reply_markup, parse_mode=None
+            chat_id, text, reply_markup=reply_markup, parse_mode=None, **extra
         )
 
 
@@ -353,19 +365,24 @@ async def safe_send_screen(
     reply_markup: InlineKeyboardMarkup | None = None,
     parse_mode: str | None = "Markdown",
     photo_fallback_to_text: bool = True,
+    disable_notification: bool = False,
 ):
     """Send a screen; optionally fall back to text when photo send fails.
 
     A new chat/remote group needs a text fallback. When REPLACING a text
     message, however, a failed photo send should instead edit that existing
     text message in place (not delete it and send another text message).
+
+    ``disable_notification`` sends a silent message (it still appears in the
+    chat). It is forwarded only when True, so default calls are unchanged.
     """
+    extra = {"disable_notification": True} if disable_notification else {}
     if photo is not None:
         caption = photo_caption(text)
         try:
             return await bot.send_photo(
                 chat_id, photo, caption=caption,
-                reply_markup=reply_markup, parse_mode=parse_mode,
+                reply_markup=reply_markup, parse_mode=parse_mode, **extra,
             )
         except TelegramBadRequest as exc:
             if parse_mode and any(marker in str(exc).lower() for marker in PARSE_ERROR_MARKERS):
@@ -374,7 +391,7 @@ async def safe_send_screen(
                 try:
                     return await bot.send_photo(
                         chat_id, photo, caption=caption,
-                        reply_markup=reply_markup, parse_mode=None,
+                        reply_markup=reply_markup, parse_mode=None, **extra,
                     )
                 except Exception as plain_exc:
                     logger.warning("photo screen without Markdown failed: %s", plain_exc)
@@ -385,7 +402,9 @@ async def safe_send_screen(
         if not photo_fallback_to_text:
             return None
     try:
-        return await _send_fallback(bot, chat_id, text, reply_markup, parse_mode)
+        return await _send_fallback(
+            bot, chat_id, text, reply_markup, parse_mode, disable_notification=disable_notification
+        )
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("send screen failed entirely: %s", exc)
         return None
