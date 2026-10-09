@@ -45,7 +45,9 @@ from sib.services.invasion import (
 )
 from sib.tests.conftest import requires_row_locks
 from sib.services.invasion_telegram import (
+    InvasionScreenSnapshot,
     InvasionTelegramService,
+    render_final_notice,
     render_invasion_status,
 )
 from sib.services.maintenance.service import MaintenanceService
@@ -477,7 +479,7 @@ async def test_valid_join_uses_service_main_card_snapshot_and_duplicate_is_idemp
     await handle_invasion_callback(callback, bot)
     first_response = _sent_text(bot)
     assert callback.answer.await_count == 1
-    assert "دفاع شما ثبت شد" in first_response
+    assert "به یورش پیوستی" in first_response
     assert "نگهبان ماه" in first_response
     assert "سطح: ۲" in first_response
     assert "قدرت: ۳۰" in first_response
@@ -487,7 +489,7 @@ async def test_valid_join_uses_service_main_card_snapshot_and_duplicate_is_idemp
     duplicate = _callback(user_id, invasion_callback_data("join", invasion_id))
     await handle_invasion_callback(duplicate, bot)
     second_response = _sent_text(bot)
-    assert "دفاع شما ثبت شد" in second_response
+    assert "به یورش پیوستی" in second_response
     assert bot.send_message.await_count == 2
     assert await db_session.scalar(
         select(func.count(InvasionParticipant.id)).where(
@@ -684,7 +686,7 @@ async def test_brace_complete_flow_updates_status_and_contributions(db_session):
         invasion_callback_data("join", invasion_id),
     )
     await handle_invasion_callback(join_callback, bot)
-    assert "دفاع شما ثبت شد" in _sent_text(bot)
+    assert "به یورش پیوستی" in _sent_text(bot)
 
     status_callback = _callback(
         user_id,
@@ -1458,7 +1460,21 @@ async def test_resolved_announcement_displays_persisted_final_outcome(db_session
 
 
 @pytest.mark.asyncio
-async def test_existing_maintenance_loop_announces_after_event_commit(db_session):
+async def test_existing_maintenance_loop_announces_after_event_commit(
+    db_session, monkeypatch
+):
+    # Battles activate only inside a slot's window, so the loop's clock is
+    # pinned to a moment inside the 08:00 UTC window instead of the wall clock.
+    from functools import partial
+
+    monkeypatch.setattr(
+        MaintenanceService,
+        "run_invasion_cycle",
+        partial(
+            MaintenanceService.run_invasion_cycle,
+            now=datetime(2026, 10, 9, 8, 0, 30, tzinfo=timezone.utc),
+        ),
+    )
     group_id = GROUP_ID - 100
     db_session.add(
         Group(
@@ -1886,3 +1902,82 @@ async def test_status_refresh_replacement_repins_the_new_announcement(db_session
     persisted = await db_session.get(Invasion, invasion_id)
     assert persisted.announcement_message_id == 9611
     assert persisted.status == InvasionStatus.ACTIVE
+
+
+def _final_snapshot(**overrides) -> InvasionScreenSnapshot:
+    values = dict(
+        invasion_id=2,
+        group_id=GROUP_ID,
+        status=InvasionStatus.FINISHED,
+        scheduled_at=NOW - timedelta(minutes=30),
+        started_at=NOW - timedelta(minutes=30),
+        ended_at=NOW,
+        current_wave_sequence=None,
+        wave_count=4,
+        current_wave_deadline=None,
+        target_region_code=None,
+        target_region_name="دره ماه",
+        enemy_faction_code="moon_descendants",
+        enemy_faction_name="فرزندان ماه",
+        enemy_faction_symbol="🌙",
+        enemy_power=100,
+        defense_total=100,
+        participant_count=3,
+        outcome=InvasionOutcome.TOTAL_VICTORY,
+        announcement_message_id=MESSAGE_ID,
+        reward_golden_apples=10,
+        rewards_settled=True,
+    )
+    values.update(overrides)
+    return InvasionScreenSnapshot(**values)
+
+
+@pytest.mark.parametrize(
+    ("outcome", "amount"),
+    [
+        (InvasionOutcome.TOTAL_VICTORY, 10),
+        (InvasionOutcome.NARROW_DEFENSE, 5),
+        (InvasionOutcome.DEFEAT, 1),
+    ],
+)
+def test_result_notice_names_the_golden_apple_inventory_reward(outcome, amount):
+    text = render_final_notice(
+        _final_snapshot(outcome=outcome, reward_golden_apples=amount)
+    )
+    persian_digits = {10: "۱۰", 5: "۵", 1: "۱"}
+    assert f"🎁 پاداش: {persian_digits[amount]} 🌕 سیب طلایی" in text
+    assert "برای هر مدافع واجد شرایط" in text
+    # Rewards are inventory items, never the ordinary Apple wallet.
+    assert "🍎" not in text
+
+
+def test_result_notice_says_when_no_defender_was_eligible():
+    text = render_final_notice(_final_snapshot(reward_golden_apples=None))
+    assert "مدافع واجد شرایطی وجود نداشت" in text
+    assert "🌕" not in text
+
+
+def test_result_notice_for_an_interrupted_battle_is_not_a_defeat_or_a_reward():
+    text = render_final_notice(
+        _final_snapshot(outcome=None, reward_golden_apples=None, rewards_settled=True)
+    )
+    assert "قطع طولانی ربات" in text
+    assert "نه پیروزی ثبت شد نه شکست" in text
+    assert "پاداشی تعلق نمی‌گیرد" in text
+    assert "نتیجه:" not in text
+    assert "🌕" not in text
+    assert "🍎" not in text
+
+
+def test_result_notice_for_a_voided_legacy_battle_pays_nothing():
+    text = render_final_notice(
+        _final_snapshot(
+            outcome=None,
+            started_at=None,
+            reward_golden_apples=None,
+            rewards_settled=True,
+        )
+    )
+    assert "بدون دفاع لغو شد" in text
+    assert "پاداشی تعلق نمی‌گیرد" in text
+    assert "🌕" not in text

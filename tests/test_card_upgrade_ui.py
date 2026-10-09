@@ -224,7 +224,7 @@ async def test_upgrade_screen_shows_everything_the_spec_requires(db_session, edi
         assert f"{label}: `{now}`" in text and f"{label}: `{after}`" in text
     assert "📊 مجموع: `60`" in text and "📊 مجموع: `90`" in text
     assert "🍎 سیب معمولی × `100`" in text                # exact cost
-    assert "🪙" in text and "× `3`" in text
+    assert "🌕" in text and "× `3`" in text
     assert "موجودی تو" in text and "`70`" in text and "`1`" in text  # own resources
     assert "⚠️" in text and "`30`" in text and "`2`" in text       # exact missing
     assert photo is not None and len(text) <= CAPTION_LIMIT
@@ -301,7 +301,7 @@ async def test_insufficient_resources_stays_clickable_and_shows_exact_missing(db
     alert = args[0]
     assert kwargs["show_alert"] is True
     assert "منابع کافی نیست" in alert
-    assert "🍎 سیب معمولی: 60" in alert and "🪙" in alert and ": 1" in alert
+    assert "🍎 سیب معمولی: 60" in alert and "🌕" in alert and ": 1" in alert
     assert len(alert) <= 200
 
     assert await _holdings(db_session, user) == before

@@ -36,8 +36,10 @@ class RecoveryService:
         2. Clean up stale matchmaking queue entries and restore parties.
         3. Recover interrupted Apple Battle matches from persisted state/cursor.
         4. Terminate stale/abandoned active matches.
-        5. Apply one bounded due Invasion transition per event through the
-           existing DB-only MaintenanceService step.
+        5. Bring every ACTIVE Invasion up to date through the existing DB-only
+           MaintenanceService step: restore downtime (four-wave battles, from
+           the persisted heartbeat), commit due wave boundaries, and settle any
+           finished battle that is still unpaid. Safe to repeat.
         """
         from sib.services.apple_battle import AppleBattleService
 

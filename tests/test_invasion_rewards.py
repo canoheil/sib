@@ -1,606 +1,377 @@
-"""Focused tests for completed-Invasion reward settlement."""
+"""Golden Apple settlement for four-wave Invasions.
+
+Covered rules:
+- Rewards are real ``apple_gold`` inventory items (``user_items``), never Apple
+  wallet currency.
+- Only defenders (a persisted successful defense action in that Invasion) are
+  paid. Joining alone never qualifies.
+- Quantities: total victory 10, narrow defense 5, defeat 1 per defender.
+- Settlement is exactly once: a failed grant rolls back and is retried, and a
+  committed marker makes every later call a no-op.
+- Interrupted (outcome NULL) and already-settled historical events are never
+  paid.
+
+Outcomes are produced by real combat (``outcome_for`` over the persisted
+defense total), not injected. Row-lock races are MySQL/MariaDB-only and are
+marked with ``requires_row_locks``.
+"""
 
 import asyncio
-import uuid
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from sib.database.connection import get_async_sessionmaker
-from sib.database.models import (
-    AppleTransaction,
-    AppleWallet,
-    InvasionDefenseAction,
-    InvasionOutcome,
-    InvasionParticipant,
-    InvasionStatus,
-    InvasionWave,
-    PlayerProgression,
-    PlayerXPGrant,
-    SeedlingAward,
-    SeedlingInventory,
-)
-from sib.services.apple_wallet import AppleWalletService
-from sib.services.characters import CharacterService
-from sib.services.config_store import ConfigService
-from sib.services.invasion import InvasionNotFoundError, InvasionService
+from sib.database.models import AppleWallet, Invasion, InvasionOutcome, InvasionStatus
+from sib.services.config_store import CONFIG_DEFAULTS
+from sib.services.invasion import InvasionDefenseActionCode, InvasionService
 from sib.services.invasion_rewards import (
-    InvasionNotCompletedError,
-    InvasionRewardLedgerConflictError,
+    GOLDEN_APPLE_ITEM_KEY,
     InvasionRewardService,
     InvasionSettlementOutcomeError,
 )
-from sib.services.player_cards import PlayerCardService
+from sib.services.items import ItemService
+from sib.services.maintenance.service import MaintenanceService
+from sib.services.recovery import RecoveryService
 from sib.tests.conftest import requires_row_locks
 from sib.tests.test_parties import create_test_group, create_test_user
 
-
 UTC = timezone.utc
-NOW = datetime(2026, 10, 8, 12, 30, tzinfo=UTC)
+SLOT = datetime(2026, 10, 9, 12, 0, tzinfo=UTC)  # a 4-hour UTC slot start
 
 
-async def _setup_invasion(
-    session,
-    *,
-    outcome=InvasionOutcome.TOTAL_VICTORY,
-    status=InvasionStatus.FINISHED,
-    user_count=1,
-    join_count=None,
-    with_main_card=False,
-):
-    group = await create_test_group(session, f"Invasion rewards {uuid.uuid4().hex[:8]}")
-    users = [
-        await create_test_user(session, f"Reward player {uuid.uuid4().hex[:8]}")
-        for _ in range(user_count)
-    ]
+def at(seconds: float) -> datetime:
+    return SLOT + timedelta(seconds=seconds)
 
-    card = None
-    character = None
-    if with_main_card:
-        character = await CharacterService.create(
-            session,
-            code=f"reward_card_{uuid.uuid4().hex[:10]}",
-            name_fa="کارت آزمایشی پاداش",
-            name_en="Invasion Reward Test Card",
-            artwork="invasion-reward-test.png",
-            power=24,
-            speed=18,
-            intelligence=18,
+
+async def _live(start: float, end: float, step: int = 15) -> Counter:
+    """Tick maintenance at live cadence (no heartbeat gap looks like downtime)."""
+    totals: Counter = Counter()
+    current = start
+    while current <= end:
+        stats = await MaintenanceService.run_invasion_cycle(
+            now=at(current), schedule_occurrences=False
         )
-        card = await PlayerCardService.acquire(session, users[0].id, character.id)
-        await PlayerCardService.set_favorite(
-            session,
-            users[0].id,
-            card.id,
-            expected_main_card_id=0,
-        )
+        totals.update(stats)
+        current += step
+    return totals
 
-    invasion = await InvasionService.create(
-        session,
-        group_id=group.id,
-        occurrence_key=f"invasion-reward:{uuid.uuid4().hex}",
-        scheduled_at=NOW - timedelta(minutes=5),
-        enemy_faction_code="moon_descendants",
-        enemy_power=500,
-        event_config={"test": "settlement-v1"},
-        wave_compositions=[{"enemy": "test-wave", "power": 500}],
-    )
 
-    if status != InvasionStatus.SCHEDULED:
-        await InvasionService.start(
-            session,
-            invasion.id,
-            now=NOW,
-            deadline_at=NOW + timedelta(minutes=10),
-        )
-
-    if join_count is None:
-        join_count = user_count
-    for user in users[:join_count]:
-        await InvasionService.join(
-            session,
-            invasion.id,
-            user.id,
-            expected_group_id=group.id,
-            now=NOW,
-        )
-
-    if status == InvasionStatus.FINISHED:
-        # Settlement consumes persisted lifecycle/outcome state; it must not
-        # invoke resolve() or derive an outcome from these zero contribution
-        # counters. Mark the test aggregate terminal without running combat.
-        waves = list(
-            (
-                await session.scalars(
-                    select(InvasionWave).where(InvasionWave.invasion_id == invasion.id)
-                )
-            ).all()
-        )
-        for wave in waves:
-            wave.status = InvasionStatus.FINISHED
-            wave.ended_at = NOW
-            wave.next_transition_at = None
-        invasion.status = InvasionStatus.FINISHED
-        invasion.outcome = outcome
-        invasion.ended_at = NOW
-        invasion.current_wave_sequence = None
-        invasion.next_transition_at = None
-
-    await session.flush()
+async def _battle(session) -> tuple[int, int]:
+    """Create a group, activate its 12:00 four-wave battle, return (group, invasion)."""
+    group = await create_test_group(session, "Golden reward group")
+    group_id = int(group.id)
     await session.commit()
-    participants = list(
-        (
-            await session.scalars(
-                select(InvasionParticipant)
-                .where(InvasionParticipant.invasion_id == invasion.id)
-                .order_by(InvasionParticipant.user_id.asc())
-            )
-        ).all()
+    await MaintenanceService.run_invasion_cycle(now=at(0))
+    session.expire_all()
+    invasion = await session.scalar(
+        select(Invasion).where(Invasion.group_id == group_id).order_by(Invasion.id.desc())
     )
-    return group, users, invasion, participants, card, character
+    assert invasion is not None, "expected the battle to activate in its window"
+    return group_id, int(invasion.id)
+
+
+async def _user(session, name: str) -> int:
+    user = await create_test_user(session, name)
+    user_id = int(user.id)
+    await session.commit()
+    return user_id
+
+
+async def _join(session, group_id: int, invasion_id: int, user_id: int, seconds: float):
+    await InvasionService.join(
+        session, invasion_id, user_id, expected_group_id=group_id, now=at(seconds)
+    )
+    await session.commit()
+
+
+async def _brace(
+    session, group_id: int, invasion_id: int, user_id: int, wave: int, seconds: float, key: str
+):
+    await InvasionService.perform_defense_action(
+        session,
+        invasion_id,
+        user_id,
+        expected_group_id=group_id,
+        wave_sequence=wave,
+        action_code=InvasionDefenseActionCode.BRACE,
+        idempotency_key=key,
+        now=at(seconds),
+    )
+    await session.commit()
+
+
+# The scenario ticks at live cadence up to this instant (last brace at 915 s).
+# Tests then finish the battle from FINISH_FROM to its 1200 s end.
+FINISH_FROM = 930
+
+
+async def _finish(session, start: float = FINISH_FROM) -> Counter:
+    return await _live(start, 1200)
+
+
+async def _scenario(session, *, enemy_power: int):
+    """Full defender (braces every wave), light defender (wave 1), join-only.
+
+    Each brace is worth 1 point (no Main Card): 4 for the full defender plus
+    1 for the light one, i.e. 5 in total. With the real threshold rule,
+    ``enemy_power`` 5 -> TOTAL (5 >= 5), 6 -> NARROW (500 >= 450 and 5 < 6),
+    100 -> DEFEAT.
+    Maintenance ticks at live cadence so every brace lands in its own wave.
+    """
+    group_id, invasion_id = await _battle(session)
+    invasion = await session.get(Invasion, invasion_id)
+    invasion.enemy_power = enemy_power
+    await session.commit()
+
+    full = await _user(session, "Full defender")
+    light = await _user(session, "Light defender")
+    joiner = await _user(session, "Join only")
+    await _join(session, group_id, invasion_id, full, 1)
+    await _join(session, group_id, invasion_id, light, 2)
+    await _join(session, group_id, invasion_id, joiner, 3)
+    braces = {
+        30: (light, 1, "light:1"),
+        15: (full, 1, "full:1"),
+        315: (full, 2, "full:2"),
+        615: (full, 3, "full:3"),
+        915: (full, 4, "full:4"),
+    }
+    for seconds in range(15, FINISH_FROM - 14, 15):
+        await MaintenanceService.run_invasion_cycle(
+            now=at(seconds), schedule_occurrences=False
+        )
+        if seconds in braces:
+            user_id, wave, key = braces[seconds]
+            await _brace(session, group_id, invasion_id, user_id, wave, seconds, key)
+    return group_id, invasion_id, full, light, joiner
+
+
+async def _golden(session, user_id: int) -> int:
+    return await ItemService.get_total(session, user_id, GOLDEN_APPLE_ITEM_KEY)
+
+
+async def _wallet(session, user_id: int) -> int:
+    session.expire_all()
+    wallet = await session.get(AppleWallet, user_id)
+    return 0 if wallet is None else int(wallet.balance)
+
+
+async def _invasion(session, invasion_id: int) -> Invasion:
+    session.expire_all()
+    return await session.get(Invasion, invasion_id)
+
+
+# ----------------------------------------------------------------------
+# Amounts, currency, and eligibility
+# ----------------------------------------------------------------------
+def test_reward_defaults_are_golden_apples_with_the_approved_quantities():
+    assert CONFIG_DEFAULTS["invasion_reward_total_victory_golden_apples"] == 10
+    assert CONFIG_DEFAULTS["invasion_reward_narrow_defense_golden_apples"] == 5
+    assert CONFIG_DEFAULTS["invasion_reward_defeat_golden_apples"] == 1
+    for legacy_key in (
+        "invasion_reward_total_victory_apples",
+        "invasion_reward_narrow_defense_apples",
+        "invasion_reward_defeat_apples",
+    ):
+        assert legacy_key not in CONFIG_DEFAULTS
+    assert "invasion_reward_eligibility" not in CONFIG_DEFAULTS
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("outcome", "expected_apples"),
+    ("enemy_power", "outcome", "golden"),
     [
-        (InvasionOutcome.TOTAL_VICTORY, 10),
-        (InvasionOutcome.NARROW_DEFENSE, 5),
-        (InvasionOutcome.DEFEAT, 1),
+        (5, InvasionOutcome.TOTAL_VICTORY, 10),
+        (6, InvasionOutcome.NARROW_DEFENSE, 5),
+        (100, InvasionOutcome.DEFEAT, 1),
     ],
 )
-async def test_persisted_outcome_selects_v1_reward_for_each_participant(
-    db_session, outcome, expected_apples
+async def test_defenders_receive_real_golden_apples_and_the_wallet_is_unchanged(
+    db_session, enemy_power, outcome, golden
 ):
-    _group, users, invasion, participants, _card, _character = await _setup_invasion(
-        db_session,
-        outcome=outcome,
+    _gid, invasion_id, full, light, joiner = await _scenario(
+        db_session, enemy_power=enemy_power
     )
-    participant = participants[0]
-    assert participant.user_id == users[0].id
-    assert participant.contribution_total == 0
-    assert participant.main_card_id_snapshot is None
-    assert participant.power_snapshot is None
-    assert invasion.enemy_power == 500
+    # Pre-existing wallet currency must survive settlement untouched.
+    db_session.add(AppleWallet(user_id=full, balance=33))
+    await db_session.commit()
+
+    totals = await _finish(db_session)  # resolution and settlement in one pass
+    assert totals["invasions_resolved"] == 1
+    assert totals["invasion_rewards_settled"] == 1
+
+    invasion = await _invasion(db_session, invasion_id)
+    assert invasion.status == InvasionStatus.FINISHED
     assert invasion.outcome == outcome
+    assert invasion.rewards_settled_at is not None
 
-    # Neither a Main Card nor a Brace is an eligibility requirement, and the
-    # contradictory zero contribution must not cause settlement to recalculate
-    # the persisted TOTAL_VICTORY result.
-    result = await InvasionRewardService.settle_completed_invasion(
-        db_session, invasion.id
-    )
-    await db_session.commit()
-
-    assert result.outcome == outcome
-    assert result.participant_count == 1
-    assert result.newly_settled_participants == 1
-    assert result.newly_granted_apples == expected_apples
-    assert result.participant_rewards[0].apples == expected_apples
-    assert result.participant_rewards[0].already_settled is False
-    assert await db_session.scalar(
-        select(func.count(InvasionDefenseAction.id)).where(
-            InvasionDefenseAction.invasion_id == invasion.id
-        )
-    ) == 0
-
-    wallet = await db_session.get(AppleWallet, users[0].id)
-    ledger = await db_session.scalar(
-        select(AppleTransaction).where(
-            AppleTransaction.user_id == users[0].id,
-            AppleTransaction.idempotency_key
-            == f"invasion:{invasion.id}:participant:{participant.id}:apples",
-        )
-    )
-    assert wallet is not None and wallet.balance == expected_apples
-    assert ledger is not None
-    assert ledger.amount == expected_apples
-    assert ledger.reason == "invasion_reward"
-    assert ledger.ref_type == "invasion"
-    assert ledger.ref_id == invasion.id
-    assert await db_session.get(PlayerProgression, users[0].id) is None
-    assert await db_session.scalar(select(func.count(PlayerXPGrant.id))) == 0
-    assert await db_session.get(SeedlingInventory, users[0].id) is None
-    assert await db_session.scalar(select(func.count(SeedlingAward.id))) == 0
+    assert await _golden(db_session, full) == golden
+    assert await _golden(db_session, light) == golden
+    assert await _golden(db_session, joiner) == 0  # join-only: nothing
+    assert await _wallet(db_session, full) == 33  # Apple wallet unchanged
+    assert await _wallet(db_session, light) == 0
 
 
 @pytest.mark.asyncio
-async def test_nonparticipant_receives_nothing_and_is_not_in_settlement_result(db_session):
-    _group, users, invasion, participants, _card, _character = await _setup_invasion(
-        db_session,
-        user_count=2,
-        join_count=1,
-    )
-    assert len(participants) == 1
-
-    result = await InvasionRewardService.settle_completed_invasion(
-        db_session, invasion.id
-    )
-    await db_session.commit()
-
-    assert [reward.user_id for reward in result.participant_rewards] == [users[0].id]
-    assert await db_session.get(AppleWallet, users[0].id) is not None
-    assert await db_session.get(AppleWallet, users[1].id) is None
-    assert await db_session.scalar(
-        select(func.count(AppleTransaction.id)).where(
-            AppleTransaction.user_id == users[1].id,
-            AppleTransaction.ref_type == "invasion",
-            AppleTransaction.ref_id == invasion.id,
-        )
-    ) == 0
+async def test_join_only_battle_settles_as_a_noop_with_no_items(db_session):
+    group_id, invasion_id = await _battle(db_session)
+    joiner = await _user(db_session, "Only joined")
+    await _join(db_session, group_id, invasion_id, joiner, 1)
+    await _live(15, 1200)  # live cadence from the start: no false downtime
+    invasion = await _invasion(db_session, invasion_id)
+    assert invasion.outcome == InvasionOutcome.DEFEAT
+    assert invasion.rewards_settled_at is not None
+    assert await _golden(db_session, joiner) == 0
 
 
 @pytest.mark.asyncio
-async def test_finished_invasion_without_participants_settles_as_a_noop(db_session):
-    _group, _users, invasion, participants, _card, _character = await _setup_invasion(
-        db_session,
-        user_count=0,
-        join_count=0,
-    )
-    assert participants == []
-
-    result = await InvasionRewardService.settle_completed_invasion(
-        db_session, invasion.id
-    )
-    await db_session.commit()
-
-    assert result.outcome == InvasionOutcome.TOTAL_VICTORY
-    assert result.participant_count == 0
-    assert result.total_apples == 0
-    assert result.newly_settled_participants == 0
-    assert result.newly_granted_apples == 0
-    assert result.duplicate is True
-    assert await db_session.scalar(
-        select(func.count(AppleTransaction.id)).where(
-            AppleTransaction.ref_type == "invasion",
-            AppleTransaction.ref_id == invasion.id,
-        )
-    ) == 0
-    assert await db_session.scalar(
-        select(func.count(AppleWallet.user_id))
-    ) == 0
+async def test_unresolved_battle_pays_nothing(db_session):
+    group_id, invasion_id = await _battle(db_session)
+    defender = await _user(db_session, "Still fighting")
+    await _join(db_session, group_id, invasion_id, defender, 1)
+    await _brace(db_session, group_id, invasion_id, defender, 1, 10, "open:1")
+    await _live(15, 400)
+    assert await _golden(db_session, defender) == 0
+    assert (await _invasion(db_session, invasion_id)).rewards_settled_at is None
 
 
+# ----------------------------------------------------------------------
+# Exactly once: retries, duplicates, and failed grants
+# ----------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_configured_reward_changed_before_first_settlement_is_used(db_session):
-    _group, users, invasion, participants, _card, _character = await _setup_invasion(
-        db_session
-    )
-    await ConfigService.set(
-        db_session,
-        "invasion_reward_total_victory_apples",
-        17,
-    )
-    await db_session.commit()
-
-    result = await InvasionRewardService.settle_completed_invasion(
-        db_session, invasion.id
-    )
-    await db_session.commit()
-
-    assert result.newly_granted_apples == 17
-    assert result.participant_rewards[0].apples == 17
-    wallet = await db_session.get(AppleWallet, users[0].id)
-    assert wallet is not None and wallet.balance == 17
-    ledger = await db_session.scalar(
-        select(AppleTransaction).where(
-            AppleTransaction.idempotency_key
-            == f"invasion:{invasion.id}:participant:{participants[0].id}:apples"
-        )
-    )
-    assert ledger is not None and ledger.amount == 17
-
-
-@pytest.mark.asyncio
-async def test_conflicting_reward_ledger_payload_is_not_treated_as_settled(db_session):
-    _group, users, invasion, participants, _card, _character = await _setup_invasion(
-        db_session
-    )
-    invasion_id = int(invasion.id)
-    user_id = int(users[0].id)
-    participant_id = int(participants[0].id)
-    key = f"invasion:{invasion_id}:participant:{participant_id}:apples"
-    await AppleWalletService.earn(
-        db_session,
-        user_id,
-        7,
-        reason="unrelated_reward",
-        ref_type="invasion",
-        ref_id=invasion_id,
-        idempotency_key=key,
-    )
-    await db_session.commit()
-
-    with pytest.raises(InvasionRewardLedgerConflictError):
-        await InvasionRewardService.settle_completed_invasion(
-            db_session, invasion_id
-        )
-    await db_session.rollback()
-
-    ledger = await db_session.scalar(
-        select(AppleTransaction).where(AppleTransaction.idempotency_key == key)
-    )
-    assert ledger is not None and ledger.reason == "unrelated_reward"
-    wallet = await db_session.get(AppleWallet, user_id)
-    assert wallet is not None and wallet.balance == 7
-    assert await db_session.scalar(
-        select(func.count(AppleTransaction.id)).where(
-            AppleTransaction.ref_type == "invasion",
-            AppleTransaction.ref_id == invasion_id,
-        )
-    ) == 1
-
-
-@pytest.mark.asyncio
-async def test_repeated_settlement_uses_apple_ledger_idempotency(db_session):
-    _group, users, invasion, participants, _card, _character = await _setup_invasion(
-        db_session,
-        user_count=2,
-    )
-
-    participants_by_user = {participant.user_id: participant for participant in participants}
-    first = await InvasionRewardService.settle_completed_invasion(
-        db_session, invasion.id
-    )
-    await db_session.commit()
-    second = await InvasionRewardService.settle_completed_invasion(
-        db_session, invasion.id
-    )
-    await db_session.commit()
-
-    assert first.duplicate is False
-    assert first.newly_granted_apples == 20
-    assert second.duplicate is True
-    assert second.newly_settled_participants == 0
-    assert second.newly_granted_apples == 0
-    assert second.total_apples == 20
-    for user in users:
-        participant = participants_by_user[user.id]
-        assert await db_session.scalar(
-            select(func.count(AppleTransaction.id)).where(
-                AppleTransaction.user_id == user.id,
-                AppleTransaction.idempotency_key
-                == f"invasion:{invasion.id}:participant:{participant.id}:apples",
-            )
-        ) == 1
-        wallet = await db_session.get(AppleWallet, user.id)
-        assert wallet.balance == 10
-
-
-@pytest.mark.asyncio
-async def test_partial_settlement_retry_pays_missing_participant_once_and_keeps_amount(
+async def test_failed_grant_rolls_back_then_the_retry_pays_each_defender_once(
     db_session, monkeypatch
 ):
-    _group, users, invasion, participants, _card, _character = await _setup_invasion(
-        db_session,
-        user_count=2,
-    )
-    participants_by_user = {participant.user_id: participant for participant in participants}
-    ordered = sorted(
-        ((user, participants_by_user[user.id]) for user in users),
-        key=lambda item: item[0].id,
-    )
-    first_user = ordered[0][0]
-    second_user = ordered[1][0]
-    original_earn = AppleWalletService.earn
+    _gid, invasion_id, full, light, joiner = await _scenario(db_session, enemy_power=100)
+    real_grant = ItemService.grant
+    state = {"fail": True, "calls": 0}
 
-    async def fail_on_second_user(session, *, user_id, **kwargs):
-        if user_id == second_user.id:
-            raise RuntimeError("injected failure after the first participant reward")
-        return await original_earn(session, user_id=user_id, **kwargs)
+    async def flaky_grant(session, user_id, item_key, quantity=1):
+        state["calls"] += 1
+        # The first defender is granted successfully, then the second write fails.
+        if state["fail"] and state["calls"] == 2:
+            raise RuntimeError("inventory write failed")
+        return await real_grant(session, user_id, item_key, quantity)
 
-    monkeypatch.setattr(
-        AppleWalletService,
-        "earn",
-        staticmethod(fail_on_second_user),
-    )
-    with pytest.raises(RuntimeError, match="injected failure"):
-        await InvasionRewardService.settle_completed_invasion(db_session, invasion.id)
+    monkeypatch.setattr(ItemService, "grant", staticmethod(flaky_grant))
+    first = await _finish(db_session)
+    assert first["invasion_failures"] == 1
+    assert first["invasion_rewards_settled"] == 0
 
-    # Model a partial settlement already durable in the ledger (for example,
-    # a later reward channel failing after this participant committed).
-    await db_session.commit()
-    assert await db_session.scalar(
-        select(func.count(AppleTransaction.id)).where(
-            AppleTransaction.user_id == first_user.id,
-            AppleTransaction.ref_id == invasion.id,
-            AppleTransaction.ref_type == "invasion",
-        )
-    ) == 1
-    assert await db_session.scalar(
-        select(func.count(AppleTransaction.id)).where(
-            AppleTransaction.user_id == second_user.id,
-            AppleTransaction.ref_id == invasion.id,
-            AppleTransaction.ref_type == "invasion",
-        )
-    ) == 0
+    # The whole settlement rolled back: the first grant did not survive either.
+    invasion = await _invasion(db_session, invasion_id)
+    assert invasion.status == InvasionStatus.FINISHED
+    assert invasion.rewards_settled_at is None  # marker never ran ahead of items
+    assert await _golden(db_session, full) == 0
+    assert await _golden(db_session, light) == 0
 
-    # Runtime balance tuning after the partial payout must not alter the
-    # amount of the remaining participants on retry.
-    monkeypatch.undo()
-    await ConfigService.set(db_session, "invasion_reward_total_victory_apples", 99)
-    await db_session.commit()
+    state["fail"] = False
+    retry = await _live(1215, 1230)
+    assert retry["invasion_rewards_settled"] == 1
+    assert await _golden(db_session, full) == 1
+    assert await _golden(db_session, light) == 1
+    assert await _golden(db_session, joiner) == 0
 
-    retry = await InvasionRewardService.settle_completed_invasion(db_session, invasion.id)
-    await db_session.commit()
-
-    assert retry.duplicate is False
-    assert retry.newly_settled_participants == 1
-    assert retry.newly_granted_apples == 10
-    for user, participant in ordered:
-        ledger = await db_session.scalar(
-            select(AppleTransaction).where(
-                AppleTransaction.user_id == user.id,
-                AppleTransaction.idempotency_key
-                == f"invasion:{invasion.id}:participant:{participant.id}:apples",
-            )
-        )
-        assert ledger is not None and ledger.amount == 10
-        wallet = await db_session.get(AppleWallet, user.id)
-        assert wallet.balance == 10
+    later = await _live(1245, 1300)
+    assert later["invasion_rewards_settled"] == 0
+    assert await _golden(db_session, full) == 1
+    assert await _golden(db_session, light) == 1
 
 
 @pytest.mark.asyncio
-async def test_settlement_does_not_commit_and_caller_can_rollback(db_session):
-    _group, users, invasion, _participants, _card, _character = await _setup_invasion(
-        db_session
-    )
-    user_id = users[0].id
-    invasion_id = invasion.id
+async def test_repeated_settlement_and_restart_never_pay_twice(db_session):
+    _gid, invasion_id, full, light, _joiner = await _scenario(db_session, enemy_power=100)
+    await _finish(db_session)
+    await RecoveryService.recover_on_startup(db_session, now=at(1300))
 
-    await InvasionRewardService.settle_completed_invasion(db_session, invasion_id)
-    assert await db_session.get(AppleWallet, user_id) is not None
+    session_maker = get_async_sessionmaker()
+    async with session_maker() as session:
+        duplicate = await InvasionRewardService.settle_completed_invasion(session, invasion_id)
+        await session.commit()
+    assert duplicate.duplicate is True
+    assert duplicate.newly_granted_golden_apples == 0
+
+    assert await _golden(db_session, full) == 1
+    assert await _golden(db_session, light) == 1
+
+
+@pytest.mark.asyncio
+async def test_settlement_does_not_commit_and_caller_can_roll_back(db_session):
+    _gid, invasion_id, full, _light, _joiner = await _scenario(db_session, enemy_power=100)
+    # Finish without settlement by advancing the timeline directly.
+    for seconds in range(FINISH_FROM, 1201, 15):
+        await InvasionService.advance_battle(db_session, invasion_id, now=at(seconds))
+        await db_session.commit()
+    invasion = await _invasion(db_session, invasion_id)
+    assert invasion.status == InvasionStatus.FINISHED
+    assert invasion.rewards_settled_at is None
+
+    await InvasionRewardService.settle_completed_invasion(db_session, invasion_id, now=at(1200))
     await db_session.rollback()
-
-    assert await db_session.get(AppleWallet, user_id) is None
-    assert await db_session.scalar(
-        select(func.count(AppleTransaction.id)).where(
-            AppleTransaction.user_id == user_id,
-            AppleTransaction.ref_type == "invasion",
-            AppleTransaction.ref_id == invasion_id,
-        )
-    ) == 0
-
-    await InvasionRewardService.settle_completed_invasion(db_session, invasion_id)
-    await db_session.commit()
-    assert (await db_session.get(AppleWallet, user_id)).balance == 10
+    assert await _golden(db_session, full) == 0
+    assert (await _invasion(db_session, invasion_id)).rewards_settled_at is None
 
 
-@pytest.mark.asyncio
-async def test_reward_is_stable_after_live_main_card_changes(db_session, monkeypatch):
-    _group, users, invasion, participants, original_card, original_character = (
-        await _setup_invasion(db_session, with_main_card=True)
-    )
-    participant = participants[0]
-    original_card_id = original_card.id
-    snapshot_power = participant.power_snapshot
-    assert snapshot_power == 24
-    assert participant.main_card_id_snapshot == original_card_id
-
-    # The event is already finished. Upgrade/rebalance the old Main Card and
-    # select a different one; settlement must use the persisted outcome and
-    # participant, not a live card lookup or current character values.
-    original_card.level = 9
-    original_character.power = 60
-    replacement_character = await CharacterService.create(
-        db_session,
-        code=f"replacement_{uuid.uuid4().hex[:10]}",
-        name_fa="کارت جایگزین",
-        name_en="Replacement Card",
-        artwork="replacement-card.png",
-        power=20,
-        speed=20,
-        intelligence=20,
-    )
-    replacement_card = await PlayerCardService.acquire(
-        db_session, users[0].id, replacement_character.id
-    )
-    await PlayerCardService.set_favorite(
-        db_session,
-        users[0].id,
-        replacement_card.id,
-        expected_main_card_id=original_card_id,
-    )
-    await db_session.commit()
-    monkeypatch.setattr(
-        PlayerCardService,
-        "get_main_card",
-        staticmethod(AsyncFailure("live Main Card lookup is forbidden")),
-    )
-
-    result = await InvasionRewardService.settle_completed_invasion(
-        db_session, invasion.id
-    )
-    await db_session.commit()
-
-    assert result.participant_rewards[0].apples == 10
-    assert participant.power_snapshot == snapshot_power
-    assert replacement_card.is_favorite is True
-
-
-class AsyncFailure:
-    """Async callable that fails if settlement consults mutable card state."""
-
-    def __init__(self, message):
-        self.message = message
-
-    async def __call__(self, *args, **kwargs):
-        raise AssertionError(self.message)
-
-
-@pytest.mark.asyncio
-async def test_settlement_rejects_missing_scheduled_active_and_unresolved_invasions(
-    db_session,
-):
-    _group, _users, scheduled, _participants, _card, _character = await _setup_invasion(
-        db_session,
-        status=InvasionStatus.SCHEDULED,
-        user_count=0,
-        join_count=0,
-    )
-    with pytest.raises(InvasionNotCompletedError):
-        await InvasionRewardService.settle_completed_invasion(db_session, scheduled.id)
-    assert scheduled.status == InvasionStatus.SCHEDULED
-
-    _group, _users, active, _participants, _card, _character = await _setup_invasion(
-        db_session,
-        status=InvasionStatus.ACTIVE,
-        user_count=0,
-        join_count=0,
-    )
-    with pytest.raises(InvasionNotCompletedError):
-        await InvasionRewardService.settle_completed_invasion(db_session, active.id)
-    assert active.status == InvasionStatus.ACTIVE
-    assert active.outcome is None
-
-    _group, _users, unresolved, _participants, _card, _character = await _setup_invasion(
-        db_session,
-        outcome=None,
-        status=InvasionStatus.FINISHED,
-        user_count=0,
-        join_count=0,
-    )
-    with pytest.raises(InvasionSettlementOutcomeError):
-        await InvasionRewardService.settle_completed_invasion(db_session, unresolved.id)
-    assert unresolved.status == InvasionStatus.FINISHED
-    assert unresolved.outcome is None
-
-    with pytest.raises(InvasionNotFoundError):
-        await InvasionRewardService.settle_completed_invasion(
-            db_session, 9_223_372_036_854_775_807
-        )
-
-
-@pytest.mark.asyncio
 @requires_row_locks
-async def test_concurrent_settlement_attempts_grant_each_participant_once(db_session):
-    _group, users, invasion, participants, _card, _character = await _setup_invasion(
-        db_session,
-        user_count=2,
-    )
+@pytest.mark.asyncio
+async def test_concurrent_settlement_attempts_grant_each_defender_once(db_session):
+    _gid, invasion_id, full, light, _joiner = await _scenario(db_session, enemy_power=100)
+    for seconds in range(FINISH_FROM, 1201, 15):
+        await InvasionService.advance_battle(db_session, invasion_id, now=at(seconds))
+        await db_session.commit()
     session_maker = get_async_sessionmaker()
 
     async def settle_once():
         async with session_maker() as session:
-            result = await InvasionRewardService.settle_completed_invasion(
-                session, invasion.id
-            )
+            result = await InvasionRewardService.settle_completed_invasion(session, invasion_id)
             await session.commit()
             return result
 
     first, second = await asyncio.gather(settle_once(), settle_once())
     assert sorted([first.duplicate, second.duplicate]) == [False, True]
+    assert await _golden(db_session, full) == 1
+    assert await _golden(db_session, light) == 1
 
-    participants_by_user = {participant.user_id: participant for participant in participants}
-    for user in users:
-        participant = participants_by_user[user.id]
-        assert await db_session.scalar(
-            select(func.count(AppleTransaction.id)).where(
-                AppleTransaction.user_id == user.id,
-                AppleTransaction.idempotency_key
-                == f"invasion:{invasion.id}:participant:{participant.id}:apples",
-            )
-        ) == 1
-        wallet = await db_session.get(AppleWallet, user.id)
-        assert wallet is not None and wallet.balance == 10
+
+# ----------------------------------------------------------------------
+# History and interruption
+# ----------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_already_settled_history_is_never_paid_retroactively(db_session):
+    _gid, invasion_id, full, light, _joiner = await _scenario(db_session, enemy_power=100)
+    for seconds in range(FINISH_FROM, 1201, 15):
+        await InvasionService.advance_battle(db_session, invasion_id, now=at(seconds))
+        await db_session.commit()
+    # Simulates the migration backfill: a FINISHED event already marked settled.
+    invasion = await _invasion(db_session, invasion_id)
+    invasion.rewards_settled_at = at(1200)
+    await db_session.commit()
+
+    totals = await _live(1215, 1400)
+    assert totals["invasion_rewards_settled"] == 0
+    assert await _golden(db_session, full) == 0
+    assert await _golden(db_session, light) == 0
+
+
+@pytest.mark.asyncio
+async def test_interrupted_battle_is_never_paid_and_is_not_settleable(db_session):
+    group_id, invasion_id = await _battle(db_session)
+    defender = await _user(db_session, "Defender before the stall")
+    await _join(db_session, group_id, invasion_id, defender, 1)
+    await _brace(db_session, group_id, invasion_id, defender, 1, 10, "stall:1")
+    await _live(15, 60)
+    stats = await RecoveryService.recover_on_startup(db_session, now=at(1400))
+    assert stats["invasions_interrupted"] == 1
+
+    invasion = await _invasion(db_session, invasion_id)
+    assert invasion.status == InvasionStatus.FINISHED
+    assert invasion.outcome is None
+
+    later = await _live(1415, 1800)
+    assert later["invasion_rewards_settled"] == 0
+    assert await _golden(db_session, defender) == 0
+    with pytest.raises(InvasionSettlementOutcomeError):
+        await InvasionRewardService.settle_completed_invasion(db_session, invasion_id)

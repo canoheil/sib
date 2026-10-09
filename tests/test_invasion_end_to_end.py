@@ -7,9 +7,7 @@ from sqlalchemy import func, select
 
 from sib.database.connection import get_async_sessionmaker
 from sib.database.models import (
-    AppleTransaction,
     AppleWallet,
-    Invasion,
     InvasionContribution,
     InvasionDefenseAction,
     InvasionOutcome,
@@ -19,7 +17,7 @@ from sib.database.models import (
 )
 from sib.services.invasion import InvasionDefenseActionCode, InvasionService
 from sib.services.invasion_rewards import InvasionRewardService
-from sib.services.maintenance.service import MaintenanceService
+from sib.services.items import ItemService
 from sib.services.recovery import RecoveryService
 from sib.tests.test_parties import create_test_group, create_test_user
 
@@ -39,8 +37,35 @@ async def _recover_after_restart(session_maker, now: datetime) -> dict[str, int]
         return await RecoveryService.recover_on_startup(session, now=now)
 
 
+async def _create_legacy_scheduled_invasion(session, group_id: int) -> int:
+    """Persist a Phase-5 two-wave occurrence directly (no current scheduler).
+
+    The scheduler now activates battles instead of pre-creating them, so the
+    legacy timeline is exercised by constructing the old row shape explicitly.
+    """
+    invasion = await InvasionService.create(
+        session,
+        group_id=group_id,
+        occurrence_key=f"legacy-e2e:group:{group_id}:slot:{int(START_AT.timestamp())}",
+        scheduled_at=START_AT,
+        enemy_faction_code="moon_descendants",
+        enemy_power=100,
+        event_config={
+            "schema_version": 1,
+            "wave_count": 2,
+            "wave_durations_seconds": [600, 600],
+        },
+        wave_compositions=[
+            {"wave_sequence": 1, "enemy_power": 50},
+            {"wave_sequence": 2, "enemy_power": 50},
+        ],
+    )
+    await session.commit()
+    return int(invasion.id)
+
+
 @pytest.mark.asyncio
-async def test_scheduled_invasion_recovers_through_outcome_and_apple_settlement(
+async def test_legacy_scheduled_invasion_recovers_through_outcome_and_golden_apple_settlement(
     db_session,
 ):
     group = await create_test_group(db_session, "Invasion end-to-end recovery")
@@ -48,19 +73,9 @@ async def test_scheduled_invasion_recovers_through_outcome_and_apple_settlement(
     group_id, user_id = int(group.id), int(user.id)
     session_maker = get_async_sessionmaker()
 
-    # The existing scheduler persists the future occurrence without starting it.
-    scheduled_stats = await MaintenanceService.run_invasion_cycle(
-        now=START_AT - timedelta(seconds=1)
-    )
-    assert scheduled_stats["invasions_scheduled"] == 1
-    assert scheduled_stats["invasions_started"] == 0
-
+    invasion_id = await _create_legacy_scheduled_invasion(db_session, group_id)
     async with session_maker() as session:
-        invasion = await session.scalar(
-            select(Invasion).where(Invasion.group_id == group_id)
-        )
-        assert invasion is not None
-        invasion_id = int(invasion.id)
+        invasion = await InvasionService.get(session, invasion_id)
         assert invasion.status == InvasionStatus.SCHEDULED
         assert _utc(invasion.scheduled_at) == START_AT
         assert await session.scalar(
@@ -90,6 +105,9 @@ async def test_scheduled_invasion_recovers_through_outcome_and_apple_settlement(
         assert wave.wave_sequence == 1
         assert wave.status == InvasionStatus.ACTIVE
         assert _utc(wave.deadline_at) == START_AT + timedelta(minutes=10)
+        # Legacy events never receive the four-wave heartbeat or stage.
+        assert invasion.heartbeat_at is None
+        assert invasion.presentation_stage is None
 
     # Join, action, and generic contribution each persist through their own
     # caller-owned transaction, then survive a separate startup recovery.
@@ -218,45 +236,42 @@ async def test_scheduled_invasion_recovers_through_outcome_and_apple_settlement(
     )
     assert no_early_finish["invasion_wave_transitions"] == 0
 
-    # The final recovery persists the result, but does not settle or notify.
+    # The final recovery persists the result and settles it in the same
+    # maintenance pass: the defender receives Golden Apples exactly once.
     finish_recovery = await _recover_after_restart(
         session_maker, START_AT + timedelta(minutes=20)
     )
     assert finish_recovery["invasion_wave_transitions"] == 1
     assert finish_recovery["invasions_resolved"] == 1
+    assert finish_recovery["invasion_rewards_settled"] == 1
     async with session_maker() as session:
         invasion = await InvasionService.get(session, invasion_id)
         assert invasion.status == InvasionStatus.FINISHED
         assert invasion.outcome == InvasionOutcome.TOTAL_VICTORY
         assert _utc(invasion.ended_at) == START_AT + timedelta(minutes=20)
         assert invasion.current_wave_sequence is None
+        assert invasion.rewards_settled_at is not None
         assert await session.scalar(
             select(func.sum(InvasionWave.contribution_total)).where(
                 InvasionWave.invasion_id == invasion_id
             )
         ) == 101
-        assert await session.scalar(
-            select(func.count(AppleTransaction.id)).where(
-                AppleTransaction.ref_type == "invasion",
-                AppleTransaction.ref_id == invasion_id,
-            )
-        ) == 0
+        assert await ItemService.get_total(session, user_id, "apple_gold") == 10
 
-    # Another restart between persisted outcome and settlement neither changes
-    # the result nor grants currency as a side effect of Telegram/recovery.
+    # Repeated restarts neither change the result nor pay again.
     terminal_recovery = await _recover_after_restart(
         session_maker, START_AT + timedelta(minutes=20)
     )
     assert terminal_recovery["invasions_resolved"] == 0
+    assert terminal_recovery["invasion_rewards_settled"] == 0
 
     async with session_maker() as session:
         settlement = await InvasionRewardService.settle_completed_invasion(
             session, invasion_id
         )
         assert settlement.outcome == InvasionOutcome.TOTAL_VICTORY
-        assert settlement.participant_count == 1
-        assert settlement.newly_settled_participants == 1
-        assert settlement.newly_granted_apples == 10
+        assert settlement.duplicate is True
+        assert settlement.newly_granted_golden_apples == 0
         await session.commit()
 
     # Post-settlement replay after a fresh restart remains ledger-idempotent.
@@ -266,18 +281,9 @@ async def test_scheduled_invasion_recovers_through_outcome_and_apple_settlement(
             session, invasion_id
         )
         assert duplicate.duplicate is True
-        assert duplicate.newly_granted_apples == 0
+        assert duplicate.newly_granted_golden_apples == 0
+        assert await ItemService.get_total(session, user_id, "apple_gold") == 10
+        # The Apple wallet is never the reward currency.
         wallet = await session.get(AppleWallet, user_id)
-        assert wallet is not None and wallet.balance == 10
-        ledger = await session.scalar(
-            select(AppleTransaction).where(
-                AppleTransaction.idempotency_key
-                == f"invasion:{invasion_id}:participant:{participant_id}:apples"
-            )
-        )
-        assert ledger is not None
-        assert ledger.amount == 10
-        assert ledger.reason == "invasion_reward"
-        assert ledger.ref_type == "invasion"
-        assert ledger.ref_id == invasion_id
+        assert wallet is None or wallet.balance == 0
         await session.commit()

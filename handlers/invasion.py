@@ -112,7 +112,12 @@ def _brace_idempotency_key(callback_query_id: object) -> str:
 
 def _join_confirmation(participant) -> str:
     """Present exactly the Main Card snapshot returned by InvasionService."""
-    lines = ["🛡 دفاع شما ثبت شد یا از قبل ثبت بوده است."]
+    # Joining is not defending: it registers you for this battle only. Each
+    # wave then needs its own Brace (one per wave).
+    lines = [
+        "⚔️ به یورش پیوستی. در هر موج، یک‌بار با 🛡 Brace دفاع کن؛ "
+        "پیوستن به‌تنهایی دفاعی ثبت نمی‌کند."
+    ]
     if participant.main_card_id_snapshot is None:
         lines.append(
             "🎴 کارت اصلی: انتخاب نشده؛ بدون کارت اصلی به جمع مدافعان پیوستی."

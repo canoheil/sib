@@ -1,9 +1,29 @@
 # Invasion Telegram delivery
 
-The Invasion announcement is a plain-text Group message with inline **Join
-Defense** and **Status** buttons. It is rendered from persisted event, wave,
-participant, contribution, faction, and outcome data; there is no Invasion art
-asset, so the existing text-screen fallback is used.
+The Invasion battle screen is a Group message with the Invasion artwork
+(`assets/invasion/moon_descendant_invasion.jpg`), falling back to plain text if
+the photo cannot be sent, and inline **Join Defense**, **Brace**, and **Status**
+buttons. It is rendered from persisted event, wave, participant, contribution,
+faction, and outcome data.
+
+For four-wave battles the message lifecycle is: the battle screen at activation
+(pinned quietly), one silent notice per wave start, and one result notice when
+the battle ends. Each delivered stage is recorded, so no notice is repeated. See
+[`invasion-four-wave-battles.md`](invasion-four-wave-battles.md) for the full
+timeline, the balance formula, and the reward rules. The guarantees below apply
+to all Invasion messages.
+
+Result notice variants for four-wave battles (one notice in every case):
+
+- **Resolved**: outcome, defense total against enemy power, participant count,
+  and the reward line. The reward names 🌕 سیب طلایی (Golden Apple inventory,
+  not wallet Apples), is paid to defenders only, and reads "no eligible defender"
+  when nobody defended.
+- **Interrupted** (downtime exceeded the recovery budget): says the battle closed
+  without a result because of a long bot outage. It records no victory or
+  defeat and states that no reward is given.
+- **Cancelled without a start** (legacy voided occurrence): says the battle was
+  cancelled without a defense and no reward is given.
 
 `MaintenanceService.run_once()` runs the DB-only Invasion lifecycle step first,
 then invokes `InvasionTelegramService` after the transaction has committed and
