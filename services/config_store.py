@@ -302,6 +302,9 @@ CONFIG_DEFAULTS: dict[str, Any] = {
         "apples_per_tier": 5,
         "tier_levels": [10, 20],
     },
+    # Group chest: seconds between two posts in one group. The group menu
+    # button and «سیب صندوق» share it. Opening is never throttled by it.
+    "group_chest_cooldown_seconds": 30,
     # Harvest drop model (spec: special-apple drops).
     # Presentation per outcome key. "asset" references a bot_assets key
     # (or a bundled assets/items/<key>.jpg file) for celebration media.

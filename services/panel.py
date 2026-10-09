@@ -38,6 +38,9 @@ OWNER_SCOPED_CALLBACKS: Tuple[str, ...] = (
     "garden_refresh",
     # Daily chest panel (consumes the once-per-day claim)
     "daily_chest:open",
+    # NOTE: the GROUP chest post (group_chest, group_chest:open:<day>) is
+    # deliberately NOT owner-scoped: one shared post serves every member and
+    # each press rewards the presser (see handlers/daily_chest.py).
     # Profile preferences (persistent, presentation-only)
     "profile_skin",
     "profile_skin_select:",

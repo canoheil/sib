@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "library": "daily_chest",
+  "purpose": "Scene artwork for the Daily Sib Treasure Chest group post (صندوقچه گنج روزانه).",
+  "usage": {
+    "loaded_by": "services/marriage_art.py (GROUP_SCENES['daily_chest']), sent by handlers/daily_chest.py",
+    "note": "The group main-menu button posts this image as a photo with the Persian caption and the open button. A missing or failed upload falls back to the text message with the same caption and button."
+  },
+  "technical": {
+    "aspect": "1:1",
+    "dimensions": "1024x1024",
+    "format": "jpeg",
+    "encoding": "baseline jpeg, 4:2:0 subsampling, 8-bit RGB, no embedded ICC profile (sRGB assumed)"
+  },
+  "generation": {
+    "mode": "pre-generated",
+    "runtime_generation": false,
+    "tool": "arena-agent image model (text-to-image with in-game scene style references)",
+    "created_at": "2026-10-09",
+    "license": "project-internal",
+    "style_reference": [
+      "assets/sib_hug/hug.jpg",
+      "assets/marriage_love/proposal.jpg",
+      "assets/items/golden_apple.jpg"
+    ]
+  },
+  "scenes": [
+    {
+      "key": "daily_chest",
+      "file": "chest.jpg",
+      "event": "group_daily_chest",
+      "description_en": "One closed wooden treasure chest with honey-gold bands and a gold apple lock plate on a mossy stone path in an orchard, with a red and a green apple, scattered gold coins and a distant castle in the background. No characters and no text.",
+      "description_fa": "صندوقچه گنج روزانه"
+    }
+  ]
+}
