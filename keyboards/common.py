@@ -102,8 +102,10 @@ def get_private_welcome_keyboard(bot_username: str) -> InlineKeyboardMarkup:
 def get_group_welcome_keyboard() -> InlineKeyboardMarkup:
     """Main keyboard for group chat /start.
 
-    Five entries only: games, the guide, the shop, the player's profile and
-    the group rating. The Games entry leads the menu full-width.
+    Six entries: games, the guide, the shop, the player's profile, the group
+    rating and the Daily Sib Treasure Chest (its own full-width row at the
+    bottom, opening the chest in this same group). The Games entry leads the
+    menu full-width.
 
     Card Trading, My Cards and Active Group Games are NOT duplicated here;
     each keeps its ONE canonical entry:
@@ -140,6 +142,12 @@ def get_group_welcome_keyboard() -> InlineKeyboardMarkup:
                 primary_button(
                     text="🏆 رتبه و آمار گروه",
                     callback_data="group_rating_stats",
+                ),
+            ],
+            [
+                primary_button(
+                    text="🎁 صندوقچه گنج روزانه",
+                    callback_data="group_chest",
                 ),
             ],
         ]

@@ -1,10 +1,11 @@
-"""Reorganized main menu: 5 entries, one entry per feature.
+"""Reorganized main menu: 6 entries, one entry per feature.
 
-The group main menu keeps exactly five options, in this order:
+The group main menu keeps exactly six options, in this order:
 
     [ 🎮 بازی‌ها ]                            (full width, first row)
     [ 📖 راهنما ]        [ 🛒 فروشگاه ]
     [ 👤 پروفایل من ]    [ 🏆 رتبه و آمار گروه ]
+    [ 🎁 صندوقچه گنج روزانه ]                  (full width, last row)
 
 Card Trading, My Cards and Active Group Games are NOT duplicated in the
 main menu - each keeps its ONE canonical entry:
@@ -39,15 +40,15 @@ def _rows(kb):
 
 
 # ---------------------------------------------------------------------------
-# The 5-option main menu
+# The 6-option main menu
 # ---------------------------------------------------------------------------
 
-def test_group_main_menu_has_exactly_five_options():
+def test_group_main_menu_has_exactly_six_options():
     main_menu = _buttons(get_group_welcome_keyboard())
-    assert len(main_menu) == 5
+    assert len(main_menu) == 6
 
 
-def test_group_main_menu_order_is_games_help_shop_profile_rank():
+def test_group_main_menu_order_is_games_help_shop_profile_rank_chest():
     callbacks = [button.callback_data for button in _buttons(get_group_welcome_keyboard())]
     assert callbacks == [
         "group_games_panel",  # 1. Games
@@ -55,6 +56,7 @@ def test_group_main_menu_order_is_games_help_shop_profile_rank():
         "apple_shop",         # 3. Shop
         "apple_profile",      # 4. My Profile
         "group_rating_stats", # 5. Group Rank & Stats
+        "group_chest",        # 6. Daily Treasure Chest (opens in this group)
     ]
 
 
@@ -63,8 +65,9 @@ def test_games_button_is_full_width_on_its_own_first_row():
     games_row = rows[0]
     assert len(games_row) == 1  # a single button spans the whole row
     assert games_row[0][1] == "group_games_panel"
-    # The remaining four options are arranged as two rows of two buttons.
-    assert [len(row) for row in rows] == [1, 2, 2]
+    # Help/Shop and Profile/Rank are two rows of two buttons; the chest closes
+    # the menu on its own full-width row.
+    assert [len(row) for row in rows] == [1, 2, 2, 1]
 
 
 def test_removed_duplicates_are_not_in_the_main_menu():

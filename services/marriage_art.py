@@ -38,6 +38,7 @@ SCENES = {
 GROUP_SCENES = {
     "hug": "sib_hug/hug.jpg",  # Sib Hug («بغل سیبی»); art arrives in Phase 4
     "kiss": "sib_kiss/kiss.jpg",  # Sib Kiss («بوس سیبی»); art arrives in Phase 4
+    "daily_chest": "daily_chest/chest.jpg",  # Daily Sib Treasure Chest group post («صندوقچه گنج روزانه»)
 }
 _ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 

@@ -42,7 +42,8 @@ def test_other_main_menu_buttons_keep_their_styles():
 
     group_kb = get_group_welcome_keyboard()
     by_text = {b.text: b for b in _buttons(group_kb)}
-    # Every non-games entry of the reorganized 5-button menu stays blue.
+    # Every non-games entry of the reorganized 6-button menu stays blue
+    # (the chest entry included).
     assert by_text["📖 راهنما"].style == "primary"
     assert by_text["🛒 فروشگاه"].style == "primary"
     assert by_text["👤 پروفایل من"].style == "primary"
