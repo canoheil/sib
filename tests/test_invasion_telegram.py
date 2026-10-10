@@ -2,6 +2,7 @@
 
 import asyncio
 import itertools
+import logging
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -10,6 +11,8 @@ import pytest
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery, Chat as TelegramChat, Message, User as TelegramUser
 from sqlalchemy import func, select
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from sib.database.models import (
     Character,
@@ -23,8 +26,10 @@ from sib.database.models import (
     InvasionStatus,
     InvasionWave,
     PlayerCard,
+    PlayerProgression,
     ReleaseStatus,
     User,
+    UserItem,
 )
 from sib.handlers.invasion import _brace_idempotency_key, handle_invasion_callback
 from sib.keyboards.invasion import (
@@ -33,7 +38,6 @@ from sib.keyboards.invasion import (
     parse_invasion_callback,
 )
 from sib.services.characters import CharacterService
-from sib.services.player_cards import PlayerCardService
 from sib.services.invasion import (
     BRACE_BASE_CONTRIBUTION,
     InvasionAlreadyResolvedError,
@@ -43,7 +47,7 @@ from sib.services.invasion import (
     InvasionService,
     InvasionStaleWaveError,
 )
-from sib.tests.conftest import requires_row_locks
+from sib.services.invasion_rewards import GOLDEN_APPLE_ITEM_KEY
 from sib.services.invasion_telegram import (
     InvasionScreenSnapshot,
     InvasionTelegramService,
@@ -51,6 +55,8 @@ from sib.services.invasion_telegram import (
     render_invasion_status,
 )
 from sib.services.maintenance.service import MaintenanceService
+from sib.services.player_cards import PlayerCardService
+from sib.tests.conftest import requires_row_locks
 
 
 UTC = timezone.utc
@@ -179,6 +185,73 @@ async def _make_event(
         )
         assert saved
         await session.commit()
+    await session.refresh(invasion)
+    return invasion
+
+
+async def _make_four_wave_event(
+    session,
+    *,
+    activated_at: datetime,
+    group_id: int = GROUP_ID,
+    wave_duration_seconds: int = 60,
+    downtime_compensation_max_seconds: int = 1200,
+) -> Invasion:
+    """Create a short activation-relative battle for callback-boundary tests."""
+    await _make_group(session, group_id)
+    faction = await session.scalar(
+        select(Faction).where(Faction.code == "moon_descendants")
+    )
+    if faction is None:
+        session.add(
+            Faction(
+                code="moon_descendants",
+                name_fa="فرزندان ماه",
+                name_en="Moon Descendants",
+                symbol="🌙",
+                lore_fa="",
+                display_order=3,
+                is_active=True,
+            )
+        )
+        await session.flush()
+
+    invasion = await InvasionService.create(
+        session,
+        group_id=group_id,
+        occurrence_key=(
+            f"telegram-v2:{group_id}:{activated_at.isoformat()}:{wave_duration_seconds}"
+        ),
+        scheduled_at=activated_at,
+        activated_at=activated_at,
+        wave_duration_seconds=wave_duration_seconds,
+        enemy_faction_code="moon_descendants",
+        enemy_power=180,
+        event_config={
+            "schema_version": 2,
+            "timing_basis": "activation",
+            "wave_count": 4,
+            "wave_duration_seconds": wave_duration_seconds,
+            "downtime_compensation_max_seconds": downtime_compensation_max_seconds,
+        },
+        event_spec={"event_type": "moon_descendants"},
+        wave_compositions=[
+            {"wave_sequence": sequence, "enemy_power": 45}
+            for sequence in range(1, 5)
+        ],
+        target_region_code="moonfall_valley",
+        target_region_name_snapshot="دره ماه",
+    )
+    await session.commit()
+    saved = await InvasionService.set_announcement_message_id(
+        session,
+        invasion.id,
+        MESSAGE_ID,
+        expected_group_id=group_id,
+        expected_message_id=None,
+    )
+    assert saved
+    await session.commit()
     await session.refresh(invasion)
     return invasion
 
@@ -510,6 +583,365 @@ async def test_valid_join_uses_service_main_card_snapshot_and_duplicate_is_idemp
 
 
 @pytest.mark.asyncio
+async def test_join_database_constraint_failure_is_logged_and_not_reported_as_success(
+    db_session,
+    monkeypatch,
+    caplog,
+):
+    invasion = await _make_event(db_session)
+    user = await _make_user(db_session, 70020)
+    participant = await InvasionService.join(
+        db_session,
+        invasion.id,
+        user.id,
+        expected_group_id=GROUP_ID,
+        now=NOW,
+    )
+    await db_session.commit()
+    existing_participant_id = int(participant.id)
+
+    # Model the final uniqueness backstop winning a join race after the lookup.
+    # The INSERT below then raises a real database IntegrityError.
+    async def miss_existing_participant(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        InvasionService,
+        "_participant_by_pair",
+        staticmethod(miss_existing_participant),
+    )
+    bot = _bot()
+    callback = _callback(user.id, invasion_callback_data("join", invasion.id))
+
+    with caplog.at_level(logging.ERROR, logger="sib"):
+        await handle_invasion_callback(callback, bot)
+
+    assert "ثبت پیوستن انجام نشد" in _sent_text(bot)
+    assert "به یورش پیوستی" not in _sent_text(bot)
+    assert "Invasion join handler failed" in caplog.text
+    assert "IntegrityError" in caplog.text
+    assert await db_session.scalar(
+        select(func.count(InvasionParticipant.id)).where(
+            InvasionParticipant.invasion_id == invasion.id,
+            InvasionParticipant.user_id == user.id,
+        )
+    ) == 1
+    persisted = await db_session.get(InvasionParticipant, existing_participant_id)
+    assert persisted is not None
+
+
+@pytest.mark.asyncio
+async def test_join_commit_failure_is_logged_and_never_reported_as_success(
+    db_session,
+    monkeypatch,
+    caplog,
+):
+    invasion = await _make_event(db_session)
+    user = await _make_user(db_session, 70022)
+    await db_session.commit()
+
+    original_commit = AsyncSession.commit
+
+    async def fail_handler_session_commit(session):
+        if session is db_session:
+            return await original_commit(session)
+        raise OperationalError(
+            "COMMIT",
+            {},
+            RuntimeError("injected database commit failure"),
+        )
+
+    monkeypatch.setattr(AsyncSession, "commit", fail_handler_session_commit)
+    bot = _bot()
+    callback = _callback(user.id, invasion_callback_data("join", invasion.id))
+
+    with caplog.at_level(logging.ERROR, logger="sib"):
+        await handle_invasion_callback(callback, bot)
+
+    assert "ثبت پیوستن انجام نشد" in _sent_text(bot)
+    assert "به یورش پیوستی" not in _sent_text(bot)
+    assert "Invasion join handler failed" in caplog.text
+    assert "OperationalError" in caplog.text
+    assert await db_session.scalar(
+        select(func.count(InvasionParticipant.id)).where(
+            InvasionParticipant.invasion_id == invasion.id,
+            InvasionParticipant.user_id == user.id,
+        )
+    ) == 0
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_join_commit_is_reconciled_from_a_fresh_session(
+    db_session,
+    monkeypatch,
+    caplog,
+):
+    invasion = await _make_event(db_session)
+    user = await _make_user(db_session, 70024)
+    await db_session.commit()
+
+    original_commit = AsyncSession.commit
+    state = {"raised": False}
+
+    async def commit_then_lose_acknowledgement(session):
+        await original_commit(session)
+        if session is not db_session and not state["raised"]:
+            state["raised"] = True
+            raise OperationalError(
+                "COMMIT",
+                {},
+                RuntimeError("injected lost commit acknowledgement"),
+            )
+
+    monkeypatch.setattr(AsyncSession, "commit", commit_then_lose_acknowledgement)
+    bot = _bot()
+    callback = _callback(user.id, invasion_callback_data("join", invasion.id))
+
+    with caplog.at_level(logging.WARNING, logger="sib"):
+        await handle_invasion_callback(callback, bot)
+
+    assert state["raised"] is True
+    assert "به یورش پیوستی" in _sent_text(bot)
+    assert "ثبت پیوستن انجام نشد" not in _sent_text(bot)
+    assert "persisted after commit acknowledgement error" in caplog.text
+    assert await db_session.scalar(
+        select(func.count(InvasionParticipant.id)).where(
+            InvasionParticipant.invasion_id == invasion.id,
+            InvasionParticipant.user_id == user.id,
+        )
+    ) == 1
+
+
+@pytest.mark.asyncio
+async def test_due_wave_transition_is_kept_when_main_card_snapshot_rejects_join(
+    db_session,
+    monkeypatch,
+):
+    now = datetime.now(UTC).replace(microsecond=0)
+    activated_at = now - timedelta(seconds=70)
+    invasion = await _make_four_wave_event(
+        db_session,
+        activated_at=activated_at,
+        wave_duration_seconds=60,
+    )
+    invasion_id = int(invasion.id)
+    user = await _make_user(db_session, 70025)
+    user_id = int(user.id)
+    character = await CharacterService.create(
+        db_session,
+        code="invasion_snapshot_race_card",
+        name_fa="کارت در حال تغییر",
+        power=20,
+        speed=20,
+        intelligence=20,
+        release_status=ReleaseStatus.RELEASED,
+    )
+    card = PlayerCard(
+        user_id=user.id,
+        character_id=character.id,
+        level=1,
+        is_favorite=True,
+    )
+    db_session.add(card)
+    await db_session.flush()
+    card_id = int(card.id)
+
+    persisted = await db_session.get(Invasion, invasion_id)
+    persisted.heartbeat_at = now - timedelta(seconds=20)
+    await db_session.commit()
+
+    original_get_main_card = PlayerCardService.get_main_card
+
+    async def invalidate_snapshot_between_reads(session, user_id):
+        current_card = await original_get_main_card(session, user_id)
+        assert current_card is not None
+        current_card.is_favorite = False
+        await session.flush()
+        return current_card
+
+    monkeypatch.setattr(
+        PlayerCardService,
+        "get_main_card",
+        staticmethod(invalidate_snapshot_between_reads),
+    )
+    bot = _bot()
+    await handle_invasion_callback(
+        _callback(user.id, invasion_callback_data("join", invasion_id)),
+        bot,
+    )
+
+    assert "وضعیت کارت اصلی‌ات تغییر کرد" in _sent_text(bot)
+    assert "به یورش پیوستی" not in _sent_text(bot)
+    db_session.expire_all()
+    persisted = await db_session.get(Invasion, invasion_id)
+    waves = list(
+        (
+            await db_session.scalars(
+                select(InvasionWave)
+                .where(InvasionWave.invasion_id == invasion_id)
+                .order_by(InvasionWave.wave_sequence)
+            )
+        ).all()
+    )
+    assert persisted.status == InvasionStatus.ACTIVE
+    assert persisted.current_wave_sequence == 2
+    assert persisted.outcome is None
+    assert persisted.rewards_settled_at is None
+    assert waves[0].status == InvasionStatus.FINISHED
+    assert waves[0].ended_at.replace(tzinfo=UTC) == activated_at + timedelta(seconds=60)
+    assert waves[1].status == InvasionStatus.ACTIVE
+    db_session.expire_all()
+    persisted_card = await db_session.get(PlayerCard, card_id)
+    assert persisted_card.is_favorite is True
+    assert await db_session.scalar(
+        select(func.count(InvasionParticipant.id)).where(
+            InvasionParticipant.invasion_id == invasion_id,
+            InvasionParticipant.user_id == user_id,
+        )
+    ) == 0
+    assert await db_session.scalar(
+        select(func.count(InvasionDefenseAction.id)).where(
+            InvasionDefenseAction.invasion_id == invasion_id
+        )
+    ) == 0
+    assert await db_session.scalar(
+        select(func.count(InvasionContribution.id)).where(
+            InvasionContribution.invasion_id == invasion_id
+        )
+    ) == 0
+    assert await db_session.scalar(
+        select(func.count(UserItem.id)).where(
+            UserItem.user_id == user_id,
+            UserItem.item_key == GOLDEN_APPLE_ITEM_KEY,
+        )
+    ) == 0
+
+
+@pytest.mark.parametrize("user_already_exists", [False, True])
+@pytest.mark.asyncio
+async def test_terminal_rejected_join_rolls_back_user_and_profile_writes(
+    db_session,
+    user_already_exists,
+):
+    now = datetime.now(UTC).replace(microsecond=0)
+    activated_at = now - timedelta(seconds=1300)
+    invasion = await _make_four_wave_event(
+        db_session,
+        activated_at=activated_at,
+        wave_duration_seconds=60,
+        downtime_compensation_max_seconds=1200,
+    )
+    invasion_id = int(invasion.id)
+    if user_already_exists:
+        user = await _make_user(db_session, 70026)
+        user_id = int(user.id)
+        user.first_name = "نام ذخیره‌شده"
+        db_session.add(PlayerProgression(user_id=user_id, total_xp=77))
+        await db_session.commit()
+    else:
+        user_id = 70027
+        while await db_session.get(User, user_id) is not None:
+            user_id += 1
+
+    callback = _callback(user_id, invasion_callback_data("join", invasion_id))
+    callback.from_user = callback.from_user.model_copy(
+        update={"first_name": "نام تازه تلگرام"}
+    )
+    bot = _bot()
+    await handle_invasion_callback(callback, bot)
+
+    assert "دفاع این یورش بسته شده" in _sent_text(bot)
+    assert "به یورش پیوستی" not in _sent_text(bot)
+    db_session.expire_all()
+    persisted = await db_session.get(Invasion, invasion_id)
+    assert persisted.status == InvasionStatus.FINISHED
+    assert persisted.outcome is None
+    if user_already_exists:
+        stored_user = await db_session.get(User, user_id)
+        assert stored_user.first_name == "نام ذخیره‌شده"
+        progression = await db_session.get(PlayerProgression, user_id)
+        assert progression.total_xp == 77
+    else:
+        assert await db_session.get(User, user_id) is None
+        assert await db_session.get(PlayerProgression, user_id) is None
+    assert await db_session.scalar(
+        select(func.count(InvasionParticipant.id)).where(
+            InvasionParticipant.invasion_id == invasion_id
+        )
+    ) == 0
+    assert await db_session.scalar(
+        select(func.count(InvasionDefenseAction.id)).where(
+            InvasionDefenseAction.invasion_id == invasion_id
+        )
+    ) == 0
+    assert await db_session.scalar(
+        select(func.count(InvasionContribution.id)).where(
+            InvasionContribution.invasion_id == invasion_id
+        )
+    ) == 0
+
+
+@pytest.mark.asyncio
+async def test_join_confirmation_failure_after_commit_uses_success_fallback(
+    db_session,
+    monkeypatch,
+    caplog,
+):
+    invasion = await _make_event(db_session)
+    user = await _make_user(db_session, 70021)
+    await db_session.commit()
+
+    def fail_confirmation(_participant):
+        raise RuntimeError("injected presentation-only failure")
+
+    monkeypatch.setattr("sib.handlers.invasion._join_confirmation", fail_confirmation)
+    bot = _bot()
+    callback = _callback(user.id, invasion_callback_data("join", invasion.id))
+
+    with caplog.at_level(logging.ERROR, logger="sib"):
+        await handle_invasion_callback(callback, bot)
+
+    response = _sent_text(bot)
+    assert "به یورش پیوستی" in response
+    assert "پیوستن به‌تنهایی دفاعی ثبت نمی‌کند" in response
+    assert "ثبت پیوستن انجام نشد" not in response
+    assert "Could not format committed Invasion join confirmation" in caplog.text
+    assert await db_session.scalar(
+        select(func.count(InvasionParticipant.id)).where(
+            InvasionParticipant.invasion_id == invasion.id,
+            InvasionParticipant.user_id == user.id,
+        )
+    ) == 1
+
+
+@pytest.mark.asyncio
+async def test_group_notice_failure_after_join_does_not_undo_commit(
+    db_session,
+    caplog,
+):
+    invasion = await _make_event(db_session)
+    user = await _make_user(db_session, 70023)
+    await db_session.commit()
+    bot = _bot()
+    bot.send_message = AsyncMock(side_effect=RuntimeError("Telegram is unavailable"))
+
+    with caplog.at_level(logging.WARNING, logger="sib"):
+        await handle_invasion_callback(
+            _callback(user.id, invasion_callback_data("join", invasion.id)),
+            bot,
+        )
+
+    assert bot.send_message.await_count == 2  # original parse mode, then plain text
+    assert "send screen failed entirely" in caplog.text
+    assert await db_session.scalar(
+        select(func.count(InvasionParticipant.id)).where(
+            InvasionParticipant.invasion_id == invasion.id,
+            InvasionParticipant.user_id == user.id,
+        )
+    ) == 1
+
+
+@pytest.mark.asyncio
 async def test_join_without_main_card_is_explicit_and_does_not_choose_a_card(db_session):
     invasion = await _make_event(db_session)
     invasion_id = int(invasion.id)
@@ -754,6 +1186,90 @@ async def test_brace_complete_flow_updates_status_and_contributions(db_session):
 
 
 @pytest.mark.asyncio
+async def test_ambiguous_brace_commit_is_reconciled_by_stable_action_key(
+    db_session,
+    monkeypatch,
+    caplog,
+):
+    now = datetime.now(UTC).replace(microsecond=0)
+    activated_at = now - timedelta(seconds=10)
+    invasion = await _make_four_wave_event(
+        db_session,
+        activated_at=activated_at,
+        wave_duration_seconds=60,
+    )
+    invasion_id = int(invasion.id)
+    user = await _make_user(db_session, 70101)
+    await InvasionService.join(
+        db_session,
+        invasion_id,
+        user.id,
+        expected_group_id=GROUP_ID,
+        now=activated_at + timedelta(seconds=1),
+    )
+    await db_session.commit()
+
+    original_commit = AsyncSession.commit
+    original_action = InvasionService.perform_defense_action
+    state = {"raised": False}
+
+    async def perform_action_then_mark_commit(session, *args, **kwargs):
+        result = await original_action(session, *args, **kwargs)
+        session.info["test_raise_after_action_commit"] = True
+        return result
+
+    async def commit_then_lose_action_acknowledgement(session):
+        should_raise = session.info.pop("test_raise_after_action_commit", False)
+        await original_commit(session)
+        if should_raise and not state["raised"]:
+            state["raised"] = True
+            raise OperationalError(
+                "COMMIT",
+                {},
+                RuntimeError("injected lost action commit acknowledgement"),
+            )
+
+    monkeypatch.setattr(
+        InvasionService,
+        "perform_defense_action",
+        staticmethod(perform_action_then_mark_commit),
+    )
+    monkeypatch.setattr(AsyncSession, "commit", commit_then_lose_action_acknowledgement)
+    bot = _bot()
+    callback = _callback(
+        user.id,
+        invasion_callback_data("brace", invasion_id, wave_sequence=1),
+        callback_id="ambiguous-brace-commit",
+    )
+
+    with caplog.at_level(logging.WARNING, logger="sib"):
+        await handle_invasion_callback(callback, bot)
+
+    assert state["raised"] is True
+    assert "دفاع پذیرفته شد" in _sent_text(bot)
+    assert "ثبت دفاع انجام نشد" not in _sent_text(bot)
+    assert "persisted after commit acknowledgement error" in caplog.text
+    action = await db_session.scalar(
+        select(InvasionDefenseAction).where(
+            InvasionDefenseAction.invasion_id == invasion_id
+        )
+    )
+    assert action is not None
+    assert action.idempotency_key == _brace_idempotency_key(callback.id)
+    assert action.wave_sequence == 1
+    assert await db_session.scalar(
+        select(func.count(InvasionDefenseAction.id)).where(
+            InvasionDefenseAction.invasion_id == invasion_id
+        )
+    ) == 1
+    assert await db_session.scalar(
+        select(func.count(InvasionContribution.id)).where(
+            InvasionContribution.invasion_id == invasion_id
+        )
+    ) == 1
+
+
+@pytest.mark.asyncio
 async def test_brace_is_one_per_wave_and_next_wave_allows_another(db_session):
     invasion = await _make_event(db_session)
     invasion_id = int(invasion.id)
@@ -955,6 +1471,142 @@ async def test_stale_wave_callbacks_do_not_contribute_and_refresh_current_status
         assert not any(button.callback_data.startswith("invasion:brace:") for button in buttons)
 
     db_session.expire_all()
+    assert await db_session.scalar(
+        select(func.count(InvasionDefenseAction.id)).where(
+            InvasionDefenseAction.invasion_id == invasion_id
+        )
+    ) == 0
+    assert await db_session.scalar(
+        select(func.count(InvasionContribution.id)).where(
+            InvasionContribution.invasion_id == invasion_id
+        )
+    ) == 0
+
+
+@pytest.mark.asyncio
+async def test_expired_four_wave_brace_commits_the_advanced_wave(db_session):
+    action_now = datetime.now(UTC).replace(microsecond=0)
+    activated_at = action_now - timedelta(seconds=60)
+    invasion = await _make_four_wave_event(
+        db_session,
+        activated_at=activated_at,
+        wave_duration_seconds=60,
+    )
+    invasion_id = int(invasion.id)
+    user = await _make_user(db_session, 70107)
+    await InvasionService.join(
+        db_session,
+        invasion_id,
+        user.id,
+        expected_group_id=GROUP_ID,
+        now=activated_at + timedelta(seconds=1),
+    )
+    wave = await InvasionService.get_current_wave(db_session, invasion_id)
+    invasion.heartbeat_at = action_now - timedelta(seconds=5)
+    invasion.next_transition_at = action_now - timedelta(seconds=1)
+    wave.deadline_at = action_now - timedelta(seconds=1)
+    wave.next_transition_at = wave.deadline_at
+    await db_session.commit()
+
+    bot = _bot()
+    callback = _callback(
+        user.id,
+        invasion_callback_data("brace", invasion_id, wave_sequence=1),
+        callback_id="expired-four-wave-brace",
+    )
+    await handle_invasion_callback(callback, bot)
+
+    assert "موج دیگر فعال نیست" in _sent_text(bot)
+    refreshed_text = bot.edit_message_media.call_args_list[-1].kwargs["media"].caption
+    assert "موج ۲ از ۴" in refreshed_text
+    assert "Brace در دسترس است" in refreshed_text
+
+    db_session.expire_all()
+    persisted = await db_session.get(Invasion, invasion_id)
+    assert persisted.status == InvasionStatus.ACTIVE
+    assert persisted.current_wave_sequence == 2
+    waves = list(
+        (
+            await db_session.scalars(
+                select(InvasionWave)
+                .where(InvasionWave.invasion_id == invasion_id)
+                .order_by(InvasionWave.wave_sequence)
+            )
+        ).all()
+    )
+    assert waves[0].status == InvasionStatus.FINISHED
+    assert waves[1].status == InvasionStatus.ACTIVE
+    assert await db_session.scalar(
+        select(func.count(InvasionDefenseAction.id)).where(
+            InvasionDefenseAction.invasion_id == invasion_id
+        )
+    ) == 0
+    assert await db_session.scalar(
+        select(func.count(InvasionContribution.id)).where(
+            InvasionContribution.invasion_id == invasion_id
+        )
+    ) == 0
+
+
+@pytest.mark.parametrize("callback_action", ["join", "brace"])
+@pytest.mark.asyncio
+async def test_callback_commits_over_budget_interruption_without_defeat_or_reward(
+    db_session,
+    callback_action,
+):
+    now = datetime.now(UTC).replace(microsecond=0)
+    activated_at = now - timedelta(seconds=1300)
+    invasion = await _make_four_wave_event(
+        db_session,
+        activated_at=activated_at,
+        wave_duration_seconds=60,
+        downtime_compensation_max_seconds=1200,
+    )
+    invasion_id = int(invasion.id)
+    user = await _make_user(db_session, 70108)
+    if callback_action == "brace":
+        await InvasionService.join(
+            db_session,
+            invasion_id,
+            user.id,
+            expected_group_id=GROUP_ID,
+            now=activated_at + timedelta(seconds=5),
+        )
+    await db_session.commit()
+
+    callback_data = (
+        invasion_callback_data("join", invasion_id)
+        if callback_action == "join"
+        else invasion_callback_data("brace", invasion_id, wave_sequence=1)
+    )
+    bot = _bot()
+    await handle_invasion_callback(
+        _callback(
+            user.id,
+            callback_data,
+            callback_id=f"over-budget-{callback_action}",
+        ),
+        bot,
+    )
+
+    if callback_action == "join":
+        assert "دفاع این یورش بسته شده" in _sent_text(bot)
+        assert "ثبت پیوستن انجام نشد" not in _sent_text(bot)
+    final_text = bot.edit_message_media.call_args.kwargs["media"].caption
+    assert "قطع طولانی ربات" in final_text
+    assert "تکمیل شد" not in final_text
+
+    db_session.expire_all()
+    persisted = await db_session.get(Invasion, invasion_id)
+    assert persisted.status == InvasionStatus.FINISHED
+    assert persisted.outcome is None
+    assert persisted.current_wave_sequence is None
+    assert persisted.rewards_settled_at is not None
+    assert await db_session.scalar(
+        select(func.count(InvasionParticipant.id)).where(
+            InvasionParticipant.invasion_id == invasion_id
+        )
+    ) == (1 if callback_action == "brace" else 0)
     assert await db_session.scalar(
         select(func.count(InvasionDefenseAction.id)).where(
             InvasionDefenseAction.invasion_id == invasion_id
@@ -1969,15 +2621,36 @@ def test_result_notice_for_an_interrupted_battle_is_not_a_defeat_or_a_reward():
     assert "🍎" not in text
 
 
-def test_result_notice_for_a_voided_legacy_battle_pays_nothing():
-    text = render_final_notice(
+def test_interrupted_status_does_not_claim_all_four_waves_completed():
+    text = render_invasion_status(
         _final_snapshot(
             outcome=None,
-            started_at=None,
+            defense_total=0,
+            participant_count=0,
             reward_golden_apples=None,
             rewards_settled=True,
         )
     )
+    assert "شرکت‌کنندگان: ۰" in text
+    assert "دفاع ثبت‌شده: ۰" in text
+    assert "موج‌ها: پس از قطع طولانی ربات، بدون نتیجه بسته شد" in text
+    assert "تکمیل شد" not in text
+
+
+def test_result_notice_for_a_voided_legacy_battle_pays_nothing():
+    snapshot = _final_snapshot(
+        outcome=None,
+        started_at=None,
+        reward_golden_apples=None,
+        rewards_settled=True,
+    )
+    text = render_final_notice(snapshot)
     assert "بدون دفاع لغو شد" in text
     assert "پاداشی تعلق نمی‌گیرد" in text
     assert "🌕" not in text
+
+    status_text = render_invasion_status(snapshot, now=NOW)
+    assert "موج‌ها: بدون آغاز لغو شد" in status_text
+    assert "نتیجه: ثبت‌نشده" in status_text
+    assert "شکست در دفاع" not in status_text
+    assert "تکمیل شد" not in status_text

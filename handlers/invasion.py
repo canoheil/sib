@@ -6,14 +6,20 @@ and idempotency rules; this module only adapts callbacks and renders results.
 """
 
 import hashlib
+from types import SimpleNamespace
 from typing import Optional
 
 from aiogram import Bot, F, Router
 from aiogram.types import CallbackQuery
+from sqlalchemy import select
 
 from sib.core.logging import logger
-from sib.database.connection import get_session
-from sib.database.models import InvasionStatus
+from sib.database.connection import get_async_sessionmaker, get_session
+from sib.database.models import (
+    InvasionDefenseAction,
+    InvasionParticipant,
+    InvasionStatus,
+)
 from sib.keyboards.invasion import parse_invasion_callback
 from sib.services.invasion import (
     InvasionAlreadyResolvedError,
@@ -23,11 +29,13 @@ from sib.services.invasion import (
     InvasionGroupMismatchError,
     InvasionInvalidDefenseActionError,
     InvasionJoinClosedError,
+    InvasionInvalidWaveError,
     InvasionMainCardSnapshotError,
     InvasionNotActiveError,
     InvasionNotFoundError,
     InvasionNotParticipantError,
     InvasionService,
+    InvasionStaleWaveError,
     InvasionStateError,
     InvasionUserNotFoundError,
     InvasionWaveError,
@@ -52,6 +60,10 @@ INVASION_UNAVAILABLE_TEXT = "این یورش دیگر در دسترس نیست."
 JOIN_PENDING_TEXT = "⏳ درخواست پیوستن در حال بررسی است؛ نتیجه همین‌جا نمایش داده می‌شود."
 STATUS_PENDING_TEXT = "⏳ وضعیت یورش در حال تازه‌شدن است."
 BRACE_PENDING_TEXT = "⏳ دفاع در حال ثبت است."
+JOIN_CONFIRMATION_FALLBACK_TEXT = (
+    "⚔️ به یورش پیوستی. در هر موج، یک‌بار با 🛡 Brace دفاع کن؛ "
+    "پیوستن به‌تنهایی دفاعی ثبت نمی‌کند."
+)
 
 _FA_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
 
@@ -108,6 +120,91 @@ def _brace_idempotency_key(callback_query_id: object) -> str:
         raise ValueError("callback query id is missing or invalid")
     digest = hashlib.sha256(callback_query_id.encode("utf-8")).hexdigest()
     return f"telegram:brace:{digest}"
+
+
+async def _find_committed_join_participant(
+    invasion_id: int,
+    user_id: int,
+    participant_id: int,
+):
+    """Read back a possibly committed join without reusing its failed session."""
+    session_factory = get_async_sessionmaker()
+    async with session_factory() as session:
+        participant = await session.scalar(
+            select(InvasionParticipant).where(
+                InvasionParticipant.id == participant_id,
+                InvasionParticipant.invasion_id == invasion_id,
+                InvasionParticipant.user_id == user_id,
+            )
+        )
+        if participant is None:
+            await session.rollback()
+            return None
+
+        # Copy only the fields used by _join_confirmation before closing the
+        # read-only session; a rollback/close must not expire this result.
+        snapshot = SimpleNamespace(
+            main_card_id_snapshot=participant.main_card_id_snapshot,
+            character_name_fa_snapshot=participant.character_name_fa_snapshot,
+            character_code_snapshot=participant.character_code_snapshot,
+            card_level_snapshot=participant.card_level_snapshot,
+            power_snapshot=participant.power_snapshot,
+            speed_snapshot=participant.speed_snapshot,
+            intelligence_snapshot=participant.intelligence_snapshot,
+        )
+        await session.rollback()
+        return snapshot
+
+
+async def _persist_rejected_join_maintenance(
+    invasion_id: int,
+    group_id: int,
+):
+    """Commit only due lifecycle maintenance after the join transaction rolls back.
+
+    User registration/profile writes and the rejected participant attempt are
+    deliberately excluded from this fresh transaction.
+    """
+    try:
+        async with get_session() as session:
+            invasion = await InvasionService.get(session, invasion_id)
+            if invasion.group_id != group_id:
+                return None
+            result = await InvasionService.advance_battle(session, invasion_id)
+        return result
+    except InvasionNotFoundError:
+        return None
+    except Exception:
+        logger.exception(
+            "Could not persist Invasion maintenance after rejected join "
+            "invasion_id=%s group_id=%s",
+            invasion_id,
+            group_id,
+        )
+        return None
+
+
+async def _find_committed_defense_action(
+    invasion_id: int,
+    idempotency_key: str,
+    result,
+) -> bool:
+    """Verify the exact action using its stable key in a new read-only session."""
+    session_factory = get_async_sessionmaker()
+    async with session_factory() as session:
+        action = await session.scalar(
+            select(InvasionDefenseAction).where(
+                InvasionDefenseAction.id == result.action_id,
+                InvasionDefenseAction.invasion_id == invasion_id,
+                InvasionDefenseAction.idempotency_key == idempotency_key,
+                InvasionDefenseAction.participant_id == result.participant_id,
+                InvasionDefenseAction.wave_sequence == result.wave_sequence,
+                InvasionDefenseAction.action_code == result.action_code,
+            )
+        )
+        committed = action is not None
+        await session.rollback()
+        return committed
 
 
 def _join_confirmation(participant) -> str:
@@ -267,6 +364,11 @@ async def _handle_join(
     actor,
 ) -> None:
     persisted_status: Optional[str] = None
+    participant = None
+    pending_participant = None
+    pending_participant_id: Optional[int] = None
+    join_attempted = False
+    lifecycle_changed = False
     try:
         async with get_session() as session:
             invasion = await InvasionService.get(session, invasion_id)
@@ -279,13 +381,18 @@ async def _handle_join(
                 # Identity comes from this authenticated Telegram update, never
                 # from callback data or the public announcement message.
                 await UserService.get_or_create_user(session, actor)
-                participant = await InvasionService.join(
+                join_attempted = True
+                pending_participant = await InvasionService.join(
                     session,
                     invasion_id,
                     actor.id,
                     expected_group_id=group_id,
                 )
-                result_text = _join_confirmation(participant)
+                pending_participant_id = int(pending_participant.id)
+        # Only expose a participant to the presenter after get_session() has
+        # committed successfully, unless a later authoritative read proves the
+        # commit succeeded despite an acknowledgement error.
+        participant = pending_participant
     except InvasionNotFoundError:
         result_text = INVASION_UNAVAILABLE_TEXT
     except (
@@ -295,6 +402,22 @@ async def _handle_join(
         InvasionStateError,
         InvasionUserNotFoundError,
     ) as error:
+        if join_attempted and isinstance(
+            error,
+            (
+                InvasionJoinClosedError,
+                InvasionMainCardSnapshotError,
+                InvasionUserNotFoundError,
+            ),
+        ):
+            # join() may have advanced a due timeline before rejecting the
+            # participant. The join transaction has now rolled back, including
+            # User/Progression/profile writes, so persist only maintenance in a
+            # fresh transaction.
+            advance = await _persist_rejected_join_maintenance(invasion_id, group_id)
+            if advance is not None:
+                persisted_status = advance.status
+                lifecycle_changed = advance.changed
         result_text = _join_error_text(error, persisted_status)
     except Exception:
         logger.exception(
@@ -303,7 +426,57 @@ async def _handle_join(
             group_id,
             actor.id,
         )
+        if pending_participant_id is not None:
+            try:
+                participant = await _find_committed_join_participant(
+                    invasion_id,
+                    actor.id,
+                    pending_participant_id,
+                )
+            except Exception:
+                # Without a successful fresh read, retain the conservative
+                # failure response; never retry the non-idempotent join write.
+                logger.exception(
+                    "Could not reconcile ambiguous Invasion join commit "
+                    "invasion_id=%s group_id=%s user_id=%s",
+                    invasion_id,
+                    group_id,
+                    actor.id,
+                )
+            if participant is not None:
+                logger.warning(
+                    "Invasion join participant persisted after commit "
+                    "acknowledgement error; treating as accepted "
+                    "invasion_id=%s group_id=%s user_id=%s participant_id=%s",
+                    invasion_id,
+                    group_id,
+                    actor.id,
+                    pending_participant_id,
+                )
         result_text = "ثبت پیوستن انجام نشد؛ کمی بعد دوباره تلاش کن."
+
+    if lifecycle_changed:
+        await _refresh_after_action_error(
+            bot,
+            invasion_id=invasion_id,
+            user_id=actor.id,
+            group_id=group_id,
+            callback_message_id=callback_message_id,
+        )
+    if participant is not None:
+        try:
+            # Formatting is presentation-only. It happens after commit so a
+            # formatting defect cannot roll back a valid participant row.
+            result_text = _join_confirmation(participant)
+        except Exception:
+            logger.exception(
+                "Could not format committed Invasion join confirmation "
+                "invasion_id=%s group_id=%s user_id=%s",
+                invasion_id,
+                group_id,
+                actor.id,
+            )
+            result_text = JOIN_CONFIRMATION_FALLBACK_TEXT
 
     # get_session() committed (or rolled back) before Telegram feedback.
     await _show_group_notice(bot, group_id, result_text)
@@ -420,21 +593,41 @@ async def _handle_brace(
         await _show_group_notice(bot, group_id, STALE_ANNOUNCEMENT_TEXT)
         return
 
+    timeline_error = None
+    result = None
+    idempotency_key = None
     try:
         # callback.id is the stable source for a Telegram delivery retry. The
         # Wave/Event/user payload is still validated against persisted state by
         # the domain API, and user identity comes only from callback.from_user.
         idempotency_key = _brace_idempotency_key(callback.id)
         async with get_session() as session:
-            result = await InvasionService.perform_defense_action(
-                session,
-                invasion_id,
-                actor.id,
-                expected_group_id=group_id,
-                wave_sequence=wave_sequence,
-                action_code=InvasionDefenseActionCode.BRACE,
-                idempotency_key=idempotency_key,
-            )
+            try:
+                result = await InvasionService.perform_defense_action(
+                    session,
+                    invasion_id,
+                    actor.id,
+                    expected_group_id=group_id,
+                    wave_sequence=wave_sequence,
+                    action_code=InvasionDefenseActionCode.BRACE,
+                    idempotency_key=idempotency_key,
+                )
+            except (
+                InvasionAlreadyResolvedError,
+                InvasionInvalidWaveError,
+                InvasionNotActiveError,
+                InvasionNotParticipantError,
+                InvasionStaleWaveError,
+            ) as error:
+                # These checks happen after perform_defense_action has brought
+                # the timeline up to date and before it writes an action. Keep
+                # that authoritative maintenance even though this callback is
+                # stale, late, or from a nonparticipant. Database/action write
+                # errors remain outside this list and still roll the session
+                # back as a unit.
+                timeline_error = error
+        if timeline_error is not None:
+            raise timeline_error
     except InvasionNotFoundError:
         await _show_group_notice(bot, group_id, INVASION_UNAVAILABLE_TEXT)
         return
@@ -540,12 +733,42 @@ async def _handle_brace(
             actor.id,
             wave_sequence,
         )
-        await _show_group_notice(
-            bot,
+        committed = False
+        if result is not None and idempotency_key is not None:
+            try:
+                committed = await _find_committed_defense_action(
+                    invasion_id,
+                    idempotency_key,
+                    result,
+                )
+            except Exception:
+                # The outcome remains ambiguous if the authoritative read is
+                # unavailable. Do not repeat a non-idempotent write.
+                logger.exception(
+                    "Could not reconcile ambiguous Invasion brace commit "
+                    "invasion_id=%s group_id=%s user_id=%s wave_sequence=%s",
+                    invasion_id,
+                    group_id,
+                    actor.id,
+                    wave_sequence,
+                )
+        if not committed:
+            await _show_group_notice(
+                bot,
+                group_id,
+                "ثبت دفاع انجام نشد؛ کمی بعد دوباره تلاش کن.",
+            )
+            return
+        logger.warning(
+            "Invasion brace action persisted after commit acknowledgement error; "
+            "treating as accepted invasion_id=%s group_id=%s user_id=%s "
+            "wave_sequence=%s action_id=%s",
+            invasion_id,
             group_id,
-            "ثبت دفاع انجام نشد؛ کمی بعد دوباره تلاش کن.",
+            actor.id,
+            wave_sequence,
+            result.action_id,
         )
-        return
 
     # Domain commit completes before message edit or send. A Telegram outage
     # can delay feedback, but can never undo the accepted defense action.

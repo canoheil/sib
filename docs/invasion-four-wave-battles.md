@@ -116,8 +116,9 @@ voided shape:
   Group's current window can open its own battle on the next tick. Missed
   occurrences are never backfilled.
 - A join or Brace that arrives after the stall is refused by the normal closed
-  responses. That transaction is rolled back, but the next maintenance tick
-  derives the same terminal state from the persisted heartbeat.
+  responses. The Telegram callback commits an interruption it discovers while
+  validating the request; if no callback reaches it first, the next maintenance
+  tick derives the same terminal state from the persisted heartbeat.
 
 ### Limitations (explicit)
 
@@ -141,6 +142,21 @@ voided shape:
   contribution. The join confirmation says so.
 - A join arriving after a silent stall first restores the battle (section 3),
   so it can still succeed if the restored window is open.
+- If `join()` maintains a due timeline and then rejects a join (for example,
+  the battle became terminal or the Main Card snapshot changed), the callback
+  rolls back that transaction first. This also rolls back speculative
+  `User`/`PlayerProgression` registration and profile updates. It then runs
+  only `advance_battle` in a fresh transaction, preserving due lifecycle
+  maintenance without accepting a participant or committing action,
+  contribution, or reward writes. Successful joins retain their normal atomic
+  participant-and-user transaction.
+- If `COMMIT` raises after the database may have committed, the callback does
+  not automatically replay the write. It opens a fresh read-only session and
+  checks the persisted participant identity or the exact Brace action id and
+  callback-derived idempotency key before reporting success. If that read is
+  unavailable or cannot confirm the exact row, the existing conservative
+  failure response remains; the commit outcome may then be ambiguous, so the
+  player should refresh status before retrying.
 - Joining before activation is impossible: a battle does not exist until it
   activates.
 
@@ -171,7 +187,10 @@ receives `E / N` (the remainder goes to the earliest waves). Dividing by the
 legacy wave count of 2 means **each wave keeps the strength of a legacy wave**.
 
 Outcome thresholds are unchanged: `TOTAL_VICTORY` if `D ≥ E`,
-`NARROW_DEFENSE` if `100·D ≥ 75·E`, otherwise `DEFEAT`.
+`NARROW_DEFENSE` if `100·D ≥ 75·E`, otherwise `DEFEAT`. A battle that reaches its
+normal final deadline with no participants and zero defense therefore resolves
+as `DEFEAT` (`D = 0`); it is distinct from an over-budget outage interruption
+(`outcome = NULL`), and no reward is paid when there are no defenders.
 
 Representative values (computed from the implemented formulas):
 
