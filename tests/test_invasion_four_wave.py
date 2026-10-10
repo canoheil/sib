@@ -23,11 +23,13 @@ from sqlalchemy import func, select
 from sib.database.connection import get_async_sessionmaker
 from sib.database.models import (
     Invasion,
+    InvasionContribution,
     InvasionDefenseAction,
     InvasionOutcome,
     InvasionParticipant,
     InvasionStatus,
     InvasionWave,
+    UserItem,
 )
 from sib.services import invasion_telegram
 from sib.services.config_store import ConfigService
@@ -41,8 +43,11 @@ from sib.services.invasion import (
     InvasionStaleWaveError,
     outcome_for,
 )
+from sib.services.invasion_rewards import GOLDEN_APPLE_ITEM_KEY
 from sib.services.invasion_telegram import (
     InvasionTelegramService,
+    render_final_notice,
+    render_invasion_status,
     render_wave_notice,
 )
 from sib.services.maintenance.service import InvasionBattleConfig, MaintenanceService
@@ -282,6 +287,55 @@ async def test_final_resolution_happens_exactly_once(db_session):
     invasion = await _load(db_session, invasion_id)
     assert invasion.status == InvasionStatus.FINISHED
     assert _utc(invasion.ended_at) == at(1200)
+
+
+@pytest.mark.asyncio
+async def test_empty_battle_completes_as_defeat_without_participants_or_rewards(db_session):
+    """Four timed waves can finish empty; that is a defeat, not an interruption."""
+    group_id = await _group_id(db_session)
+    invasion_id = await _activate(db_session, group_id, at(0))
+
+    stats = await _live(15, 1200)
+
+    assert stats["invasions_resolved"] == 1
+    invasion = await _load(db_session, invasion_id)
+    assert invasion.status == InvasionStatus.FINISHED
+    assert invasion.outcome == InvasionOutcome.DEFEAT
+    assert _utc(invasion.ended_at) == at(1200)
+    assert invasion.rewards_settled_at is not None
+    waves = await _waves(db_session, invasion_id)
+    assert [wave.status for wave in waves] == [InvasionStatus.FINISHED] * 4
+    assert [wave.contribution_total for wave in waves] == [0, 0, 0, 0]
+    assert [
+        _utc(wave.ended_at) for wave in waves
+    ] == [at(WAVE * sequence) for sequence in range(1, 5)]
+    assert await db_session.scalar(
+        select(func.count(InvasionParticipant.id)).where(
+            InvasionParticipant.invasion_id == invasion_id
+        )
+    ) == 0
+    assert await db_session.scalar(
+        select(func.count(InvasionDefenseAction.id)).where(
+            InvasionDefenseAction.invasion_id == invasion_id
+        )
+    ) == 0
+    assert await db_session.scalar(
+        select(func.count(InvasionContribution.id)).where(
+            InvasionContribution.invasion_id == invasion_id
+        )
+    ) == 0
+
+    snapshot = await InvasionTelegramService.load_snapshot(invasion_id)
+    assert snapshot is not None
+    status_text = render_invasion_status(snapshot, now=at(1200))
+    result_text = render_final_notice(snapshot)
+    assert "موج‌ها: ۴ از ۴ تکمیل شد" in status_text
+    assert "نتیجه: شکست در دفاع" in status_text
+    assert "شرکت‌کنندگان: ۰" in status_text
+    assert "دفاع ثبت‌شده: ۰" in status_text
+    assert "پاداشی ثبت نشد؛ مدافع واجد شرایطی وجود نداشت" in status_text
+    assert "نتیجه: شکست در دفاع" in result_text
+    assert "پاداشی ثبت نشد؛ مدافع واجد شرایطی وجود نداشت" in result_text
 
 
 @pytest.mark.asyncio
@@ -833,7 +887,26 @@ async def test_compensation_budget_is_cumulative_across_outages(db_session):
 async def test_over_budget_interruption_is_terminal_and_not_repeated(db_session):
     group_id = await _group_id(db_session)
     invasion_id = await _activate(db_session, group_id, at(0))
-    await _live(15, 60)
+    defender = await _user_id(db_session, "Defender before a terminal outage")
+    await InvasionService.join(
+        db_session,
+        invasion_id,
+        defender,
+        expected_group_id=group_id,
+        now=at(1),
+    )
+    await InvasionService.perform_defense_action(
+        db_session,
+        invasion_id,
+        defender,
+        expected_group_id=group_id,
+        wave_sequence=1,
+        action_code=InvasionDefenseActionCode.BRACE,
+        idempotency_key="terminal-outage:wave-1",
+        now=at(15),
+    )
+    await db_session.commit()
+    await _live(30, 60)
     await RecoveryService.recover_on_startup(db_session, now=at(1400))
     first = await _load(db_session, invasion_id)
     first_end = _utc(first.ended_at)
@@ -850,6 +923,19 @@ async def test_over_budget_interruption_is_terminal_and_not_repeated(db_session)
     for wave in await _waves(db_session, invasion_id):
         assert wave.status == InvasionStatus.FINISHED
         assert wave.next_transition_at is None
+    # This participant had a real successful Brace before the interruption,
+    # but outcome=NULL still means no inventory reward may be granted.
+    assert await db_session.scalar(
+        select(func.count(InvasionDefenseAction.id)).where(
+            InvasionDefenseAction.invasion_id == invasion_id
+        )
+    ) == 1
+    assert await db_session.scalar(
+        select(func.count(UserItem.id)).where(
+            UserItem.user_id == defender,
+            UserItem.item_key == GOLDEN_APPLE_ITEM_KEY,
+        )
+    ) == 0
 
 
 @pytest.mark.asyncio

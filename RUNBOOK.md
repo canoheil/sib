@@ -8,6 +8,13 @@
 
 ### الف) روش Systemd (پیشنهادی برای سرور لینوکس خام / اوبونتو / دبیان)
 
+> ⚠️ واحد systemd فقط `bot.py` را اجرا می‌کند و `init_db()` با `create_all()` تغییرات
+> طرحوارهٔ جدول‌های موجود را اعمال نمی‌کند. پیش از اجرای کد جدید، مایگریشن‌ها را
+> طبق بخش ۳ با `alembic upgrade head` اعمال و نسخه را با `alembic current` بررسی
+> کنید؛ در استقرار Invasion چهارموجی، کد به مایگریشن 031 نیاز دارد. اسکریپت
+> `deploy/deploy.sh` و فرمان Docker مایگریشن را اجرا می‌کنند، اما `systemctl start`
+> یا `restart` به‌تنهایی این کار را نمی‌کند.
+
 1. کپی فایل سرویس به مسیر systemd:
    ```bash
    sudo cp /opt/sib/deploy/sib.service /etc/systemd/system/sib.service

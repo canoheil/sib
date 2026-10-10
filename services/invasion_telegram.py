@@ -163,7 +163,15 @@ def render_invasion_status(
         )
     else:
         title = "🏁 نتیجه نهایی تهاجم"
-        wave_label = f"موج‌ها: {_fa(snapshot.wave_count)} از {_fa(snapshot.wave_count)} تکمیل شد"
+        if snapshot.outcome is None and snapshot.started_at is not None:
+            wave_label = "موج‌ها: پس از قطع طولانی ربات، بدون نتیجه بسته شد"
+        elif snapshot.outcome is None:
+            wave_label = "موج‌ها: بدون آغاز لغو شد"
+        else:
+            wave_label = (
+                f"موج‌ها: {_fa(snapshot.wave_count)} از "
+                f"{_fa(snapshot.wave_count)} تکمیل شد"
+            )
         timing_label = "⏳ زمان دفاع: پایان‌یافته"
 
     lines = [
