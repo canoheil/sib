@@ -288,7 +288,9 @@ async def test_long_shop_card_preserves_photo_and_offers_full_description(db_ses
     await handle_shop_item_full(cb, bot)
     assert cb.message.kind == "text" and character.lore_fa in cb.message.text
     assert len(bot.live()) == 1 and original.deleted
-    assert f"shop_buy:{entry_id}" in {b.callback_data for b in _buttons(cb.message)}
+    assert any(
+        c.startswith(f"shop_buy:{entry_id}:") for c in {b.callback_data for b in _buttons(cb.message)}
+    )
     assert f"shop_item:{entry_id}" in {b.callback_data for b in _buttons(cb.message)}
 
 

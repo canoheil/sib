@@ -29,6 +29,9 @@ that can never block, so it is held to ``assert_first_acquisition_order``.
 """
 
 import functools
+import json
+
+from sqlalchemy import select
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Tuple
 
@@ -44,7 +47,13 @@ from sib.database.models import (
     ProposalStatus,
     User,
 )
+from sib.services.apple_wallet import AppleWalletService
 from sib.services.config_store import ConfigService
+from sib.tests.test_parties import create_test_user
+from sib.services.items import ITEM_CATALOG
+from sib.services.lock_order import LOCK_RANKS
+from sib.services.player_cards import PlayerCardService
+from sib.services.player_xp import PlayerXPService
 from sib.services.items import ItemService
 from sib.services.love import LoveService
 from sib.services.marriage import (
@@ -59,12 +68,17 @@ from sib.services.marriage_proposal import MarriageProposalService
 # Global lock-order policy (single source of truth for the audit)
 # ---------------------------------------------------------------------------
 
+# Mirrors services/lock_order.LOCK_RANKS (checked by
+# test_policy_table_is_strictly_ordered_and_agrees_with_this_suite below).
 LOCK_ORDER_RANK: Dict[str, int] = {
     "user": 0,
     "marriage": 1,
     "proposal": 2,
     "gift": 3,
-    "item": 4,
+    "card": 4,
+    "item": 5,
+    "wallet": 6,
+    "progression": 7,
 }
 
 
@@ -628,3 +642,216 @@ async def test_create_proposal_and_accept_proposal_agree_on_user_then_proposal(
         f"expected {expected}; this is the reverse of create_proposal and can "
         "deadlock on MariaDB/MySQL."
     )
+
+
+# ---------------------------------------------------------------------------
+# Economy policy: one rank table, and the real purchase/settlement paths
+# ---------------------------------------------------------------------------
+
+
+def test_policy_table_is_strictly_ordered_and_agrees_with_this_suite():
+    assert sorted(LOCK_RANKS, key=LOCK_RANKS.get) == [
+        "users",
+        "marriage",
+        "marriage_proposal",
+        "flower_gift",
+        "player_cards",
+        "user_items",
+        "apple_wallets",
+        "player_progressions",
+    ]
+    assert len(set(LOCK_RANKS.values())) == len(LOCK_RANKS)
+    assert LOCK_ORDER_RANK == {
+        "user": LOCK_RANKS["users"],
+        "marriage": LOCK_RANKS["marriage"],
+        "proposal": LOCK_RANKS["marriage_proposal"],
+        "gift": LOCK_RANKS["flower_gift"],
+        "card": LOCK_RANKS["player_cards"],
+        "item": LOCK_RANKS["user_items"],
+        "wallet": LOCK_RANKS["apple_wallets"],
+        "progression": LOCK_RANKS["player_progressions"],
+    }
+
+
+def _record_calls(monkeypatch, events: List[str], targets) -> None:
+    """Append ``label`` to ``events`` each time ``owner.name`` is entered.
+
+    Works for module functions, classmethods and staticmethods. The wrapper
+    forwards to the original, so behaviour is unchanged.
+    """
+    for owner, name, label in targets:
+        original = getattr(owner, name)
+
+        async def wrapper(*args, __orig=original, __label=label, **kwargs):
+            events.append(__label)
+            return await __orig(*args, **kwargs)
+
+        monkeypatch.setattr(owner, name, wrapper)
+
+
+def _ranks_of(events: List[str]) -> List[int]:
+    return [LOCK_ORDER_RANK[event] for event in events]
+
+
+@pytest.mark.asyncio
+async def test_item_buy_locks_user_then_inventory_then_wallet(db_session, monkeypatch):
+    from sib.services import items as items_module
+
+    user = await create_test_user(db_session, "قفل خرید آیتم")
+    await AppleWalletService.earn(db_session, user.id, 500, reason="seed")
+    await db_session.commit()
+    priced = None
+    for key in ITEM_CATALOG:
+        if await ItemService.buy_price(db_session, key):
+            priced = key
+            break
+    assert priced is not None, "no buyable catalog item in the test catalog"
+
+    events: List[str] = []
+    _record_calls(
+        monkeypatch,
+        events,
+        [
+            (items_module, "lock_user_row", "user"),
+            (ItemService, "_lock_inventory_row", "item"),
+            (AppleWalletService, "spend", "wallet"),
+            (ItemService, "grant", "item"),
+        ],
+    )
+    await ItemService.buy(db_session, user.id, priced, 1)
+    await db_session.commit()
+
+    # Inventory is locked before the wallet; grant re-enters the same row.
+    assert events == ["user", "item", "wallet", "item"], events
+    firsts = list(dict.fromkeys(events))  # first acquisition of each resource
+    assert _ranks_of(firsts) == sorted(_ranks_of(firsts)), firsts
+
+
+@pytest.mark.asyncio
+async def test_shop_card_purchase_locks_user_card_wallet_progression(db_session, monkeypatch):
+    from sib.services import shop as shop_module
+    from sib.services.shop import ShopService
+    from sib.tests.test_shop import _make_characters
+
+    await _make_characters(db_session, 1)
+    user = await create_test_user(db_session, "قفل خرید کارت")
+    await AppleWalletService.earn(db_session, user.id, 5000, reason="seed")
+    await db_session.commit()
+    entries = await ShopService.list_entries(db_session, user_id=user.id)
+    await db_session.commit()
+    entry = entries[0][0]
+
+    events: List[str] = []
+    _record_calls(
+        monkeypatch,
+        events,
+        [
+            (shop_module, "lock_user_row", "user"),
+            (PlayerCardService, "acquire", "card"),
+            (AppleWalletService, "debit_once", "wallet"),
+            (PlayerXPService, "award_character_collection", "progression"),
+        ],
+    )
+    await ShopService.purchase(db_session, user.id, entry.id, nonce="lockorder-01")
+    await db_session.commit()
+
+    assert events == ["user", "card", "wallet", "progression"], events
+
+
+@pytest.mark.asyncio
+async def test_apple_battle_settlement_pays_wallet_before_progression(db_session, monkeypatch):
+    """Regression for F5: the winner's apples (wallet) are paid before the match
+    progression award, matching every other path (wallet -> progression)."""
+    from sib.database.models import Game, MatchState
+    from sib.services.apple_battle import AppleBattleService
+    from sib.services.group import GroupService
+    from sib.services.match_result import MatchResultService
+    from sib.tests.test_apple_battle import _card, _make_match, _reload_match
+
+    class _Chat:
+        def __init__(self, cid, title):
+            self.id = cid
+            self.title = title
+            self.type = "supergroup"
+            self.username = None
+
+    await GroupService.get_or_create_group(db_session, _Chat(-7001, "قفل نبرد یک"))
+    await GroupService.get_or_create_group(db_session, _Chat(-7002, "قفل نبرد دو"))
+    a = await create_test_user(db_session, "قفل نبرد الف")
+    b = await create_test_user(db_session, "قفل نبرد ب")
+    card_a = await _card(db_session, a, "lock_a")
+    card_b = await _card(db_session, b, "lock_b")
+    await AppleBattleService.enqueue(db_session, a.id, card_a.id)
+    await AppleBattleService.enqueue(db_session, b.id, card_b.id)
+    await db_session.commit()
+
+    game = await db_session.scalar(select(Game).where(Game.code == "apple_battle"))
+    match = await _make_match(
+        db_session,
+        game,
+        type("X", (), {"id": -7001})(),
+        type("X", (), {"id": -7002})(),
+        a,
+        b,
+    )
+    match = await _reload_match(db_session, match.id)
+    state = await AppleBattleService.build_match_state(db_session, match)
+    match.game_state = json.dumps(state, ensure_ascii=False)
+    match.state = MatchState.ACTIVE
+    await db_session.commit()
+    battle_row = await AppleBattleService.record_battle(db_session, match, state)
+    await db_session.commit()
+    match = await _reload_match(db_session, match.id)
+
+    events: List[str] = []
+    _record_calls(
+        monkeypatch,
+        events,
+        [
+            (AppleWalletService, "earn", "wallet"),
+            (MatchResultService, "apply_match_result", "progression"),
+        ],
+    )
+    await AppleBattleService.finalize_match(db_session, match, battle_row.id)
+    await db_session.commit()
+
+    assert "wallet" in events and "progression" in events, events
+    assert events.index("wallet") < events.index("progression"), events
+
+
+
+@pytest.mark.asyncio
+async def test_card_upgrade_locks_and_writes_items_before_the_wallet(db_session, monkeypatch):
+    """Regression for the audit's lock-order finding on CardUpgradeService.upgrade.
+
+    Reads lock the inventory row (rank 5) before the wallet (rank 6), and the
+    writes must follow the same order: consume the item, then debit apples.
+    The card row (rank 4) is locked inline in upgrade() and is not observable
+    here; the user row (rank 0) is taken first.
+    """
+    from sib.services import card_upgrade as card_upgrade_module
+    from sib.services.card_upgrade import CardUpgradeService
+    from sib.tests.test_card_upgrade import _fund, _new_card
+
+    user, _character, card = await _new_card(db_session, name="ترتیب ارتقا", code="order_up")
+    await _fund(db_session, user, apples=500, gold=10)
+    card_id, user_id = card.id, user.id
+
+    events: List[str] = []
+    _record_calls(
+        monkeypatch,
+        events,
+        [
+            (card_upgrade_module, "lock_user_row", "user"),
+            (ItemService, "get_total", "item"),
+            (AppleWalletService, "get_balance", "wallet"),
+            (ItemService, "consume", "item"),
+            (AppleWalletService, "debit_once", "wallet"),
+        ],
+    )
+    await CardUpgradeService.upgrade(db_session, user_id, card_id, expected_level=1)
+    await db_session.commit()
+
+    assert events == ["user", "item", "wallet", "item", "wallet"], events
+    firsts = list(dict.fromkeys(events))
+    assert _ranks_of(firsts) == sorted(_ranks_of(firsts)), firsts

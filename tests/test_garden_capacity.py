@@ -4,6 +4,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from sqlalchemy import select
+
 from sib.database.models import GardenPlot
 from sib.services.apple_wallet import AppleWalletService
 from sib.services.garden import GardenService
@@ -100,9 +102,16 @@ async def test_unlock_is_idempotent_per_plot(db_session):
     await db_session.delete(plot)
     await db_session.commit()
 
-    await GardenService.unlock_plot(db_session, uid)
-    await db_session.commit()
+    # The slot's unlock key was already consumed by a charge: a second unlock
+    # is REFUSED (never a silent free plot), and nothing is written.
+    with pytest.raises(ValueError):
+        await GardenService.unlock_plot(db_session, uid)
+    await db_session.rollback()
     assert await AppleWalletService.get_balance(db_session, uid) == balance_after
+    recreated = await db_session.scalar(
+        select(GardenPlot).where(GardenPlot.garden_id == uid, GardenPlot.plot_index == 5)
+    )
+    assert recreated is None
 
 
 # ---------------------------------------------------------------------------

@@ -806,7 +806,9 @@ class AppleBattleService:
         engine = AppleBattleEngine()
         result = engine.get_result(state)
 
-        await MatchResultService.apply_match_result(session, match, result)
+        # Lock order (see services/lock_order.py): the winner's apples (wallet,
+        # rank 6) are paid BEFORE the match progression/XP award (rank 7).
+        # apply_match_result runs after the payout block below.
 
         if battle is not None:
             now_ts = datetime.now(timezone.utc)
@@ -874,6 +876,8 @@ class AppleBattleService:
                         "winner_id": winner_id,
                     },
                 )
+
+        await MatchResultService.apply_match_result(session, match, result)
 
     # ------------------------------------------------------------------
     # Staged narration runner (asyncio task; never blocks handlers)

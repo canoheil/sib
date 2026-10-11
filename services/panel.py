@@ -53,6 +53,10 @@ OWNER_SCOPED_CALLBACKS: Tuple[str, ...] = (
     # happens on "shop_sell_all_ok:" — both stay owner-scoped.
     "shop_sell_all:",
     "shop_sell_all_ok:",
+    # Shop chests: the detail page is owner-scoped, and "shop_chest_open:"
+    # spends apples. "shop_chests" (the list) is a view and is not scoped.
+    "shop_chest:",
+    "shop_chest_open:",
     "card_panel:",
     "card_main_set:",
     "card_upgrade:",

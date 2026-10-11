@@ -96,7 +96,8 @@ async def test_purchase_deducts_apples_and_grants_card(db_session):
     assert not owned
 
     price = ShopService.entry_price(entry, character)
-    card = await ShopService.purchase(db_session, user.id, entry.id)
+    outcome = await ShopService.purchase(db_session, user.id, entry.id, nonce="buytest0001")
+    card = outcome.card
     await db_session.commit()
 
     assert card.character_id == character.id
@@ -117,7 +118,7 @@ async def test_purchase_requires_enough_apples(db_session):
 
     entries = await ShopService.list_entries(db_session)
     with pytest.raises(ShopError):
-        await ShopService.purchase(db_session, user.id, entries[0][0].id)
+        await ShopService.purchase(db_session, user.id, entries[0][0].id, nonce="buytest0002")
 
     # No card and no charge.
     cards = await PlayerCardService.list_cards(db_session, user.id)
@@ -134,12 +135,12 @@ async def test_duplicate_purchase_blocked_and_not_charged_twice(db_session):
 
     entries = await ShopService.list_entries(db_session)
     entry = entries[0][0]
-    await ShopService.purchase(db_session, user.id, entry.id)
+    await ShopService.purchase(db_session, user.id, entry.id, nonce="dupfirst0001")
     await db_session.commit()
     balance_after_first = await AppleWalletService.get_balance(db_session, user.id)
 
     with pytest.raises(ShopError):
-        await ShopService.purchase(db_session, user.id, entry.id)
+        await ShopService.purchase(db_session, user.id, entry.id, nonce="dupsecond01")
 
     assert await AppleWalletService.get_balance(db_session, user.id) == balance_after_first
     cards = await PlayerCardService.list_cards(db_session, user.id)
@@ -161,7 +162,7 @@ async def test_expired_rotation_cannot_be_purchased(db_session):
     await db_session.commit()
 
     with pytest.raises(ShopError):
-        await ShopService.purchase(db_session, user.id, entry.id)
+        await ShopService.purchase(db_session, user.id, entry.id, nonce="expired0001")
 
 
 @pytest.mark.asyncio

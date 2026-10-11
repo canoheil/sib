@@ -1,23 +1,28 @@
-"""Shop handlers: three sections (Cards / Items / Sell Items).
+"""Shop handlers: exactly four sections (Cards / Items / Sell Items / Chests).
 
 Store structure (spec):
     Shop
     ├── Cards        — weekly rotating character cards (Apples)
     ├── Items        — generic items, starting with Magic Powder (Apples)
-    └── Sell Items   — sell eligible inventory items for normal Apples
+    ├── Sell Items   — sell eligible inventory items for normal Apples
+    └── Chests       — configured shop chests (Apples), see services/shop_chests.py
 
 All economic values are config-driven (item_buy_prices /
 item_sell_prices / magic_powder_level_costs / garden_plot_prices), so
 rebalancing never touches this file.
 """
 
+import secrets
+
 from aiogram import Bot, Router, F
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from sib.core.logging import logger
 from sib.database.connection import get_session
 from sib.services.apple_wallet import AppleWalletService
 from sib.services.config_store import ConfigService
+from sib.services.lock_order import lock_user_row
 from sib.services.items import (
     ITEM_CATALOG,
     ItemService,
@@ -72,7 +77,7 @@ async def _shop_actor(callback: CallbackQuery) -> int:
 
 
 async def _shop_view(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
-    """Shop ROOT screen: Cards / Items / Sell Items."""
+    """Shop ROOT screen: Cards / Items / Sell Items / Chests."""
     async with get_session() as session:
         balance = await AppleWalletService.get_balance(session, user_id)
 
@@ -88,7 +93,10 @@ async def _shop_view(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
                 success_button(text="🎴 کارت‌ها", callback_data="shop_cards"),
                 primary_button(text="✨ آیتم‌ها", callback_data="shop_goods"),
             ],
-            [primary_button(text="💰 فروش آیتم‌ها", callback_data="shop_sell")],
+            [
+                primary_button(text="💰 فروش آیتم‌ها", callback_data="shop_sell"),
+                primary_button(text="🎁 صندوقچه‌ها", callback_data="shop_chests"),
+            ],
             [primary_button(text="🔄 بروزرسانی", callback_data="shop_refresh")],
             [danger_button(text="↩️ بازگشت به منوی اصلی", callback_data="main_menu")],
         ]
@@ -221,10 +229,13 @@ async def _shop_item_view(user_id: int, entry_id: int):
     if owned:
         action = [primary_button(text="✅ خریداری‌شده", callback_data=f"shop_owned:{entry.id}")]
     else:
+        # One nonce per rendered page: a double tap reuses it (charged once),
+        # while a fresh page mints a new one (a deliberate new purchase).
+        nonce = secrets.token_urlsafe(9)
         action = [
             success_button(
                 text=f"✅ تأیید خرید ({price} 🍎)",
-                callback_data=f"shop_buy:{entry.id}",
+                callback_data=f"shop_buy:{entry.id}:{nonce}",
             )
         ]
     kb = InlineKeyboardMarkup(
@@ -286,7 +297,7 @@ async def handle_shop_owned(callback: CallbackQuery, bot: Bot):
 
 @router.callback_query(F.data.startswith("shop_buy:"))
 async def handle_shop_buy(callback: CallbackQuery, bot: Bot):
-    entry_id = int(callback.data.split(":")[1])
+    """Card purchase. Callback data: ``shop_buy:{entry_id}:{nonce}``."""
     user = callback.from_user
     if not user:
         return
@@ -295,27 +306,44 @@ async def handle_shop_buy(callback: CallbackQuery, bot: Bot):
         return
 
     from sib.services.player_xp import PlayerXPService
+    from sib.services.shop import OPERATION_NONCE_RE, STALE_PURCHASE_TEXT
 
-    async with get_session() as session:
-        PlayerXPService.set_notification_chat(
-            session,
-            getattr(getattr(callback.message, "chat", None), "id", None),
-        )
-        try:
-            await ShopService.purchase(session, actor, entry_id)
-        except ShopError as e:
-            await safe_answer_callback(callback, str(e), show_alert=True)
-            return
+    parts = callback.data.split(":")
+    try:
+        entry_id = int(parts[1])
+        nonce = parts[2] if len(parts) == 3 else ""
+    except (IndexError, ValueError):
+        await safe_answer_callback(callback, STALE_PURCHASE_TEXT, show_alert=True)
+        return
 
-    await PlayerXPService.deliver_pending_notifications(
-        bot,
-        fallback_chat_id=getattr(getattr(callback.message, "chat", None), "id", None),
-    )
+    # Old nonce-less buttons (rendered before per-press nonces existed) and
+    # malformed nonces are refused here, before any database work. The user
+    # is told to re-open the shop; an empty nonce never authorizes a purchase.
+    if not OPERATION_NONCE_RE.match(nonce or ""):
+        await safe_answer_callback(callback, STALE_PURCHASE_TEXT, show_alert=True)
+        return
+
+    chat_id = getattr(getattr(callback.message, "chat", None), "id", None)
+    # The refusal escapes the transaction block: whatever the purchase wrote
+    # before refusing is rolled back, never committed.
+    try:
+        async with get_session() as session:
+            PlayerXPService.set_notification_chat(session, chat_id)
+            outcome = await ShopService.purchase(session, actor, entry_id, nonce=nonce)
+    except ShopError as e:
+        await safe_answer_callback(callback, str(e), show_alert=True)
+        return
+
+    await PlayerXPService.deliver_pending_notifications(bot, fallback_chat_id=chat_id)
 
     from sib.services.banner import render_banner
 
     text, kb = await _shop_view(actor)
-    await safe_answer_callback(callback, "خرید انجام شد! کارت به مجموعه شما اضافه شد 🎉")
+    if outcome.replayed:
+        toast = "این خرید قبلاً ثبت شده است؛ مبلغی دوباره کسر نشد. ✅"
+    else:
+        toast = "خرید انجام شد! کارت به مجموعه شما اضافه شد 🎉"
+    await safe_answer_callback(callback, toast)
     if callback.message:
         await render_banner(callback, bot, "shop", text, kb)
 
@@ -439,12 +467,13 @@ async def handle_shop_good_buy(callback: CallbackQuery, bot: Bot):
     if not actor or actor != user.id:
         return
 
-    async with get_session() as session:
-        try:
+    # Refusals escape the transaction block (nothing commits).
+    try:
+        async with get_session() as session:
             total = await ItemService.buy(session, actor, item_key, 1)
-        except ValueError as e:
-            await safe_answer_callback(callback, str(e), show_alert=True)
-            return
+    except ValueError as e:
+        await safe_answer_callback(callback, str(e), show_alert=True)
+        return
 
     await safe_answer_callback(
         callback,
@@ -641,13 +670,18 @@ async def handle_shop_sell_one(callback: CallbackQuery, bot: Bot):
     if not actor or actor != user.id:
         return
 
-    async with get_session() as session:
-        try:
+    # Refusals (stale click, empty stock, not sellable) escape the
+    # transaction block so nothing commits; the screen is rendered after it.
+    error = None
+    apples = 0
+    try:
+        async with get_session() as session:
             apples = await ItemService.sell(session, actor, item_key, 1)
-        except ValueError as e:
-            # Nothing was sold (stale click, empty stock, not sellable).
-            await _render_sell_list(callback, bot, actor, answer=str(e))
-            return
+    except ValueError as e:
+        error = str(e)
+    if error is not None:
+        await _render_sell_list(callback, bot, actor, answer=error)
+        return
 
     # Sold out -> _sell_item_view falls back to the (now shorter) LIST,
     # from which this item has disappeared; otherwise the item page is
@@ -668,20 +702,25 @@ async def handle_shop_sell_all_confirm(callback: CallbackQuery, bot: Bot):
     if not actor or actor != user.id:
         return
 
-    async with get_session() as session:
-        # Authoritative quantity read inside the selling transaction (the
-        # quantity shown on the confirmation screen is never trusted); the
-        # row lock makes a double click sell the remaining 0 units, i.e.
-        # fail loudly instead of paying twice.
-        have = await ItemService.get_total(session, actor, item_key, for_update=True)
-        if have <= 0:
-            await _render_sell_list(callback, bot, actor, answer="از این آیتم نداری!")
-            return
-        try:
+    error = None
+    apples = 0
+    try:
+        async with get_session() as session:
+            # User row first (lock policy rank 0), then the inventory row.
+            await lock_user_row(session, actor)
+            # Authoritative quantity read inside the selling transaction (the
+            # quantity shown on the confirmation screen is never trusted); the
+            # row lock makes a double click sell the remaining 0 units, i.e.
+            # fail loudly instead of paying twice.
+            have = await ItemService.get_total(session, actor, item_key, for_update=True)
+            if have <= 0:
+                raise ValueError("از این آیتم نداری!")
             apples = await ItemService.sell(session, actor, item_key, have)
-        except ValueError as e:
-            await _render_sell_list(callback, bot, actor, answer=str(e))
-            return
+    except ValueError as e:
+        error = str(e)
+    if error is not None:
+        await _render_sell_list(callback, bot, actor, answer=error)
+        return
 
     await safe_answer_callback(callback, f"فروش انجام شد! `{apples}` سیب دریافت کردی 🍎")
     await _render_sell_list(callback, bot, actor)
@@ -700,3 +739,219 @@ async def handle_shop_sell_all(callback: CallbackQuery, bot: Bot):
     text, kb, photo, ok = await _sell_confirm_view(actor, item_key)
     await safe_answer_callback(callback, None if ok else "از این آیتم نداری!")
     await safe_edit_callback_message(callback, bot, text, reply_markup=kb, photo=photo)
+
+
+# ---------------------------------------------------------------------------
+# Section 4: Chests (configured shop chests, paid in Apples)
+# ---------------------------------------------------------------------------
+#
+# Callbacks: ``shop_chests`` (list), ``shop_chest:<id>`` (detail) and
+# ``shop_chest_open:<id>:<version>:<nonce>`` (open). The version is the chest
+# version the page was rendered from; a changed chest refuses the stale page
+# before any write (see ``ShopChestService.open_chest``). The nonce is minted per rendered
+# detail page (see services/shop_chests.py): a double tap reuses it and is
+# charged once; a freshly rendered page starts a new opening.
+
+CHEST_BACK_CALLBACK = "shop_chests"
+USER_CHEST_UNAVAILABLE_TEXT = "این صندوقچه فعلاً در دسترس نیست."
+
+
+async def _chests_view(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    """Chest LIST: name, price and a button per valid active chest."""
+    from sib.services.shop_chests import ShopChestConfigError, ShopChestService
+
+    async with get_session() as session:
+        balance = await AppleWalletService.get_balance(session, user_id)
+        valid = []
+        for chest in await ShopChestService.list_active(session):
+            try:
+                await ShopChestService.validate_chest(session, chest)
+            except ShopChestConfigError as exc:
+                # A misconfigured chest is hidden from players, never sold.
+                logger.error(f"hiding misconfigured shop chest {chest.code}: {exc}")
+                continue
+            valid.append(chest)
+
+    lines = [
+        "🎁 **صندوقچه‌های فروشگاه**",
+        f"💰 سیب‌های شما: `{balance}`",
+        "",
+    ]
+    if not valid:
+        lines.append("فعلاً صندوقچه‌ای برای فروش نیست.")
+    else:
+        lines.append("صندوقچه‌ی مورد نظرت رو انتخاب کن 👇")
+        for chest in valid:
+            lines.append(f"• {chest.name} — `{chest.price_apples}` سیب 🍎")
+    rows = [
+        [primary_button(text=f"🎁 {chest.name} ({chest.price_apples} 🍎)", callback_data=f"shop_chest:{chest.id}")]
+        for chest in valid
+    ]
+    rows.append([danger_button(text="↩️ بازگشت به فروشگاه", callback_data="shop_refresh")])
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _chest_detail_view(user_id: int, chest_id: int):
+    """Chest DETAIL: image, probabilities from weights, open action.
+
+    Returns ``(text, kb, photo)`` or ``None`` when the chest is gone/inactive.
+    """
+    from sib.services.assets import AssetService
+    from sib.services.character_art import photo_arg
+    from sib.services.shop_chests import (
+        ShopChestConfigError,
+        ShopChestService,
+        format_probability,
+    )
+
+    async with get_session() as session:
+        chest = await ShopChestService.get_chest(session, chest_id)
+        if chest is None or not chest.is_active:
+            return None
+        balance = await AppleWalletService.get_balance(session, user_id)
+        try:
+            await ShopChestService.validate_chest(session, chest)
+            table = await ShopChestService.describe(session, chest)
+            configured = True
+        except ShopChestConfigError as exc:
+            logger.error(f"shop chest {chest.code} is misconfigured: {exc}")
+            table, configured = [], False
+        photo = None
+        if chest.image_key:
+            file_id, fs_path = await AssetService.resolve_photo(session, chest.image_key)
+            photo = photo_arg(file_id, fs_path)
+        name, price = chest.name, chest.price_apples
+        duplicate_apples = chest.duplicate_apples
+
+    lines = [f"🎁 **{name}**", "", f"💰 قیمت: `{price}` سیب 🍎", f"💰 سیب‌های شما: `{balance}`"]
+    rows = []
+    if configured:
+        lines += ["", "🎲 **جوایز و احتمال هر جایزه:**"]
+        for _spec, probability, label in table:
+            lines.append(f"• {label} — {format_probability(probability)}")
+        if duplicate_apples:
+            lines.append(f"🔁 کارت تکراری ← `{duplicate_apples}` سیب 🍎")
+        # One nonce per rendered page (double taps share it; a new page is a new buy).
+        nonce = secrets.token_urlsafe(9)
+        rows.append([
+            success_button(
+                text=f"🎁 باز کردن ({price} 🍎)",
+                callback_data=f"shop_chest_open:{chest.id}:{chest.version}:{nonce}",
+            )
+        ])
+    else:
+        lines += ["", USER_CHEST_UNAVAILABLE_TEXT]
+    rows.append([danger_button(text="↩️ بازگشت به صندوقچه‌ها", callback_data=CHEST_BACK_CALLBACK)])
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows), photo
+
+
+def _opened_text(result, balance_note: str = "") -> str:
+    """Immediate result screen for one opening (rendered after commit)."""
+    lines = []
+    if result.replayed:
+        lines.append("این باز کردن قبلاً ثبت شده بود؛ مبلغی دوباره کسر نشد.")
+        lines.append("")
+    lines.append(f"🎁 از **{result.chest_name}** باز شد!")
+    lines.append("")
+    if result.reward_kind == "apples":
+        lines.append(f"🍎 دریافت شد: `{result.apples_awarded}` سیب")
+    elif result.reward_kind == "item":
+        lines.append(f"{item_emoji(result.item_key)} دریافت شد: {item_label(result.item_key)}")
+    elif result.duplicate_converted:
+        lines.append(f"🔁 کارت «{result.character_name or ''}» را از قبل داشتی.")
+        if result.compensation_apples:
+            lines.append(f"🍎 به‌جایش `{result.compensation_apples}` سیب گرفتی.")
+    else:
+        lines.append(f"🎴 کارت جدید: **{result.character_name or ''}** به مجموعه‌ات اضافه شد!")
+    lines.append("")
+    lines.append(f"💸 هزینه: `{result.price_apples}` سیب")
+    lines.append(f"💰 موجودی: `{result.balance_after}` سیب 🍎")
+    if balance_note:
+        lines.append(balance_note)
+    return "\n".join(lines)
+
+
+@router.callback_query(F.data == "shop_chests")
+async def handle_shop_chests(callback: CallbackQuery, bot: Bot):
+    actor = await _shop_actor(callback)
+    if not actor:
+        return
+    text, kb = await _chests_view(actor)
+    await safe_answer_callback(callback)
+    await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("shop_chest:"))
+async def handle_shop_chest(callback: CallbackQuery, bot: Bot):
+    actor = await _shop_actor(callback)
+    if not actor:
+        return
+    try:
+        chest_id = int(callback.data.split(":", 1)[1])
+    except ValueError:
+        await safe_answer_callback(callback, "این صندوقچه پیدا نشد.", show_alert=True)
+        return
+    view = await _chest_detail_view(actor, chest_id)
+    if view is None:
+        text, kb = await _chests_view(actor)
+        await safe_answer_callback(callback, "این صندوقچه دیگر در فروشگاه نیست.", show_alert=True)
+        await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
+        return
+    text, kb, photo = view
+    await safe_answer_callback(callback)
+    await safe_edit_callback_message(callback, bot, text, reply_markup=kb, photo=photo)
+
+
+CHEST_UNKNOWN_OUTCOME_TEXT = "نتیجه باز کردن صندوقچه نامشخص است. موجودی را بررسی کن و اگر تغییری ندیدی دوباره امتحان کن."
+
+
+@router.callback_query(F.data.startswith("shop_chest_open:"))
+async def handle_shop_chest_open(callback: CallbackQuery, bot: Bot):
+    """Open a chest. Callback data: ``shop_chest_open:{chest_id}:{version}:{nonce}``.
+
+    A callback in any other shape (including the pre-version form) is treated
+    as a stale page: nothing is charged and nothing is granted.
+    """
+    from sib.services.shop_chests import STALE_OPEN_TEXT, ShopChestError, ShopChestService
+
+    actor = await _shop_actor(callback)
+    if not actor:
+        return
+    parts = callback.data.split(":")
+    try:
+        if len(parts) != 4:
+            raise ValueError("unversioned open callback")
+        chest_id = int(parts[1])
+        version = int(parts[2])
+        nonce = parts[3]
+    except (IndexError, ValueError):
+        await safe_answer_callback(callback, STALE_OPEN_TEXT, show_alert=True)
+        return
+
+    try:
+        result = await ShopChestService.open_chest_reliably(
+            actor, chest_id, nonce, expected_version=version
+        )
+    except ShopChestError as exc:
+        await safe_answer_callback(callback, str(exc), show_alert=True)
+        return
+    except Exception:
+        # Unexpected failure: the outcome is unknown to the user, so say that.
+        # Never claim success here; the stored opening (if any) is shown on the
+        # next open, which replays the same key.
+        logger.exception(f"shop chest open failed (user={actor}, chest={chest_id})")
+        await safe_answer_callback(callback, CHEST_UNKNOWN_OUTCOME_TEXT, show_alert=True)
+        return
+
+    nonce_again = secrets.token_urlsafe(9)
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [success_button(
+                text=f"🎁 باز کردن دوباره ({result.price_apples} 🍎)",
+                callback_data=f"shop_chest_open:{chest_id}:{result.chest_version}:{nonce_again}",
+            )],
+            [danger_button(text="↩️ بازگشت به صندوقچه‌ها", callback_data=CHEST_BACK_CALLBACK)],
+        ]
+    )
+    await safe_answer_callback(callback, "صندوقچه باز شد! 🎉")
+    await safe_edit_callback_message(callback, bot, _opened_text(result), reply_markup=kb)

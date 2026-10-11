@@ -133,7 +133,7 @@ async def test_shop_item_detail_full_screen(db_session):
     assert "قیمت" in text
     assert "توضیح آزمایشی" in text  # wiki description travels to the detail screen
     callbacks = [b.callback_data for row in kb.inline_keyboard for b in row]
-    assert f"shop_buy:{entry.id}" in callbacks  # confirm — purchase handler untouched
+    assert any(c.startswith(f"shop_buy:{entry.id}:") for c in callbacks)  # confirm (nonce-bearing)
     assert "shop_refresh" in callbacks  # back to shop
     assert art_photo is not None  # framed art resolved
 
