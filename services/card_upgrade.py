@@ -48,6 +48,7 @@ from sib.services.card_progression import (
 )
 from sib.services.config_store import ConfigService
 from sib.services.items import ITEM_CATALOG, ItemService
+from sib.services.lock_order import lock_user_row
 from sib.services.player_cards import CardError
 
 LEDGER_REASON = "card_upgrade"
@@ -273,6 +274,10 @@ class CardUpgradeService:
         """Upgrade ONE level. Must run inside a transaction the caller
         commits (``get_session()``); raises ``CardUpgradeError`` subclasses
         without changing anything when a rule is not met."""
+        # 0. user row first (lock policy rank 0): same-user economy work
+        #    serializes before any read decides a rule.
+        await lock_user_row(session, user_id)
+
         # 1. lock the card + ownership
         card = await session.scalar(
             select(PlayerCard)
@@ -322,8 +327,14 @@ class CardUpgradeService:
             await session.refresh(card)
             raise StaleUpgradeError(card.level)
 
+        # Write order follows the documented lock order (docs/lock-order.md):
+        # card (rank 4, locked above) -> items (rank 5) -> wallet (rank 6).
+        # Both the item row and the wallet row were already locked by the
+        # reads in step 3, in that order; this keeps the writes in the same
+        # order so no later change can invert it.
         try:
-            balance_after = await AppleWalletService.spend(
+            await ItemService.consume(session, user_id, cost.item_key, cost.item_quantity)
+            debit = await AppleWalletService.debit_once(
                 session,
                 user_id,
                 cost.apples,
@@ -334,11 +345,10 @@ class CardUpgradeService:
                     card_id=card.id, to_level=to_level
                 ),
             )
-            if balance_after != apples_have - cost.apples:
-                # The wallet service treated this as an already-applied
-                # (idempotent) spend: refuse rather than upgrade for free.
+            if not debit.applied or debit.balance_after != apples_have - cost.apples:
+                # The key was already consumed (an earlier charge for this
+                # level): refuse rather than upgrade for free.
                 raise CardUpgradeError("ثبت هزینه ارتقا انجام نشد.")
-            await ItemService.consume(session, user_id, cost.item_key, cost.item_quantity)
             # A card selected as the battle loadout mirrors its level.
             await session.execute(
                 update(AppleBattleQueueEntry)

@@ -1,0 +1,20 @@
+[
+  {
+    "code": "green_apple_chest",
+    "name": "صندوق سیبی",
+    "price_apples": 150,
+    "duplicate_apples": 50,
+    "image_key": "green_apple_chest",
+    "sort_order": 1,
+    "is_active": true,
+    "expected_version": 0,
+    "rewards": [
+      {"kind": "card", "weight": 15, "character_code": "sib_sorkh"},
+      {"kind": "card", "weight": 15, "character_code": "sib_sabz"},
+      {"kind": "card", "weight": 15, "character_code": "sib_talayi"},
+      {"kind": "card", "weight": 15, "character_code": "sib_mahi"},
+      {"kind": "item", "weight": 1, "item_key": "wedding_ring"},
+      {"kind": "apples", "weight": 39, "apples": 100}
+    ]
+  }
+]

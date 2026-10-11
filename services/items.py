@@ -23,6 +23,7 @@ from sib.core.logging import Events, log_event
 from sib.database.models import UserItem
 from sib.services.apple_wallet import AppleWalletService, InsufficientFundsException
 from sib.services.config_store import ConfigService
+from sib.services.lock_order import lock_user_row
 
 # Display catalog for known items (emoji/label). Unknown keys still work
 # (they fall back to the key itself) so new drops can be added via config
@@ -96,6 +97,7 @@ class ItemService:
             .where(UserItem.user_id == user_id)
             .where(UserItem.item_key == item_key)
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
         if row is None:
             row = UserItem(user_id=user_id, item_key=item_key, quantity=0)
@@ -258,18 +260,39 @@ class ItemService:
         entry = entries.get(item_key) or {}
         return entry.get("asset") or item_key
 
+    @staticmethod
+    async def _lock_inventory_row(session: AsyncSession, user_id: int, item_key: str) -> None:
+        """Lock (rank 5) the user's inventory row for ``item_key``, if it exists.
+
+        Taken after the user row and before the wallet (rank 6).
+        """
+        await session.scalar(
+            select(UserItem.id)
+            .where(UserItem.user_id == user_id)
+            .where(UserItem.item_key == item_key)
+            .with_for_update()
+        )
+
     @classmethod
     async def buy(cls, session: AsyncSession, user_id: int, item_key: str, quantity: int = 1) -> int:
         """Buy an item with normal Apples (atomic spend + grant).
 
         Repeatable purchase: every press is a real, paid transaction.
         Returns the new inventory total.
+
+        Everything is validated BEFORE the debit: an unknown or unpriced item
+        raises ``ValueError`` with no ledger write. Locks: user row, then the
+        inventory row, then the wallet (lock policy ranks 0, 3, 5).
         """
         if quantity < 1:
             raise ValueError("تعداد باید حداقل ۱ باشد.")
-        price = await cls.buy_price(session, item_key)
-        if price is None:
+        await lock_user_row(session, user_id)
+        if item_key not in ITEM_CATALOG:
             raise ValueError("این آیتم در فروشگاه قابل خرید نیست.")
+        price = await cls.buy_price(session, item_key)
+        if price is None or price <= 0:
+            raise ValueError("این آیتم در فروشگاه قابل خرید نیست.")
+        await cls._lock_inventory_row(session, user_id, item_key)
         try:
             await AppleWalletService.spend(
                 session,
@@ -305,6 +328,7 @@ class ItemService:
         """
         if quantity < 1:
             raise ValueError("تعداد باید حداقل ۱ باشد.")
+        await lock_user_row(session, user_id)  # rank 0 before the inventory row
         price = await cls.sell_price(session, item_key)
         if price is None:
             raise ValueError("این آیتم قابل فروش نیست.")
@@ -313,6 +337,7 @@ class ItemService:
             .where(UserItem.user_id == user_id)
             .where(UserItem.item_key == item_key)
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
         have = row.quantity if row else 0
         if have < quantity:

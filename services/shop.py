@@ -8,14 +8,21 @@ Rotation policy (deterministic and data-driven):
   the shop in later weeks automatically. Historical entries remain
   immutable.
 
-Purchases are atomic: price check -> apple debit -> card acquisition in
-one transaction with an idempotency key.
+Purchases are one transaction owned by the caller (``get_session()``):
+user row lock -> replay/ownership checks -> apple debit (keyed per button
+press, see :meth:`ShopService.purchase`) -> card acquisition -> XP. Every
+refusal is raised as :class:`ShopError` and must escape the caller's
+transaction block, so nothing a refused purchase wrote is committed.
 """
 
+import re
+from contextlib import nullcontext
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sib.core.logging import Events, log_event, logger
@@ -27,13 +34,50 @@ from sib.database.models import (
     ShopEntryType,
     ShopRotation,
 )
-from sib.services.apple_wallet import AppleWalletService, InsufficientFundsException
+from sib.services.apple_wallet import (
+    AppleWalletService,
+    InsufficientFundsException,
+    LedgerKeyConflictError,
+    savepoints_supported,
+)
 from sib.services.config_store import ConfigService
-from sib.services.player_cards import DuplicateCardError, PlayerCardService
+from sib.services.lock_order import lock_user_row
+from sib.services.player_cards import (
+    DuplicateCardError,
+    PlayerCardService,
+    is_shop_eligible,
+)
+
+
+def _atomic_block(session: AsyncSession):
+    """A savepoint where the dialect supports one, otherwise a no-op."""
+    if savepoints_supported(session):
+        return session.begin_nested()
+    return nullcontext()
 
 
 class ShopError(ValueError):
     """Raised for invalid shop operations."""
+
+
+# Per-press operation nonce minted when a purchase button is rendered.
+OPERATION_NONCE_RE = re.compile(r"^[A-Za-z0-9_-]{8,32}$")
+PURCHASE_KEY_FORMAT = "shop_purchase:{user_id}:{nonce}"
+STALE_PURCHASE_TEXT = "این صفحه خرید قدیمی است؛ از فروشگاه دوباره وارد شو."
+
+
+@dataclass(frozen=True)
+class PurchaseOutcome:
+    """Result of :meth:`ShopService.purchase`.
+
+    ``replayed`` is True when this operation key had already been processed:
+    nothing was charged or granted by this call, and ``card`` is the card the
+    user owns for the character now (``None`` if it was traded away since).
+    """
+
+    card: Optional[PlayerCard]
+    replayed: bool
+    price: int
 
 
 def _utc(dt: datetime) -> datetime:
@@ -230,8 +274,40 @@ class ShopService:
     # ------------------------------------------------------------------
     @classmethod
     async def purchase(
-        cls, session: AsyncSession, user_id: int, entry_id: int
-    ) -> PlayerCard:
+        cls,
+        session: AsyncSession,
+        user_id: int,
+        entry_id: int,
+        *,
+        nonce: str,
+    ) -> PurchaseOutcome:
+        """Buy the card for ``entry_id`` once per ``nonce``.
+
+        ``nonce`` identifies one purchase press (minted when the item page is
+        rendered). The ledger key is ``shop_purchase:{user}:{nonce}``:
+
+        * the same nonce replays the stored outcome (no charge, no card);
+        * a new nonce is a new purchase, charged in full, even if the user
+          bought and then traded this character away earlier;
+        * a nonce reused for a different entry is refused.
+
+        Raises :class:`ShopError` for refusals. The caller must not commit
+        after a refusal: the exception has to escape its transaction.
+        """
+        if not OPERATION_NONCE_RE.match(nonce or ""):
+            raise ShopError(STALE_PURCHASE_TEXT)
+
+        # User row first, before any read (lock policy rank 0): the snapshot
+        # used for the replay and ownership checks is taken after the lock.
+        await lock_user_row(session, user_id)
+        key = PURCHASE_KEY_FORMAT.format(user_id=user_id, nonce=nonce)
+
+        # Replays are answered before the shop state is re-checked: a button
+        # pressed after its entry left the shop must not look like a new buy.
+        existing = await AppleWalletService._find_ledger(session, key)
+        if existing is not None:
+            return await cls._replayed_outcome(session, user_id, entry_id, existing)
+
         now = datetime.now(timezone.utc)
         entry = await session.get(ShopEntry, entry_id)
         if not entry or not entry.is_active:
@@ -246,8 +322,12 @@ class ShopService:
         ):
             raise ShopError("این چرخش فروشگاه به پایان رسیده است.")
 
+        # Eligibility is checked at purchase time, not only when the rotation
+        # was created: a character retired or shop-disabled after the rotation
+        # must not be sold from a button that is still on screen. This runs
+        # after the replay check above, so an already-paid nonce still replays.
         character = await session.get(Character, entry.character_id)
-        if not character or not character.is_active:
+        if not is_shop_eligible(character):
             raise ShopError("شخصیت موردنظر در دسترس نیست.")
 
         price = cls.entry_price(entry, character)
@@ -262,31 +342,60 @@ class ShopService:
         if already_owned is not None:
             raise ShopError("شما قبلاً این شخصیت را دارید!")
 
-        # Atomic debit + card acquisition.
-        try:
-            await AppleWalletService.spend(
-                session,
-                user_id,
-                price,
-                reason="shop_purchase",
-                ref_type="shop_entry",
-                ref_id=entry.id,
-                idempotency_key=f"shop:{entry.id}:{user_id}",
-            )
-        except InsufficientFundsException:
+        # Funds pre-check BEFORE the card write, so an unaffordable purchase
+        # writes nothing even if a caller commits after a refusal. The debit
+        # below stays the authoritative check.
+        if await AppleWalletService.get_balance(session, user_id) < price:
             raise ShopError(f"سیب کافی نیست! قیمت: {price} سیب 🍎")
 
+        # Lock order (cards rank 4 -> wallet rank 6 -> progression rank 7): the
+        # card row is written BEFORE the wallet is debited, and XP comes last.
+        # The card insert, the debit and the XP award are ONE atomic unit:
+        #   * on MariaDB they run inside a savepoint, so a refusal after the
+        #     card write undoes all of them, even if a caller catches the
+        #     ShopError and commits its outer transaction;
+        #   * on SQLite (no savepoints, test engine only) an explicit refusal
+        #     after the card insert deletes that card again in the same
+        #     transaction, so a commit still persists nothing.
+        card: Optional[PlayerCard] = None
         try:
-            card = await PlayerCardService.acquire(session, user_id, character.id)
-        except DuplicateCardError:
-            # Race backstop: re-raise so the transaction rolls back the debit.
-            raise ShopError("شما قبلاً این شخصیت را دارید!")
+            async with _atomic_block(session):
+                try:
+                    card = await PlayerCardService.acquire(session, user_id, character.id)
+                except (DuplicateCardError, IntegrityError):
+                    # Lost a card race before any charge.
+                    raise ShopError("شما قبلاً این شخصیت را دارید!")
 
-        from sib.services.player_xp import PlayerXPService
+                try:
+                    debit = await AppleWalletService.debit_once(
+                        session,
+                        user_id,
+                        price,
+                        reason="shop_purchase",
+                        ref_type="shop_entry",
+                        ref_id=entry.id,
+                        idempotency_key=key,
+                    )
+                except InsufficientFundsException:
+                    raise ShopError(f"سیب کافی نیست! قیمت: {price} سیب 🍎")
+                except LedgerKeyConflictError:
+                    raise ShopError(STALE_PURCHASE_TEXT)
+                if not debit.applied:
+                    # Only possible if the key appeared after our replay check;
+                    # the user lock makes that unreachable. Refuse, so the card
+                    # insert is undone with it and nothing is charged twice.
+                    raise ShopError(STALE_PURCHASE_TEXT)
 
-        await PlayerXPService.award_character_collection(
-            session, user_id=user_id, character_id=character.id
-        )
+                from sib.services.player_xp import PlayerXPService
+
+                await PlayerXPService.award_character_collection(
+                    session, user_id=user_id, character_id=character.id
+                )
+        except ShopError:
+            if card is not None and not savepoints_supported(session):
+                await session.delete(card)
+                await session.flush()
+            raise
 
         log_event(
             Events.SHOP_EVENT,
@@ -298,4 +407,33 @@ class ShopService:
                 "price": price,
             },
         )
-        return card
+        return PurchaseOutcome(card=card, replayed=False, price=price)
+
+    @classmethod
+    async def _replayed_outcome(
+        cls,
+        session: AsyncSession,
+        user_id: int,
+        entry_id: int,
+        existing,
+    ) -> PurchaseOutcome:
+        """Stored outcome for an already-processed purchase key (no writes)."""
+        entry = await session.get(ShopEntry, entry_id)
+        if existing is not None and (
+            existing.user_id != user_id
+            or existing.reason != "shop_purchase"
+            or existing.ref_type != "shop_entry"
+            or existing.ref_id != entry_id
+        ):
+            raise ShopError(STALE_PURCHASE_TEXT)
+        card = None
+        price = -existing.amount if existing is not None else 0
+        if entry is not None:
+            character_id = entry.character_id
+            card = await session.scalar(
+                select(PlayerCard).where(
+                    PlayerCard.user_id == user_id,
+                    PlayerCard.character_id == character_id,
+                )
+            )
+        return PurchaseOutcome(card=card, replayed=True, price=price)

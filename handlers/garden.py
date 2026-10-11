@@ -538,12 +538,14 @@ async def handle_garden_unlock(callback: CallbackQuery, bot: Bot):
 
     error = None
     capacity = 0
-    async with get_session() as session:
-        try:
+    # Refusals escape the transaction block (nothing commits) and are shown
+    # afterwards.
+    try:
+        async with get_session() as session:
             _capture_xp_notification_chat(session, callback)
             capacity = await GardenService.unlock_plot(session, subject_id)
-        except ValueError as e:
-            error = str(e)
+    except ValueError as e:
+        error = str(e)
 
     if error:
         await _rerender(callback, bot, answer=error)

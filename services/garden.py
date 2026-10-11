@@ -35,6 +35,7 @@ from sib.core.logging import logger, log_event, Events
 from sib.database.models import Garden, GardenPlot, PlotState
 from sib.services.apple_wallet import AppleWalletService, InsufficientFundsException
 from sib.services.config_store import ConfigService
+from sib.services.lock_order import lock_user_row
 from sib.services.seedling import SeedlingService
 
 
@@ -485,7 +486,13 @@ class GardenService:
         session: AsyncSession,
         user_id: int,
     ) -> int:
-        """Buy the next locked plot individually. Returns the new capacity."""
+        """Buy the next locked plot individually. Returns the new capacity.
+
+        Raises ``ValueError`` (refusal) before any write it cannot undo. The
+        caller must let the error escape its transaction so nothing commits.
+        """
+        # User row first (lock policy rank 0), then the garden row.
+        await lock_user_row(session, user_id)
         garden = await cls.get_or_create(session, user_id, for_update=True)
 
         price = await cls.next_unlock_price(session, garden)
@@ -494,10 +501,10 @@ class GardenService:
 
         next_index = garden.capacity_plots
         try:
-            await AppleWalletService.spend(
+            debit = await AppleWalletService.debit_once(
                 session,
-                user_id=user_id,
-                amount=price,
+                user_id,
+                price,
                 reason="garden_plot_unlock",
                 ref_type="garden",
                 ref_id=user_id,
@@ -505,6 +512,10 @@ class GardenService:
             )
         except InsufficientFundsException:
             raise ValueError("سیب‌های شما برای باز کردن قطعه جدید کافی نیست! 🍎")
+        if not debit.applied:
+            # The unlock key for this plot index was already consumed by an
+            # earlier charge: a replay must never open a free plot.
+            raise ValueError("این قطعه قبلاً پرداخت شده است؛ صفحه باغ را دوباره باز کن. 🌳")
 
         session.add(GardenPlot(garden_id=user_id, plot_index=next_index))
         garden.capacity_plots += 1

@@ -437,6 +437,9 @@ async def test_partial_reward_failure_leaves_no_committed_entries(db_session, mo
     alice = await create_test_user(db_session, "آلیس اتمیک")
     bob = await create_test_user(db_session, "باب اتمیک")
     await db_session.commit()
+    # Capture ids BEFORE the rollback: rollback expires loaded ORM objects, and
+    # reading them afterwards is a lazy load outside the greenlet (MissingGreenlet).
+    alice_id, bob_id = alice.id, bob.id
 
     real_earn = AppleWalletService.earn
     calls = {"n": 0}
@@ -449,16 +452,16 @@ async def test_partial_reward_failure_leaves_no_committed_entries(db_session, mo
 
     monkeypatch.setattr(AppleWalletService, "earn", failing_second_earn)
     with pytest.raises(RuntimeError):
-        await SibHugService.hug(db_session, sender_id=alice.id, target_id=bob.id, message_key="-100:50")
+        await SibHugService.hug(db_session, sender_id=alice_id, target_id=bob_id, message_key="-100:50")
     await db_session.rollback()  # what get_session() does on error
 
     assert await _ledger(db_session) == []
-    assert await _balance(db_session, alice.id) == 0
-    assert await _balance(db_session, bob.id) == 0
+    assert await _balance(db_session, alice_id) == 0
+    assert await _balance(db_session, bob_id) == 0
 
     # The sender's cooldown was never established, so a retry succeeds.
     monkeypatch.setattr(AppleWalletService, "earn", real_earn)
-    retry = await SibHugService.hug(db_session, sender_id=alice.id, target_id=bob.id, message_key="-100:50")
+    retry = await SibHugService.hug(db_session, sender_id=alice_id, target_id=bob_id, message_key="-100:50")
     await db_session.commit()
     assert retry.status == HUG_AWARDED
 
@@ -470,6 +473,7 @@ async def test_self_hug_and_bot_target_are_refused_without_writes(db_session):
 
     alice = await create_test_user(db_session, "آلیس خود")
     await db_session.commit()
+    alice_id = alice.id  # captured before any rollback (see test_partial_reward...)
     with pytest.raises(SibHugSelfTargetError):
         await SibHugService.hug(db_session, sender_id=alice.id, target_id=alice.id, message_key="-100:60")
 
@@ -477,11 +481,11 @@ async def test_self_hug_and_bot_target_are_refused_without_writes(db_session):
     db_session.add(bot)
     await db_session.commit()
     with pytest.raises(SibHugInvalidTargetError):
-        await SibHugService.hug(db_session, sender_id=alice.id, target_id=bot.id, message_key="-100:61")
+        await SibHugService.hug(db_session, sender_id=alice_id, target_id=bot.id, message_key="-100:61")
     await db_session.rollback()
 
     assert await _ledger(db_session) == []
-    assert await _balance(db_session, alice.id) == 0
+    assert await _balance(db_session, alice_id) == 0
 
 
 @requires_row_locks

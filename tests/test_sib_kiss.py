@@ -340,6 +340,7 @@ async def test_self_kiss_and_bot_target_are_refused_without_writes(db_session):
 
     alice = await create_test_user(db_session, "آلیس خود بوس")
     await db_session.commit()
+    alice_id = alice.id  # captured before the rollback below (MissingGreenlet otherwise)
     with pytest.raises(SibKissSelfTargetError):
         await SibKissService.kiss(db_session, sender_id=alice.id, target_id=alice.id, message_key="-100:60")
 
@@ -347,11 +348,11 @@ async def test_self_kiss_and_bot_target_are_refused_without_writes(db_session):
     db_session.add(bot)
     await db_session.commit()
     with pytest.raises(SibKissInvalidTargetError):
-        await SibKissService.kiss(db_session, sender_id=alice.id, target_id=bot.id, message_key="-100:61")
+        await SibKissService.kiss(db_session, sender_id=alice_id, target_id=bot.id, message_key="-100:61")
     await db_session.rollback()
 
     assert await _kiss_ledger(db_session) == []
-    assert await _balance(db_session, alice.id) == 0
+    assert await _balance(db_session, alice_id) == 0
 
 
 @pytest.mark.asyncio

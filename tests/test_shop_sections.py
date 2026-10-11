@@ -20,21 +20,24 @@ def _labels(kb):
 
 
 # ---------------------------------------------------------------------------
-# Root: exactly three sections, never a direct purchase
+# Root: exactly four sections, never a direct purchase
 # ---------------------------------------------------------------------------
 
 
+SHOP_SECTION_CALLBACKS = {"shop_cards", "shop_goods", "shop_sell", "shop_chests"}
+
+
 @pytest.mark.asyncio
-async def test_shop_root_offers_three_sections(db_session):
+async def test_shop_root_offers_four_sections(db_session):
     from sib.handlers.shop import _shop_view
 
     user = await create_test_user(db_session, "خریدار بخش‌ها")
     text, kb = await _shop_view(user.id)
 
     callbacks = _callbacks(kb)
-    assert callbacks.count("shop_cards") == 1
-    assert callbacks.count("shop_goods") == 1
-    assert callbacks.count("shop_sell") == 1
+    sections = [c for c in callbacks if c in SHOP_SECTION_CALLBACKS]
+    assert sorted(sections) == sorted(SHOP_SECTION_CALLBACKS)  # exactly four
+    assert len(sections) == 4
     assert not any(c.startswith("shop_buy:") for c in callbacks)
     assert "فروشگاه" in text
 
@@ -242,7 +245,7 @@ async def test_get_entry_returns_rotation_entry_and_ownership(db_session):
     assert got_char.id == character.id
     assert owned is False
 
-    await ShopService.purchase(db_session, uid, entry_id)
+    await ShopService.purchase(db_session, uid, entry_id, nonce="ownedcheck01")
     await db_session.commit()
 
     _e, _c, owned_now = await ShopService.get_entry(db_session, entry_id, user_id=uid)

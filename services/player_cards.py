@@ -12,10 +12,22 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sib.core.logging import Events, log_event
-from sib.database.models import Character, PlayerCard, User
+from sib.database.models import Character, PlayerCard, ReleaseStatus, User
 from sib.services.card_progression import card_attributes
 
 MAX_SIGNED_BIGINT = (1 << 63) - 1
+
+
+def is_shop_eligible(character: Optional[Character]) -> bool:
+    """A character may be sold or offered as a card reward only when it is
+    released, shop-enabled, and active. Shared by shop purchases and chest
+    reward validation so the rule cannot drift between them."""
+    return (
+        character is not None
+        and bool(character.is_active)
+        and bool(character.shop_enabled)
+        and character.release_status == ReleaseStatus.RELEASED
+    )
 
 
 class CardError(ValueError):

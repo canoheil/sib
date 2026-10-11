@@ -239,22 +239,25 @@ async def handle_card_upgrade_do(callback: CallbackQuery, bot: Bot):
     result = None
     from sib.services.player_xp import PlayerXPService
 
-    async with get_session() as session:
-        PlayerXPService.set_notification_chat(
-            session,
-            getattr(getattr(callback.message, "chat", None), "id", None),
-        )
-        try:
+    # Refusals are converted to a toast OUTSIDE the transaction block: the
+    # exception escapes get_session(), so nothing a refused upgrade touched
+    # can be committed by the handler.
+    try:
+        async with get_session() as session:
+            PlayerXPService.set_notification_chat(
+                session,
+                getattr(getattr(callback.message, "chat", None), "id", None),
+            )
             result = await CardUpgradeService.upgrade(
                 session, actor, card_id, expected_level=seen_level
             )
             toast = success_toast(result)
-        except InsufficientResourcesError as exc:
-            toast, alert = missing_alert_text(exc), True
-        except StaleUpgradeError as exc:
-            toast = str(exc)
-        except CardUpgradeError as exc:
-            toast, alert = str(exc), True
+    except InsufficientResourcesError as exc:
+        toast, alert = missing_alert_text(exc), True
+    except StaleUpgradeError as exc:
+        toast = str(exc)
+    except CardUpgradeError as exc:
+        toast, alert = str(exc), True
 
     # XP notices are sent only after the paid upgrade and its XP row commit.
     if result is not None:

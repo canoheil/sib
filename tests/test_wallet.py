@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 
 from sib.database.models import AppleTransaction
 from sib.services.apple_wallet import (
+    LedgerKeyReplayError,
     AppleWalletService,
     InsufficientFundsException,
 )
@@ -58,31 +59,35 @@ async def test_negative_balance_is_impossible(db_session):
 @pytest.mark.asyncio
 async def test_idempotency_key_blocks_duplicates(db_session):
     user = await create_test_user(db_session, "کیفدار ۳")
+    uid = user.id
 
     await AppleWalletService.earn(
-        db_session, user.id, 25, reason="reward", idempotency_key="reward:1"
+        db_session, uid, 25, reason="reward", idempotency_key="reward:1"
     )
     await AppleWalletService.earn(
-        db_session, user.id, 25, reason="reward", idempotency_key="reward:1"
+        db_session, uid, 25, reason="reward", idempotency_key="reward:1"
     )
     await db_session.commit()
 
-    assert await AppleWalletService.get_balance(db_session, user.id) == 25
+    assert await AppleWalletService.get_balance(db_session, uid) == 25
 
-    # Spend keys work the same way.
+    # Keyed spends are strict: the first debit applies, a replay is refused
+    # (never a silent "success") and writes nothing.
     await AppleWalletService.spend(
-        db_session, user.id, 10, reason="buy", idempotency_key="buy:1"
-    )
-    await AppleWalletService.spend(
-        db_session, user.id, 10, reason="buy", idempotency_key="buy:1"
+        db_session, uid, 10, reason="buy", idempotency_key="buy:1"
     )
     await db_session.commit()
+    with pytest.raises(LedgerKeyReplayError):
+        await AppleWalletService.spend(
+            db_session, uid, 10, reason="buy", idempotency_key="buy:1"
+        )
+    await db_session.rollback()
 
-    assert await AppleWalletService.get_balance(db_session, user.id) == 15
+    assert await AppleWalletService.get_balance(db_session, uid) == 15
 
     rows = (
         await db_session.scalars(
-            select(AppleTransaction).where(AppleTransaction.user_id == user.id)
+            select(AppleTransaction).where(AppleTransaction.user_id == uid)
         )
     ).all()
     assert len(rows) == 2  # one earn + one spend despite repeated calls
