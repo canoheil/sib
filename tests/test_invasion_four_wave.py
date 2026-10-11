@@ -1107,3 +1107,159 @@ async def test_wave_notice_text_comes_from_persisted_state(db_session):
     assert "موج ۱ از ۴ آغاز شد" in text
     assert "۵ دقیقه" in text
     assert "🛡 دفاع این موج: ۰" in text
+
+
+# ----------------------------------------------------------------------
+# Incident regression: wave-1 Brace, then a prolonged outage, closes the
+# battle as interrupted (no outcome, no rewards, preserved region name).
+# ----------------------------------------------------------------------
+async def _seed_moon_descendants_faction(session) -> None:
+    """Ensure the Moon Children faction exists with its territory lore.
+
+    Production always seeds factions on startup; the isolated test database
+    only runs ``seed_default_data`` (games/channels/ads), so tests that
+    touch faction/region metadata seed the row explicitly.
+    """
+    from sib.database.models import Faction as _Faction
+    existing = await session.scalar(
+        select(_Faction.id).where(_Faction.code == "moon_descendants")
+    )
+    if existing is not None:
+        return
+    session.add(
+        _Faction(
+            code="moon_descendants",
+            name_fa="فرزندان ماه",
+            name_en="Moon Descendants",
+            symbol="🌙",
+            lore_fa="ساکنان درّه ماه.",
+            territory_fa="درّه ماه (Moonfall Valley)",
+            display_order=3,
+            is_active=True,
+        )
+    )
+    await session.flush()
+
+
+@pytest.mark.asyncio
+async def test_incident_wave_one_brace_then_long_outage_is_interrupted_without_rewards(db_session):
+    """Reproduce the 2026-10-11 incident timeline end-to-end.
+
+    The player joins, performs one Brace on wave 1, the bot stays down
+    past the downtime compensation budget, startup recovery fires, and
+    the battle must terminate FINISHED with outcome NULL, zero rewards
+    granted, exactly one participant and one defense action preserved,
+    the target-region snapshot populated by the scheduler, and the final
+    Telegram notice describing a closed-without-result outcome.
+    """
+    await _seed_moon_descendants_faction(db_session)
+    group_id = await _group_id(db_session)
+    defender = await _user_id(db_session, "Incident defender")
+
+    # 1) Activate via the real scheduler path so region metadata is set.
+    await MaintenanceService.run_invasion_cycle(now=at(0))
+    db_session.expire_all()
+    invasion = await _group_invasion(db_session, group_id)
+    assert invasion is not None
+    invasion_id = int(invasion.id)
+    assert invasion.status == InvasionStatus.ACTIVE
+    assert invasion.enemy_power > 0
+    # The scheduler fix must have populated the region display name.
+    assert invasion.target_region_name_snapshot == "درّه ماه (Moonfall Valley)"
+
+    # 2) Player joins and performs one Brace in wave 1 at t=15.
+    await InvasionService.join(
+        db_session, invasion_id, defender, expected_group_id=group_id, now=at(1)
+    )
+    await InvasionService.perform_defense_action(
+        db_session,
+        invasion_id,
+        defender,
+        expected_group_id=group_id,
+        wave_sequence=1,
+        action_code=InvasionDefenseActionCode.BRACE,
+        idempotency_key="incident:wave-1:brace",
+        now=at(15),
+    )
+    await db_session.commit()
+
+    # 3) Simulate live ticks only up to t=60 (a 45-second cadence), then
+    #    bot outage. No maintenance runs until recovery at t=1400 s, which
+    #    is past the default 20-minute compensation budget (1200 s) plus
+    #    the 30 s heartbeat tolerance.
+    await _live(30, 60)
+    await RecoveryService.recover_on_startup(db_session, now=at(1400))
+
+    # 4) Final persisted state must match the incident observations.
+    db_session.expire_all()
+    invasion = await db_session.get(Invasion, invasion_id)
+    assert invasion is not None
+    assert invasion.status == InvasionStatus.FINISHED
+    assert invasion.outcome is None  # no win/loss recorded
+    assert invasion.ended_at is not None
+    assert invasion.started_at is not None
+    assert invasion.rewards_settled_at is not None  # stamped: nothing owed
+    assert invasion.current_wave_sequence is None
+    assert invasion.next_transition_at is None
+    # Waves are all closed.
+    waves = list(
+        (
+            await db_session.scalars(
+                select(InvasionWave)
+                .where(InvasionWave.invasion_id == invasion_id)
+                .order_by(InvasionWave.wave_sequence.asc())
+            )
+        ).all()
+    )
+    assert len(waves) == 4
+    assert all(w.status == InvasionStatus.FINISHED for w in waves)
+    assert all(w.next_transition_at is None for w in waves)
+
+    # Participant / action counts preserved.
+    participant_count = await db_session.scalar(
+        select(func.count(InvasionParticipant.id)).where(
+            InvasionParticipant.invasion_id == invasion_id
+        )
+    )
+    action_count = await db_session.scalar(
+        select(func.count(InvasionDefenseAction.id)).where(
+            InvasionDefenseAction.invasion_id == invasion_id
+        )
+    )
+    assert participant_count == 1
+    assert action_count == 1
+    # Wave 1 holds the Brace contribution; later waves hold 0.
+    assert waves[0].contribution_total > 0
+    assert sum(w.contribution_total for w in waves[1:]) == 0
+
+    # No rewards granted (outcome NULL excludes the battle from settlement).
+    assert (
+        await db_session.scalar(
+            select(func.count(UserItem.id)).where(
+                UserItem.user_id == defender,
+                UserItem.item_key == GOLDEN_APPLE_ITEM_KEY,
+            )
+        )
+    ) == 0
+
+    # 5) Final Telegram notice describes the outage closure, not a defeat.
+    snapshot = await InvasionTelegramService.load_snapshot(invasion_id)
+    assert snapshot is not None
+    final_text = render_final_notice(snapshot)
+    status_text = render_invasion_status(snapshot, now=at(1400))
+    assert "بدون نتیجه" in final_text
+    assert "پاداشی تعلق نمی‌گیرد" in final_text
+    assert "قطع طولانی ربات" in status_text
+    # The region must still be shown (not "مشخص نشده").
+    assert "درّه ماه" in final_text
+    assert "مشخص نشده" not in final_text
+
+    # 6) Idempotency: re-running recovery/maintenance changes nothing.
+    again = await RecoveryService.recover_on_startup(db_session, now=at(1400))
+    assert again.get("invasions_interrupted", 0) == 0
+    assert again.get("invasions_resolved", 0) == 0
+    db_session.expire_all()
+    invasion2 = await db_session.get(Invasion, invasion_id)
+    assert invasion2.status == InvasionStatus.FINISHED
+    assert invasion2.outcome is None
+    assert invasion2.ended_at == invasion.ended_at
