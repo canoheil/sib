@@ -444,6 +444,7 @@ class MaintenanceService:
         can never overlap; the Group row lock serializes that check per Group.
         """
         from sib.database.models import Group, GroupStats, Invasion, InvasionStatus
+        from sib.services.factions import FactionService
         from sib.services.invasion import (
             InvasionGroupNotFoundError,
             InvasionOccurrenceConflictError,
@@ -458,6 +459,17 @@ class MaintenanceService:
         }
         async with get_session() as session:
             cfg = await cls._battle_config(session)
+            # Load the invading Faction once per scheduling pass so we can
+            # snapshot its home territory as the battle's target region.
+            # Region metadata is optional on the Invasion row; if the faction
+            # or its territory is missing we simply leave the fields NULL and
+            # the UI falls back to "مشخص نشده" (preserves the pre-fix shape).
+            enemy_faction = await FactionService.get_by_code(
+                session, cls.INVASION_ENEMY_FACTION
+            )
+            target_region_name: Optional[str] = None
+            if enemy_faction is not None and enemy_faction.territory_fa:
+                target_region_name = enemy_faction.territory_fa
         eligible = cls._eligible_slot(now, cfg.interval_seconds, cfg.wave_count * cfg.wave_seconds)
         if eligible is None:
             # Outside every slot's battle window: nothing to create, nothing
@@ -563,6 +575,11 @@ class MaintenanceService:
                         wave_compositions=wave_compositions,
                         activated_at=activated_at,
                         wave_duration_seconds=cfg.wave_seconds,
+                        # Snapshot the invading Faction's home territory as the
+                        # battle's target region when the faction metadata is
+                        # present. The field is optional; NULL values preserve
+                        # the "مشخص نشده" rendering used by older records.
+                        target_region_name_snapshot=target_region_name,
                     )
                     invasion_id = invasion.id
                 stats["invasions_scheduled"] += 1
