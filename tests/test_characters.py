@@ -8,7 +8,12 @@ import json
 
 import pytest
 
-from sib.database.models import Character, CharacterBalanceVersion, ReleaseStatus
+from sib.database.models import (
+    SHOP_CARD_PRICE_APPLES,
+    Character,
+    CharacterBalanceVersion,
+    ReleaseStatus,
+)
 from sib.services.characters import (
     CharacterService,
     CharacterValidationError,
@@ -150,7 +155,6 @@ async def test_render_card_is_persian_and_complete(db_session):
         passive_key="first_strike",
         strengths=["سرعت"],
         weaknesses=["قدرت"],
-        price=150,
     )
     await db_session.commit()
 
@@ -160,7 +164,7 @@ async def test_render_card_is_persian_and_complete(db_session):
     # Unimplemented raw passive keys must not be presented as active mechanics.
     assert "first_strike" not in card
     assert "توانایی منفعل" not in card
-    assert "150" in card
+    assert str(SHOP_CARD_PRICE_APPLES) in card
     assert "یک داستان کوتاه." in card
     # Rarity is no longer an active classification: it must not leak into
     # the presentation even when the (deprecated) column holds a value.

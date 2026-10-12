@@ -30,10 +30,13 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     "magic_powder_level_costs": [1, 2, 3, 5, 8],
     # Magic Powder shop price (normal Apples).
     "magic_powder_buy_price": 40,
-    # Card attribute budget at Level 1 (Power + Speed + Intelligence of every
-    # card definition). Upgrades add +10 to each attribute per level; that rule
-    # is global and lives in services/card_progression.py, not here.
-    "card_base_attribute_budget": 60,
+    # NOTE: the Level-1 card attribute budget (Power + Speed + Intelligence
+    # == 60 for every character definition) is a PERMANENT GAME RULE, not
+    # configuration: it lives in ``services/card_progression.py``
+    # (``CARD_BASE_ATTRIBUTE_BUDGET``) together with the +10-per-level step
+    # and is enforced by ``CharacterService.validate_base_budget``. The old
+    # ``card_base_attribute_budget`` key was removed on purpose - adding it
+    # back here or in ``system_config`` has no effect.
     # Card upgrade cost table: ONE row per upgrade step, index 0 = Level 1->2,
     # ... index 8 = Level 9->10. Every row costs normal Apples (wallet) plus
     # ONE special-apple material, following the Dark Souls 3 style of tiered
@@ -282,7 +285,8 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     #     apples' per-tier upgrade ladder pacing intact.
     #   * card weight 0.05 (0.05% = 1 in 2,000 chests) is deliberately
     #     EXTREMELY low: cards are the collection jackpot also served by
-    #     the weekly shop (character.price) and one-trade-per-day trading,
+    #     the weekly shop (one global price: SHOP_CARD_PRICE_APPLES) and
+    #     one-trade-per-day trading,
     #     and a free daily card source must not erode that scarcity. It is
     #     ~29x rarer than the chest's own Obsidian Apple and rarer than the
     #     garden's legendary Obsidian lore rate (1 in 1,000 rolls). At

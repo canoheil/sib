@@ -6,8 +6,11 @@ live in the database and can be managed through the admin panel without
 touching Python code.
 
 Visible attributes (Power 💪 / Speed ⚡ / Intelligence 🧠) follow a total
-attribute budget model: their SUM equals the budget of the card level
-(60/120/180/240/300 for levels 1-5, extensible beyond 5).
+attribute budget model at Level 1: the SUM of the three attributes is exactly
+``services.card_progression.CARD_BASE_ATTRIBUTE_BUDGET`` (60) and it is a
+permanent game rule, not configuration. Progression is deterministic and
+additive: every level adds +10 to EACH attribute, so an owned card's total is
+``60 + 30 * (level - 1)`` - 60 at Level 1 and 330 at Level 10.
 """
 
 from datetime import datetime
@@ -27,6 +30,7 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.orm import Mapped, mapped_column
 
 from sib.database.base import Base, TimestampMixin
+from sib.database.models.shop import SHOP_CARD_PRICE_APPLES
 
 
 class ReleaseStatus:
@@ -49,7 +53,9 @@ class Character(Base, TimestampMixin):
     lore_fa: Mapped[str] = mapped_column(Text, default="", nullable=False)
     artwork: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
-    # Visible attributes (sum == level-1 budget).
+    # Visible attributes: the immutable Level-1 card definition. Their SUM
+    # must be exactly the fixed budget (60) - see
+    # ``services/card_progression.CARD_BASE_ATTRIBUTE_BUDGET``.
     power: Mapped[int] = mapped_column(Integer, default=20, nullable=False)
     speed: Mapped[int] = mapped_column(Integer, default=20, nullable=False)
     intelligence: Mapped[int] = mapped_column(Integer, default=20, nullable=False)
@@ -74,11 +80,20 @@ class Character(Base, TimestampMixin):
     faction_role_fa: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
 
     # Economy / availability.
-    price: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
-    # DEPRECATED: rarity is no longer an active classification (cards are
-    # sidegrades; the faction is the lore metadata now). The column is
-    # kept, with its historical values, so no existing installation loses
-    # data - nothing in the codebase reads or writes it as a category.
+    # DEPRECATED: the per-card price. Every card costs the unified
+    # ``SHOP_CARD_PRICE_APPLES`` in the shop; this column is kept
+    # (normalized to that value by ``CharacterService`` and migration 033)
+    # so existing installations and raw inserts stay schema-compatible and
+    # nothing that ever stored a price row loses data.
+    price: Mapped[int] = mapped_column(
+        Integer, default=SHOP_CARD_PRICE_APPLES, nullable=False
+    )
+    # DEPRECATED: rarity is no longer a classification at all (cards are
+    # sidegrades; the faction is the lore metadata now) and it has no effect
+    # on pricing, the shop, filters, badges or labels. The column is kept,
+    # with its historical values, so no existing installation loses data -
+    # nothing in the codebase reads it, and CharacterService.update refuses
+    # to write it (the server default only keeps raw inserts valid).
     rarity: Mapped[str] = mapped_column(String(20), default="COMMON", nullable=False)
     release_status: Mapped[str] = mapped_column(
         String(20), default=ReleaseStatus.DRAFT, nullable=False, index=True
@@ -143,7 +158,12 @@ class Character(Base, TimestampMixin):
         }
 
     def snapshot(self) -> Dict[str, Any]:
-        """Full balance-relevant snapshot for versioning."""
+        """Full balance-relevant snapshot for versioning.
+
+        ``price`` is kept in the snapshot so historical rows stay
+        interpretable; it is always the unified ``SHOP_CARD_PRICE_APPLES``
+        for anything written from now on.
+        """
         return {
             "code": self.code,
             "power": self.power,

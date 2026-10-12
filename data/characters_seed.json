@@ -78,5 +78,126 @@
     "faction_role_fa": "ملکه ماه، رهبر فرزندان ماه",
     "release_status": "RELEASED",
     "shop_enabled": true
+  },
+  {
+    "code": "filo",
+    "name_fa": "فیلو",
+    "name_en": "Filo",
+    "artwork": null,
+    "power": 7,
+    "speed": 13,
+    "intelligence": 40,
+    "release_status": "RELEASED",
+    "shop_enabled": true
+  },
+  {
+    "code": "goje",
+    "name_fa": "گوجه",
+    "name_en": "Goje",
+    "artwork": null,
+    "power": 20,
+    "speed": 20,
+    "intelligence": 20,
+    "release_status": "RELEASED",
+    "shop_enabled": true
+  },
+  {
+    "code": "green_knight",
+    "name_fa": "شوالیه سبز",
+    "name_en": "Green Knight",
+    "artwork": null,
+    "power": 27,
+    "speed": 19,
+    "intelligence": 14,
+    "release_status": "RELEASED",
+    "shop_enabled": true
+  },
+  {
+    "code": "igris",
+    "name_fa": "ایگریس",
+    "name_en": "Igris",
+    "artwork": null,
+    "power": 32,
+    "speed": 17,
+    "intelligence": 11,
+    "release_status": "RELEASED",
+    "shop_enabled": true
+  },
+  {
+    "code": "mmung",
+    "name_fa": "ممونگ",
+    "name_en": "Mmung",
+    "artwork": null,
+    "power": 14,
+    "speed": 36,
+    "intelligence": 10,
+    "release_status": "RELEASED",
+    "shop_enabled": true
+  },
+  {
+    "code": "moon_knight",
+    "name_fa": "شوالیه ماه",
+    "name_en": "Moon Knight",
+    "artwork": null,
+    "power": 30,
+    "speed": 20,
+    "intelligence": 10,
+    "release_status": "RELEASED",
+    "shop_enabled": true
+  },
+  {
+    "code": "moon_lily",
+    "name_fa": "نیلوفر ماه",
+    "name_en": "Moon Lily",
+    "artwork": null,
+    "power": 8,
+    "speed": 12,
+    "intelligence": 40,
+    "release_status": "RELEASED",
+    "shop_enabled": true
+  },
+  {
+    "code": "sage_king",
+    "name_fa": "پادشاه فرزانه",
+    "name_en": "Sage King",
+    "artwork": null,
+    "power": 20,
+    "speed": 12,
+    "intelligence": 28,
+    "release_status": "RELEASED",
+    "shop_enabled": true
+  },
+  {
+    "code": "treyni",
+    "name_fa": "ترینی",
+    "name_en": "Treyni",
+    "artwork": null,
+    "power": 12,
+    "speed": 24,
+    "intelligence": 24,
+    "release_status": "RELEASED",
+    "shop_enabled": true
+  },
+  {
+    "code": "wizard",
+    "name_fa": "جادوگر",
+    "name_en": "Wizard",
+    "artwork": null,
+    "power": 24,
+    "speed": 10,
+    "intelligence": 26,
+    "release_status": "RELEASED",
+    "shop_enabled": true
+  },
+  {
+    "code": "zarush",
+    "name_fa": "زاروش",
+    "name_en": "Zarush",
+    "artwork": null,
+    "power": 22,
+    "speed": 21,
+    "intelligence": 17,
+    "release_status": "RELEASED",
+    "shop_enabled": true
   }
 ]

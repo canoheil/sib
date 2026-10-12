@@ -16,11 +16,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sib.core.logging import logger, log_event, Events
 from sib.database.models import (
+    SHOP_CARD_PRICE_APPLES,
     Character,
     CharacterBalanceVersion,
     ReleaseStatus,
 )
-from sib.services.config_store import ConfigService
+from sib.services.card_progression import CARD_BASE_ATTRIBUTE_BUDGET
 
 
 class CharacterValidationError(ValueError):
@@ -35,14 +36,21 @@ class CharacterService:
     # ------------------------------------------------------------------
     @classmethod
     async def validate_base_budget(cls, session: AsyncSession, power: int, speed: int, intelligence: int) -> None:
-        level1_budget = int(
-            await ConfigService.get(session, "card_base_attribute_budget") or 60
-        )
+        """Enforce the permanent Level-1 budget: Power + Speed + Intelligence == 60.
+
+        The budget is a GAME RULE defined in code
+        (``services.card_progression.CARD_BASE_ATTRIBUTE_BUDGET``) and is
+        deliberately NOT read from configuration: the retired
+        ``card_base_attribute_budget`` setting (and any stale row an
+        installation may still hold) can no longer widen or tighten it, so
+        every installation validates against the same number.
+        """
         if power < 0 or speed < 0 or intelligence < 0:
             raise CharacterValidationError("ویژگی‌ها نمی‌توانند منفی باشند.")
-        if power + speed + intelligence != level1_budget:
+        if power + speed + intelligence != CARD_BASE_ATTRIBUTE_BUDGET:
             raise CharacterValidationError(
-                f"مجموع قدرت/سرعت/هوش باید دقیقاً {level1_budget} باشد (مدل بودجه ویژگی)."
+                f"مجموع قدرت/سرعت/هوش باید دقیقاً {CARD_BASE_ATTRIBUTE_BUDGET} باشد "
+                "(قانون ثابت بازی؛ این بودجه قابل تنظیم نیست)."
             )
 
     # ------------------------------------------------------------------
@@ -66,11 +74,18 @@ class CharacterService:
         hidden_modifiers: Optional[Dict[str, Any]] = None,
         strengths: Optional[List[str]] = None,
         weaknesses: Optional[List[str]] = None,
-        price: int = 100,
         faction_id: Optional[int] = None,
         faction_role_fa: Optional[str] = None,
         release_status: str = ReleaseStatus.DRAFT,
     ) -> Character:
+        """Register a character/card.
+
+        There is deliberately no ``price`` parameter: every shop card costs
+        the unified ``SHOP_CARD_PRICE_APPLES`` (see
+        :meth:`ShopService.card_price`), so a new card needs no price (and
+        no rarity) configuration. The legacy ``price`` column is written
+        with that unified value for schema/backward compatibility.
+        """
         existing = await session.scalar(select(Character).where(Character.code == code))
         if existing:
             raise CharacterValidationError(f"شخصیت با کد «{code}» قبلاً ثبت شده.")
@@ -91,7 +106,8 @@ class CharacterService:
             hidden_modifiers=Character._dump(hidden_modifiers),
             strengths=Character._dump(strengths or []),
             weaknesses=Character._dump(weaknesses or []),
-            price=price,
+            # Unified pricing: never a per-card value.
+            price=SHOP_CARD_PRICE_APPLES,
             faction_id=faction_id,
             faction_role_fa=faction_role_fa,
             release_status=release_status,
@@ -115,12 +131,31 @@ class CharacterService:
         note: Optional[str] = None,
         **fields: Any,
     ) -> Character:
+        """Edit a character's data.
+
+        ``price`` is NOT an editable field: shop cards have one global price
+        (``SHOP_CARD_PRICE_APPLES``). An attempt to set a per-card price is
+        refused loudly instead of silently writing a value nothing prices
+        with - there is no per-card pricing left to drift out of sync.
+
+        ``rarity`` is refused for the same reason: the game has no rarity
+        system, so there is no tier to edit (the deprecated column keeps
+        historical values for old installations and is never written here).
+        """
         character = await session.get(Character, character_id)
         if not character:
             raise CharacterValidationError("شخصیت پیدا نشد.")
 
+        unsupported = sorted({"price", "rarity"} & set(fields))
+        if unsupported:
+            raise CharacterValidationError(
+                "این فیلدها بخشی از مدل کارت نیستند: "
+                f"{', '.join(unsupported)} — قیمت همهٔ کارت‌ها سراسری است "
+                f"({SHOP_CARD_PRICE_APPLES} سیب) و سیستم کمیابی وجود ندارد."
+            )
+
         stat_keys = {"power", "speed", "intelligence"}
-        balance_keys = stat_keys | {"passive_key", "passive_data", "hidden_modifiers", "price"}
+        balance_keys = stat_keys | {"passive_key", "passive_data", "hidden_modifiers"}
 
         new_stats = {
             "power": fields.get("power", character.power),
@@ -268,6 +303,10 @@ def render_character_card(
     when provided it is shown with the character's role inside it. There
     is no rarity tier any more - cards are sidegrades and the faction is
     the classify-by-lore metadata.
+
+    The price line (when ``show_price``) always prints the unified
+    ``SHOP_CARD_PRICE_APPLES``, never a legacy per-card column, so this
+    screen (also used by the shop detail page) cannot show a stale price.
     """
     header = f"🍎 **{character.name_fa}**"
     if faction is not None:
@@ -300,5 +339,5 @@ def render_character_card(
     if character.weaknesses_list:
         lines.append(f"⚠️ نقاط ضعف: {', '.join(character.weaknesses_list)}")
     if show_price:
-        lines.append(f"💰 قیمت: `{character.price}` سیب 🍎")
+        lines.append(f"💰 قیمت: `{SHOP_CARD_PRICE_APPLES}` سیب 🍎")
     return "\n".join(lines)

@@ -89,16 +89,22 @@ async def _analytics_text() -> str:
 async def _characters_text() -> str:
     async with get_session() as session:
         characters = await CharacterService.list_all(session)
+    from sib.services.shop import ShopService
+
+    card_price = ShopService.card_price()
     lines = ["👤 **مدیریت شخصیت‌ها**\n"]
     for c in characters:
         status = {"DRAFT": "📝", "RELEASED": "✅", "RETIRED": "🗄"}.get(c.release_status, "?")
         active = "" if c.is_active else " (غیرفعال)"
         lines.append(
             f"{status} `{c.id}` {c.name_fa} | "
-            f"💪{c.power} ⚡{c.speed} 🧠{c.intelligence} | {c.price} 🍎 | v{c.balance_version}{active}"
+            f"💪{c.power} ⚡{c.speed} 🧠{c.intelligence} | {card_price} 🍎 | v{c.balance_version}{active}"
         )
     lines.append(
         "\nشخصیت‌ها را از طریق داده‌ها (seed JSON / سرویس CharacterService) اضافه کنید — بدون تغییر کد."
+    )
+    lines.append(
+        f"💰 قیمت همهٔ کارت‌های فروشگاه ثابت و سراسری است: {card_price} سیب."
     )
     return "\n".join(lines)
 
@@ -110,16 +116,16 @@ async def _shop_text() -> str:
         entries = await ShopService.list_entries(session)
         rotation = await ShopService.current_rotation(session)
 
+    price = ShopService.card_price()
     lines = [
         "🏪 **مدیریت فروشگاه**\n",
         f"چرخش فعلی: `{rotation.week_id}` تا {rotation.ends_at}",
+        f"💰 قیمت سراسری کارت‌ها: `{price}` سیب",
         "",
     ]
     for entry, character, _ in entries:
         badge = f" | {entry.badge}" if entry.badge else ""
-        lines.append(
-            f"🍎 {character.name_fa} — {ShopService.entry_price(entry, character)} سیب{badge}"
-        )
+        lines.append(f"🍎 {character.name_fa} — {price} سیب{badge}")
     lines.append("\nتنظیمات: shop_rotation_hours / shop_pool_character_ids در پیکربندی سیستم.")
     return "\n".join(lines)
 

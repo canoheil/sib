@@ -41,6 +41,7 @@ for import_root in (REPO_ROOT, REPO_ROOT.parent):
 from sib.database.models.invasion import InvasionOutcome  # noqa: E402
 from sib.services.card_progression import (  # noqa: E402
     ATTRIBUTE_STEP,
+    CARD_BASE_ATTRIBUTE_BUDGET,
     MAX_CARD_LEVEL,
     MIN_CARD_LEVEL,
     card_attributes,
@@ -53,6 +54,12 @@ from sib.services.invasion import (  # noqa: E402
 from sib.services.invasion_rewards import REWARD_CONFIG_KEYS  # noqa: E402
 from sib.services.maintenance.service import MaintenanceService  # noqa: E402
 
+
+# The four cards this analysis was audited against. The roster has grown
+# since (data/characters_seed.json is append-only), but the published report
+# and scenario matrix describe exactly these four Level-1 distributions, so
+# the strength profiles below keep using them as the audited baseline set.
+AUDITED_SEED_CODES = ("sib_sorkh", "sib_sabz", "sib_talayi", "sib_mahi")
 
 GROUP_SIZES = (1, 2, 3, 5, 10, 20, 30, 50)
 PARTICIPATION_PCTS = (10, 25, 50, 75, 100)
@@ -106,16 +113,19 @@ def snapshot_power(character: dict, level: int) -> int:
 
 
 def build_strength_profiles(seed_cards: list[dict]) -> dict[str, tuple[int, ...]]:
-    by_code = {entry["code"]: entry for entry in seed_cards}
+    audited = [
+        entry for entry in seed_cards if entry["code"] in AUDITED_SEED_CODES
+    ]
+    by_code = {entry["code"]: entry for entry in audited}
     return {
         # Low-end seed card at Level 1 is an explicit weak/new proxy.
         "weak_new": (snapshot_power(by_code["sib_mahi"], 1),),
         # Equal weighting is a transparent synthetic card-choice prior, not
         # an assertion about real ownership or Main Card selection.
-        "average_l1_seed_mix": tuple(snapshot_power(entry, 1) for entry in seed_cards),
-        "strong_l5_seed_mix": tuple(snapshot_power(entry, 5) for entry in seed_cards),
+        "average_l1_seed_mix": tuple(snapshot_power(entry, 1) for entry in audited),
+        "strong_l5_seed_mix": tuple(snapshot_power(entry, 5) for entry in audited),
         "highly_developed_l10_seed_mix": tuple(
-            snapshot_power(entry, MAX_CARD_LEVEL) for entry in seed_cards
+            snapshot_power(entry, MAX_CARD_LEVEL) for entry in audited
         ),
         # No Main Card is explicitly supported by InvasionService.join.
         "no_main_card": (0,),
@@ -179,10 +189,13 @@ def validate_source_rules(seed_cards: list[dict]) -> None:
         InvasionOutcome.NARROW_DEFENSE: 5,
         InvasionOutcome.DEFEAT: 1,
     }
-    assert len(seed_cards) == 4
+    seed_codes = {entry["code"] for entry in seed_cards}
+    assert set(AUDITED_SEED_CODES) <= seed_codes
+    # The Level-1 budget is a permanent game rule in code (60), not the
+    # retired ``card_base_attribute_budget`` configuration key.
     assert all(
         entry["power"] + entry["speed"] + entry["intelligence"]
-        == int(CONFIG_DEFAULTS["card_base_attribute_budget"])
+        == CARD_BASE_ATTRIBUTE_BUDGET
         for entry in seed_cards
     )
     for played, expected in ((0, 100), (25, 125), (50, 150), (75, 175), (100, 200), (1000, 200)):

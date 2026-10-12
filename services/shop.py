@@ -1,5 +1,12 @@
 """Weekly rotating shop service (Phase 11).
 
+Pricing: every card in the shop costs exactly ``SHOP_CARD_PRICE_APPLES``
+(Apples). There is no rarity system and no per-card, per-entry or
+client-supplied price anywhere in this flow: :meth:`ShopService.card_price`
+is the single authoritative value the listing screens, the balance
+pre-check, the apple debit and the ledger row all use. Newly registered
+characters are therefore priced correctly with no configuration.
+
 Rotation policy (deterministic and data-driven):
 - Duration comes from `shop_rotation_hours` (default 168 = 7 days).
 - The pool comes from `shop_pool_character_ids` (empty = all released
@@ -27,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sib.core.logging import Events, log_event, logger
 from sib.database.models import (
+    SHOP_CARD_PRICE_APPLES,
     Character,
     PlayerCard,
     ReleaseStatus,
@@ -152,6 +160,8 @@ class ShopService:
                         rotation_id=rotation.id,
                         character_id=character.id,
                         entry_type=ShopEntryType.CHARACTER,
+                        # Legacy column: never written with a per-entry price,
+                        # never read (see ShopService.card_price).
                         price_override=None,
                         badge=cls._badge_for(index),
                         sort_order=index,
@@ -266,8 +276,22 @@ class ShopService:
         return entry, character, owned
 
     @staticmethod
-    def entry_price(entry: ShopEntry, character: Character) -> int:
-        return entry.price_override if entry.price_override is not None else character.price
+    def card_price() -> int:
+        """The price of ANY shop card, in Apples - the ONE authoritative rule.
+
+        Deliberately independent of the entry, the character and the caller:
+
+        * ``ShopEntry.price_override`` is a deprecated column and is never
+          read (migration 033 clears historical values);
+        * ``Character.price`` is a deprecated column and is never read;
+        * the client never supplies a price - purchase callbacks carry only
+          an entry id and a per-press nonce (see :meth:`purchase`).
+
+        Every screen, the balance pre-check, the debit and the ledger row
+        call this method, so they can never disagree, and cards released in
+        the future are priced automatically without any configuration.
+        """
+        return SHOP_CARD_PRICE_APPLES
 
     # ------------------------------------------------------------------
     # Purchase (atomic)
@@ -330,7 +354,9 @@ class ShopService:
         if not is_shop_eligible(character):
             raise ShopError("شخصیت موردنظر در دسترس نیست.")
 
-        price = cls.entry_price(entry, character)
+        # The ONE price: the legacy per-character/per-entry values are never
+        # consulted, and this is the same value used below for the debit.
+        price = cls.card_price()
 
         # Ownership check BEFORE any debit (never charge for nothing).
         already_owned = await session.scalar(
