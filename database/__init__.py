@@ -2,10 +2,12 @@
 
 from sib.database.base import Base
 from sib.database.connection import (
+    CharacterSeedError,
     get_async_engine,
     get_async_sessionmaker,
     get_session,
     init_db,
+    seed_characters,
 )
 from sib.database.models import (
     User,
@@ -60,6 +62,8 @@ __all__ = [
     "get_async_sessionmaker",
     "get_session",
     "init_db",
+    "seed_characters",
+    "CharacterSeedError",
     "User",
     "Group",
     "Game",

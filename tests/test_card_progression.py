@@ -77,14 +77,22 @@ def test_every_real_card_keeps_its_level_one_base_and_gains_10_each(entry):
     )
 
 
+# The four cards this suite audited first - pinned so a rebalance of an
+# existing card can never slip in unnoticed. The roster is append-only, so
+# the assertion below is a SUBSET check (11 more cards were added later and
+# are covered by the parametrized progression test above).
+AUDITED_LEVEL_ONE = {
+    "sib_sorkh": (22, 20, 18),
+    "sib_sabz": (16, 18, 26),
+    "sib_talayi": (20, 24, 16),
+    "sib_mahi": (14, 16, 30),
+}
+
+
 def test_real_seed_level_one_distributions_are_unchanged():
     by_code = {e["code"]: (e["power"], e["speed"], e["intelligence"]) for e in SEED}
-    assert by_code == {
-        "sib_sorkh": (22, 20, 18),
-        "sib_sabz": (16, 18, 26),
-        "sib_talayi": (20, 24, 16),
-        "sib_mahi": (14, 16, 30),
-    }
+    for code, expected in AUDITED_LEVEL_ONE.items():
+        assert by_code[code] == expected
 
 
 def test_level_helpers_never_exceed_the_range():

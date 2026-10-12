@@ -126,7 +126,6 @@ async def _favorite_card_owner(db_session, name: str = "آرت‌باز"):
         power=22,
         speed=20,
         intelligence=18,
-        price=100,
         passive_key="test_passive",
     )
     await CharacterService.set_release_status(

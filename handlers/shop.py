@@ -7,9 +7,11 @@ Store structure (spec):
     ├── Sell Items   — sell eligible inventory items for normal Apples
     └── Chests       — configured shop chests (Apples), see services/shop_chests.py
 
-All economic values are config-driven (item_buy_prices /
+Item/chest/garden economic values are config-driven (item_buy_prices /
 item_sell_prices / magic_powder_level_costs / garden_plot_prices), so
-rebalancing never touches this file.
+rebalancing never touches this file. Card prices are not: every card
+costs the single unified ``ShopService.card_price()`` (300 Apples), and
+the purchase button carries only an entry id + nonce - never a price.
 """
 
 import secrets
@@ -159,8 +161,10 @@ async def _cards_view(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
         "",
     ]
     buttons: list[list[InlineKeyboardButton]] = []
+    # ONE price for every card (present and future): never per-entry,
+    # per-character or client-supplied.
+    price = ShopService.card_price()
     for entry, character, owned in entries:
-        price = ShopService.entry_price(entry, character)
         badge = f" {entry.badge}" if entry.badge else ""
         if owned:
             lines.append(f"✅ {character.name_fa} — (دارید)")
@@ -219,7 +223,7 @@ async def _shop_item_view(user_id: int, entry_id: int):
         )
         return text, kb, None
 
-    price = ShopService.entry_price(entry, character)
+    price = ShopService.card_price()
     badge = f" {entry.badge}" if entry.badge else ""
     lines = [
         render_character_card(character, faction=faction),

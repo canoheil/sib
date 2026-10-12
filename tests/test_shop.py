@@ -16,6 +16,8 @@ from sib.tests.test_parties import create_test_user
 
 
 async def _make_characters(db_session, count=4):
+    """Shop characters. Cards carry no price of their own any more: the
+    unified ``ShopService.card_price()`` applies to every one of them."""
     chars = []
     for i in range(count):
         character = await CharacterService.create(
@@ -25,7 +27,6 @@ async def _make_characters(db_session, count=4):
             power=20,
             speed=20,
             intelligence=20,
-            price=100 + i * 50,
         )
         await CharacterService.set_release_status(
             db_session, character.id, ReleaseStatus.RELEASED
@@ -95,12 +96,13 @@ async def test_purchase_deducts_apples_and_grants_card(db_session):
     entry, character, owned = entries[0]
     assert not owned
 
-    price = ShopService.entry_price(entry, character)
+    price = ShopService.card_price()
     outcome = await ShopService.purchase(db_session, user.id, entry.id, nonce="buytest0001")
     card = outcome.card
     await db_session.commit()
 
     assert card.character_id == character.id
+    assert outcome.price == price
     assert await AppleWalletService.get_balance(db_session, user.id) == 500 - price
     assert (await PlayerXPService.get_progress(db_session, user.id)).total_xp == 25
 

@@ -1469,7 +1469,13 @@ async def test_unimplemented_passives_are_not_shown_as_active(db_session):
         card_text = render_character_card(char)
         wiki_text = await WikiService.wiki_page(db_session, char.id)
         assert "توانایی منفعل" not in card_text
-        assert (char.passive_key or "") not in card_text
+        # A card without a passive_key has nothing to hide: an empty key
+        # would make the assertion below vacuously unsatisfiable (`"" in
+        # any_text` is True), so only characters that declare one are
+        # checked - the ones whose raw key must never leak.
+        if char.passive_key:
+            assert char.passive_key not in card_text
         if wiki_text:
             assert "توانایی منفعل" not in wiki_text
-            assert (char.passive_key or "") not in wiki_text
+            if char.passive_key:
+                assert char.passive_key not in wiki_text

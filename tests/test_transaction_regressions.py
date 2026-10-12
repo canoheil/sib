@@ -155,7 +155,7 @@ async def test_C_rebuying_a_traded_card_is_charged_at_full_price(db_session):
     await AppleWalletService.earn(db_session, user.id, 1000, reason="seed")
     await db_session.commit()
     entry, character, _owned = await _first_entry(db_session, user.id)
-    price = ShopService.entry_price(entry, character)
+    price = ShopService.card_price()
 
     await _run_handler(
         shop_handlers.handle_shop_buy,
@@ -184,7 +184,7 @@ async def test_C_consumed_nonce_never_authorizes_a_new_purchase(db_session):
     await AppleWalletService.earn(db_session, user.id, 1000, reason="seed")
     await db_session.commit()
     entry, character, _owned = await _first_entry(db_session, user.id)
-    price = ShopService.entry_price(entry, character)
+    price = ShopService.card_price()
 
     await _run_handler(
         shop_handlers.handle_shop_buy,

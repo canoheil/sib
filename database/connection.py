@@ -150,11 +150,42 @@ async def seed_default_data(
             ))
 
 
-async def seed_characters(session) -> int:
-    """Load the starter character roster from the data layer.
+class CharacterSeedError(RuntimeError):
+    """The shipped character seed data could not be applied.
 
-    Characters are data, not code: the JSON file is the source of truth
-    for the initial roster and can be edited without code changes.
+    Raised instead of booting with a partially applied roster: a card that
+    is missing from the database is missing from the shop, the wiki and
+    every collection, so a silent skip would be an invisible content loss.
+    """
+
+    def __init__(self, failures: list[tuple[str, str]]) -> None:
+        self.failures = list(failures)
+        detail = "; ".join(f"{code}: {error}" for code, error in self.failures)
+        super().__init__(
+            f"{len(self.failures)} character seed entr"
+            f"{'y' if len(self.failures) == 1 else 'ies'} failed -> {detail}"
+        )
+
+
+async def seed_characters(session) -> int:
+    """Sync the character roster from the data layer (append-only, idempotent).
+
+    Characters are data, not code: ``data/characters_seed.json`` is the
+    source of truth for the roster and can be edited without code changes.
+
+    Semantics (all three are required so new cards reach installations that
+    already run):
+
+    * a character whose ``code`` already exists is left COMPLETELY alone -
+      no stat rewrite, no release-status reset, no ownership/level touch;
+    * a character missing from the database is created (this is how new
+      cards ship: the file is append-only, so existing installs pick them
+      up on the next start);
+    * re-running is a no-op once every entry exists (no duplicates).
+
+    A failed entry is NOT skipped silently: every failure is logged with its
+    reason and the whole call raises :class:`CharacterSeedError` afterwards,
+    so startup fails loudly instead of running with a card missing.
     """
     from pathlib import Path
     import json as _json
@@ -167,11 +198,7 @@ async def seed_characters(session) -> int:
     # installations that already have characters): existing rows are only
     # filled where the faction is still NULL, never overwritten.
     await FactionService.seed_from_data(session)
-
-    existing = await session.scalar(select(Character.id).limit(1))
-    if existing is not None:
-        await FactionService.backfill_characters_from_data(session)
-        return 0
+    await FactionService.backfill_characters_from_data(session)
 
     seed_path = Path(__file__).resolve().parents[1] / "data" / "characters_seed.json"
     if not seed_path.exists():
@@ -179,8 +206,14 @@ async def seed_characters(session) -> int:
         return 0
 
     entries = _json.loads(seed_path.read_text(encoding="utf-8"))
+    existing_codes = set((await session.scalars(select(Character.code))).all())
+
     created = 0
+    failures: list[tuple[str, str]] = []
     for entry in entries:
+        code = entry.get("code") or "<missing code>"
+        if code in existing_codes:
+            continue  # Existing definition: never modified by the seed.
         try:
             faction = await FactionService.get_by_code(session, entry.get("faction"))
             character = await CharacterService.create(
@@ -198,17 +231,32 @@ async def seed_characters(session) -> int:
                 hidden_modifiers=entry.get("hidden_modifiers"),
                 strengths=entry.get("strengths"),
                 weaknesses=entry.get("weaknesses"),
-                price=entry.get("price", 100),
+                # No price key: every card is priced by the one unified
+                # shop rule (services.shop.ShopService.card_price).
                 faction_id=faction.id if faction else None,
                 faction_role_fa=entry.get("faction_role_fa"),
                 release_status=entry.get("release_status", ReleaseStatus.DRAFT),
             )
             character.shop_enabled = bool(entry.get("shop_enabled", True))
+            existing_codes.add(code)
             created += 1
         except CharacterValidationError as exc:
-            logger.error(f"Skipping invalid seed character {entry.get('code')}: {exc}")
+            failures.append((code, str(exc)))
+            logger.error(f"Invalid seed character {code}: {exc}")
 
-    logger.info(f"Seeded {created} characters from data layer.")
+    if failures:
+        # Loud: the caller (init_db / bot startup) must not continue with a
+        # partially applied roster, and the transaction rolls back so the
+        # next start retries from a clean state.
+        logger.error(
+            "Character seed FAILED for: "
+            + ", ".join(code for code, _ in failures)
+            + " - fix data/characters_seed.json and restart."
+        )
+        raise CharacterSeedError(failures)
+
+    if created:
+        logger.info(f"Seeded {created} characters from data layer.")
     return created
 
 

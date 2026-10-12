@@ -13,8 +13,10 @@ upgrade logic:
    No random gains, no player-chosen distribution, no stored copies that can
    drift from the level.
 
-The rules here are global (same range, same step for every card). The
-upgrade COST table is separate data: see ``services/card_upgrade.py`` and
+The rules here are global (same range, same step for every card) and are
+CODE, not configuration: the Level-1 budget (``CARD_BASE_ATTRIBUTE_BUDGET``)
+and the per-level step (``ATTRIBUTE_STEP``) cannot be overridden at runtime.
+The upgrade COST table is separate data: see ``services/card_upgrade.py`` and
 ``config_store.CONFIG_DEFAULTS["card_upgrade_costs"]``.
 """
 
@@ -25,6 +27,13 @@ MIN_CARD_LEVEL = 1
 MAX_CARD_LEVEL = 10
 # Every successful upgrade adds exactly this many points to EACH attribute.
 ATTRIBUTE_STEP = 10
+
+# The permanent Level-1 attribute budget: Power + Speed + Intelligence of
+# EVERY character definition equals exactly this. It is a GAME RULE, not
+# configuration - it lives here (with the rest of the progression rules) and
+# cannot be overridden at runtime: there is no `card_base_attribute_budget`
+# system_config key any more (see CharacterService.validate_base_budget).
+CARD_BASE_ATTRIBUTE_BUDGET = 60
 
 # The exactly-3 card attributes: (key, emoji, Persian label). The keys are
 # the ``Character`` column names; the labels are the ones players already see.

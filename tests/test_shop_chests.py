@@ -204,7 +204,7 @@ async def test_activation_requires_a_valid_reward_table(db_session):
 
     # A card reward for a character that is not on sale is refused too.
     hidden = await CharacterService.create(
-        db_session, code="hidden_one", name_fa="پنهان", power=20, speed=20, intelligence=20, price=10
+        db_session, code="hidden_one", name_fa="پنهان", power=20, speed=20, intelligence=20
     )
     await CharacterService.set_release_status(db_session, hidden.id, ReleaseStatus.RETIRED)
     await db_session.commit()

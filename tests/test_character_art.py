@@ -8,8 +8,10 @@ import pytest
 from PIL import Image, ImageFilter
 
 
-async def _shop_character(db_session, code: str, price: int = 100):
-    """A released, shop-enabled character whose `code` maps to framed art."""
+async def _shop_character(db_session, code: str):
+    """A released, shop-enabled character whose `code` maps to framed art.
+
+    Cards have no per-card price: the unified shop price applies."""
     from sib.database.models import ReleaseStatus
     from sib.services.characters import CharacterService
 
@@ -21,7 +23,6 @@ async def _shop_character(db_session, code: str, price: int = 100):
         power=22,
         speed=20,
         intelligence=18,
-        price=price,
         passive_key="test_passive",
     )
     await CharacterService.set_release_status(db_session, character.id, ReleaseStatus.RELEASED)
@@ -117,7 +118,7 @@ async def test_wiki_char_page_shows_art(db_session):
 async def test_shop_item_detail_full_screen(db_session):
     from sib.services.shop import ShopService
 
-    character = await _shop_character(db_session, "sib_talayi", price=300)
+    character = await _shop_character(db_session, "sib_talayi")
     async with __import__("sib.database.connection", fromlist=["get_session"]).get_session() as session:
         entries = await ShopService.list_entries(session, user_id=989898)
         await session.commit()
