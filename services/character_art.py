@@ -40,7 +40,7 @@ async def resolve_character_photo(session, character) -> tuple[str | None, objec
     if key:
         from sib.services.assets import AssetService
 
-        file_id = await AssetService.get_file_id(session, key)
+        file_id = await AssetService.file_id(session, key)
         if file_id:
             return file_id, None
     path = artwork_path(character)

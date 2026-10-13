@@ -119,6 +119,21 @@ class PlayerCardService:
         if locked_user_id is None:
             raise CardError("حساب کاربری پیدا نشد.")
 
+        # Accepted duel presentation freezes Main Card selection, using the
+        # same user mutex as acceptance. Pending invitations do not block it.
+        from sib.database.models import AppleDuel
+
+        active_duel = await session.scalar(
+            select(AppleDuel.id)
+            .where(
+                (AppleDuel.inviter_id == user_id) | (AppleDuel.recipient_id == user_id),
+                AppleDuel.status == "ACCEPTED",
+            )
+            .with_for_update()
+        )
+        if active_duel:
+            raise CardError("دوئل شروع شده؛ پس از پایان نمایش می‌توانی کارت اصلی را تغییر بدهی.")
+
         # Lock the requested owned card and all current favorites in one
         # deterministic order. Filtering by user_id also makes an unowned
         # target indistinguishable from a missing card at the service boundary.

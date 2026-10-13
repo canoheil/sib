@@ -129,3 +129,7 @@ __all__ = [
     "ShopChestReward",
     "ShopChestOpening",
 ]
+
+from sib.database.models.apple_duel import AppleDuel, AppleDuelSlot
+
+__all__ += ["AppleDuel", "AppleDuelSlot"]
