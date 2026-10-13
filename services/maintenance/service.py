@@ -1133,6 +1133,15 @@ class MaintenanceService:
         except Exception:
             logger.exception("Could not resume pending bot turns")
 
+        # Direct duels have independent durable deadlines/result/presentation.
+        # Isolated transaction: Telegram failures cannot roll back other games.
+        try:
+            from sib.services.apple_duel_presentation import AppleDuelPresentation
+
+            await AppleDuelPresentation.recover_and_publish(cls._bot)
+        except Exception:
+            logger.exception("Apple Duel maintenance failed")
+
         # Invasion presentation follows the committed domain step and bot-turn
         # scheduling. Pending sends can retry on later maintenance passes; edits
         # are selected only for events whose persisted lifecycle just moved.

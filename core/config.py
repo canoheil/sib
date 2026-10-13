@@ -76,6 +76,10 @@ class Settings(BaseSettings):
     CONNECT_FOUR_TIMEOUT: int = Field(default=60, description="Connect Four turn timeout")
     BATTLESHIP_TIMEOUT: int = Field(default=90, description="Battleship turn timeout")
 
+    # Direct Apple Duel (UTC server deadlines; six scenes, five gaps).
+    APPLE_DUEL_EXPIRY_SECONDS: int = Field(default=60, ge=1, le=3600)
+    APPLE_DUEL_SCENE_SECONDS: float = Field(default=4.0, ge=0.1, le=60)
+
     # Logging
     LOG_LEVEL: str = Field(default="INFO", description="Log level: DEBUG, INFO, WARNING, ERROR")
 

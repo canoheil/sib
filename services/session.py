@@ -73,7 +73,7 @@ class SessionService:
     # ------------------------------------------------------------------
     @classmethod
     async def live_party_for_user(
-        cls, session: AsyncSession, user_id: int
+        cls, session: AsyncSession, user_id: int, *, lock: bool = False
     ) -> Optional[Party]:
         """The live party that blocks this user, if any (same statuses as UI)."""
         stmt = (
@@ -84,11 +84,13 @@ class SessionService:
             .order_by(Party.id.desc())
             .limit(1)
         )
+        if lock:
+            stmt = stmt.with_for_update()
         return await session.scalar(stmt)
 
     @classmethod
     async def live_match_for_user(
-        cls, session: AsyncSession, user_id: int
+        cls, session: AsyncSession, user_id: int, *, lock: bool = False
     ) -> Optional[Match]:
         """The live match that blocks this user, if any."""
         stmt = (
@@ -100,13 +102,15 @@ class SessionService:
             .order_by(Match.id.desc())
             .limit(1)
         )
+        if lock:
+            stmt = stmt.with_for_update()
         return await session.scalar(stmt)
 
     @classmethod
     async def live_session_for_user(
         cls, session: AsyncSession, user_id: int
     ) -> Optional[str]:
-        """'party' | 'match' | None - THE live-session predicate.
+        """'party' | 'match' | 'duel' | None - THE live-session predicate.
 
         Both the guard and the informational message are derived from this
         single method, and the UI lists exactly the parties/states this
@@ -116,6 +120,21 @@ class SessionService:
             return "party"
         if await cls.live_match_for_user(session, user_id):
             return "match"
+        from sib.database.models import AppleDuel
+
+        # Locking current-read: MySQL REPEATABLE READ must not use a snapshot
+        # established before the caller waited for the shared User mutex.
+        duel_id = await session.scalar(
+            select(AppleDuel.id)
+            .where((AppleDuel.inviter_id == user_id) | (AppleDuel.recipient_id == user_id))
+            .where((AppleDuel.status == "ACCEPTED") | (
+                (AppleDuel.status == "PENDING") &
+                (AppleDuel.expires_at > datetime.now(timezone.utc))
+            ))
+            .with_for_update()
+        )
+        if duel_id:
+            return "duel"
         return None
 
     @classmethod
@@ -174,6 +193,8 @@ class SessionService:
         if kind == "match":
             match = await cls.live_match_for_user(session, user_id)
             return f"مسابقه فعال (شناسه: {match.id})" if match else None
+        if kind == "duel":
+            return "دعوت یا دوئل سیبی فعال؛ به پیام دعوت در گروه برگرد."
         return None
 
     # ------------------------------------------------------------------

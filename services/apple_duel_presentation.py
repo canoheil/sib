@@ -1,0 +1,296 @@
+"""Truthful Persian scenes, dynamic existing card art, DB-driven delivery."""
+
+import asyncio
+import io
+import json
+from functools import lru_cache
+from pathlib import Path
+from types import SimpleNamespace
+
+from aiogram.types import BufferedInputFile
+from PIL import Image, ImageDraw, ImageFilter, ImageOps
+from sib.core.logging import logger
+from sib.database.connection import get_session
+from sib.database.models import AppleBattle, AppleDuel
+from sib.services.apple_duel import AppleDuelService, now_utc
+from sib.services.character_art import resolve_character_photo
+from sqlalchemy import select
+
+# Pre-generated cast-free arena plates (see assets/apple_duel/manifest.json
+# and .agents/tasks/apple-duel-cinematic-presentation/ART_DIRECTION.md).
+# The runtime never generates images; unreadable/missing plates fall back to
+# the procedural composition below, never to a wrong-identity picture.
+DUEL_SCENES_DIR = Path(__file__).resolve().parent.parent / "assets" / "apple_duel"
+DUEL_MANIFEST_PATH = DUEL_SCENES_DIR / "manifest.json"
+
+
+@lru_cache(maxsize=1)
+def _plate_files():
+    """index -> plate path from the manifest; an empty mapping is valid."""
+    try:
+        raw = json.loads(DUEL_MANIFEST_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        logger.exception("Apple Duel plate manifest unreadable; procedural fallback")
+        return {}
+    plates = {}
+    for scene in raw.get("scenes", []):
+        if scene.get("status") == "ready" and scene.get("cast_free"):
+            plates[scene["index"]] = DUEL_SCENES_DIR / scene["file"]
+    return plates
+
+
+@lru_cache(maxsize=8)
+def scene_plate_bytes(index):
+    """Pre-generated arena plate bytes for a scene, or None for fallback."""
+    path = _plate_files().get(index)
+    if path is None or not path.is_file():
+        return None
+    try:
+        return path.read_bytes()
+    except Exception:
+        logger.exception("Apple Duel plate unreadable %s", path)
+        return None
+
+
+def scene_text(duel, battle, index):
+    cards = json.loads(duel.snapshot_json)["cards"]
+    a, b = cards
+    winner = next(c for c in cards if c["user_id"] == battle.winner_id)
+    scenes = [
+        f"⚔️ دوئل سیبی\n\n{a['player_name']} با «{a['name']}» (سطح {a['level']})\n"
+        f"در برابر {b['player_name']} با «{b['name']}» (سطح {b['level']})\n\n"
+        "دو مبارز وارد میدان می‌شوند؛ میانشان سکوتی کوتاه و سنگین نشسته است.",
+        "🌘 سنجش حریف\n\nفاصله هنوز پابرجاست. نگاه‌ها به سوی حریف می‌چرخند؛ میدان آرام است و لحظهٔ رویارویی نزدیک‌تر می‌شود.",
+        "⚔️ برخورد نخست\n\nرویارویی شکل می‌گیرد. نور از میان دو کارت می‌گذرد و سکوت میدان جای خود را به انتظار می‌دهد.\n"
+        "این قاب، روایت رویارویی است؛ جزئیات ضربه‌ها در موتور ثبت نمی‌شود.",
+        "🍃 تغییر جریان\n\nمیدان زیر نور تازه‌ای نمایان می‌شود. هر دو کارت هنوز در قاب‌اند؛ نگاه‌ها منتظر پایان این رویارویی می‌مانند.",
+        f"✨ لحظهٔ تعیین‌کننده\n\nانتظار به پایان نزدیک است؛ در نتیجهٔ ثبت‌شدهٔ نبرد، «{winner['name']}» پیش افتاده است. میدان آمادهٔ اعلام پیروز می‌شود.",
+        f"🏆 پایان دوئل سیبی\n\nبرنده: {winner['player_name']} با «{winner['name']}»\n"
+        "🌱 یک نهال به برنده داده شد. بازنده نهالی از دست نمی‌دهد.\n"
+        f"شناسهٔ دوئل: {duel.id}",
+    ]
+    return scenes[index]
+
+
+def compose_frame(arts, stage, background=None):
+    """Facing-card composition over a pre-generated plate (or procedural).
+
+    ``background`` is a cast-free arena plate from ``assets/apple_duel``;
+    without it the original procedural backdrop keeps every scene sendable.
+    """
+    configs = [(90, 10), (115, 6), (140, -8), (150, 10), (165, 16), (175, 0)]
+    offset, angle = configs[stage]
+    if background:
+        with Image.open(io.BytesIO(background)) as plate:
+            frame = ImageOps.cover(plate.convert("RGB"), (1000, 650))
+    else:
+        colors = [
+            (28, 36, 62),
+            (36, 30, 52),
+            (62, 25, 42),
+            (52, 38, 24),
+            (68, 43, 16),
+            (20, 62, 48),
+        ]
+        frame = Image.new("RGB", (1000, 650), colors[stage])
+        glow = Image.new("RGB", frame.size, (0, 0, 0))
+        draw = ImageDraw.Draw(glow)
+        draw.ellipse((350 - stage * 15, 0, 650 + stage * 15, 650), fill=(115, 88, 43))
+        glow = glow.filter(ImageFilter.GaussianBlur(70))
+        from PIL import ImageChops
+
+        frame = ImageChops.add(frame, glow)
+        draw = ImageDraw.Draw(frame)
+        # Light trails emphasize the facing composition without suggesting mechanics.
+        for n in range(8):
+            y = 75 + n * 70
+            draw.line(
+                (0, y, 500, 325 + (n - 4) * (stage + 2), 1000, 650 - y),
+                fill=(80 + stage * 18, 64 + stage * 10, 45),
+                width=2,
+            )
+    for i, raw in enumerate(arts):
+        if raw:
+            with Image.open(io.BytesIO(raw)) as image:
+                card = ImageOps.contain(image.convert("RGB"), (330, 490)).convert(
+                    "RGBA"
+                )
+        else:
+            # Honest missing-art placeholder; never show a wrong character.
+            card = Image.new("RGBA", (320, 470), (32, 36, 46, 255))
+            ImageDraw.Draw(card).rounded_rectangle(
+                (10, 10, 310, 460), 22, outline=(185, 145, 65), width=4
+            )
+        card = card.rotate(
+            angle if i == 0 else -angle, resample=Image.Resampling.BICUBIC, expand=True
+        )
+        x = offset if i == 0 else 1000 - offset - card.width
+        frame.paste(card, (x, (650 - card.height) // 2), card)
+    if not background:
+        ImageDraw.Draw(frame).line(
+            (500, 45, 500, 605), fill=(224, 184, 92), width=2 + stage
+        )
+    result = io.BytesIO()
+    frame.save(result, "JPEG", quality=88)
+    return result.getvalue()
+
+
+class AppleDuelPresentation:
+    @staticmethod
+    async def _photo(bot, duel, index):
+        cards = json.loads(duel.snapshot_json)["cards"]
+        sources = []
+        async with get_session() as session:
+            for card in cards:
+                sources.append(
+                    await resolve_character_photo(
+                        session,
+                        SimpleNamespace(code=card["code"], artwork=card.get("artwork")),
+                    )
+                )
+        arts = []
+        for file_id, path in sources:
+            if file_id:
+                buf = io.BytesIO()
+                await bot.download(file_id, destination=buf)
+                arts.append(buf.getvalue())
+            elif path:
+                arts.append(await asyncio.to_thread(path.read_bytes))
+            else:
+                arts.append(None)
+        background = await asyncio.to_thread(scene_plate_bytes, index)
+        raw = await asyncio.to_thread(compose_frame, arts, index, background)
+        return BufferedInputFile(raw, filename=f"duel-{duel.id}-{index}.jpg")
+
+    @classmethod
+    async def tick(cls, bot, duel_id):
+        if bot is None:
+            return
+        async with get_session() as session:
+            index = await AppleDuelService.claim_scene(session, duel_id)
+        async with get_session() as session:
+            duel = await session.get(AppleDuel, duel_id)
+            if not duel:
+                return
+            battle = (
+                await session.get(AppleBattle, duel.battle_id)
+                if duel.battle_id
+                else None
+            )
+        # Claim transaction has committed; even total Telegram failure cannot
+        # roll back result, reward or re-run the engine.
+        if index is not None:
+            text = scene_text(duel, battle, index)
+            try:
+                try:
+                    photo = await cls._photo(bot, duel, index)
+                except Exception:
+                    logger.exception(
+                        "Apple Duel artwork unavailable %s/%s; use text", duel_id, index
+                    )
+                    photo = None
+                if photo:
+                    try:
+                        await bot.send_photo(
+                            duel.group_id, photo, caption=text, parse_mode=None
+                        )
+                    except Exception:
+                        await bot.send_message(duel.group_id, text, parse_mode=None)
+                else:
+                    await bot.send_message(duel.group_id, text, parse_mode=None)
+            except Exception:
+                logger.exception(
+                    "Apple Duel scene delivery failed %s/%s", duel_id, index
+                )
+                # Transport failure (not a process crash): return the scene to
+                # the durable queue so the next sweep retries the same scene
+                # instead of silently skipping it. Result/reward untouched.
+                async with get_session() as session:
+                    if await AppleDuelService.release_scene(session, duel_id, index):
+                        logger.warning(
+                            "Apple Duel scene %s/%s queued for retry", duel_id, index
+                        )
+        if (
+            duel.status in ("COMPLETED", "REJECTED", "EXPIRED")
+            and not duel.terminal_presented
+        ):
+            await cls.publish_terminal(bot, duel, battle)
+
+    @staticmethod
+    async def publish_terminal(bot, duel, battle):
+        from aiogram.exceptions import TelegramBadRequest
+
+        text = (
+            scene_text(duel, battle, 5)
+            if battle
+            else "❌ دعوت دوئل سیبی رد شد."
+            if duel.status == "REJECTED"
+            else "⌛ دعوت دوئل سیبی منقضی شد."
+        )
+        try:
+            if duel.message_id:
+                try:
+                    await bot.edit_message_text(
+                        text,
+                        chat_id=duel.group_id,
+                        message_id=duel.message_id,
+                        reply_markup=None,
+                        parse_mode=None,
+                    )
+                except TelegramBadRequest as exc:
+                    if "message is not modified" not in str(exc).lower():
+                        await bot.send_message(duel.group_id, text, parse_mode=None)
+                except Exception:
+                    await bot.send_message(duel.group_id, text, parse_mode=None)
+            elif battle:
+                await bot.send_message(duel.group_id, text, parse_mode=None)
+            async with get_session() as session:
+                stored = await session.get(AppleDuel, duel.id)
+                stored.terminal_presented = True
+        except Exception:
+            logger.exception(
+                "Apple Duel final board delivery failed %s; retry next sweep", duel.id
+            )
+
+    @classmethod
+    async def recover_and_publish(cls, bot):
+        """Existing maintenance calls this; restart needs no process-local task."""
+        now = now_utc()
+        async with get_session() as session:
+            expired = list(
+                (
+                    await session.scalars(
+                        select(AppleDuel.id).where(
+                            AppleDuel.status == "PENDING", AppleDuel.expires_at <= now
+                        )
+                    )
+                ).all()
+            )
+            for duel_id in expired:
+                await AppleDuelService.expire(session, duel_id, now=now)
+        if bot is None:
+            return
+        async with get_session() as session:
+            ids = list(
+                (
+                    await session.scalars(
+                        select(AppleDuel.id).where(
+                            (
+                                (AppleDuel.status == "ACCEPTED")
+                                & (AppleDuel.next_scene_at <= now)
+                            )
+                            | (
+                                AppleDuel.status.in_(
+                                    ("COMPLETED", "REJECTED", "EXPIRED")
+                                )
+                                & AppleDuel.terminal_presented.is_(False)
+                            )
+                        )
+                    )
+                ).all()
+            )
+        for duel_id in ids:
+            try:
+                await cls.tick(bot, duel_id)
+            except Exception:
+                logger.exception("Apple Duel recovery failed %s", duel_id)
