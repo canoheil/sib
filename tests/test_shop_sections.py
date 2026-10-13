@@ -42,6 +42,47 @@ async def test_shop_root_offers_four_sections(db_session):
     assert "فروشگاه" in text
 
 
+@pytest.mark.asyncio
+async def test_shop_card_page_handler_renders_requested_five_card_page(db_session):
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from sib.handlers import shop as shop_handlers
+
+    await _make_characters(db_session, 12)
+    user = await create_test_user(db_session, "ورق‌زن فروشگاه")
+    await db_session.commit()
+
+    callback = MagicMock()
+    callback.data = "shop_cards:1"
+    callback.from_user.id = user.id
+    callback.answer = AsyncMock()
+
+    with (
+        patch.object(shop_handlers, "_shop_actor", new=AsyncMock(return_value=user.id)),
+        patch.object(shop_handlers, "safe_answer_callback", new=AsyncMock()) as answer,
+        patch.object(shop_handlers, "safe_edit_callback_message", new=AsyncMock()) as edit,
+    ):
+        await shop_handlers.handle_shop_cards(callback, bot=MagicMock())
+
+    answer.assert_awaited_once_with(callback)
+    text = edit.await_args.args[2]
+    keyboard = edit.await_args.kwargs["reply_markup"]
+    assert "📖 صفحه 2 از 3" in text
+    card_rows = [
+        row for row in keyboard.inline_keyboard
+        if row and row[0].callback_data.startswith(("shop_item:", "shop_owned:"))
+    ]
+    assert len(card_rows) == 5 and all(len(row) == 1 for row in card_rows)
+    assert any(
+        button.text == "◀️ قبلی" and button.callback_data == "shop_cards:0"
+        for row in keyboard.inline_keyboard for button in row
+    )
+    assert any(
+        button.text == "▶️ بعدی" and button.callback_data == "shop_cards:2"
+        for row in keyboard.inline_keyboard for button in row
+    )
+
+
 # ---------------------------------------------------------------------------
 # Section: Items (Magic Powder buyable with Apples)
 # ---------------------------------------------------------------------------

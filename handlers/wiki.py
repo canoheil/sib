@@ -8,6 +8,7 @@ from aiogram import Bot, Router, F
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from sib.core.text import escape_markdown
 from sib.keyboards.common import danger_button
 from sib.database.connection import get_session
 from sib.services.telegram_ui import (
@@ -47,14 +48,14 @@ def _wiki_keyboard(characters, page: int, origin: str = None) -> InlineKeyboardM
     if page > 0:
         nav.append(
             primary_button(
-                text="▶️ قبلی",
+                text="◀️ قبلی",
                 callback_data=f"wiki_page:{page - 1}" + (f":{origin}" if origin else ""),
             )
         )
     if start + WIKI_PAGE_SIZE < len(characters):
         nav.append(
             primary_button(
-                text="◀️ بعدی",
+                text="▶️ بعدی",
                 callback_data=f"wiki_page:{page + 1}" + (f":{origin}" if origin else ""),
             )
         )
@@ -96,7 +97,7 @@ def _wiki_index_lines(characters, faction_by_id=None) -> list[str]:
             else:
                 lines.append("\n**— 🍎 بدون دسته —**")
         lines.append(
-            f"{number}. 🍎 **{character.name_fa}** — "
+            f"{number}. 🍎 *{escape_markdown(character.name_fa)}* — "
             f"💪{character.power} ⚡{character.speed} 🧠{character.intelligence}"
         )
         number += 1
@@ -194,12 +195,12 @@ async def handle_wiki_char(callback: CallbackQuery, bot: Bot):
     nav = []
     if index > 0:
         nav.append(primary_button(
-            text="▶️ قبلی",
+            text="◀️ قبلی",
             callback_data=f"wiki_char:{characters[index - 1].id}" + (f":{origin}" if origin else ""),
         ))
     if index + 1 < len(characters):
         nav.append(primary_button(
-            text="◀️ بعدی",
+            text="▶️ بعدی",
             callback_data=f"wiki_char:{characters[index + 1].id}" + (f":{origin}" if origin else ""),
         ))
     rows = [nav] if nav else []

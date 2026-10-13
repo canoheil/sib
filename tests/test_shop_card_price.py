@@ -218,7 +218,7 @@ async def test_card_detail_screen_shows_300_even_with_a_legacy_override(db_sessi
 
     text, kb, _photo = await _shop_item_view(user_id, entry.id)
 
-    assert f"`{EXPECTED_PRICE}` سیب" in text  # card body (render_character_card)
+    assert f"💰 قیمت: {EXPECTED_PRICE} سیب" in text  # card body (render_character_card)
     nonce_buttons = [c for c in _callbacks(kb) if c.startswith(f"shop_buy:{entry.id}:")]
     assert len(nonce_buttons) == 1
     assert f"({EXPECTED_PRICE} 🍎)" in next(
@@ -371,7 +371,7 @@ async def test_rarity_values_do_not_change_rendering_or_pricing(db_session):
 
     # Identical cards -> identical presentation, including the price line.
     assert render_character_card(common) == render_character_card(legendary)
-    assert f"`{EXPECTED_PRICE}` سیب" in render_character_card(legendary)
+    assert f"💰 قیمت: {EXPECTED_PRICE} سیب" in render_character_card(legendary)
     for tier_label in ("کمیاب", "حماسی", "افسانه‌ای", "معمولی", "LEGENDARY", "COMMON"):
         assert tier_label not in render_character_card(legendary)
 

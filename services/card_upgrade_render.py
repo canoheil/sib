@@ -8,6 +8,7 @@ own catalogs (``card_progression.CARD_ATTRIBUTES``, ``items.ITEM_CATALOG``).
 
 from typing import Any, List, Optional
 
+from sib.core.text import escape_markdown
 from sib.services.card_progression import CARD_ATTRIBUTES, MAX_CARD_LEVEL, CardAttributes
 from sib.services.card_upgrade import (
     InsufficientResourcesError,
@@ -65,7 +66,7 @@ def missing_lines(missing: MissingResources) -> List[str]:
 
 def render_upgrade_screen(preview: UpgradePreview) -> str:
     """The Card Upgrade screen caption (kept well under Telegram's 1024)."""
-    lines = [f"⬆️ **ارتقای کارت {preview.character_name}**", ""]
+    lines = [f"⬆️ *ارتقای کارت {escape_markdown(preview.character_name)}*", ""]
 
     if preview.is_max_level:
         lines += [
@@ -80,7 +81,7 @@ def render_upgrade_screen(preview: UpgradePreview) -> str:
 
     assert preview.after is not None and preview.cost is not None
     lines += [
-        f"🎴 سطح کارت: `{preview.level}` ◀️ `{preview.next_level}`",
+        f"🎴 سطح کارت: `{preview.level}` ▶️ `{preview.next_level}`",
         "",
         "**الان:**",
         *_attribute_block(preview.current),

@@ -253,9 +253,9 @@ async def handle_trade_new(callback: CallbackQuery, bot: Bot):
 
     nav: list[InlineKeyboardButton] = []
     if page > 0:
-        nav.append(primary_button(text="▶️ قبلی", callback_data=f"trade_new:{page - 1}"))
+        nav.append(primary_button(text="◀️ قبلی", callback_data=f"trade_new:{page - 1}"))
     if page + 1 < total_pages:
-        nav.append(primary_button(text="◀️ بعدی", callback_data=f"trade_new:{page + 1}"))
+        nav.append(primary_button(text="▶️ بعدی", callback_data=f"trade_new:{page + 1}"))
     if nav:
         rows.append(nav)
     rows.append([danger_button(text="↩️ بازگشت به مبادله", callback_data="trade_refresh")])

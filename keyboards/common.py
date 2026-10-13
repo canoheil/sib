@@ -261,14 +261,14 @@ def get_cards_keyboard(
         if page > 0:
             nav.append(
                 primary_button(
-                    text="▶️ قبلی",
+                    text="◀️ قبلی",
                     callback_data=with_origin(f"apple_cards:{page - 1}", origin),
                 )
             )
         if page + 1 < total_pages:
             nav.append(
                 primary_button(
-                    text="◀️ بعدی",
+                    text="▶️ بعدی",
                     callback_data=with_origin(f"apple_cards:{page + 1}", origin),
                 )
             )

@@ -23,6 +23,7 @@ from sib.handlers.trading import (
     _pending_view,
     handle_trade_cancel,
     handle_trade_join,
+    handle_trade_new,
     handle_trade_offer,
     handle_trade_ok,
     handle_trade_pick,
@@ -131,6 +132,28 @@ async def test_trade_hub_offers_proposal_and_back(db_session):
     assert "trade_new" in data  # there is a real way to propose a trade
     assert "main_menu" in data  # back to the main menu
     assert "هم‌سطح" in text  # the same-level rule is communicated
+
+
+@pytest.mark.asyncio
+async def test_trade_card_picker_arrows_match_previous_and_next_pages(db_session):
+    user = await create_test_user(db_session, "صفحه‌بند مبادله")
+    for index in range(7):
+        await _card_for(db_session, user, f"trade_nav_{index}")
+
+    bot = _new_bot()
+    first_page = _callback(user, "trade_new:0")
+    await handle_trade_new(first_page, bot)
+    _text, first_keyboard = _edit_payload(first_page, bot)
+    following = next(b for b in _all_buttons(first_keyboard) if "بعدی" in b.text)
+    assert following.text == "▶️ بعدی"
+    assert following.callback_data == "trade_new:1"
+
+    second_page = _callback(user, "trade_new:1")
+    await handle_trade_new(second_page, bot)
+    _text, second_keyboard = _edit_payload(second_page, bot)
+    previous = next(b for b in _all_buttons(second_keyboard) if "قبلی" in b.text)
+    assert previous.text == "◀️ قبلی"
+    assert previous.callback_data == "trade_new:0"
 
 
 # ---------------------------------------------------------------------------

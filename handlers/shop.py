@@ -21,6 +21,7 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from sib.core.logging import logger
+from sib.core.text import escape_markdown
 from sib.database.connection import get_session
 from sib.services.apple_wallet import AppleWalletService
 from sib.services.config_store import ConfigService
@@ -150,41 +151,65 @@ async def handle_shop_refresh(callback: CallbackQuery, bot: Bot):
 # ---------------------------------------------------------------------------
 
 
-async def _cards_view(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
+SHOP_CARDS_PAGE_SIZE = 5
+
+
+async def _cards_view(user_id: int, page: int = 0) -> tuple[str, InlineKeyboardMarkup]:
     async with get_session() as session:
         entries = await ShopService.list_entries(session, user_id=user_id)
         balance = await AppleWalletService.get_balance(session, user_id)
+
+    total_pages = max(1, (len(entries) + SHOP_CARDS_PAGE_SIZE - 1) // SHOP_CARDS_PAGE_SIZE)
+    page = max(0, min(page, total_pages - 1))
+    start = page * SHOP_CARDS_PAGE_SIZE
+    page_entries = entries[start : start + SHOP_CARDS_PAGE_SIZE]
 
     lines = [
         "🏪 **فروشگاه — کارت‌ها** 🎴",
         f"💰 سیب‌های شما: `{balance}`",
         "",
     ]
+    if total_pages > 1:
+        lines.extend([f"📖 صفحه {page + 1} از {total_pages}", ""])
+
     buttons: list[list[InlineKeyboardButton]] = []
     # ONE price for every card (present and future): never per-entry,
-    # per-character or client-supplied.
+    # per-character or client-supplied. Render five at a time in a single column.
     price = ShopService.card_price()
-    for entry, character, owned in entries:
+    for entry, character, owned in page_entries:
         badge = f" {entry.badge}" if entry.badge else ""
         if owned:
-            lines.append(f"✅ {character.name_fa} — (دارید)")
+            lines.append(f"✅ *{escape_markdown(character.name_fa)}* — (دارید)")
             buttons.append(
                 [primary_button(text=f"✅ {character.name_fa} (خریداری‌شده)", callback_data=f"shop_owned:{entry.id}")]
             )
         else:
-            lines.append(f"🍎 {character.name_fa} — {price} سیب{badge}")
+            lines.append(f"🍎 *{escape_markdown(character.name_fa)}* — {price} سیب{badge}")
             buttons.append(
-                [primary_button(text=f"🛒 خرید {character.name_fa} ({price} 🍎){badge}", callback_data=f"shop_item:{entry.id}")]
+                [primary_button(text=f"🛒 خرید {character.name_fa} ({price} 🍎){badge}", callback_data=f"shop_item:{entry.id}:{page}")]
             )
 
     if not entries:
         lines.append("این هفته کالایی در فروشگاه نیست.")
-    buttons.append([primary_button(text="🔄 بروزرسانی", callback_data="shop_cards")])
+
+    if total_pages > 1:
+        navigation: list[InlineKeyboardButton] = []
+        if page > 0:
+            navigation.append(
+                primary_button(text="◀️ قبلی", callback_data=f"shop_cards:{page - 1}")
+            )
+        if page + 1 < total_pages:
+            navigation.append(
+                primary_button(text="▶️ بعدی", callback_data=f"shop_cards:{page + 1}")
+            )
+        buttons.append(navigation)
+
+    buttons.append([primary_button(text="🔄 بروزرسانی", callback_data=f"shop_cards:{page}")])
     buttons.append([danger_button(text="↩️ بازگشت به فروشگاه", callback_data="shop_refresh")])
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-@router.callback_query(F.data == "shop_cards")
+@router.callback_query(F.data.startswith("shop_cards"))
 async def handle_shop_cards(callback: CallbackQuery, bot: Bot):
     user = callback.from_user
     if not user:
@@ -192,12 +217,21 @@ async def handle_shop_cards(callback: CallbackQuery, bot: Bot):
     actor = await _shop_actor(callback)
     if not actor or actor != user.id:
         return
-    text, kb = await _cards_view(actor)
+
+    page = 0
+    if callback.data != "shop_cards":
+        prefix, separator, value = callback.data.partition(":")
+        if prefix != "shop_cards" or not separator or not value.isdecimal():
+            await safe_answer_callback(callback, "این صفحهٔ فروشگاه معتبر نیست.", show_alert=True)
+            return
+        page = int(value)
+
+    text, kb = await _cards_view(actor, page=page)
     await safe_answer_callback(callback)
     await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
 
-async def _shop_item_view(user_id: int, entry_id: int):
+async def _shop_item_view(user_id: int, entry_id: int, page: int = 0):
     """Full card detail: art + wiki description + stats + price + actions."""
     from sib.services.character_art import photo_arg, resolve_character_photo
     from sib.services.characters import render_character_card
@@ -219,7 +253,7 @@ async def _shop_item_view(user_id: int, entry_id: int):
     if entry is None:
         text = "کالای مورد نظر در فروشگاه این هفته نیست."
         kb = InlineKeyboardMarkup(
-            inline_keyboard=[[danger_button(text="↩️ بازگشت به فروشگاه", callback_data="shop_refresh")]]
+            inline_keyboard=[[danger_button(text="↩️ بازگشت به کارت‌ها", callback_data=f"shop_cards:{page}")]]
         )
         return text, kb, None
 
@@ -245,7 +279,7 @@ async def _shop_item_view(user_id: int, entry_id: int):
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             action,
-            [danger_button(text="↩️ بازگشت به فروشگاه", callback_data="shop_refresh")],
+            [danger_button(text="↩️ بازگشت به کارت‌ها", callback_data=f"shop_cards:{page}")],
         ]
     )
     return "\n".join(lines), kb, art_photo
@@ -253,18 +287,20 @@ async def _shop_item_view(user_id: int, entry_id: int):
 
 @router.callback_query(F.data.startswith("shop_item:"))
 async def handle_shop_item(callback: CallbackQuery, bot: Bot):
-    entry_id = int(callback.data.split(":")[1])
+    parts = callback.data.split(":")
+    entry_id = int(parts[1])
+    page = int(parts[2]) if len(parts) > 2 and parts[2].isdecimal() else 0
     user = callback.from_user
     if not user:
         return
     actor = await _shop_actor(callback)
     if not actor or actor != user.id:
         return
-    text, kb, art_photo = await _shop_item_view(actor, entry_id)
+    text, kb, art_photo = await _shop_item_view(actor, entry_id, page=page)
     if art_photo is not None and caption_length(text) > CAPTION_LIMIT:
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [primary_button(
-                text="📖 متن کامل کارت", callback_data=f"shop_item_full:{entry_id}",
+                text="📖 متن کامل کارت", callback_data=f"shop_item_full:{entry_id}:{page}",
             )],
             *kb.inline_keyboard,
         ])
@@ -281,12 +317,14 @@ async def handle_shop_item_full(callback: CallbackQuery, bot: Bot):
     actor = await _shop_actor(callback)
     if not actor or actor != user.id:
         return
-    entry_id = int(callback.data.split(":")[1])
-    text, kb, art_photo = await _shop_item_view(actor, entry_id)
+    parts = callback.data.split(":")
+    entry_id = int(parts[1])
+    page = int(parts[2]) if len(parts) > 2 and parts[2].isdecimal() else 0
+    text, kb, art_photo = await _shop_item_view(actor, entry_id, page=page)
     if art_photo is not None:
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [primary_button(
-                text="↩️ بازگشت به کارت", callback_data=f"shop_item:{entry_id}",
+                text="↩️ بازگشت به کارت", callback_data=f"shop_item:{entry_id}:{page}",
             )],
             *kb.inline_keyboard,
         ])
