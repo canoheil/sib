@@ -37,18 +37,29 @@ from sib.services.card_progression import (
     card_attributes,
 )
 from sib.services.characters import CharacterService, CharacterValidationError
+from sib.services.factions import FactionService
 from sib.services.shop import ShopError, ShopService
 from sib.services.wiki import CollectionService, WikiService
+from sib.tests.test_card_lore_filo import FILO_AFFILIATIONS, FILO_STORY
+from sib.tests.test_card_lore_goje import GOJE_AFFILIATIONS, GOJE_STORY
+from sib.tests.test_card_lore_green_knight import KNIGHT_AFFILIATIONS, KNIGHT_STORY
+from sib.tests.test_card_lore_igris import IGRIS_AFFILIATIONS, IGRIS_STORY
+from sib.tests.test_card_lore_mmung import MMUNG_AFFILIATIONS, MMUNG_STORY
+from sib.tests.test_card_lore_moon_knight import MOON_KNIGHT_AFFILIATIONS, MOON_KNIGHT_STORY
+from sib.tests.test_card_lore_moon_lily import MOON_LILY_AFFILIATIONS, MOON_LILY_STORY
+from sib.tests.test_card_lore_sage_king import SAGE_KING_AFFILIATIONS, SAGE_KING_STORY
+from sib.tests.test_card_lore_treyni import TREYNI_AFFILIATIONS, TREYNI_STORY
+from sib.tests.test_card_lore_wizard import WIZARD_AFFILIATIONS, WIZARD_STORY
+from sib.tests.test_card_lore_zarush import ZARUSH_AFFILIATIONS, ZARUSH_STORY
 from sib.tests.test_parties import create_test_user
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SEED_PATH = REPO_ROOT / "data" / "characters_seed.json"
 
-# The authoritative delivery table: code == artwork filename stem, which is
-# exactly how ``services.character_art.artwork_path`` resolves bundled art
-# (``assets/characters/{code}.jpg``). Persian names are literal
-# transliterations/translations - no lore, faction, role or ability is
-# assigned to these cards here.
+# The authoritative roster table: code == artwork filename stem, which is
+# how ``services.character_art.artwork_path`` resolves bundled art. Names and
+# stats are pinned; official text appears only for cards explicitly submitted
+# so far. No role or gameplay ability is inferred from any story.
 NEW_CARDS: dict[str, dict] = {
     "filo": {"name_en": "Filo", "power": 7, "speed": 13, "intelligence": 40},
     "goje": {"name_en": "Goje", "power": 20, "speed": 20, "intelligence": 20},
@@ -63,6 +74,21 @@ NEW_CARDS: dict[str, dict] = {
     "zarush": {"name_en": "Zarush", "power": 22, "speed": 21, "intelligence": 17},
 }
 NEW_CODES = tuple(NEW_CARDS)
+
+# Only explicitly received official text is allowed on this later roster.
+OFFICIAL_NEW_TEXT = {
+    "filo": (FILO_AFFILIATIONS, FILO_STORY, "empire"),
+    "goje": (GOJE_AFFILIATIONS, GOJE_STORY, "empire"),
+    "green_knight": (KNIGHT_AFFILIATIONS, KNIGHT_STORY, "sages"),
+    "igris": (IGRIS_AFFILIATIONS, IGRIS_STORY, "empire"),
+    "mmung": (MMUNG_AFFILIATIONS, MMUNG_STORY, "moon_descendants"),
+    "moon_knight": (MOON_KNIGHT_AFFILIATIONS, MOON_KNIGHT_STORY, "moon_descendants"),
+    "moon_lily": (MOON_LILY_AFFILIATIONS, MOON_LILY_STORY, "moon_descendants"),
+    "sage_king": (SAGE_KING_AFFILIATIONS, SAGE_KING_STORY, "sages"),
+    "treyni": (TREYNI_AFFILIATIONS, TREYNI_STORY, "sages"),
+    "wizard": (WIZARD_AFFILIATIONS, WIZARD_STORY, "moon_descendants"),
+    "zarush": (ZARUSH_AFFILIATIONS, ZARUSH_STORY, "empire"),
+}
 
 # The four pre-existing cards: pinned so the new delivery cannot have
 # silently rebalanced them.
@@ -122,9 +148,18 @@ def test_seed_entries_carry_exactly_the_delivered_stats_and_no_invented_metadata
         )
         assert entry["release_status"] == "RELEASED"
         assert entry["shop_enabled"] is True
-        # Narrative fields are deliberately absent (deferred to a later task).
-        for field in ("lore_fa", "faction", "faction_role_fa", "passive_key",
-                      "passive_data", "hidden_modifiers", "strengths", "weaknesses"):
+        if code in OFFICIAL_NEW_TEXT:
+            # Only these cards have received their official content, verbatim.
+            affiliations, story, faction_code = OFFICIAL_NEW_TEXT[code]
+            assert entry["affiliations_fa"] == affiliations
+            assert entry["lore_fa"] == story
+            assert entry["faction"] == faction_code and entry["sync_faction"] is True
+        else:
+            # No other card in this delivery has received official lore yet.
+            for field in ("lore_fa", "affiliations_fa", "faction", "sync_faction"):
+                assert field not in entry, f"{code} must not invent {field}"
+        for field in ("faction_role_fa", "passive_key", "passive_data",
+                      "hidden_modifiers", "strengths", "weaknesses"):
             assert field not in entry, f"{code} must not invent {field}"
         assert entry.get("artwork") is None  # bundled art resolves by code
 
@@ -144,8 +179,17 @@ async def test_seed_registers_all_eleven_characters_with_unique_ids(db_session):
         assert character.release_status == ReleaseStatus.RELEASED
         assert character.is_active is True
         assert character.shop_enabled is True
-        # No faction / ability / lore was invented for the new cards.
-        assert character.faction_id is None and character.faction_role_fa is None
+        if code in OFFICIAL_NEW_TEXT:
+            affiliations, story, faction_code = OFFICIAL_NEW_TEXT[code]
+            assert character.affiliations_fa == affiliations
+            assert character.lore_fa == story
+            faction = await FactionService.get_for_character(db_session, character)
+            assert faction is not None and faction.code == faction_code
+        else:
+            assert character.faction_id is None
+            assert character.affiliations_fa is None and character.lore_fa == ""
+        # No role or gameplay mechanic was inferred from the supplied story.
+        assert character.faction_role_fa is None
         assert character.passive_key is None and character.hidden_modifiers is None
 
 
@@ -360,20 +404,56 @@ async def test_all_new_cards_are_offered_in_the_shop_rotation(db_session):
 
 @pytest.mark.asyncio
 async def test_shop_card_list_shows_every_new_card_for_300_apples(db_session):
-    from sib.handlers.shop import _cards_view
+    from sib.handlers.shop import SHOP_CARDS_PAGE_SIZE, _cards_view
 
     characters = await _seeded(db_session)
     user_id = await _buyer(db_session, apples=0)
+    entries = await ShopService.list_entries(db_session, user_id=user_id)
+    total_pages = (len(entries) + SHOP_CARDS_PAGE_SIZE - 1) // SHOP_CARDS_PAGE_SIZE
+    await db_session.commit()  # _cards_view reads through the handler's own session
+    assert len(entries) == 15 and total_pages == 3
 
-    text, kb = await _cards_view(user_id)
-    labels = [button.text for row in kb.inline_keyboard for button in row]
+    all_text = []
+    all_labels = []
+    for page in range(total_pages):
+        text, kb = await _cards_view(user_id, page=page)
+        all_text.append(text)
+        labels = [button.text for row in kb.inline_keyboard for button in row]
+        all_labels.extend(labels)
 
+        card_rows = [
+            row for row in kb.inline_keyboard
+            if row and row[0].callback_data.startswith(("shop_item:", "shop_owned:"))
+        ]
+        expected_count = min(SHOP_CARDS_PAGE_SIZE, len(entries) - page * SHOP_CARDS_PAGE_SIZE)
+        assert len(card_rows) == expected_count == 5
+        assert all(len(row) == 1 for row in card_rows)  # one vertical column
+        visible_entry_ids = [int(row[0].callback_data.split(":")[1]) for row in card_rows]
+        expected_entry_ids = [entry.id for entry, _character, _owned in entries][
+            page * SHOP_CARDS_PAGE_SIZE : (page + 1) * SHOP_CARDS_PAGE_SIZE
+        ]
+        assert visible_entry_ids == expected_entry_ids
+        assert f"📖 صفحه {page + 1} از {total_pages}" in text
+        assert text.count(f"{SHOP_CARD_PRICE_APPLES} سیب") == expected_count
+
+        previous = [button for button in kb.inline_keyboard[-3] if button.text == "◀️ قبلی"]
+        following = [button for button in kb.inline_keyboard[-3] if button.text == "▶️ بعدی"]
+        assert bool(previous) == (page > 0)
+        assert bool(following) == (page + 1 < total_pages)
+        if previous:
+            assert previous[0].callback_data == f"shop_cards:{page - 1}"
+        if following:
+            assert following[0].callback_data == f"shop_cards:{page + 1}"
+        assert kb.inline_keyboard[-2][0].callback_data == f"shop_cards:{page}"
+        assert kb.inline_keyboard[-1][0].callback_data == "shop_refresh"
+
+    joined_text = "\n".join(all_text)
     for code in NEW_CODES:
         name = characters[code].name_fa
-        assert name in text
-        assert any(name in label and f"({SHOP_CARD_PRICE_APPLES} 🍎)" in label for label in labels), code
-    # ONE price for the whole list: 300 appears once per purchasable card.
-    assert f"{SHOP_CARD_PRICE_APPLES} سیب" in text
+        assert joined_text.count(name) == 1
+        assert any(name in label and f"({SHOP_CARD_PRICE_APPLES} 🍎)" in label for label in all_labels), code
+    # Across pages the unified price appears once per purchasable card.
+    assert joined_text.count(f"{SHOP_CARD_PRICE_APPLES} سیب") == len(entries)
 
 
 @pytest.mark.asyncio
@@ -391,7 +471,7 @@ async def test_new_card_detail_screen_shows_its_art_and_the_300_price(db_session
 
     text, kb, art_photo = await _shop_item_view(user_id, entry_id)
     assert character.name_fa in text
-    assert f"`{SHOP_CARD_PRICE_APPLES}` سیب" in text
+    assert f"💰 قیمت: {SHOP_CARD_PRICE_APPLES} سیب" in text
     assert art_photo is not None  # the bundled original art
     callbacks = [button.callback_data for row in kb.inline_keyboard for button in row]
     assert any(callback.startswith(f"shop_buy:{entry_id}:") for callback in callbacks)
@@ -600,7 +680,7 @@ async def test_seed_is_idempotent_and_never_touches_player_data(db_session):
     balance = await AppleWalletService.get_balance(db_session, user_id)
     row_count = len((await db_session.scalars(select(Character))).all())
 
-    # A hand-edited definition must survive a re-seed (append-only sync).
+    # Official Igris content is restored; ownership/progression must not reset.
     igris.name_fa = "ایگریس (دست‌کاری‌شده)"
     await db_session.commit()
 
@@ -609,7 +689,9 @@ async def test_seed_is_idempotent_and_never_touches_player_data(db_session):
 
     assert len((await db_session.scalars(select(Character))).all()) == row_count
     refreshed = await db_session.get(Character, igris.id)
-    assert refreshed.name_fa == "ایگریس (دست‌کاری‌شده)"  # not overwritten
+    assert refreshed.name_fa == "ایگریس"  # the newly supplied official name
+    assert refreshed.lore_fa == IGRIS_STORY
+    assert refreshed.affiliations_fa == IGRIS_AFFILIATIONS
     assert card.level == MAX_CARD_LEVEL  # player progression untouched
     assert card.character_id == igris.id
     assert await AppleWalletService.get_balance(db_session, user_id) == balance

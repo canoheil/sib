@@ -6,7 +6,8 @@ import pytest
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery
 
-from sib.handlers.shop import handle_shop_item, handle_shop_item_full, handle_shop_refresh
+from sib.core.text import escape_markdown
+from sib.handlers.shop import handle_shop_cards, handle_shop_item, handle_shop_item_full
 from sib.handlers.start import handle_apple_cards, handle_main_menu
 from sib.handlers.wiki import handle_apple_wiki, handle_wiki_char, handle_wiki_char_full, handle_wiki_page
 from sib.middleware.panel_guard import PanelGuardMiddleware
@@ -84,6 +85,8 @@ async def test_character_card_previous_next_edit_photo_in_place(db_session):
 
     previous = next(b for b in _buttons(cb.message) if "قبلی" in b.text)
     following = next(b for b in _buttons(cb.message) if "بعدی" in b.text)
+    assert previous.text == "◀️ قبلی"
+    assert following.text == "▶️ بعدی"
     assert previous.callback_data == f"wiki_char:{characters[0].id}:apple_cards"
     assert following.callback_data == f"wiki_char:{characters[2].id}:apple_cards"
 
@@ -96,7 +99,7 @@ async def test_character_card_previous_next_edit_photo_in_place(db_session):
     assert cb.message.message_id == original.message_id
     assert len(bot.live()) == 1 and not original.deleted
     assert [op[0] for op in bot.operations] == ["edit_media"] * 3
-    assert f"قهرمان {characters[1].code}" in cb.message.caption
+    assert escape_markdown(characters[1].name_fa) in cb.message.caption
 
 
 @pytest.mark.asyncio
@@ -114,9 +117,13 @@ async def test_wiki_index_previous_next_are_text_edits(db_session):
     original = _text_message(bot)
     cb = _callback(original, "wiki_page:0:apple_cards")
     await handle_wiki_page(cb, bot)
-    cb.data = next(b.callback_data for b in _buttons(cb.message) if "بعدی" in b.text)
+    following = next(b for b in _buttons(cb.message) if "بعدی" in b.text)
+    assert following.text == "▶️ بعدی"
+    cb.data = following.callback_data
     await handle_wiki_page(cb, bot)
-    cb.data = next(b.callback_data for b in _buttons(cb.message) if "قبلی" in b.text)
+    previous = next(b for b in _buttons(cb.message) if "قبلی" in b.text)
+    assert previous.text == "◀️ قبلی"
+    cb.data = previous.callback_data
     await handle_wiki_page(cb, bot)
     assert cb.message is original and not original.deleted
     assert len(bot.live()) == 1
@@ -244,25 +251,41 @@ async def test_failed_home_edit_does_not_unlock_the_original_personal_panel(db_s
 
 
 @pytest.mark.asyncio
-async def test_shop_detail_to_banner_is_photo_media_swap(db_session):
-    """Shop detail and shop banner each supply their own media to the renderer."""
+async def test_shop_detail_back_returns_to_the_same_cards_page(db_session):
+    """Card detail's Back returns one screen to the page that opened it."""
     from sib.services.shop import ShopService
 
+    for index in range(5):
+        await _shop_character(db_session, f"shop_back_before_{index}")
     character = await _shop_character(db_session, "sib_talayi")
+    for index in range(6):
+        await _shop_character(db_session, f"shop_back_after_{index}")
     entries = await ShopService.list_entries(db_session, user_id=7)
-    entry = next(e for e, c, owned in entries if c.id == character.id)
+    selected_index = next(i for i, (_entry, c, _owned) in enumerate(entries) if c.id == character.id)
+    entry = entries[selected_index][0]
+    assert selected_index // 5 == 1
     await db_session.commit()
+
     bot = RecordingBot()
     original = _photo_message(bot)
-    cb = _callback(original, f"shop_item:{entry.id}")
+    cb = _callback(original, f"shop_item:{entry.id}:1")
     await handle_shop_item(cb, bot)
-    detail_art = cb.message.photo
-    assert detail_art is not None
-    cb.data = "shop_refresh"
-    await handle_shop_refresh(cb, bot)
-    assert cb.message is original and bot.live() == [original]
-    assert not original.deleted and original.photo != detail_art
-    assert [op[0] for op in bot.operations] == ["edit_media", "edit_media"]
+    assert cb.message.photo is not None
+    back = next(b for b in _buttons(cb.message) if b.text == "↩️ بازگشت به کارت‌ها")
+    assert back.callback_data == "shop_cards:1"
+
+    cb.data = back.callback_data
+    await handle_shop_cards(cb, bot)
+    assert cb.message.kind == "text" and "📖 صفحه 2 از 3" in cb.message.text
+    assert escape_markdown(character.name_fa) in cb.message.text
+    assert any(
+        b.callback_data == f"shop_item:{entry.id}:1" for b in _buttons(cb.message)
+    )
+    assert original.deleted and bot.live() == [cb.message]
+    operation_names = [op[0] for op in bot.operations]
+    assert operation_names.count("edit_media") == 1
+    assert operation_names.count("send_text") == 1
+    assert operation_names.count("delete") == 1
 
 
 @pytest.mark.asyncio
@@ -278,20 +301,22 @@ async def test_long_shop_card_preserves_photo_and_offers_full_description(db_ses
 
     bot = RecordingBot()
     original = _photo_message(bot)
-    cb = _callback(original, f"shop_item:{entry_id}")
+    cb = _callback(original, f"shop_item:{entry_id}:1")
     await handle_shop_item(cb, bot)
     assert cb.message is original and not original.deleted
     assert cb.message.photo is not None and _units(cb.message.caption) <= CAPTION_LIMIT
     assert [op[0] for op in bot.operations] == ["edit_media"]
 
-    cb.data = next(b.callback_data for b in _buttons(cb.message) if "متن کامل" in b.text)
+    full_text = next(b for b in _buttons(cb.message) if "متن کامل" in b.text)
+    assert full_text.callback_data == f"shop_item_full:{entry_id}:1"
+    cb.data = full_text.callback_data
     await handle_shop_item_full(cb, bot)
     assert cb.message.kind == "text" and character.lore_fa in cb.message.text
     assert len(bot.live()) == 1 and original.deleted
     assert any(
         c.startswith(f"shop_buy:{entry_id}:") for c in {b.callback_data for b in _buttons(cb.message)}
     )
-    assert f"shop_item:{entry_id}" in {b.callback_data for b in _buttons(cb.message)}
+    assert f"shop_item:{entry_id}:1" in {b.callback_data for b in _buttons(cb.message)}
 
 
 @pytest.mark.asyncio

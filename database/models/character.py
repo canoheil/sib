@@ -78,6 +78,11 @@ class Character(Base, TimestampMixin):
     )
     # The character's role inside the faction («بانوی ماه», ...).
     faction_role_fa: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    # Verbatim official affiliations, including subgroups, spacing and emoji.
+    # None means this card has not received its official content yet. Keep
+    # the legacy faction/role metadata for grouping and historical data;
+    # never reconstruct an official line from those independent fields.
+    affiliations_fa: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Economy / availability.
     # DEPRECATED: the per-card price. Every card costs the unified

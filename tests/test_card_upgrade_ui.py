@@ -9,6 +9,7 @@ from aiogram.types import InlineKeyboardMarkup
 from PIL import Image
 from sqlalchemy import select
 
+from sib.core.text import escape_markdown
 from sib.database.models import AppleBattleQueueEntry, PlayerCard
 from sib.handlers import cards as cards_handlers
 from sib.handlers.cards import (
@@ -218,8 +219,8 @@ async def test_upgrade_screen_shows_everything_the_spec_requires(db_session, edi
     await _press(handle_card_upgrade_screen, user.id, f"card_upgrade:{card.id}")
     text, kb, photo = _shown(edit)
 
-    assert character.name_fa in text                      # card name
-    assert "`1` ◀️ `2`" in text                           # level N -> N+1
+    assert escape_markdown(character.name_fa) in text     # literal name after Markdown transport
+    assert "`1` ▶️ `2`" in text                           # level N -> N+1
     for label, now, after in (("💪 قدرت", 22, 32), ("⚡ سرعت", 20, 30), ("🧠 هوش", 18, 28)):
         assert f"{label}: `{now}`" in text and f"{label}: `{after}`" in text
     assert "📊 مجموع: `60`" in text and "📊 مجموع: `90`" in text
@@ -323,7 +324,7 @@ async def test_successful_upgrade_updates_the_screen_and_charges_once(db_session
     cb = await _press(handle_card_upgrade_do, user.id, f"card_upgrade_do:{card.id}:1")
     assert "سطح 2" in cb.answer.await_args.args[0]
     text, kb, _p = _shown(edit)
-    assert "`2` ◀️ `3`" in text
+    assert "`2` ▶️ `3`" in text
     assert f"card_upgrade_do:{card.id}:2" in [b.callback_data for b in _all_buttons(kb)]
     assert await _level(db_session, card.id) == 2
     assert await _holdings(db_session, user) == (400, {"apple_gold": 7, "apple_diamond": 0, "apple_obsidian": 0})

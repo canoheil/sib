@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sib.core.logging import logger, log_event, Events
+from sib.core.text import escape_markdown
 from sib.database.models import (
     SHOP_CARD_PRICE_APPLES,
     Character,
@@ -76,6 +77,7 @@ class CharacterService:
         weaknesses: Optional[List[str]] = None,
         faction_id: Optional[int] = None,
         faction_role_fa: Optional[str] = None,
+        affiliations_fa: Optional[str] = None,
         release_status: str = ReleaseStatus.DRAFT,
     ) -> Character:
         """Register a character/card.
@@ -110,6 +112,7 @@ class CharacterService:
             price=SHOP_CARD_PRICE_APPLES,
             faction_id=faction_id,
             faction_role_fa=faction_role_fa,
+            affiliations_fa=affiliations_fa,
             release_status=release_status,
             released_at=datetime.now(timezone.utc) if release_status == ReleaseStatus.RELEASED else None,
             balance_version=1,
@@ -291,53 +294,65 @@ STAT_EMOJI = {"power": "💪", "speed": "⚡", "intelligence": "🧠"}
 IMPLEMENTED_PASSIVES: Dict[str, str] = {}
 
 
+def render_affiliations_line(character: Character, faction=None) -> str:
+    """Shared affiliation label; official text is never reconstructed.
+
+    Escape only for Telegram transport, not when storing the text. Legacy
+    cards keep their faction metadata until their official text arrives.
+    """
+    affiliations = character.affiliations_fa
+    if affiliations is None:
+        affiliations = (
+            f"{faction.name_fa}{faction.symbol or ''}" if faction is not None else ""
+        )
+    return f"*وابستگی‌ها*:{escape_markdown(affiliations)}"
+
+
 def render_character_card(
     character: Character,
     *,
     show_price: bool = True,
     faction=None,
 ) -> str:
-    """Persian character presentation used by wiki/shop/profile.
+    """One wiki/shop body: name, affiliations, stats, verbatim full story.
 
-    ``faction`` is the character's lore faction (data-driven, optional):
-    when provided it is shown with the character's role inside it. There
-    is no rarity tier any more - cards are sidegrades and the faction is
-    the classify-by-lore metadata.
-
-    The price line (when ``show_price``) always prints the unified
-    ``SHOP_CARD_PRICE_APPLES``, never a legacy per-card column, so this
-    screen (also used by the shop detail page) cannot show a stale price.
+    Official cards never inherit extra faction prose, roles or sidegrade
+    flavor text from older generated definitions. Those fields remain in
+    storage and are still shown on legacy cards awaiting official content.
+    Single asterisks are bold in Telegram's configured legacy Markdown.
+    Shop price is a separate final line from the existing unified rule.
     """
-    header = f"🍎 **{character.name_fa}**"
-    if faction is not None:
-        symbol = f"{faction.symbol} " if faction.symbol else ""
-        header += f" — {symbol}**{faction.name_fa}**"
-    lines = [header, ""]
-
-    if character.faction_role_fa:
-        lines.append(f"🎖 نقش: {character.faction_role_fa}")
-    if faction is not None and faction.lore_fa:
-        lines.append(f"📜 {faction.lore_fa}")
-    if character.faction_role_fa or (faction is not None and faction.lore_fa):
-        lines.append("")
-
-    if character.lore_fa:
-        lines.append(f"_{character.lore_fa}_")
-        lines.append("")
-    lines.append(
-        f"💪 قدرت: `{character.power}` | ⚡ سرعت: `{character.speed}` | 🧠 هوش: `{character.intelligence}`"
-    )
-    passive_label = (
-        IMPLEMENTED_PASSIVES.get(character.passive_key)
-        if character.passive_key
-        else None
-    )
-    if passive_label:
-        lines.append(f"✨ توانایی منفعل: {passive_label}")
-    if character.strengths_list:
-        lines.append(f"✅ نقاط قوت: {', '.join(character.strengths_list)}")
-    if character.weaknesses_list:
-        lines.append(f"⚠️ نقاط ضعف: {', '.join(character.weaknesses_list)}")
+    official = character.affiliations_fa is not None
+    lines = [
+        f"*{escape_markdown(character.name_fa)}*",
+        "",
+        render_affiliations_line(character, faction),
+    ]
+    if not official:
+        if character.faction_role_fa:
+            lines.append(f"🎖 نقش: {escape_markdown(character.faction_role_fa)}")
+        if faction is not None and faction.lore_fa:
+            lines.append(f"📜 {escape_markdown(faction.lore_fa)}")
+    lines += [
+        "",
+        f"💪 قدرت: {character.power}",
+        f"⚡ سرعت: {character.speed}",
+        f"🧠 هوش: {character.intelligence}",
+        "",
+        f"*داستان*:{escape_markdown(character.lore_fa)}",
+    ]
+    if not official:
+        passive_label = (
+            IMPLEMENTED_PASSIVES.get(character.passive_key)
+            if character.passive_key
+            else None
+        )
+        if passive_label:
+            lines.append(f"✨ توانایی منفعل: {passive_label}")
+        if character.strengths_list:
+            lines.append(f"✅ نقاط قوت: {escape_markdown(', '.join(character.strengths_list))}")
+        if character.weaknesses_list:
+            lines.append(f"⚠️ نقاط ضعف: {escape_markdown(', '.join(character.weaknesses_list))}")
     if show_price:
-        lines.append(f"💰 قیمت: `{SHOP_CARD_PRICE_APPLES}` سیب 🍎")
+        lines += ["", f"💰 قیمت: {SHOP_CARD_PRICE_APPLES} سیب"]
     return "\n".join(lines)

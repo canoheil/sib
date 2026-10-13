@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from PIL import Image, ImageFilter
 
+from sib.core.text import escape_markdown
+
 
 async def _shop_character(db_session, code: str):
     """A released, shop-enabled character whose `code` maps to framed art.
@@ -130,12 +132,12 @@ async def test_shop_item_detail_full_screen(db_session):
     from sib.handlers.shop import _shop_item_view
 
     text, kb, art_photo = await _shop_item_view(989898, entry.id)
-    assert character.name_fa in text
+    assert escape_markdown(character.name_fa) in text
     assert "قیمت" in text
     assert "توضیح آزمایشی" in text  # wiki description travels to the detail screen
     callbacks = [b.callback_data for row in kb.inline_keyboard for b in row]
     assert any(c.startswith(f"shop_buy:{entry.id}:") for c in callbacks)  # confirm (nonce-bearing)
-    assert "shop_refresh" in callbacks  # back to shop
+    assert "shop_cards:0" in callbacks  # back to the Cards section
     assert art_photo is not None  # framed art resolved
 
     # Unknown entry degrades safely.

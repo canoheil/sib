@@ -86,8 +86,8 @@ async def test_collection_shows_only_owned_cards(db_session):
     )
     await db_session.commit()
     selected_text, _ = await CollectionService.render_collection(db_session, user.id)
-    assert "⭐ کارت اصلی: **سیبک ج**" in selected_text
-    assert "⭐ **سیبک ج**" in selected_text
+    assert "⭐ کارت اصلی: *سیبک ج*" in selected_text
+    assert "⭐ *سیبک ج*" in selected_text
 
     empty_user = await create_test_user(db_session, "کالکتور ۲")
     empty_text, empty_pages = await CollectionService.render_collection(
@@ -145,4 +145,4 @@ async def test_detail_names_a_different_current_main_card(db_session):
         db_session, user.id, viewed_card.id
     )
     assert detail is not None
-    assert "کارت اصلی فعلی شما: **سیبکِ اصلی**" in detail
+    assert "کارت اصلی فعلی شما: *سیبکِ اصلی*" in detail

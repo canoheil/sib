@@ -261,6 +261,16 @@ def test_wiki_back_is_context_aware():
     assert "کارت‌های من" in backs[0].text
 
 
+def test_card_pagination_arrows_match_persian_navigation_direction():
+    previous_kb = get_cards_keyboard(page=1, total_pages=2)
+    previous = next(b for b in _all_buttons(previous_kb) if "قبلی" in b.text)
+    assert previous.text == "◀️ قبلی"
+
+    next_kb = get_cards_keyboard(page=0, total_pages=2)
+    following = next(b for b in _all_buttons(next_kb) if "بعدی" in b.text)
+    assert following.text == "▶️ بعدی"
+
+
 # ---------------------------------------------------------------------------
 # Context-aware main menu
 # ---------------------------------------------------------------------------

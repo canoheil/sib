@@ -11,6 +11,7 @@ from typing import List, Optional, Tuple
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sib.core.text import escape_markdown
 from sib.database.models import Character, Faction, PlayerCard, ReleaseStatus
 from sib.services.card_progression import (
     CARD_ATTRIBUTES,
@@ -18,7 +19,7 @@ from sib.services.card_progression import (
     CardAttributes,
     card_attributes,
 )
-from sib.services.characters import render_character_card
+from sib.services.characters import render_affiliations_line, render_character_card
 from sib.services.factions import FactionService
 from sib.services.player_cards import PlayerCardService
 
@@ -58,11 +59,11 @@ class WikiService:
         if character.release_status != ReleaseStatus.RELEASED:
             return None
         faction = await FactionService.get_for_character(session, character)
-        return render_character_card(character, faction=faction)
+        return render_character_card(character, show_price=False, faction=faction)
 
     @staticmethod
     def wiki_index_entry(character: Character, index: int) -> str:
-        return f"{index}. 🍎 **{character.name_fa}** — `{character.code}`"
+        return f"{index}. 🍎 *{escape_markdown(character.name_fa)}* — `{character.code}`"
 
 
 class CollectionService:
@@ -118,7 +119,7 @@ class CollectionService:
 
         lines = ["🎴 **کارت‌های من**\n"]
         main_summary = (
-            f"⭐ کارت اصلی: **{main_name}**"
+            f"⭐ کارت اصلی: *{escape_markdown(main_name)}*"
             if main_card is not None
             else "⭐ کارت اصلی: انتخاب نشده"
         )
@@ -143,7 +144,7 @@ class CollectionService:
                 if stats
                 else "—"
             )
-            lines.append(f"{star}**{name}** — سطح `{card.level}` | {stats_text}")
+            lines.append(f"{star}*{escape_markdown(name)}* — سطح `{card.level}` | {stats_text}")
 
         lines.append("")
         lines.append("برای دیدن کارت و ارتقای آن، یکی از کارت‌ها را انتخاب کن 👇")
@@ -173,7 +174,7 @@ class CollectionService:
         faction = await FactionService.get_for_character(session, character)
         stats = card_attributes(card, character)
         lines = [
-            f"🎴 **{character.name_fa}** — سطح `{card.level}` از `{MAX_CARD_LEVEL}`",
+            f"🎴 *{escape_markdown(character.name_fa)}* — سطح `{card.level}` از `{MAX_CARD_LEVEL}`",
             "",
             *attribute_lines(stats),
             f"📊 مجموع ویژگی‌ها: `{stats.total}`",
@@ -187,12 +188,11 @@ class CollectionService:
         else:
             main_character = await session.get(Character, main_card.character_id)
             main_name = main_character.name_fa if main_character else "نامشخص"
-            lines.extend(["", f"⭐ کارت اصلی فعلی شما: **{main_name}**"])
-        if faction is not None:
-            lines.append("")
-            lines.append(f"🎖 **{faction.name_fa}** {faction.symbol or ''}".rstrip())
+            lines.extend(["", f"⭐ کارت اصلی فعلی شما: *{escape_markdown(main_name)}*"])
+        lines.extend(["", render_affiliations_line(character, faction)])
+        if character.affiliations_fa is None and faction is not None:
             if character.faction_role_fa:
-                lines.append(f"نقش: {character.faction_role_fa}")
+                lines.append(f"نقش: {escape_markdown(character.faction_role_fa)}")
         lines += [
             "",
             "برای دیدن داستان و جزئیات شخصیت، به ویکی شخصیت‌ها سر بزن.",

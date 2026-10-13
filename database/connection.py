@@ -168,24 +168,21 @@ class CharacterSeedError(RuntimeError):
 
 
 async def seed_characters(session) -> int:
-    """Sync the character roster from the data layer (append-only, idempotent).
+    """Sync the roster and explicitly supplied official content, idempotently.
 
-    Characters are data, not code: ``data/characters_seed.json`` is the
-    source of truth for the roster and can be edited without code changes.
+    ``data/characters_seed.json`` is the only shipped definition source.
+    Missing cards are created. Existing entries WITHOUT ``affiliations_fa``
+    keep the append-only behavior: their definitions are not overwritten.
+    Entries WITH that key have received official content; only their name,
+    affiliations, base stats and story are synced, verbatim. Only changed
+    fields are written, keeping reruns and balance snapshots idempotent.
 
-    Semantics (all three are required so new cards reach installations that
-    already run):
-
-    * a character whose ``code`` already exists is left COMPLETELY alone -
-      no stat rewrite, no release-status reset, no ownership/level touch;
-    * a character missing from the database is created (this is how new
-      cards ship: the file is append-only, so existing installs pick them
-      up on the next start);
-    * re-running is a no-op once every entry exists (no duplicates).
-
-    A failed entry is NOT skipped silently: every failure is logged with its
-    reason and the whole call raises :class:`CharacterSeedError` afterwards,
-    so startup fails loudly instead of running with a card missing.
+    An explicit ``sync_faction: true`` additionally syncs the primary
+    faction link for that entry, using its declared existing faction code.
+    Other faction links retain their old behavior. Availability, artwork,
+    passive mechanics, legacy roles and all player/economy state are
+    preserved. All writes belong to the caller's transaction. Any invalid
+    entry raises CharacterSeedError so startup cannot commit a partial sync.
     """
     from pathlib import Path
     import json as _json
@@ -209,12 +206,65 @@ async def seed_characters(session) -> int:
     existing_codes = set((await session.scalars(select(Character.code))).all())
 
     created = 0
+    updated = 0
     failures: list[tuple[str, str]] = []
+    official_keys = (
+        "name_fa", "affiliations_fa", "power", "speed", "intelligence", "lore_fa"
+    )
     for entry in entries:
         code = entry.get("code") or "<missing code>"
-        if code in existing_codes:
-            continue  # Existing definition: never modified by the seed.
         try:
+            official_fields = None
+            sync_faction = entry.get("sync_faction", False)
+            if type(sync_faction) is not bool:
+                raise CharacterValidationError("sync_faction must be an explicit boolean.")
+            if sync_faction and "affiliations_fa" not in entry:
+                raise CharacterValidationError("Faction sync requires official card content.")
+            if "affiliations_fa" in entry:
+                missing = [key for key in official_keys if key not in entry]
+                if missing:
+                    raise CharacterValidationError(
+                        f"Official content is incomplete: {', '.join(missing)}"
+                    )
+                for key in ("name_fa", "affiliations_fa", "lore_fa"):
+                    if not isinstance(entry[key], str):
+                        raise CharacterValidationError(
+                            f"Official {key} must be verbatim text, not null or another type."
+                        )
+                for key in ("power", "speed", "intelligence"):
+                    if type(entry[key]) is not int:
+                        raise CharacterValidationError(f"Official {key} must be an integer.")
+                await CharacterService.validate_base_budget(
+                    session, entry["power"], entry["speed"], entry["intelligence"]
+                )
+                official_fields = {key: entry[key] for key in official_keys}
+                if sync_faction:
+                    if "faction" not in entry:
+                        raise CharacterValidationError("Faction sync requires an explicit faction key.")
+                    faction_code = entry["faction"]
+                    if faction_code is not None and not isinstance(faction_code, str):
+                        raise CharacterValidationError("The official faction code must be text or null.")
+                    official_faction = await FactionService.get_by_code(session, faction_code)
+                    if faction_code is not None and official_faction is None:
+                        raise CharacterValidationError(f"Unknown official faction: {faction_code}")
+                    official_fields["faction_id"] = (
+                        official_faction.id if official_faction is not None else None
+                    )
+
+            if code in existing_codes:
+                if official_fields is not None:
+                    character = await CharacterService.get_by_code(session, code)
+                    changed = {
+                        key: value for key, value in official_fields.items()
+                        if getattr(character, key) != value
+                    }
+                    if changed:
+                        await CharacterService.update(
+                            session, character.id, note="ثبت اطلاعات رسمی کارت", **changed
+                        )
+                        updated += 1
+                continue  # Unmarked definitions retain append-only semantics.
+
             faction = await FactionService.get_by_code(session, entry.get("faction"))
             character = await CharacterService.create(
                 session,
@@ -235,6 +285,7 @@ async def seed_characters(session) -> int:
                 # shop rule (services.shop.ShopService.card_price).
                 faction_id=faction.id if faction else None,
                 faction_role_fa=entry.get("faction_role_fa"),
+                affiliations_fa=entry.get("affiliations_fa"),
                 release_status=entry.get("release_status", ReleaseStatus.DRAFT),
             )
             character.shop_enabled = bool(entry.get("shop_enabled", True))
@@ -257,6 +308,8 @@ async def seed_characters(session) -> int:
 
     if created:
         logger.info(f"Seeded {created} characters from data layer.")
+    if updated:
+        logger.info(f"Synced official content for {updated} character(s).")
     return created
 
 

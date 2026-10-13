@@ -231,8 +231,9 @@ async def test_faction_does_not_touch_stats_or_balance(db_session):
 
 
 @pytest.mark.asyncio
-async def test_owned_card_detail_shows_faction_lore(db_session):
-    """Card detail surfaces faction metadata without touching stats."""
+@pytest.mark.parametrize("official", [True, False])
+async def test_owned_card_detail_shows_faction_lore(db_session, official):
+    """Official affiliations win; unmarked cards retain legacy role display."""
     await seed_characters(db_session)
     await db_session.commit()
     user = await create_test_user(db_session, "ویکی‌کارت")
@@ -242,14 +243,26 @@ async def test_owned_card_detail_shows_faction_lore(db_session):
     from sib.services.player_cards import PlayerCardService
     from sib.services.wiki import CollectionService
 
+    if not official:
+        # Emulate the old installation in this isolated fixture only.
+        character.affiliations_fa = None
     card = await PlayerCardService.acquire(db_session, user.id, character.id)
     await db_session.commit()
 
     detail = await CollectionService.render_card_detail(db_session, user.id, card.id)
-    assert "ملکه ماه" in detail          # role
-    assert "فرزندان ماه" in detail      # faction name
+    assert character.faction_role_fa == "ملکه ماه، رهبر فرزندان ماه"
+    if official:
+        assert character.affiliations_fa == "فرزندان ماه🌙"
+        assert f"*وابستگی‌ها*:{character.affiliations_fa}" in detail
+        assert "نقش:" not in detail  # Do not append the old, unsupplied role.
+    else:
+        assert "ملکه ماه" in detail  # Preserve the original legacy coverage.
+    assert "فرزندان ماه" in detail
+    assert character.lore_fa not in detail  # This interface has no story.
     # Stats stay untouched by faction metadata.
     assert f"💪 قدرت: `{character.power}`" in detail
+    assert f"⚡ سرعت: `{character.speed}`" in detail
+    assert f"🧠 هوش: `{character.intelligence}`" in detail
 
 
 def test_gameplay_modules_never_read_faction_metadata():
