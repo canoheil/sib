@@ -22,27 +22,40 @@ from .imaging import compose_announcement_image, compose_join_image, compose_res
 from .imaging.compose import load_card_image_bytes
 
 
+async def _breaker_failure(group_id) -> None:
+    try:
+        if group_id is not None:
+            await record_send_failure(group_id)
+    except Exception:
+        logger.exception("inv2 circuit breaker failure recording failed")
+
+
+async def _breaker_success(group_id) -> None:
+    try:
+        if group_id is not None:
+            await record_send_success(group_id)
+    except Exception:
+        logger.exception("inv2 circuit breaker success recording failed")
+
+
 async def _telegram(group_id, method, **kwargs):
     """One metered Telegram operation; never raise into gameplay/maintenance."""
     try:
         result = await method(**kwargs)
     except (TelegramBadRequest, TelegramForbiddenError):
         logger.debug("inv2 Telegram send rejected group=%s", group_id, exc_info=True)
-        try:
-            if group_id is not None:
-                await record_send_failure(group_id)
-        except Exception:
-            logger.exception("inv2 circuit breaker failure recording failed")
+        await _breaker_failure(group_id)
         return None
     except Exception:
         logger.exception("inv2 Telegram send failed group=%s", group_id)
         return None
-    try:
-        if group_id is not None:
-            await record_send_success(group_id)
-    except Exception:
-        logger.exception("inv2 circuit breaker success recording failed")
+    await _breaker_success(group_id)
     return result
+
+
+def _is_not_modified(error: TelegramBadRequest) -> bool:
+    """Telegram refuses edits whose caption is byte-identical."""
+    return "not modified" in (error.message or "").lower()
 
 
 def _caption(text: str) -> str:
@@ -77,6 +90,106 @@ def build_join_caption(narrative_text: str, damage: int, *, is_crit: bool, is_ki
     """
     emoji = "🏆" if is_kill else "💥" if is_crit else "🔥"
     return _fit_caption(narrative_text, f"\n\n{emoji} اسیب وارده به دشمن: {fa_digits(damage)}")
+
+
+async def _edit_announcement_caption(bot, group_id, chat_id, message_id, caption) -> None:
+    """One metered announcement caption edit.
+
+    "Message is not modified" is an expected no-op when joins coalesce into an
+    identical caption; it is swallowed at DEBUG and is NOT a breaker failure.
+    Any other failure logs WARNING and records exactly one breaker failure.
+    Never raises into the join flow.
+    """
+    try:
+        await bot.edit_message_caption(chat_id=chat_id, message_id=message_id, caption=caption)
+    except TelegramBadRequest as exc:
+        if _is_not_modified(exc):
+            logger.debug("inv2 HP edit unchanged, skipping group=%s message=%s", group_id, message_id)
+            return
+        logger.warning("inv2 HP edit rejected group=%s message=%s: %s", group_id, message_id, exc.message)
+        await _breaker_failure(group_id)
+        return
+    except Exception:
+        logger.warning("inv2 HP edit failed group=%s message=%s", group_id, message_id, exc_info=True)
+        await _breaker_failure(group_id)
+        return
+    await _breaker_success(group_id)
+
+
+async def _apply_hp_edit(bot, invasion_id: int, *, allow_victory: bool = False) -> None:
+    """Rebuild the announcement caption from the latest committed HP and edit once.
+
+    Only a live (ACTIVE) battle gets a debounced HP edit: once the battle is
+    terminal, the finalize step owns the caption. ``allow_victory`` is used by
+    the synchronous killing-blow edit, which must show 0 / total HP before
+    finalize rewrites the caption with the victory narrative.
+    """
+    if bot is None:
+        return
+    try:
+        async with get_session() as session:
+            inv = await session.get(Inv2Invasion, invasion_id)
+            if inv is None or inv.message_id is None:
+                return
+            if inv.status == InvasionStatus.PENDING.value:
+                return  # announcement was never sent
+            if inv.status == InvasionStatus.DEFEAT.value:
+                return  # defeat narrative owns the caption
+            if inv.status == InvasionStatus.VICTORY.value and not allow_victory:
+                return  # victory narrative owns the caption (no edit after finalize)
+            narrative_text = inv.announcement_narrative
+            if narrative_text is None:
+                # Legacy row announced before the narrative column existed:
+                # best-effort re-render (pool history may have advanced).
+                region = await session.get(Inv2Region, inv.region_code)
+                narrative_text = narrative.render_announcement(
+                    username="نگهبانان", card_name="کارت‌های اصلی",
+                    region_name=region.name_fa if region else "نامشخص",
+                    enemy_name=inv.enemy_name_fa, rng=random.Random(inv.id), invasion_id=inv.id)
+            caption = build_announcement_caption(narrative_text, inv.enemy_hp_remaining, inv.enemy_hp)
+            group_id = inv.group_id
+            chat_id = inv.message_chat_id or group_id
+            message_id = inv.message_id
+    except Exception:
+        logger.exception("inv2 HP edit state read failed invasion=%s", invasion_id)
+        return
+    await _edit_announcement_caption(bot, group_id, chat_id, message_id, caption)
+
+
+# Per-invasion coalescing of announcement HP edits: rapid joins within the
+# debounce window share a single delayed edit that reads the latest HP.
+_pending_edits: dict[int, asyncio.Task] = {}
+HP_EDIT_DEBOUNCE_SECONDS = 1.5
+
+
+def schedule_hp_edit(bot, invasion_id: int) -> None:
+    """Schedule one coalesced HP edit per invasion (no-op if one is pending)."""
+    existing = _pending_edits.get(invasion_id)
+    if existing is not None and not existing.done():
+        return
+    _pending_edits[invasion_id] = asyncio.create_task(_debounced_hp_edit(bot, invasion_id))
+
+
+async def _debounced_hp_edit(bot, invasion_id: int) -> None:
+    try:
+        await asyncio.sleep(HP_EDIT_DEBOUNCE_SECONDS)
+        await _apply_hp_edit(bot, invasion_id)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("inv2 debounced HP edit failed invasion=%s", invasion_id)
+    finally:
+        _pending_edits.pop(invasion_id, None)
+
+
+async def cancel_pending_hp_edits() -> None:
+    """Cancel in-flight debounced HP edits; called from the shutdown hook."""
+    tasks = list(_pending_edits.values())
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    _pending_edits.clear()
 
 
 class InvasionPresentation:
@@ -162,6 +275,16 @@ class InvasionPresentation:
                 await _telegram(inv.group_id, bot.send_photo, chat_id=inv.group_id,
                     photo=FSInputFile(path), caption=caption,
                     reply_to_message_id=inv.message_id, parse_mode=None)
+                # Live HP view: refresh the announcement caption. The attack
+                # is committed, so this never blocks or reopens the join flow.
+                if inv.message_id is None:
+                    return
+                if inv.enemy_hp_remaining <= 0:
+                    # Killing blow: show 0 / total HP immediately, before the
+                    # victory flow rewrites the caption.
+                    await _apply_hp_edit(bot, inv.id, allow_victory=True)
+                else:
+                    schedule_hp_edit(bot, inv.id)
         except Exception:
             logger.exception("inv2 join presentation failed invasion=%s user=%s", invasion_id, user_id)
 

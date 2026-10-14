@@ -70,6 +70,8 @@ async def db(monkeypatch):
         yield factory, session
     finally:
         column.type = original_type
+        # Phase 8D: never leave a debounced HP-edit task against a closed DB.
+        await presentation.cancel_pending_hp_edits()
         await engine.dispose()
 
 
