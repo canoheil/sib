@@ -37,9 +37,8 @@ def _private(event) -> bool:
     return getattr(chat_type, "value", chat_type) == "private"
 
 
-async def _run(admin_id: int, command: str, args: list[str]) -> str:
+async def _execute(admin_id: int, command: str, args: list[str], func, min_args: int, max_args: int) -> str:
     """Audit with the action in the same transaction; never expose tracebacks."""
-    func, min_args, max_args = COMMANDS[command]
     try:
         async with get_session() as session:
             session.add(AdminLog(admin_id=admin_id, action=command,
@@ -53,6 +52,10 @@ async def _run(admin_id: int, command: str, args: list[str]) -> str:
     except Exception:
         logger.exception("inv2 admin command failed: %s", command)
         return "⚠️ عملیات انجام نشد؛ بعداً دوباره تلاش کنید."
+
+
+async def _run(admin_id: int, command: str, args: list[str]) -> str:
+    return await _execute(admin_id, command, args, *COMMANDS[command])
 
 
 @router.message(Command(*COMMANDS.keys()))
