@@ -101,9 +101,16 @@ def render_finisher(
 def render_victory(
     *, username: str, card_name: str, region_name: str,
     enemy_name: str, rng: random.Random, invasion_id: int | None = None,
+    participant_count: int | None = None,
 ) -> str:
-    return _render(_pool.VICTORY, key=_key("victory", region_name, enemy_name, invasion_id=invasion_id), rng=rng,
-                   user=username, card=card_name, region=region_name, enemy_name=enemy_name)
+    with_n = [text for text in _pool.VICTORY if "{n}" in text]
+    without_n = [text for text in _pool.VICTORY if "{n}" not in text]
+    values = dict(user=username, card=card_name, region=region_name, enemy_name=enemy_name)
+    if participant_count is not None:
+        values["n"] = _fa(participant_count)
+    return _render(with_n if participant_count is not None else without_n,
+                   key=_key("victory", region_name, enemy_name, invasion_id=invasion_id),
+                   rng=rng, **values)
 
 
 def render_defeat(

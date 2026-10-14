@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.types import FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from sib.core.logging import logger
 from sib.database.connection import get_session
@@ -144,8 +144,14 @@ class InvasionPresentation:
                 if region is None or inv.message_id is None:
                     return
                 render = narrative.render_victory if inv.status == InvasionStatus.VICTORY.value else narrative.render_defeat
+                narrative_context = {"invasion_id": inv.id}
+                if inv.status == InvasionStatus.VICTORY.value:
+                    # Count stored defenders once; rewards can contain multiple rows per user.
+                    narrative_context["participant_count"] = await session.scalar(
+                        select(func.count(Inv2Attack.id)).where(Inv2Attack.invasion_id == inv.id))
                 final = _caption(render(username="نگهبانان", card_name="کارت‌های اصلی",
-                    region_name=region.name_fa, enemy_name=inv.enemy_name_fa, rng=random.Random(inv.id), invasion_id=inv.id))
+                    region_name=region.name_fa, enemy_name=inv.enemy_name_fa, rng=random.Random(inv.id),
+                    **narrative_context))
                 # Telegram caption edit and photo send are separate metered calls.
                 await _telegram(inv.group_id, bot.edit_message_caption,
                     chat_id=inv.message_chat_id or inv.group_id, message_id=inv.message_id,
