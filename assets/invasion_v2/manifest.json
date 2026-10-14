@@ -1,0 +1,91 @@
+{
+  "version": "1",
+  "generated_at": "2026-10-14T11:22:23.385150Z",
+  "generator": "manual-ai",
+  "assets": [
+    {
+      "path": "backgrounds/brute.jpg",
+      "width": 1280,
+      "height": 720,
+      "sha256": "9436f541317c97b56557adbfd89b4baf56f184c9814857d8877cb1804b3ec35f"
+    },
+    {
+      "path": "backgrounds/commander.jpg",
+      "width": 1280,
+      "height": 720,
+      "sha256": "f5ed2cef58e0eb0970d7cf6dd317cc1db76b9087fdf3f9e0f432e4e81db72a1a"
+    },
+    {
+      "path": "backgrounds/king.jpg",
+      "width": 1280,
+      "height": 720,
+      "sha256": "2ca256e1ef86bd8f77fbed71701a359a2476f2e8b6fd2af8782d1a2716a3fb87"
+    },
+    {
+      "path": "backgrounds/shadow.jpg",
+      "width": 1280,
+      "height": 720,
+      "sha256": "e3769f32104b19de8b0a6ac009000f11c9a541a7ff70b5606e7961e40622cffa"
+    },
+    {
+      "path": "backgrounds/soldier.jpg",
+      "width": 1280,
+      "height": 720,
+      "sha256": "6fd234aa99c5e66978ab56d7d8dba649b1aad4ba8c21b6c2b7c4c054931bc7f5"
+    },
+    {
+      "path": "layouts/announcement.jpg",
+      "width": 1280,
+      "height": 720,
+      "sha256": "921ef27e311cedc27efe915e0172e014c7d21708fa22c309c19e17bfdb549107"
+    },
+    {
+      "path": "layouts/defeat.jpg",
+      "width": 1280,
+      "height": 720,
+      "sha256": "224edd4b0e25a560e79fd0063e8c2dc7049f87e9d3b55943aaa1c57d5bc89a18"
+    },
+    {
+      "path": "layouts/join.jpg",
+      "width": 1280,
+      "height": 720,
+      "sha256": "cbb1d23e508f96294633daa2b0abad332362107a852429ad8303a7f4a9be3fa3"
+    },
+    {
+      "path": "layouts/victory.jpg",
+      "width": 1280,
+      "height": 720,
+      "sha256": "c46be057cf9e1251c5ebbfaed777313800d770bfc9584dc2b4ed3476051d1681"
+    },
+    {
+      "path": "silhouettes/brute.png",
+      "width": 400,
+      "height": 560,
+      "sha256": "c65e65e276a98377956b4e35e8df04d2f03deb34bed136c0f44630dc2fc67bb0"
+    },
+    {
+      "path": "silhouettes/commander.png",
+      "width": 400,
+      "height": 560,
+      "sha256": "fdecf92793f33c3256f9fa04d73a0a870395b9d61ecf4b9d1a024eb0ac7b0659"
+    },
+    {
+      "path": "silhouettes/king.png",
+      "width": 400,
+      "height": 560,
+      "sha256": "4672519bebdcb62e68b6394f00f2b624330f68eb14e2792ee8e06b34b2d347fb"
+    },
+    {
+      "path": "silhouettes/shadow.png",
+      "width": 400,
+      "height": 560,
+      "sha256": "e34af4d6c8cd101fb68f86ccce470054a520bc1769f5b6b90b4f7fcc8fed96f8"
+    },
+    {
+      "path": "silhouettes/soldier.png",
+      "width": 400,
+      "height": 560,
+      "sha256": "a3dcf95f258765495ba524c29f08a2c2f6fe00f2d85828496879be7ffee22b04"
+    }
+  ]
+}
