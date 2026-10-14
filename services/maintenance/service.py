@@ -1167,7 +1167,21 @@ class MaintenanceService:
             try:
                 from sib.services.invasion_v2.scheduler import InvasionScheduler
 
-                await InvasionScheduler.tick()
+                terminal = await InvasionScheduler.tick()
+                # Presentation never runs in the scheduler or on startup recovery.
+                # Terminal IDs come only from a newly committed maintenance tick.
+                if cls._bot is not None:
+                    from sib.services.invasion_v2.presentation import InvasionPresentation
+                    from sib.services.invasion_v2.rewards_service import settle_outcome
+                    presenter = InvasionPresentation()
+                    for inv_id, status in (terminal or []):
+                        try:
+                            async with get_session() as session:
+                                await settle_outcome(session, inv_id, status)
+                            await presenter.finalize(cls._bot, inv_id)
+                        except Exception:
+                            logger.exception("inv2 terminal settlement failed id=%s", inv_id)
+                    await presenter.publish_pending(cls._bot)
             except Exception:
                 logger.exception("Invasion v2 maintenance cycle failed")
 

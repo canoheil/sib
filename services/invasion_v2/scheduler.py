@@ -58,7 +58,7 @@ class InvasionScheduler:
         return rng.choice(regions)
 
     @classmethod
-    async def _finalize_due(cls, session: AsyncSession, now: datetime) -> None:
+    async def _finalize_due(cls, session: AsyncSession, now: datetime) -> list[tuple[int, str]]:
         due = list((await session.scalars(
             select(Inv2Invasion).where(
                 Inv2Invasion.status.in_((InvasionStatus.PENDING.value, InvasionStatus.ACTIVE.value)),
@@ -66,6 +66,7 @@ class InvasionScheduler:
                 Inv2Invasion.ends_at <= now,
             ).order_by(Inv2Invasion.id).with_for_update()
         )).all())
+        transitions = []
         for invasion in due:
             if invasion.status == InvasionStatus.PENDING.value:
                 invasion.status = InvasionStatus.EXPIRED.value
@@ -80,7 +81,10 @@ class InvasionScheduler:
                 if region is not None:
                     region.is_lost_to_enemy = True
             invasion.finalized_at = now
-            # No rewards here. Settlement belongs to a later phase.
+            # No grants in the DB-only scheduler. Caller settles after commit.
+            if invasion.status in (InvasionStatus.VICTORY.value, InvasionStatus.DEFEAT.value):
+                transitions.append((invasion.id, invasion.status))
+        return transitions
 
     @classmethod
     async def _deactivate_stale_mutes(cls, session: AsyncSession, now: datetime) -> None:
@@ -195,7 +199,7 @@ class InvasionScheduler:
             return  # at most one new invasion per global interval
 
     @classmethod
-    async def tick(cls, *, now: datetime | None = None, rng: random.Random | None = None) -> None:
+    async def tick(cls, *, now: datetime | None = None, rng: random.Random | None = None) -> list[tuple[int, str]] | None:
         """Finalize due rows, then schedule at most one eligible group.
 
         False/missing flag means *no session and no writes*, even when this
@@ -205,9 +209,10 @@ class InvasionScheduler:
             return
         current = _utc(now or datetime.now(timezone.utc))
         async with get_session() as session:
-            await cls._finalize_due(session, current)
+            terminal = await cls._finalize_due(session, current)
             await cls._deactivate_stale_mutes(session, current)
             await cls._spawn_if_due(session, current, rng or random.Random())
+        return terminal
 
     @classmethod
     async def recover(cls, *, now: datetime | None = None) -> int:
