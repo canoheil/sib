@@ -1,6 +1,6 @@
 {
-  "version": "1",
-  "generated_at": "2026-10-14T11:22:23.385150Z",
+  "version": "2",
+  "generated_at": "2026-10-14T11:47:02.905347Z",
   "generator": "manual-ai",
   "assets": [
     {
@@ -37,25 +37,25 @@
       "path": "layouts/announcement.jpg",
       "width": 1280,
       "height": 720,
-      "sha256": "921ef27e311cedc27efe915e0172e014c7d21708fa22c309c19e17bfdb549107"
+      "sha256": "990f68cc047a4730a481952be39c98c46eefe0d58a5ec2d8c3b39a9f2de91b30"
     },
     {
       "path": "layouts/defeat.jpg",
       "width": 1280,
       "height": 720,
-      "sha256": "224edd4b0e25a560e79fd0063e8c2dc7049f87e9d3b55943aaa1c57d5bc89a18"
+      "sha256": "74fd14f272b3b8691bfac29728d8a61e238a0a31f8761cda29902d8fb4139fd6"
     },
     {
       "path": "layouts/join.jpg",
       "width": 1280,
       "height": 720,
-      "sha256": "cbb1d23e508f96294633daa2b0abad332362107a852429ad8303a7f4a9be3fa3"
+      "sha256": "55532566ddd9a53858fad36baf03e20b3bbf8b8fc20183a354a5f64e90db76c4"
     },
     {
       "path": "layouts/victory.jpg",
       "width": 1280,
       "height": 720,
-      "sha256": "c46be057cf9e1251c5ebbfaed777313800d770bfc9584dc2b4ed3476051d1681"
+      "sha256": "9dcf85feb77b84f2e1a1961710a0f64133e212ce29ba8cd7c7ba94575a54dec4"
     },
     {
       "path": "silhouettes/brute.png",
