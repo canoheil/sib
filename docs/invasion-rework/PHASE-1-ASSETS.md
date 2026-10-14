@@ -45,3 +45,34 @@ Inspected `assets/invasion/moon_descendant_invasion.jpg`, `assets/invasion/manif
 | Reward-only accent (suggested) | `#C7A65A` | Small warm-gold glint for apples/rewards; not the primary moonlit palette |
 
 Avoid neon saturation, cute comedy, generic humanoid monsters, graphic horror, English lettering, and large parchment/gold frames that would conflict with the dark invasion family. Keep motifs of leaves, stems, old stone, silver filigree and distant moons; use richer accent only where it distinguishes enemy threat or rewards.
+
+## Phase 5 implementation status (16:9 supersedes the square plan above)
+
+The earlier 1024×1024 specifications remain the Phase 1 proposal, **not** the
+runtime format. Phase 5's requested canvas is **1280×720**. The five enemy
+backgrounds and their distinct apple-shaped silhouettes are generated offline
+in `services/invasion_v2/imaging/backgrounds.py`, rather than requiring the
+proposed ten externally painted source assets. They are intentionally stylized
+procedural silhouettes; hand-painted source plates remain pending and would
+need separate approval. The join uses the existing local framed card art at
+`assets/characters/{character.code}.jpg`, resolved through
+`services/character_art.py::artwork_path`. A Telegram-only `characters.artwork`
+file-ID override is not a local image and cannot be composited without a
+network download; the renderer reports an absent local card file rather than
+silently substituting a different card. Admins without Main Cards receive a
+labeled placeholder only in private preview.
+
+Persian drawing uses the repository's tracked
+`.agents/skills/persian-writing/assets/fonts/Vazirmatn-Bold.ttf`; Pillow
+libraqm is used if available, otherwise `arabic-reshaper` and `python-bidi`
+shape the text locally. Missing dependencies/fonts raise an explicit error.
+The original framed artwork may have English lettering baked into the JPEG;
+Phase 5 does not edit that source. The bottom image overlay is brief and the
+cinematic full narrative remains in the Telegram caption.
+
+- Runtime on-disk cache: `~/.cache/inv2/<sha256>.jpg` (30-day prune at bot startup).
+- Committed four examples: `docs/invasion-rework/samples/soldier-announcement.jpg`,
+  `shadow-join.jpg`, `king-victory.jpg`, and `brute-defeat.jpg` in that directory.
+- Victory/defeat result art, announcement art, and join compositing are now
+  generated. Nonterminal expiry imagery and hand-painted enemy plates are
+  still pending; expiry does not imply defeat.
