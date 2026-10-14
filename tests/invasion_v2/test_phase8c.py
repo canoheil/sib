@@ -276,9 +276,11 @@ async def test_join_passes_invasion_id_without_changing_damage_flow(db, monkeypa
 
 
 # Phase 8B pool fingerprints: existing prose must remain byte-for-byte intact.
-# ANNOUNCEMENT was refreshed once, in the Persian copy audit, for the compound
-# spelling «چشم‌به‌راه» (was «چشم به راه»); every other pool is still the original.
-ORIGINAL_POOLS = {'ANNOUNCEMENT': (12, '8c057889fcb4c0ac8ff6a0c74d6d44d3f85fbf3bee454a3366e30d992cd48ed7'), 'JOIN_NORMAL': (22, '1ff97177b187cdbe5923cec9b73b4fdc9d966f3826cdc0dcb8b9aafe7dded901'), 'JOIN_CRIT': (16, '8c14dda3f60db2c2ae35c1755232964bb201e5cd12b6401f54c0d77d72608464'), 'JOIN_KILL': (10, '3fa197a29837874239167f254cd3ff37f024d5306c628005c1ea2e976d1ee653'), 'VICTORY': (12, '41cb3d57b7d062e8dca38436fcb95d86e6793c561d67dd3272bbf6719d07484a'), 'DEFEAT': (12, '709e4316427f80041f1a5e3d09287a5879cb915ae306ced6614b6e4f6d5d521b'), 'EXPIRED': (8, 'df0a55a077d09f23b0a083e29fcfbd98e186549a6f2d3355f9b5dab4073456f6')}
+# Refreshed twice by the Persian copy audit: phase 1 (ANNOUNCEMENT, «چشم‌به‌راه»)
+# and phase 4 (every pool, grammar of the plural defender subjects, «سردار
+# شیاسیب», «۱۲۳ ضربه», and the «می‌گردد» register) — the wording changed on
+# purpose, so these hashes are the new contract, not a regression.
+ORIGINAL_POOLS = {'ANNOUNCEMENT': (12, '0d90ff8560d578e9ba4d65a074228ddd363f7e8b5023c5b18d34ad3b4a59efa7'), 'JOIN_NORMAL': (22, 'b4fe62e069057b4e2d8972c2a651374fcc21bbe9905eed983f84e8c4ff592537'), 'JOIN_CRIT': (16, '9913c46e17998332aa3d27e7f927a55e6e37a2913f7e64a3e88a35f36585928f'), 'JOIN_KILL': (10, 'cbe6b1801a929c5586c804e747541d442a6b4a6494d72d3eb877aa35049e37b3'), 'VICTORY': (12, '4be138d58cf41098afd69248b4d7aaca26991306aa0f9a751648767034bb1055'), 'DEFEAT': (12, 'ff92a50dadd7f9e0ed5047de2e26f608ce8175f39024fc4bad970da34b2ad6e3'), 'EXPIRED': (8, '7a4dd2cc053d1d28dcf69b906da2b2b7da7313d3088b3303c66708ddf3913185')}
 
 @pytest.mark.parametrize("name", ORIGINAL_POOLS)
 def test_existing_narrative_variants_unchanged(name):

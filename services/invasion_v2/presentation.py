@@ -402,7 +402,7 @@ class InvasionPresentation:
                     # Count stored defenders once; rewards can contain multiple rows per user.
                     narrative_context["participant_count"] = await session.scalar(
                         select(func.count(Inv2Attack.id)).where(Inv2Attack.invasion_id == inv.id))
-                narrative_text = _caption(render(username="نگهبانان", card_name="کارت‌های اصلی",
+                narrative_text = _caption(render(username="نگهبانان", card_name="کارت‌های نگهبانان",
                     region_name=region.name_fa, enemy_name=inv.enemy_name_fa, rng=random.Random(inv.id),
                     **narrative_context))
                 # Telegram caption edit and photo send are separate metered calls.
