@@ -7,6 +7,9 @@ the compose_* API directly. No gameplay-handler changes are required.
 Phase 8E: phone-legible typography (1280x720 displays ~360px wide on mobile),
 drop shadows on every Persian string, damage-number glow, and dramatic
 victory/defeat status words with radial vignettes.
+
+Follow-up fix: the victory word is spelled "پیروزی", and the result region name
+and reward lines are drawn straight onto the art - no dark plate behind them.
 """
 from functools import lru_cache
 from io import BytesIO
@@ -141,7 +144,7 @@ def _draw_radial_vignette(img, center_xy, radius_x, radius_y, inner_alpha, outer
 # Phase 8E status words: dramatic, not pastel. Vignette -> glow -> text.
 _STATUS_WORDS = {
     "victory": (
-        "پیوروزی", "#C8A02E", "#3A2408", 8,      # deep gold, warm dark-brown stroke
+        "پیروزی", "#C8A02E", "#3A2408", 8,      # deep gold, warm dark-brown stroke
         "#E8C766", 0.60, 20,                    # glow: color, opacity, blur radius
         (640, 325), 450, 180, 0.55, (60, 40, 10)  # warm halo vignette
     ),
@@ -162,15 +165,11 @@ def _text_ink_box(size, xy, text, font, anchor="mm"):
     return layer.getchannel("A").getbbox()
 
 
-_PILL_FILL = (0, 0, 0, 140)  # rgba(0, 0, 0, 0.55)
-
-
-def _pill_backdrop(image, ink_box, *, padding=20, radius=20, fill=_PILL_FILL):
-    """Subtle dark rounded pill behind text, padding around the ink box."""
-    left, top, right, bottom = ink_box
-    ImageDraw.Draw(image).rounded_rectangle(
-        (left - padding, top - padding, right + padding, bottom + padding),
-        radius=radius, fill=fill)
+# Result text sits directly on the painted art: no plate, pill or box behind
+# it. Legibility comes from a heavier stroke plus a wider, softer drop shadow
+# (a rounded rectangle drawn with an alpha fill is opaque once the RGBA canvas
+# is flattened to JPEG, which is what produced the old solid black boxes).
+_RESULT_SHADOW = {"shadow_offset": (0, 4), "shadow_blur": 10, "shadow_opacity": 0.85}
 
 
 def _decorative_line(image, center):
@@ -293,7 +292,7 @@ def _join(enemy_type, card_image_bytes, username, damage, is_crit, enemy_hp_rema
         draw = ImageDraw.Draw(image)
         label(draw, (1216, 64), username, 32, fill="white", stroke_width=2, max_width=310)
         damage_text = _digits(damage)
-        damage_text = f"{damage_text} اسیب" if damage else "سایه بر میدان افتاد"
+        damage_text = f"{damage_text} آسیب" if damage else "سایه بر میدان افتاد"
         if is_crit:
             glow = Image.new("RGBA", (780, 160))
             label(ImageDraw.Draw(glow), (390, 122), damage_text, 64,
@@ -339,15 +338,13 @@ def _result(status, region_name, enemy_type, reward_lines):
         raise ValueError("Result image requires victory or defeat")
     image = load_layout(status).convert("RGBA")
     _paste_enemy(image, enemy_type, (360, -32), opacity=.35, scale=1.4)
-    # Region name: always readable - 88px on its own dark pill, y=70.
+    # Region name: always readable - 88px at y=70, plate-free over the art.
     region_size = _fit_size(region_name, 88, max_width=int(SIZE[0] * 0.9), min_size=56,
                             warn_key="inv2 result region name too long")
     region_font = templates.font(region_size)
-    region_box = _text_ink_box(image.size, (640, 70), region_name, region_font, anchor="ma")
-    if region_box:
-        _pill_backdrop(image, region_box)
     _draw_text_with_shadow(image, (640, 70), region_name, region_font,
-                           fill="#FCECD8", stroke_fill="#2A1408", stroke_width=3, anchor="ma")
+                           fill="#FCECD8", stroke_fill="#2A1408", stroke_width=4,
+                           anchor="ma", **_RESULT_SHADOW)
     # Dramatic status word: vignette behind, glow, then the stroked word.
     (word, fill, stroke, stroke_width, glow_color, glow_opacity, glow_blur,
      center, radius_x, radius_y, inner_alpha, vignette_color) = _STATUS_WORDS[status]
@@ -359,19 +356,16 @@ def _result(status, region_name, enemy_type, reward_lines):
     _draw_text_with_shadow(image, center, word, word_font, fill=fill,
                            stroke_fill=stroke, stroke_width=stroke_width, anchor="mm")
     if status == "victory":
-        # Reward lines: 54px, each on its own subtle dark pill, bottom-center.
+        # Reward lines: 54px, bottom-center, plate-free over the art.
         lines = list(reward_lines)
         spacing = 86
         for index, line in enumerate(lines):
             center_y = 672 - (len(lines) - 1 - index) * spacing
             line_size = _fit_size(line, 54, max_width=1080)
             line_font = templates.font(line_size)
-            line_box = _text_ink_box(image.size, (640, center_y), line, line_font, anchor="ms")
-            if line_box:
-                _pill_backdrop(image, line_box)
             _draw_text_with_shadow(image, (640, center_y), line, line_font,
-                                   fill="#FCECD8", stroke_fill="#2A1408", stroke_width=1,
-                                   anchor="ms")
+                                   fill="#FCECD8", stroke_fill="#2A1408", stroke_width=2,
+                                   anchor="ms", **_RESULT_SHADOW)
     return image
 
 

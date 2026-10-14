@@ -56,14 +56,14 @@ async def preview(message: Message) -> None:
         # Explicit preview-only example HP; no invasion row or reward is created.
         join_args = (enemy.value, card_bytes, message.from_user.first_name, 42, False, 958)
         specs = [
-            (("compose-v2", "preview", "announcement", *announcement_args),
+            (("compose-v3", "preview", "announcement", *announcement_args),
                 lambda: compose_announcement_image(*announcement_args)),
-            (("compose-v2", "preview", "join", message.from_user.id, join_args[0],
+            (("compose-v3", "preview", "join", message.from_user.id, join_args[0],
               hashlib.sha256(card_bytes).hexdigest(), *join_args[2:]),
                 lambda: compose_join_image(*join_args)),
-            (("compose-v2", "preview", "victory", enemy.value, region),
+            (("compose-v3", "preview", "victory", enemy.value, region),
                 lambda: compose_result_image("victory", region, enemy.value, ())),
-            (("compose-v2", "preview", "defeat", enemy.value, region),
+            (("compose-v3", "preview", "defeat", enemy.value, region),
                 lambda: compose_result_image("defeat", region, enemy.value, ())),
         ]
         paths = [await asyncio.to_thread(cached_image, key, render) for key, render in specs]
