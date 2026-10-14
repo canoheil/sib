@@ -4,7 +4,7 @@ import random
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from sib.database.models import Group, Inv2GroupState, Inv2Invasion, Inv2Region, SystemConfig
 from sib.services.config_store import CONFIG_DEFAULTS, ConfigService
@@ -66,7 +66,7 @@ async def force_spawn(session, group_raw: str, region_code: str | None = None, e
     group_id = _group_id(group_raw)
     if not await is_group_available(group_id, session=session):
         return "گروه غیرفعال، خاموش یا سامانهٔ تهاجم غیرفعال است."
-    group = await session.scalar(select(Group).where(Group.id == group_id).with_for_update())
+    group = await session.scalar(select(Group).where(Group.id == group_id).with_for_update().execution_options(populate_existing=True))
     if group is None or not group.is_active:
         return "گروه فعال پیدا نشد."
     max_active = _integer(str(await ConfigService.get(session, "invasion_max_active_per_group") or 1), maximum=100)
@@ -74,8 +74,14 @@ async def force_spawn(session, group_raw: str, region_code: str | None = None, e
         Inv2Invasion.group_id == group_id, Inv2Invasion.status.in_(LIVE)))
     if live >= max_active:
         return "سقف نبردهای هم‌زمان این گروه پر است."
-    if not await is_group_available(group_id, session=session):
-        return "گروه خاموش شده است."
+    # The group row is the per-group mutex shared with circuit-breaker writes.
+    # Re-read the state under that lock, not from an earlier identity-map hit.
+    state = await session.scalar(select(Inv2GroupState).where(
+        Inv2GroupState.group_id == group_id).with_for_update().execution_options(populate_existing=True))
+    if state is not None and state.muted_until is not None:
+        muted = state.muted_until.replace(tzinfo=timezone.utc) if state.muted_until.tzinfo is None else state.muted_until
+        if muted >= NOW():
+            return "گروه خاموش شده است."
     resolver = get_power_resolver()
     if resolver is None:
         return "توان کارت‌های گروه نامشخص است؛ حل‌گر ثبت نشده است."
@@ -204,7 +210,7 @@ async def invasions(session, status_filter: str | None = None) -> str:
 
 async def config(session) -> str:
     rows = (await session.scalars(select(SystemConfig).where(
-        SystemConfig.key.like("inv2_%")).order_by(SystemConfig.key))).all()
+        or_(SystemConfig.key.like("inv2_%"), SystemConfig.key.like("invasion_%"))).order_by(SystemConfig.key))).all()
     return "⚙️ تنظیمات تهاجم\n" + ("\n".join(f"{r.key}: {r.value}" for r in rows) or "تنظیمی ثبت نشده است.")
 
 

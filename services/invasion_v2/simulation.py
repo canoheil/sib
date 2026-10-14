@@ -9,7 +9,7 @@ from sib.services.card_progression import MAX_CARD_LEVEL, card_attributes
 from sib.services.config_store import ConfigService
 from sib.services.player_cards import PlayerCardService
 from .damage import compute_damage
-from .enemy import choose_enemy_type, compute_enemy_hp
+from .enemy import choose_enemy_type, compute_enemy_hp, enemy_spec
 from .enums import EnemyType
 from .power_resolver import get_power_resolver
 from .power_resolver_impl import DbGroupPowerResolver
@@ -57,7 +57,7 @@ async def simulate(session, group_raw: str, enemy_raw: str | None = None) -> str
     if hp <= 0:
         return "جان دشمن معتبر نیست."
     rng = random.Random(f"inv2sim:{group_id}:{enemy.value}:{','.join(map(str, powers))}:{hp}")
-    lines = [f"⚔️ شبیه‌سازی گروه {group_id} | {enemy.value}",
+    lines = [f"⚔️ شبیه‌سازی گروه {group_id} | {enemy_spec(enemy).name_fa}",
              f"جان دشمن: {hp} | میانگین کارت: {average:.1f} | اعضای مشاهده‌شده: {len(powers)}"]
     for count in JOINERS:
         wins = total_damage = 0
