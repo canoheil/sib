@@ -1,6 +1,6 @@
 # Phase 1 — Invasion v2 design specification
 
-**Status:** original Phase 1 design reference, with a Phase 4.5 implementation addendum below. Phase 0 kept the old invasion system disabled behind `invasion_enabled`; Phase 1 itself did not create tables, change code, seed a database, generate images, or turn the flag on. Later phases implement this specification without silently changing its numbers/probabilities. See [region seeds](PHASE-1-REGION-SEEDS.md), [narrative samples](PHASE-1-NARRATIVE.md), [asset plan](PHASE-1-ASSETS.md), and [Phase 4.5 report](PHASE-4.5-REPORT.md).
+**Status: IMPLEMENTED — see [PHASE-7-ROLLOUT.md](PHASE-7-ROLLOUT.md).** This document preserves the original Phase 1 design reference (including its historical proposals); Phase 1 itself did not create tables, seed data or enable the flag. Later phases implemented V2 and archived V1. No Phase 7 deployment or live flag enablement is implied. See [region seeds](PHASE-1-REGION-SEEDS.md), [narrative samples](PHASE-1-NARRATIVE.md), [asset plan](PHASE-1-ASSETS.md), and [Phase 7 report](PHASE-7-REPORT.md).
 
 ## World
 
@@ -180,3 +180,11 @@ These were **design defaults** in Phase 1. Migration 037 now inserts `inv2_membe
   age. It never fabricates a Main Card or treats old participation as recent.
   Use `python -m sib.scripts.backfill_inv2_group_members --dry-run` before a
   confirmed write; it is not part of startup.
+
+## Archived tables (Phase 7 implementation)
+
+Migration `039_archive_inv1_tables` renames the five original V1 tables to `_archive_inv1_invasions`, `_archive_inv1_waves`, `_archive_inv1_contributions`, `_archive_inv1_defense_actions`, `_archive_inv1_participants`; no V1 table is dropped. Its downgrade restores the old names. The old ORM mappings have been removed, rather than kept as writable mappings against the archives. The existing V2 tables (`inv2_*`) remain separate. Migration 039 adds nullable `delivered_at` to `inv2_invasions`. Preserve the historical migration chain and read-only balance artifacts in `archive/`; verify row counts/foreign keys on a DB copy before any production migration.
+
+## Crash safety (Phase 7 implementation)
+
+The V2 scheduler is DB-only; after a committed tick the presenter sends photos. Successful VICTORY photo delivery stamps `delivered_at`; at startup the gated recovery expires overdue ACTIVE rows (without rewards/messages), retries VICTORY rows whose `delivered_at` is NULL through the circuit breaker, and logs reward/attack and group counter inconsistencies without changing them. Telegram send and DB commit cannot be atomic: a crash between them can produce a duplicate final photo. DEFEAT photo replay is not included. See the [rollout guide](PHASE-7-ROLLOUT.md) and [phase report](PHASE-7-REPORT.md) for limitations and checks. Do not infer that the production `invasion_enabled` flag is false merely from source defaults; no Phase 7 activation was performed.
