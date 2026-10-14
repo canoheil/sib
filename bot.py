@@ -50,6 +50,13 @@ async def main():
     # Initialize database tables and seed data
     await init_db()
 
+    # Best-effort local artwork-cache cleanup; never enables invasion sends.
+    from sib.services.invasion_v2.imaging.cache import prune as prune_inv2_cache
+    try:
+        prune_inv2_cache()
+    except OSError:
+        logger.debug("inv2 image cache pruning failed", exc_info=True)
+
     # Register the authoritative inv2 resolver before recovery/maintenance.
     # This does NOT change the invasion_enabled feature flag.
     from sib.services.invasion_v2.power_resolver import set_power_resolver
