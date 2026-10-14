@@ -53,6 +53,76 @@ async def _telegram(group_id, method, **kwargs):
     return result
 
 
+async def _unmetered(bot, method_name: str, group_id, **kwargs) -> bool:
+    """One cosmetic Telegram call: never raises, never meters the breaker.
+
+    Pinning decorates a delivery that already succeeded. A group whose bot is
+    not an admin with "pin messages" must keep receiving invasions, so a
+    rejection here must not count toward the send-failure circuit breaker
+    (three strikes mute a group for 24h) and a success must not reset it.
+    Bots without the method at all (previews, test doubles) are a no-op.
+    """
+    method = getattr(bot, method_name, None)
+    if method is None:
+        logger.debug("inv2 %s unsupported by this bot; skipped group=%s", method_name, group_id)
+        return False
+    try:
+        await method(**kwargs)
+    except (TelegramBadRequest, TelegramForbiddenError):
+        logger.warning("inv2 %s rejected group=%s; bot needs admin rights to pin messages",
+                       method_name, group_id)
+        return False
+    except Exception:
+        logger.exception("inv2 %s failed group=%s", method_name, group_id)
+        return False
+    return True
+
+
+async def pin_announcement(bot, invasion_id: int) -> None:
+    """Pin the sent announcement, then unpin the group's previous one.
+
+    Called after the announcement transaction has committed, so a pin failure
+    can never roll back message_id/ACTIVE and make the next tick announce the
+    same invasion twice. The new pin is placed first: if Telegram refuses it
+    the old announcement stays pinned rather than leaving the group with
+    nothing. pinned_at is written only for pins Telegram accepted, and the
+    previous row is cleared only once its unpin succeeded, so a transient
+    failure is simply retried by the next invasion.
+    """
+    try:
+        async with get_session() as session:
+            inv = await session.get(Inv2Invasion, invasion_id)
+            if inv is None or inv.message_id is None or inv.pinned_at is not None:
+                return
+            group_id, message_id = inv.group_id, inv.message_id
+            chat_id = inv.message_chat_id or group_id
+            previous = list((await session.execute(
+                select(Inv2Invasion.id, Inv2Invasion.group_id,
+                       Inv2Invasion.message_chat_id, Inv2Invasion.message_id)
+                .where(Inv2Invasion.group_id == group_id,
+                       Inv2Invasion.id != invasion_id,
+                       Inv2Invasion.pinned_at.is_not(None))
+                .order_by(Inv2Invasion.id))).all())
+        # The pin notification is the point of the feature: never silent.
+        if not await _unmetered(bot, "pin_chat_message", group_id, chat_id=chat_id,
+                                message_id=message_id, disable_notification=False):
+            return
+        unpinned = [prev_id for prev_id, prev_group, prev_chat, prev_message in previous
+                    if prev_message is None or await _unmetered(
+                        bot, "unpin_chat_message", prev_group,
+                        chat_id=prev_chat or prev_group, message_id=prev_message)]
+        async with get_session() as session:
+            inv = await session.get(Inv2Invasion, invasion_id)
+            if inv is not None and inv.pinned_at is None:
+                inv.pinned_at = datetime.now(timezone.utc)
+            for prev_id in unpinned:
+                stale = await session.get(Inv2Invasion, prev_id)
+                if stale is not None:
+                    stale.pinned_at = None
+    except Exception:
+        logger.exception("inv2 announcement pin failed invasion=%s", invasion_id)
+
+
 def _is_not_modified(error: TelegramBadRequest) -> bool:
     """Telegram refuses edits whose caption is byte-identical."""
     return "not modified" in (error.message or "").lower()
@@ -257,6 +327,9 @@ class InvasionPresentation:
                 inv.started_at = now
                 inv.ends_at = now + timedelta(seconds=window)
                 inv.status = InvasionStatus.ACTIVE.value
+            # Outside the transaction on purpose: pinning is best-effort and
+            # must never undo a committed, already-delivered announcement.
+            await pin_announcement(bot, invasion_id)
         except Exception:
             logger.exception("inv2 announcement failed id=%s", invasion_id)
 
