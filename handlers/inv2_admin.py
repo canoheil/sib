@@ -66,7 +66,6 @@ async def preview(message: Message) -> None:
         await _telegram(None, message.answer, text="پیش‌نمایش آماده نشد؛ تصویر کارت یا قلم فارسی را بررسی کنید.")
 
 
-@router.message(Command("inv2_simulate"))
 async def simulate(message: Message) -> None:
     if not _private(message):
         return

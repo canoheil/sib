@@ -77,3 +77,27 @@ async def inv2_command(message: Message) -> None:
         from sib.services.maintenance.service import invalidate_invasion_config_cache
         invalidate_invasion_config_cache()
     await _telegram(None, message.answer, text=response[:4000], parse_mode=None)
+
+
+@router.message(Command("inv2_simulate"))
+async def simulate_command(message: Message) -> None:
+    if not message.from_user or not is_admin(message.from_user.id):
+        if _private(message):
+            await _telegram(None, message.answer, text="دسترسی ندارید.", parse_mode=None)
+        return
+    if not _private(message):
+        return
+    parts = (message.text or "").split()
+    args = parts[1:]
+    # Accept the old Phase 5 optional user-count argument for compatibility;
+    # Phase 6 always reports N=1,3,5,10, never an arbitrary supplied count.
+    if len(args) == 3:
+        try:
+            int(args[2])
+        except ValueError:
+            pass
+        else:
+            args = args[:2]
+    from sib.services.invasion_v2.simulation import simulate
+    result = await _execute(message.from_user.id, "inv2_simulate", args, simulate, 1, 2)
+    await _telegram(None, message.answer, text=result[:4000], parse_mode=None)
