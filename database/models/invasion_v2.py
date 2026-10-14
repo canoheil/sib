@@ -67,6 +67,10 @@ class Inv2Invasion(Base, TimestampMixin):
     )
     message_chat_id: Mapped[Optional[int]] = mapped_column(BigInteger)
     message_id: Mapped[Optional[int]] = mapped_column(BigInteger)
+    # Exact rendered narrative of the sent announcement, so live-HP caption
+    # edits rebuild the message with the same prose (pool picks are not
+    # replayable once made).
+    announcement_narrative: Mapped[Optional[str]] = mapped_column(Text)
     announcement_sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))

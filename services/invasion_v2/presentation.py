@@ -13,6 +13,7 @@ from sib.database.connection import get_session
 from sib.database.models import Character, Inv2Attack, Inv2Invasion, Inv2Region, Inv2Reward, PlayerCard, User
 from sib.services.character_art import artwork_path
 from sib.services.config_store import ConfigService
+from sib.services.sib_claim import fa_digits
 from . import narrative
 from .circuit_breaker import is_group_available, record_send_failure, record_send_success
 from .enums import InvasionStatus
@@ -48,6 +49,26 @@ def _caption(text: str) -> str:
     return text[:1020]  # leave room below Telegram's 1024-character limit
 
 
+def _fit_caption(narrative_text: str, suffix: str, limit: int = 1024) -> str:
+    """Narrative + status line; if over the limit, truncate the narrative at
+    a word boundary and append "…" before the status line."""
+    if len(narrative_text) + len(suffix) <= limit:
+        return narrative_text + suffix
+    budget = max(0, limit - len(suffix) - 1)
+    cut = narrative_text[:budget].rsplit(" ", 1)[0].rstrip()
+    return f"{cut}…{suffix}"
+
+
+def announcement_hp_line(current_hp: int, total_hp: int) -> str:
+    """Live enemy HP block appended after the announcement narrative."""
+    return f"\n\n⚔️ سلامتی شیاسیب: {fa_digits(max(0, current_hp))} / {fa_digits(total_hp)}"
+
+
+def build_announcement_caption(narrative_text: str, current_hp: int, total_hp: int) -> str:
+    """Announcement caption: narrative, blank line, then the live HP line."""
+    return _fit_caption(narrative_text, announcement_hp_line(current_hp, total_hp))
+
+
 class InvasionPresentation:
     async def announce(self, bot, invasion_id: int) -> None:
         if bot is None:
@@ -70,9 +91,10 @@ class InvasionPresentation:
                 path = await asyncio.to_thread(cached_image,
                     ("compose-v2", "announcement", inv.id, *image_args),
                     lambda: compose_announcement_image(*image_args))
-                caption = _caption(narrative.render_announcement(
+                narrative_text = narrative.render_announcement(
                     username="نگهبانان", card_name="کارت‌های اصلی", region_name=region.name_fa,
-                    enemy_name=inv.enemy_name_fa, rng=random.Random(inv.id), invasion_id=inv.id))
+                    enemy_name=inv.enemy_name_fa, rng=random.Random(inv.id), invasion_id=inv.id)
+                caption = build_announcement_caption(narrative_text, inv.enemy_hp_remaining, inv.enemy_hp)
                 kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
                     text="⚔️ پیوستن به نبرد", callback_data=f"inv2:join:{inv.id}")]])
                 raw_window = await ConfigService.get(session, "invasion_join_window_seconds")
@@ -86,6 +108,7 @@ class InvasionPresentation:
                 now = datetime.now(timezone.utc)
                 inv.message_chat_id = message.chat.id
                 inv.message_id = message.message_id
+                inv.announcement_narrative = narrative_text
                 inv.announcement_sent_at = now
                 inv.started_at = now
                 inv.ends_at = now + timedelta(seconds=window)
