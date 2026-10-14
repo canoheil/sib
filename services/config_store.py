@@ -13,9 +13,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sib.database.models import SystemConfig
 
 
+# Invasion v2 default; database/admin overrides remain authoritative.
+DEFAULT_INVASION_DIFFICULTY_MULTIPLIER = 2.5
+
+
 # Safe built-in defaults. Everything here is overridable via the
 # system_config table and the admin panel.
 CONFIG_DEFAULTS: dict[str, Any] = {
+    "invasion_difficulty_multiplier": DEFAULT_INVASION_DIFFICULTY_MULTIPLIER,
     # Days after which a group member is considered inactive for inv2 power.
     "inv2_member_active_window_days": 30,
     # Garden

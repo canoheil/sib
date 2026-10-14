@@ -61,7 +61,7 @@ enemy_hp = round(
 )
 ```
 
-`difficulty_multiplier` defaults to **4.0**, configurable via `system_config`. The enemy type's `power_multiplier` is the `type_multiplier` in this formula. `avg_card_power_of_all_group_members` must come from `GroupPowerResolver.average_main_card_power(group_id=..., session=...)`. If it returns `None` (or no resolver is configured), scheduling fails closed and does **not** substitute a guessed number. The concrete resolver is implemented in Phase 4.5; its observation-based definition of active group membership and fail-closed semantics are documented below.
+`difficulty_multiplier` defaults to **2.5** (Phase 8C; originally 4.0), configurable via `system_config`. The enemy type's `power_multiplier` is the `type_multiplier` in this formula. `avg_card_power_of_all_group_members` must come from `GroupPowerResolver.average_main_card_power(group_id=..., session=...)`. If it returns `None` (or no resolver is configured), scheduling fails closed and does **not** substitute a guessed number. The concrete resolver is implemented in Phase 4.5; its observation-based definition of active group membership and fail-closed semantics are documented below.
 
 ## Join and attack mechanics
 
@@ -127,7 +127,7 @@ On defeat: **no rewards**.
 | invasion_enabled | false | bool |
 | invasion_join_window_seconds | 300 | int |
 | invasion_interval_seconds | 3600 | int |
-| invasion_difficulty_multiplier | 4.0 | float |
+| invasion_difficulty_multiplier | 2.5 | float |
 | invasion_max_active_per_group | 1 | int |
 | invasion_circuit_breaker_threshold | 3 | int |
 | invasion_mute_hours | 24 | int |

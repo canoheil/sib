@@ -50,7 +50,7 @@ async def status(session) -> str:
     lost = await session.scalar(select(func.count()).select_from(Inv2Region).where(Inv2Region.is_lost_to_enemy.is_(True)))
     return ("⚔️ وضعیت تهاجم\n"
             f"فعال: {'بله' if flag is True or str(flag).lower() == 'true' else 'خیر'} | پنجرهٔ پیوستن: {join if join is not None else 300} ثانیه\n"
-            f"فاصله: {interval if interval is not None else 3600} ثانیه | سختی: {difficulty if difficulty is not None else 4.0}\n"
+            f"فاصله: {interval if interval is not None else 3600} ثانیه | سختی: {difficulty if difficulty is not None else DEFAULT_INVASION_DIFFICULTY_MULTIPLIER}\n"
             f"نبرد فعال: {active} | گروه خاموش: {muted} | ناحیهٔ از‌دست‌رفته: {lost}\n"
             f"آخرین تیک موفق: {_date(admin_runtime.last_successful_tick)}")
 
@@ -104,7 +104,7 @@ async def force_spawn(session, group_raw: str, region_code: str | None = None, e
         enemy = EnemyType(enemy_raw) if enemy_raw else choose_enemy_type(random.Random())
     except ValueError:
         return "گونهٔ دشمن نامعتبر است."
-    difficulty = float(await ConfigService.get(session, "invasion_difficulty_multiplier") or 4.0)
+    difficulty = float(await ConfigService.get(session, "invasion_difficulty_multiplier") or DEFAULT_INVASION_DIFFICULTY_MULTIPLIER)
     if not math.isfinite(difficulty) or difficulty <= 0:
         return "سختی نبرد نامعتبر است."
     hp = compute_enemy_hp(average, enemy, difficulty)

@@ -1,75 +1,19 @@
-"""Pure Persian cinematic text rendering; no Telegram formatting or I/O.
+"""Persian cinematic narration with process-local recent-template avoidance.
 
-Each event owns five immutable alternatives. The caller supplies real display
-names, a seeded RNG, and the already-decided event; no game state is changed.
+Existing arguments are preserved; optional invasion context adds scoped history. Supplied RNGs still drive selection; replay is
+reproducible given the same RNG *and history*, not the seed alone. Rendering never
+changes combat state, rewards, feature flags or Telegram messages.
 """
 
+import hashlib
+import json
 import random
 
+from . import narrative_pool as _pool
 
-_ANNOUNCEMENT = (
-    "بر فراز {region_name}، سپیده به رنگ خاکستر درآمده است. {username}، {card_name} را به گذرگاه ببر؛ {enemy_name} از مه بیرون آمده و به دروازه‌ها رحم نخواهد کرد.",
-    "آب‌های {region_name} بی‌صدا تیره شدند. {username}، در کنار {card_name} بایست؛ {enemy_name} پشت آخرین موج کمین کرده است.",
-    "زنگ‌های {region_name} بی‌آنکه دستی به آن‌ها برسد به صدا درآمدند. {username}، {card_name} را فرا بخوان؛ {enemy_name} بر آستانهٔ شهر ایستاده است.",
-    "بادِ {region_name} بوی آهن می‌دهد. {username} و {card_name} باید پیش از فروریختن نخستین برج برسند؛ رد پای {enemy_name} روی خاک مانده است.",
-    "فانوس‌های {region_name} رو به تاریکی می‌سوزند. {username}، {card_name} را کنار بارو نگه دار: نشانِ {enemy_name} در افق پیدا شده است.",
-)
 
-_JOIN = (
-    "{username} با {card_name} از میان غبار گذشت؛ ضربه‌ای به اندازهٔ {damage} بر زره شیاسیب نشست. هنوز {remaining} از جان دشمن مانده است.",
-    "{card_name} به اشارهٔ {username} پیش آمد و صف دشمن را شکافت. {damage} آسیب بر جای ماند و توان شیاسیب به {remaining} رسید.",
-    "در سکوت میدان، {username} راه را برای {card_name} گشود؛ تیغه با نیروی {damage} فرود آمد. شیاسیب با {remaining} جان عقب نشست.",
-    "{username} و {card_name} از پشت ستون‌ها بیرون جهیدند؛ سپر دشمن {damage} آسیب دید و هنوز {remaining} توان برایش باقی است.",
-    "خاک زیر پای {card_name} لرزید؛ {username} فرمان حمله داد و {damage} آسیب به شیاسیب رسید. جان باقی‌مانده‌اش {remaining} است.",
-)
-
-_CRITICAL = (
-    "{username} لحظهٔ گشودن زره را دید؛ {card_name} همان‌جا فرود آمد و {damage} آسیب بر جای گذاشت. شیاسیب با {remaining} جان به دشواری ایستاده است.",
-    "نورِ {card_name} به فرمان {username} از شکاف تاج دشمن گذشت؛ ضربهٔ سهمگین {damage} از توان شیاسیب کاست و {remaining} برایش ماند.",
-    "{username} نفسش را حبس کرد. یک حرکتِ {card_name} با نیروی {damage} صف شیاسیب را از هم درید؛ جان او به {remaining} رسید.",
-    "درست هنگام فرود گام دشمن، {username} به {card_name} اشاره کرد؛ زره ترکید، {damage} آسیب ثبت شد و فقط {remaining} جان باقی ماند.",
-    "{card_name} از دل سایه بیرون آمد و فرمان {username} را به ضربه‌ای سهمگین بدل کرد؛ {damage} آسیب و {remaining} جانِ باقی‌مانده، بهای آن لحظه بود.",
-)
-
-_HIGH_DAMAGE = (
-    "{username} و {card_name} چنان به دروازهٔ سپاه کوبیدند که لولاها از دیوار کنده شد؛ {damage} آسیب رسید و شیاسیب با {remaining} جان عقب رفت.",
-    "موجی از نیروی {card_name} به فرمان {username} سراسر میدان را پیمود؛ صف دشمن زیر {damage} آسیب فرو ریخت و تنها {remaining} جان ماند.",
-    "{username} راه سنگر را گشود و {card_name} آوار را بر سپاه شیاسیب فرود آورد؛ {damage} آسیب به جا ماند، توان دشمن {remaining} شد.",
-    "با یک حرکتِ {card_name}، هزار بازتاب به یک فروغ بدل شدند؛ {username} شکست صف دشمن را دید: {damage} آسیب و فقط {remaining} جان.",
-    "{username} کنار {card_name} بر خاکِ لرزان ایستاد؛ برخوردی با نیروی {damage} سنگرهای شیاسیب را خاموش کرد و {remaining} جان برایش گذاشت.",
-)
-
-_FINISHER = (
-    "{username} تیغهٔ {card_name} را برای آخرین بار بالا آورد؛ نشانِ {enemy_name} در خاکِ {region_name} فرو رفت و دیگر دستی برای برداشتنش نماند.",
-    "به اشارهٔ {username}، {card_name} واپسین رشتهٔ تاریکی را در {region_name} برید. {enemy_name} خاموش شد و نور دوباره به زمین رسید.",
-    "ضربهٔ پایان را {card_name} در کنار {username} فرود آورد؛ پژواکِ {enemy_name} در {region_name} شکست و صدای نفس مدافعان شنیده شد.",
-    "{username} با {card_name} از میان آوار گذشت؛ آخرین جرقه بر زره {enemy_name} نشست و {region_name} از سایه بیرون آمد.",
-    "تاجِ {enemy_name} زیر ضربهٔ {card_name} فرو افتاد. {username} در {region_name} ایستاد تا چراغ نگهبانان دوباره روشن شود.",
-)
-
-_VICTORY = (
-    "{region_name} هنوز ایستاده است. {username}، رد تیغهٔ {card_name} بر سنگ دروازه مانده؛ مردم نام مدافعان را آهسته می‌گویند و {enemy_name} دیگر پیش نمی‌رود.",
-    "نخستین رهگذر پس از نبرد از {region_name} گذشت. {username} و {card_name} کنار راه ایستاده‌اند؛ آب دیگر تصویر {enemy_name} را بازنمی‌گرداند.",
-    "پرچم‌های {region_name} دوباره در آفتاب پیدا شدند. {username}، {card_name} را پایین آورد؛ شهر پیش از فریاد پیروزی نفس راحتی کشید و {enemy_name} گریخت.",
-    "سنگرهای {region_name} فرو نریختند. {username} و {card_name} به افق نگاه کردند؛ جای پای {enemy_name} هنوز تازه است، اما این خاک امروز از آنِ او نیست.",
-    "فانوس‌های {region_name} یکی‌یکی روشن شدند. {username}، {card_name} را کنار گذرگاه نشاند؛ کاروان‌ها در سکوت از کنار میدانِ رهاشده از {enemy_name} گذشتند.",
-)
-
-_DEFEAT = (
-    "دروازهٔ {region_name} شکست. {username}، {card_name} را از زیر باران سنگ بیرون کشید؛ {enemy_name} این خاک را گرفت، اما صدای بازماندگان خاموش نشده است.",
-    "وقتی {username} و {card_name} به کرانه رسیدند، {region_name} دیگر نور را نمی‌پذیرفت. {enemy_name} بر فراز آن پرچم زده؛ راه بازگشت باید دوباره گشوده شود.",
-    "برج‌های {region_name} یک‌به‌یک تار شدند. {username}، {card_name} را پشت آخرین دیوار نگه داشت؛ زمین به دست {enemy_name} افتاد، نه سوگند نگهبانانش.",
-    "باد در {region_name} ایستاد و دیوار فرو ریخت. {username} و {card_name} آخرین نفرات را به راه امن بردند؛ {enemy_name} زمین را گرفت، نه امیدشان را.",
-    "چراغِ {region_name} خاموش شد. {username}، {card_name} را از گذرگاه شکسته گذراند؛ {enemy_name} اکنون بر ویرانه‌ها نگهبانی می‌دهد.",
-)
-
-_EXPIRED = (
-    "وقتی خبر به {region_name} رسید، پنجرهٔ نبرد گذشته بود. {username} و {card_name} کنار دروازه ایستادند؛ از ساعت‌های بی‌خبر در برابر {enemy_name} هنوز روایتی قطعی در دست نیست.",
-    "پیامِ {username} و {card_name} دیر از مهِ {region_name} گذشت. زمان فراخوان پایان یافته بود و هیچ‌کس سرانجام رویارویی با {enemy_name} را از سکوت نمی‌خواند.",
-    "در {region_name}، {username} نامِ {card_name} را بر سنگ سرد نوشت؛ پیغام به‌موقع نرسید و خبری از پایان راهِ {enemy_name} در دست نیست.",
-    "{username} و {card_name} فانوسِ {region_name} را تا واپسین لحظه روشن نگه داشتند. با بازگشت صدا، فرصت پاسخ به {enemy_name} گذشته بود؛ روایت هنوز ناتمام است.",
-    "{username} تصویرِ {card_name} را کنار گذرگاهِ بی‌خبر گذاشت. {region_name} از خاموشی پیام بیرون آمد، اما ساعت‌های رویارویی با {enemy_name} بازنمی‌گردند.",
-)
+_MAX_VALUE_LENGTH = 96
+_MAX_CAPTION_LENGTH = 899
 
 
 def _fa(number: int) -> str:
@@ -77,68 +21,109 @@ def _fa(number: int) -> str:
     return "".join("۰۱۲۳۴۵۶۷۸۹"[ord(char) - 48] if "0" <= char <= "9" else char for char in str(number))
 
 
-def _render(templates: tuple[str, ...], rng: random.Random, **values: object) -> str:
-    return templates[rng.randrange(len(templates))].format(**values)
+def _key(event: str, *context: str, invasion_id: int | None = None,
+         fallback_event: str | None = None) -> str:
+    """Prefer an event/invasion key; legacy callers keep their context-based key."""
+    if invasion_id is not None:
+        return f"{event}:{invasion_id}"
+    digest = hashlib.sha256(json.dumps(context, ensure_ascii=False).encode("utf-8")).hexdigest()
+    return f"{fallback_event or event}:{digest}"
+
+
+def _value(value: object) -> str:
+    """Keep injected display values inline and bounded; never translate names."""
+    text = " ".join(str(value).split())
+    if len(text) > _MAX_VALUE_LENGTH:
+        return text[:_MAX_VALUE_LENGTH-1] + "…"
+    return text
+
+
+def _render(templates: list[str], *, key: str, rng: random.Random, **values: object) -> str:
+    with _pool._using_rng(rng):
+        template = _pool.pick(templates, key=key)
+    text = template.format(**{name: _value(value) for name, value in values.items()})
+    # Current templates plus bounded values are comfortably below this limit.
+    # Retain a final guard so later copy additions cannot overflow Telegram captions.
+    if len(text) > _MAX_CAPTION_LENGTH:
+        text = text[:_MAX_CAPTION_LENGTH-1].rstrip() + "…"
+    return text
 
 
 def render_join(
     *, username: str, card_name: str, damage: int, is_crit: bool,
-    enemy_hp_remaining: int, rng: random.Random,
+    enemy_hp_remaining: int, rng: random.Random, invasion_id: int | None = None,
 ) -> str:
-    """Describe an already-decided join/attack; never decide damage here."""
-    return _render(
-        _CRITICAL if is_crit else _JOIN, rng,
-        username=username, card_name=card_name,
-        damage=_fa(damage), remaining=_fa(enemy_hp_remaining),
-    )
+    """Finishing hit wins over critical; describe stored outcomes, never decide them."""
+    if enemy_hp_remaining <= 0:
+        templates = _pool.JOIN_KILL
+    elif is_crit:
+        templates = _pool.JOIN_CRIT
+    else:
+        templates = _pool.JOIN_NORMAL
+    event = "join_kill" if templates is _pool.JOIN_KILL else "join_crit" if templates is _pool.JOIN_CRIT else "join_normal"
+    return _render(templates, key=_key(event, username, card_name,
+                   invasion_id=invasion_id, fallback_event="join"), rng=rng,
+                   user=username, card=card_name, damage=_fa(damage),
+                   hp_remaining=_fa(enemy_hp_remaining))
 
 
 def render_high_damage(
     *, username: str, card_name: str, damage: int,
-    enemy_hp_remaining: int, rng: random.Random,
+    enemy_hp_remaining: int, rng: random.Random, invasion_id: int | None = None,
 ) -> str:
-    """Explicit high-damage prose; classification threshold is not specified."""
-    return _render(
-        _HIGH_DAMAGE, rng, username=username, card_name=card_name,
-        damage=_fa(damage), remaining=_fa(enemy_hp_remaining),
-    )
+    """Keep the explicit legacy entry point; strong-impact prose shares the crit pool."""
+    templates = _pool.JOIN_KILL if enemy_hp_remaining <= 0 else _pool.JOIN_CRIT
+    event = "join_kill" if templates is _pool.JOIN_KILL else "join_crit" if templates is _pool.JOIN_CRIT else "join_normal"
+    return _render(templates, key=_key(event, username, card_name,
+                   invasion_id=invasion_id, fallback_event="join"), rng=rng,
+                   user=username, card=card_name, damage=_fa(damage),
+                   hp_remaining=_fa(enemy_hp_remaining))
 
 
 def render_announcement(
     *, username: str, card_name: str, region_name: str,
-    enemy_name: str, rng: random.Random,
+    enemy_name: str, rng: random.Random, invasion_id: int | None = None,
 ) -> str:
-    return _render(_ANNOUNCEMENT, rng, username=username, card_name=card_name,
-                   region_name=region_name, enemy_name=enemy_name)
+    return _render(_pool.ANNOUNCEMENT, key=_key("announcement", region_name, enemy_name,
+                   invasion_id=invasion_id, fallback_event="announce"), rng=rng,
+                   user=username, card=card_name, region=region_name, enemy_name=enemy_name)
 
 
 def render_finisher(
     *, username: str, card_name: str, region_name: str,
-    enemy_name: str, rng: random.Random,
+    enemy_name: str, rng: random.Random, invasion_id: int | None = None,
 ) -> str:
-    return _render(_FINISHER, rng, username=username, card_name=card_name,
-                   region_name=region_name, enemy_name=enemy_name)
+    return _render(_pool.JOIN_KILL, key=_key("join_kill", username, card_name,
+                   invasion_id=invasion_id, fallback_event="join"), rng=rng,
+                   user=username, card=card_name, region=region_name, enemy_name=enemy_name)
 
 
 def render_victory(
     *, username: str, card_name: str, region_name: str,
-    enemy_name: str, rng: random.Random,
+    enemy_name: str, rng: random.Random, invasion_id: int | None = None,
+    participant_count: int | None = None,
 ) -> str:
-    return _render(_VICTORY, rng, username=username, card_name=card_name,
-                   region_name=region_name, enemy_name=enemy_name)
+    with_n = [text for text in _pool.VICTORY if "{n}" in text]
+    without_n = [text for text in _pool.VICTORY if "{n}" not in text]
+    values = dict(user=username, card=card_name, region=region_name, enemy_name=enemy_name)
+    if participant_count is not None:
+        values["n"] = _fa(participant_count)
+    return _render(with_n if participant_count is not None else without_n,
+                   key=_key("victory", region_name, enemy_name, invasion_id=invasion_id),
+                   rng=rng, **values)
 
 
 def render_defeat(
     *, username: str, card_name: str, region_name: str,
-    enemy_name: str, rng: random.Random,
+    enemy_name: str, rng: random.Random, invasion_id: int | None = None,
 ) -> str:
-    return _render(_DEFEAT, rng, username=username, card_name=card_name,
-                   region_name=region_name, enemy_name=enemy_name)
+    return _render(_pool.DEFEAT, key=_key("defeat", region_name, enemy_name, invasion_id=invasion_id), rng=rng,
+                   user=username, card=card_name, region=region_name, enemy_name=enemy_name)
 
 
 def render_expired(
     *, username: str, card_name: str, region_name: str,
-    enemy_name: str, rng: random.Random,
+    enemy_name: str, rng: random.Random, invasion_id: int | None = None,
 ) -> str:
-    return _render(_EXPIRED, rng, username=username, card_name=card_name,
-                   region_name=region_name, enemy_name=enemy_name)
+    return _render(_pool.EXPIRED, key=_key("expired", region_name, enemy_name, invasion_id=invasion_id), rng=rng,
+                   user=username, card=card_name, region=region_name, enemy_name=enemy_name)

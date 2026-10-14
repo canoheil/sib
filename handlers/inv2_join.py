@@ -77,7 +77,7 @@ async def handle_inv2_join(callback: CallbackQuery, bot) -> None:
             user = await session.get(User, user_id)
             name = user.display_name if user else callback.from_user.first_name
             story = render_join(username=name, card_name=character.name_fa,
-                damage=damage, is_crit=crit, enemy_hp_remaining=remaining, rng=random.Random())
+                damage=damage, is_crit=crit, enemy_hp_remaining=remaining, rng=random.Random(), invasion_id=inv.id)
             terminal = remaining <= 0
             # Compare-and-swap guards the old HP, active state and deadline.
             result = await session.execute(update(Inv2Invasion).where(

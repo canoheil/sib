@@ -17,6 +17,7 @@ from sib.handlers import inv2_join
 from sib.services.config_store import ConfigService
 from sib.services.invasion_v2 import circuit_breaker, presentation, recovery, scheduler
 from sib.services.invasion_v2.enums import EnemyType
+from sib.services.invasion_v2.narrative_pool import JOIN_KILL
 from sib.services.invasion_v2.power_resolver import set_power_resolver
 from sib.services.invasion_v2.recovery import InvasionV2Recovery
 from sib.services.invasion_v2.scheduler import InvasionScheduler
@@ -33,6 +34,26 @@ async def test_v2_full_battle_offline(db, monkeypatch):
     monkeypatch.setattr(presentation, "record_send_success", circuit_breaker.record_send_success)
     monkeypatch.setattr(scheduler, "choose_enemy_type", lambda rng: EnemyType.SOLDIER)
     monkeypatch.setattr(inv2_join, "_answer", AsyncMock())  # no callback HTTP
+    # Await detached delivery deterministically instead of assuming 30ms is enough.
+    joined = {uid: asyncio.Event() for uid in range(1, 17)}
+    finalized = asyncio.Event()
+    original_join = presentation.InvasionPresentation.on_join
+    original_finalize = presentation.InvasionPresentation.finalize
+
+    async def tracked_join(self, bot, invasion_id, user_id, attack_id):
+        try:
+            return await original_join(self, bot, invasion_id, user_id, attack_id)
+        finally:
+            joined[user_id].set()
+
+    async def tracked_finalize(self, bot, invasion_id):
+        try:
+            return await original_finalize(self, bot, invasion_id)
+        finally:
+            finalized.set()
+
+    monkeypatch.setattr(presentation.InvasionPresentation, "on_join", tracked_join)
+    monkeypatch.setattr(presentation.InvasionPresentation, "finalize", tracked_finalize)
     set_power_resolver(SimpleNamespace(average_main_card_power=AsyncMock(return_value=500.0)))
     try:
         async with factory.begin() as s:
@@ -65,7 +86,7 @@ async def test_v2_full_battle_offline(db, monkeypatch):
             async with factory() as s:
                 old_hp = (await s.get(Inv2Invasion, inv_id)).enemy_hp_remaining
             await inv2_join.handle_inv2_join(callback(inv_id, user_id=uid), bot)
-            await asyncio.sleep(.03)  # detached, mocked photo delivery
+            await asyncio.wait_for(joined[uid].wait(), timeout=5)
             async with factory() as s:
                 inv = await s.get(Inv2Invasion, inv_id)
                 attack = await s.scalar(select(Inv2Attack).where(
@@ -78,7 +99,8 @@ async def test_v2_full_battle_offline(db, monkeypatch):
                 if (await s.get(Inv2Invasion, inv_id)).status == "VICTORY":
                     break
             await inv2_join.handle_inv2_join(callback(inv_id, user_id=uid), bot)
-            await asyncio.sleep(.03)
+            await asyncio.wait_for(joined[uid].wait(), timeout=5)
+        await asyncio.wait_for(finalized.wait(), timeout=5)
         async with factory() as s:
             inv = await s.get(Inv2Invasion, inv_id)
             assert inv.status == "VICTORY" and inv.enemy_hp_remaining == 0
@@ -86,6 +108,9 @@ async def test_v2_full_battle_offline(db, monkeypatch):
             attacks = (await s.scalars(select(Inv2Attack).where(Inv2Attack.invasion_id == inv_id))).all()
             rewards = (await s.scalars(select(Inv2Reward).where(Inv2Reward.invasion_id == inv_id))).all()
             assert len(attacks) >= 4
+            finisher = max(attacks, key=lambda attack: attack.id)
+            name = (await s.get(User, finisher.user_id)).display_name
+            assert finisher.narrative in {text.format(user=name, card="سیب سبز") for text in JOIN_KILL}
             assert {r.user_id for r in rewards} == {a.user_id for a in attacks}
             assert len(rewards) >= len(attacks)
             before = len(rewards)

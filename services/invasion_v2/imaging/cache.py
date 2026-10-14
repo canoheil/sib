@@ -7,16 +7,17 @@ import time
 from pathlib import Path
 from typing import Callable
 from PIL import Image
+from .templates import asset_version
 
 CACHE_DIR = Path.home() / ".cache" / "inv2"
 MAX_AGE = 30 * 24 * 60 * 60
 
 
 def cache_key(*parts: object) -> str:
-    return hashlib.sha256(json.dumps(parts, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
+    return hashlib.sha256(json.dumps((asset_version(), *parts), ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
-def cached_image(parts: tuple[object, ...], build: Callable[[], Image.Image], *, directory: Path | None = None) -> Path:
+def cached_image(parts: tuple[object, ...], build: Callable[[], Image.Image | bytes], *, directory: Path | None = None) -> Path:
     directory = Path(directory or CACHE_DIR)
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / (cache_key(*parts) + ".jpg")
@@ -25,7 +26,11 @@ def cached_image(parts: tuple[object, ...], build: Callable[[], Image.Image], *,
     fd, temp = tempfile.mkstemp(dir=directory, suffix=".jpg")
     try:
         with os.fdopen(fd, "wb") as output:
-            build().convert("RGB").save(output, format="JPEG", quality=88, optimize=True)
+            image = build()
+            if isinstance(image, bytes):
+                output.write(image)
+            else:
+                image.convert("RGB").save(output, format="JPEG", quality=88)
         os.replace(temp, path)
     finally:
         if os.path.exists(temp):
