@@ -119,7 +119,7 @@ class InvasionPresentation:
         except Exception:
             logger.exception("inv2 join presentation failed invasion=%s user=%s", invasion_id, user_id)
 
-    async def finalize(self, bot, invasion_id: int) -> None:
+    async def finalize(self, bot, invasion_id: int) -> bool:
         if bot is None:
             return
         try:
@@ -156,10 +156,18 @@ class InvasionPresentation:
                                   ("obsidian_apple", "سیب ابسیدینی"))
                         summary = "، ".join(f"{name} ×{totals[key]}" for key, name in labels if totals[key])
                         caption += "\n🎁 پاداش مدافعان: " + summary
-                await _telegram(inv.group_id, bot.send_photo, chat_id=inv.group_id,
+                sent = await _telegram(inv.group_id, bot.send_photo, chat_id=inv.group_id,
                     photo=FSInputFile(path), caption=_caption(caption), parse_mode=None)
+                if sent is None:
+                    return False
+                if inv.status == InvasionStatus.VICTORY.value and inv.delivered_at is None:
+                    # The photo was accepted; a failed DB commit leaves NULL so
+                    # startup recovery will retry. Telegram and DB cannot be atomic.
+                    inv.delivered_at = datetime.now(timezone.utc)
+                return True
         except Exception:
             logger.exception("inv2 final presentation failed id=%s", invasion_id)
+            return False
 
     async def publish_pending(self, bot) -> None:
         """Present committed PENDING rows. Called only under the feature flag."""

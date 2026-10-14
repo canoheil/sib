@@ -37,7 +37,7 @@ class RecoveryService:
         3. Recover interrupted Apple Battle matches from persisted state/cursor.
         4. Terminate stale/abandoned active matches.
         5. Expire past-due ACTIVE Invasion v2 rows after downtime without
-           settlement. The legacy recovery path is retained but not invoked.
+           settlement, then reconcile and retry undelivered victory photos.
         """
         from sib.services.apple_battle import AppleBattleService
 
@@ -167,8 +167,9 @@ class RecoveryService:
 
         await session.commit()
 
-        # TODO (PHASE 7 Step 4): InvasionV2Recovery.run_on_startup() will be
-        # wired here. Until then, preserve the gated V2 scheduler recovery.
+        # Existing gated scheduler recovery remains for in-flight restarts.
+        # Once a bot is available, V2 recovery also retries undelivered
+        # victories and performs read-only consistency checks.
         try:
             from sib.services.maintenance.service import MaintenanceService
             from sib.services.invasion_v2.scheduler import InvasionScheduler
@@ -179,6 +180,15 @@ class RecoveryService:
         except Exception:
             stats["invasion_failures"] += 1
             logger.exception("Invasion v2 startup recovery failed")
+
+        if bot is not None:
+            try:
+                from sib.services.invasion_v2.recovery import InvasionV2Recovery
+
+                stats["inv2_recovery"] = await InvasionV2Recovery.run_on_startup(bot)
+            except Exception:
+                stats["invasion_failures"] += 1
+                logger.exception("Invasion v2 reconciliation failed on startup")
 
         for match_id in apple_recovery["resumed"]:
             AppleBattleService.schedule_narration(match_id, bot=bot)

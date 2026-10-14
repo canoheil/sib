@@ -64,14 +64,16 @@ async def main():
     set_power_resolver(DbGroupPowerResolver())
     logger.info("inv2 power resolver: DbGroupPowerResolver")
 
+    # Create the bot before recovery so V2 can retry committed, undelivered
+    # victory photos. The feature gate still controls all invasion operations.
+    bot, dp = await create_bot_and_dispatcher()
+
     # Perform startup recovery and cleanup
     from sib.database.connection import get_session
     from sib.services.recovery import RecoveryService
     from sib.services.maintenance import MaintenanceService
     async with get_session() as session:
-        await RecoveryService.recover_on_startup(session)
-
-    bot, dp = await create_bot_and_dispatcher()
+        await RecoveryService.recover_on_startup(session, bot=bot)
 
     maintenance_stop = asyncio.Event()
     maintenance_task = asyncio.create_task(
