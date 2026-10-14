@@ -402,14 +402,14 @@ class InvasionPresentation:
                     # Count stored defenders once; rewards can contain multiple rows per user.
                     narrative_context["participant_count"] = await session.scalar(
                         select(func.count(Inv2Attack.id)).where(Inv2Attack.invasion_id == inv.id))
-                final = _caption(render(username="نگهبانان", card_name="کارت‌های اصلی",
+                narrative_text = _caption(render(username="نگهبانان", card_name="کارت‌های اصلی",
                     region_name=region.name_fa, enemy_name=inv.enemy_name_fa, rng=random.Random(inv.id),
                     **narrative_context))
                 # Telegram caption edit and photo send are separate metered calls.
                 await _telegram(inv.group_id, bot.edit_message_caption,
                     chat_id=inv.message_chat_id or inv.group_id, message_id=inv.message_id,
-                    caption=final, reply_markup=None, parse_mode=None)
-                caption = final
+                    caption=narrative_text, reply_markup=None, parse_mode=None)
+                caption = narrative_text
                 reward_lines = ()
                 if inv.status == InvasionStatus.VICTORY.value:
                     rewards = (await session.execute(select(Inv2Reward.reward_type, Inv2Reward.reward_amount)
@@ -422,9 +422,14 @@ class InvasionPresentation:
                         labels = (("golden_apple", "سیب طلایی"),
                                   ("diamond_apple", "سیب الماسی"),
                                   ("obsidian_apple", "سیب ابسیدینی"))
-                        reward_lines = tuple(f"{name} ×{totals[key]}" for key, name in labels if totals[key])
+                        reward_lines = tuple(f"{name} ×{fa_digits(totals[key])}"
+                                             for key, name in labels if totals[key])
                         summary = "، ".join(reward_lines)
-                        caption += "\n🎁 پاداش مدافعان: " + summary
+                        # Blank line before the reward block, matching the HP and
+                        # damage lines. Fitting the narrative instead of appending
+                        # keeps the reward line itself from being cut by Telegram.
+                        caption = _fit_caption(narrative_text,
+                                               "\n\n🎁 پاداش مدافعان: " + summary, limit=1020)
                 image_args = (inv.status.lower(), region.name_fa, inv.enemy_type, reward_lines)
                 path = await asyncio.to_thread(cached_image,
                     ("compose-v4", "result", inv.id, *image_args),
