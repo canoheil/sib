@@ -133,3 +133,13 @@ __all__ = [
 from sib.database.models.apple_duel import AppleDuel, AppleDuelSlot
 
 __all__ += ["AppleDuel", "AppleDuelSlot"]
+
+from sib.database.models.invasion_v2 import (
+    Inv2Region,
+    Inv2Invasion,
+    Inv2Attack,
+    Inv2Reward,
+    Inv2GroupState,
+)
+
+__all__ += ["Inv2Region", "Inv2Invasion", "Inv2Attack", "Inv2Reward", "Inv2GroupState"]
