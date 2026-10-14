@@ -212,7 +212,7 @@ class InvasionPresentation:
                     return
                 image_args = (inv.enemy_type, region.name_fa, inv.enemy_name_fa)
                 path = await asyncio.to_thread(cached_image,
-                    ("compose-v2", "announcement", inv.id, *image_args),
+                    ("compose-v3", "announcement", inv.id, *image_args),
                     lambda: compose_announcement_image(*image_args))
                 narrative_text = narrative.render_announcement(
                     username="نگهبانان", card_name="کارت‌های اصلی", region_name=region.name_fa,
@@ -265,7 +265,7 @@ class InvasionPresentation:
                 image_args = (inv.enemy_type, card_bytes, user.display_name, attack.damage,
                               bool(attack.is_crit), inv.enemy_hp_remaining)
                 path = await asyncio.to_thread(cached_image,
-                    ("compose-v2", "join", inv.id, user_id, attack_id, image_args[0],
+                    ("compose-v3", "join", inv.id, user_id, attack_id, image_args[0],
                      hashlib.sha256(card_bytes).hexdigest(), *image_args[2:]),
                     lambda: compose_join_image(*image_args))
                 # Post-attack HP is already committed: 0 means this blow was fatal.
@@ -333,7 +333,7 @@ class InvasionPresentation:
                         caption += "\n🎁 پاداش مدافعان: " + summary
                 image_args = (inv.status.lower(), region.name_fa, inv.enemy_type, reward_lines)
                 path = await asyncio.to_thread(cached_image,
-                    ("compose-v2", "result", inv.id, *image_args),
+                    ("compose-v3", "result", inv.id, *image_args),
                     lambda: compose_result_image(*image_args))
                 sent = await _telegram(inv.group_id, bot.send_photo, chat_id=inv.group_id,
                     photo=FSInputFile(path), caption=_caption(caption), parse_mode=None)
