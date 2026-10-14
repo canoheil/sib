@@ -143,3 +143,7 @@ from sib.database.models.invasion_v2 import (
 )
 
 __all__ += ["Inv2Region", "Inv2Invasion", "Inv2Attack", "Inv2Reward", "Inv2GroupState"]
+
+from sib.database.models.invasion_v2_group_member import Inv2GroupMember
+
+__all__ += ["Inv2GroupMember"]
