@@ -23,18 +23,6 @@ class RecoveryService:
     """Service responsible for safe system recovery and orphaned state cleanup on startup."""
 
     @classmethod
-    async def _recover_legacy_invasions(cls, now: datetime) -> Dict[str, Any]:
-        """Retained v1 path; never called alongside the v2 recovery sweep."""
-        from sib.services.maintenance.service import MaintenanceService
-
-        if await MaintenanceService._invasion_enabled():
-            # [INVASION-REWORK] guarded — see docs/invasion-rework/
-            return await MaintenanceService.run_invasion_cycle(
-                now=now, schedule_occurrences=False,
-            )
-        return {}
-
-    @classmethod
     async def recover_on_startup(
         cls,
         session: AsyncSession,
@@ -179,9 +167,8 @@ class RecoveryService:
 
         await session.commit()
 
-        # V2 startup recovery expires overdue ACTIVE rows, without granting
-        # rewards or running the legacy battle cycle. The legacy call remains
-        # in _recover_legacy_invasions for Phase 7 cleanup.
+        # TODO (PHASE 7 Step 4): InvasionV2Recovery.run_on_startup() will be
+        # wired here. Until then, preserve the gated V2 scheduler recovery.
         try:
             from sib.services.maintenance.service import MaintenanceService
             from sib.services.invasion_v2.scheduler import InvasionScheduler

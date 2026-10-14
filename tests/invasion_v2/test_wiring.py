@@ -1,4 +1,4 @@
-"""Production entry points route to v2 only; legacy calls stay dormant."""
+"""Production entry points route to the gated v2 scheduler only."""
 
 import asyncio
 import logging
@@ -22,7 +22,6 @@ async def test_maintenance_uses_only_v2_tick(monkeypatch, enabled):
     from sib.services.match_result import MatchResultService
     from sib.services.apple_duel_presentation import AppleDuelPresentation
     from sib.services.player_xp import PlayerXPService
-    from sib.services.invasion_telegram import InvasionTelegramService
 
     @asynccontextmanager
     async def fake_session():
@@ -40,17 +39,11 @@ async def test_maintenance_uses_only_v2_tick(monkeypatch, enabled):
     monkeypatch.setattr(MaintenanceService, "_resume_pending_bot_turns", AsyncMock())
     monkeypatch.setattr(AppleDuelPresentation, "recover_and_publish", AsyncMock())
     monkeypatch.setattr(PlayerXPService, "deliver_pending_notifications", AsyncMock())
-    old_cycle = AsyncMock()
-    old_publisher = AsyncMock()
     new_tick = AsyncMock()
-    monkeypatch.setattr(MaintenanceService, "run_invasion_cycle", old_cycle)
-    monkeypatch.setattr(InvasionTelegramService, "publish_maintenance_updates", old_publisher)
     monkeypatch.setattr(InvasionScheduler, "tick", new_tick)
 
     await MaintenanceService.run_once()
     assert new_tick.await_count == int(enabled)
-    old_cycle.assert_not_awaited()
-    old_publisher.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -73,14 +66,11 @@ async def test_recovery_uses_only_v2(monkeypatch, enabled):
     monkeypatch.setattr(LoveService, "apply_daily_decay", AsyncMock(return_value=0))
     monkeypatch.setattr(LoveService, "expire_overdue_gifts", AsyncMock(return_value=[]))
     monkeypatch.setattr(MaintenanceService, "_invasion_enabled", AsyncMock(return_value=enabled))
-    old_cycle = AsyncMock()
     new_recover = AsyncMock(return_value=1)
-    monkeypatch.setattr(MaintenanceService, "run_invasion_cycle", old_cycle)
     monkeypatch.setattr(InvasionScheduler, "recover", new_recover)
 
     await RecoveryService.recover_on_startup(session)
     assert new_recover.await_count == int(enabled)
-    old_cycle.assert_not_awaited()
 
 
 @pytest.mark.asyncio

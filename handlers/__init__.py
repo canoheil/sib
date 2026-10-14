@@ -28,7 +28,6 @@ from sib.handlers.assets import router as assets_router
 from sib.handlers.admin_center import router as admin_center_router
 from sib.handlers.friendly import router as friendly_router
 from sib.handlers.marriage import router as marriage_router
-from sib.handlers.invasion import router as invasion_router
 from sib.handlers.inv2_join import router as inv2_join_router
 from sib.handlers.inv2_admin import router as inv2_admin_router
 from sib.handlers.inv2_controls import router as inv2_controls_router
@@ -71,7 +70,6 @@ def register_all_handlers(dp: Dispatcher) -> None:
     dp.include_router(inv2_dashboard_router)
     dp.include_router(inv2_admin_router)
     dp.include_router(inv2_join_router)
-    dp.include_router(invasion_router)
     dp.include_router(start_router)
 
 
@@ -91,5 +89,4 @@ __all__ = [
     "battleship_router",
     "ads_router",
     "leaderboard_router",
-    "invasion_router",
 ]

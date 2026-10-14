@@ -75,23 +75,22 @@ async def test_invasion_flag_read_failure_fails_closed_and_is_cached(flag_reader
 
 
 @pytest.mark.asyncio
-async def test_disabled_callback_does_not_enter_invasion_flow(monkeypatch):
+async def test_disabled_inv2_join_callback_does_not_read_invasion(monkeypatch):
+    from sib.handlers import inv2_join
+
     monkeypatch.setattr(MaintenanceService, "_invasion_enabled", AsyncMock(return_value=False))
     answer = AsyncMock()
-    monkeypatch.setattr(invasion_handler, "safe_answer_callback", answer)
-    callback = SimpleNamespace(data="invasion:join:123")
-    await invasion_handler.handle_invasion_callback(callback, bot=None)
-    answer.assert_awaited_once_with(
-        callback, invasion_handler.INVASION_REWORK_TEXT, show_alert=True
-    )
+    callback = SimpleNamespace(data="inv2:join:123", message=None, from_user=None, answer=answer)
+    await inv2_join.handle_inv2_join(callback, bot=None)
+    answer.assert_awaited_once_with(text="⚔️ سیستم تهاجم موقتاً غیرفعال است.", show_alert=True)
 
 
 @pytest.mark.asyncio
-async def test_disabled_cycle_does_not_schedule_even_if_called_directly(monkeypatch):
+async def test_disabled_tick_does_not_open_session(monkeypatch):
+    from sib.services.invasion_v2 import scheduler
+
     monkeypatch.setattr(MaintenanceService, "_invasion_enabled", AsyncMock(return_value=False))
-    schedule = AsyncMock()
-    monkeypatch.setattr(MaintenanceService, "_schedule_current_invasions", schedule)
-    monkeypatch.setattr(MaintenanceService, "_candidate_invasions", AsyncMock(return_value=[]))
-    monkeypatch.setattr(MaintenanceService, "_settle_pending_rewards", AsyncMock(return_value=(0, 0)))
-    await MaintenanceService.run_invasion_cycle(now=datetime.now(timezone.utc))
-    schedule.assert_not_awaited()
+    def unexpected_session():
+        raise AssertionError("disabled tick opened a database session")
+    monkeypatch.setattr(scheduler, "get_session", unexpected_session)
+    assert await scheduler.InvasionScheduler.tick(now=datetime.now(timezone.utc)) is None

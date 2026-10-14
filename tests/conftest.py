@@ -1,7 +1,6 @@
 """Pytest fixtures and configuration."""
 
 import os
-import sys
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
@@ -72,12 +71,6 @@ async def db_session():
             "sib_TEST_DATABASE_URL does not point to the expected test database."
         )
 
-    # The DB is cleaned per test, so reset this Telegram-only process-local
-    # retry throttle as well; SQLite may reuse deleted integer primary keys.
-    invasion_telegram = sys.modules.get("sib.services.invasion_telegram")
-    if invasion_telegram is not None:
-        invasion_telegram._ANNOUNCEMENT_RETRY_AFTER.clear()
-
     engine = create_async_engine(
         test_database_url,
         poolclass=NullPool,
@@ -100,11 +93,6 @@ async def db_session():
     async with session_factory() as session:
         # Clean transient test data between tests to ensure test isolation
         from sqlalchemy import text
-        await session.execute(text("DELETE FROM invasion_defense_actions"))
-        await session.execute(text("DELETE FROM invasion_contributions"))
-        await session.execute(text("DELETE FROM invasion_participants"))
-        await session.execute(text("DELETE FROM invasion_waves"))
-        await session.execute(text("DELETE FROM invasions"))
         await session.execute(text("DELETE FROM player_xp_grants"))
         await session.execute(text("DELETE FROM player_progressions"))
         await session.execute(text("DELETE FROM flower_gifts"))
