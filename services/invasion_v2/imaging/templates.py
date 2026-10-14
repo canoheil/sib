@@ -1,6 +1,11 @@
 """Actual repository font and 16:9 composition geometry."""
 from pathlib import Path
-from PIL import ImageFont
+from PIL import ImageFont, features
+try:
+    import arabic_reshaper
+    from bidi.algorithm import get_display
+except ImportError as exc:
+    raise ImportError("Persian invasion imaging needs arabic-reshaper and python-bidi") from exc
 
 ROOT = Path(__file__).resolve().parents[3]
 FONT_CANDIDATES = (
@@ -29,8 +34,9 @@ def font(size: int):
 
 
 def label(draw, xy, text: str, size: int, *, fill="#f3eee1", anchor="ra"):
-    """Shape RTL text with libraqm (required for legible Persian)."""
-    from PIL import features
-    if not features.check("raqm"):
-        raise RuntimeError("Pillow must have libraqm to shape Persian invasion text")
-    draw.text(xy, str(text), font=font(size), fill=fill, anchor=anchor, direction="rtl", stroke_width=1, stroke_fill="#090b12")
+    """Shape with libraqm where available, otherwise local reshaper + bidi."""
+    if features.check("raqm"):
+        draw.text(xy, str(text), font=font(size), fill=fill, anchor=anchor, direction="rtl", stroke_width=1, stroke_fill="#090b12")
+    else:
+        visual = get_display(arabic_reshaper.reshape(str(text)))
+        draw.text(xy, visual, font=font(size), fill=fill, anchor=anchor, stroke_width=1, stroke_fill="#090b12")

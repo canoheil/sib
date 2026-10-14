@@ -84,7 +84,7 @@ async def handle_inv2_join(callback: CallbackQuery, bot) -> None:
                 Inv2Invasion.id == inv.id, Inv2Invasion.status == InvasionStatus.ACTIVE.value,
                 Inv2Invasion.enemy_hp_remaining == inv.enemy_hp_remaining,
                 Inv2Invasion.ends_at > now,
-            ).values(enemy_hp_remaining=remaining,
+            ).execution_options(synchronize_session=False).values(enemy_hp_remaining=remaining,
                 status=InvasionStatus.VICTORY.value if terminal else InvasionStatus.ACTIVE.value,
                 finalized_at=now if terminal else None))
             if result.rowcount != 1:

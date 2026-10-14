@@ -23,8 +23,15 @@ router = Router(name="inv2_admin")
 router.message.filter(IsAdminFilter())
 
 
+def _private(message: Message) -> bool:
+    chat_type = getattr(getattr(message, "chat", None), "type", None)
+    return getattr(chat_type, "value", chat_type) == "private"
+
+
 @router.message(Command("inv2_preview"))
 async def preview(message: Message) -> None:
+    if not _private(message):
+        return  # Never reply or send an album to a group, even for an admin.
     try:
         args = (message.text or "").split()
         enemy = EnemyType(args[1]) if len(args) == 2 else None
@@ -61,6 +68,8 @@ async def preview(message: Message) -> None:
 
 @router.message(Command("inv2_simulate"))
 async def simulate(message: Message) -> None:
+    if not _private(message):
+        return
     try:
         args = (message.text or "").split()
         if len(args) != 4:

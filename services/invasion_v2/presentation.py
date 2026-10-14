@@ -13,7 +13,7 @@ from sib.database.models import Character, Inv2Attack, Inv2Invasion, Inv2Region,
 from sib.services.character_art import artwork_path
 from sib.services.config_store import ConfigService
 from . import narrative
-from .circuit_breaker import record_send_failure, record_send_success
+from .circuit_breaker import is_group_available, record_send_failure, record_send_success
 from .enums import InvasionStatus
 from .imaging.cache import cached_image
 from .imaging.compose import announcement_image, join_image, result_image
@@ -62,6 +62,8 @@ class InvasionPresentation:
                 if region is None:
                     return
                 group_id = inv.group_id
+                if not await is_group_available(group_id, session=session):
+                    return
                 path = await asyncio.to_thread(cached_image, ("announcement", inv.id, inv.enemy_type),
                     lambda: announcement_image(inv.enemy_type, region.name_fa, region.controlling_faction))
                 caption = _caption(narrative.render_announcement(
@@ -69,14 +71,15 @@ class InvasionPresentation:
                     enemy_name=inv.enemy_name_fa, rng=random.Random(inv.id)))
                 kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
                     text="⚔️ پیوستن به نبرد", callback_data=f"inv2:join:{inv.id}")]])
+                raw_window = await ConfigService.get(session, "invasion_join_window_seconds")
+                window = int(300 if raw_window is None else raw_window)
+                if window <= 0:
+                    raise ValueError("Invalid join window")
                 message = await _telegram(group_id, bot.send_photo, chat_id=group_id,
                     photo=FSInputFile(path), caption=caption, reply_markup=kb, parse_mode=None)
                 if message is None:
                     return
                 now = datetime.now(timezone.utc)
-                window = int(await ConfigService.get(session, "invasion_join_window_seconds"))
-                if window <= 0:
-                    raise ValueError("Invalid join window")
                 inv.message_chat_id = message.chat.id
                 inv.message_id = message.message_id
                 inv.announcement_sent_at = now
@@ -144,7 +147,15 @@ class InvasionPresentation:
                     rewards = (await session.execute(select(Inv2Reward.reward_type, Inv2Reward.reward_amount)
                         .where(Inv2Reward.invasion_id == inv.id))).all()
                     if rewards:
-                        caption += "\n🎁 پاداش مدافعان: ۳ سیب طلایی؛ بخت سیب الماسی و ابسیدینی ثبت شد."
+                        from collections import Counter
+                        totals = Counter()
+                        for kind, amount in rewards:
+                            totals[kind] += amount
+                        labels = (("golden_apple", "سیب طلایی"),
+                                  ("diamond_apple", "سیب الماسی"),
+                                  ("obsidian_apple", "سیب ابسیدینی"))
+                        summary = "، ".join(f"{name} ×{totals[key]}" for key, name in labels if totals[key])
+                        caption += "\n🎁 پاداش مدافعان: " + summary
                 await _telegram(inv.group_id, bot.send_photo, chat_id=inv.group_id,
                     photo=FSInputFile(path), caption=_caption(caption), parse_mode=None)
         except Exception:

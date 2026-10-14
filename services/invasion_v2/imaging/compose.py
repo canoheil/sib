@@ -41,7 +41,8 @@ def join_image(enemy_type: str, card_path: Path | None, username: str, damage: i
     d.rounded_rectangle((905, 80, 1230, 240), 26, fill=(9, 11, 18, 205))
     label(d, (1198, 155), username[:28], 30)
     d.rectangle(BAND, fill=(9, 11, 18, 216))
-    label(d, (1170, 650), f"{damage:,} آسیب" if damage else "سایه بر میدان افتاد", 44)
+    fa_damage = f"{damage:,}".translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
+    label(d, (1170, 650), f"{fa_damage} آسیب" if damage else "سایه بر میدان افتاد", 44)
     if is_crit:
         flash = Image.new("RGBA", SIZE, (225, 96, 65, 21))
         img.alpha_composite(flash)
@@ -59,5 +60,5 @@ def result_image(enemy_type: str, status: str, region: str, faction: str) -> Ima
     d.rectangle((0, 0, 1280, 135), fill=(9, 11, 18, 205))
     d.rectangle(BAND, fill=(9, 11, 18, 230))
     label(d, (1190, 78), f"{region[:30]} · {faction[:22]}", 35)
-    label(d, (1145, 652), "پیروزی" if status == "VICTORY" else "شکست", 65, fill="#ebd38c" if status == "VICTORY" else "#efa7a0")
+    label(d, (1145, 610), "پیروزی" if status == "VICTORY" else "شکست", 65, fill="#ebd38c" if status == "VICTORY" else "#efa7a0")
     return img.convert("RGB")

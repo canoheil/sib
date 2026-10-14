@@ -24,7 +24,7 @@ async def grant_victory_rewards(session, invasion_id: int) -> None:
     user's rolls/inventory/ledger entries commit together with that marker.
     """
     invasion = await session.scalar(select(Inv2Invasion).where(
-        Inv2Invasion.id == invasion_id).with_for_update())
+        Inv2Invasion.id == invasion_id).with_for_update().execution_options(populate_existing=True))
     if invasion is None or invasion.status != InvasionStatus.VICTORY.value:
         return
     attackers = list((await session.scalars(select(Inv2Attack.user_id).where(
@@ -47,7 +47,7 @@ async def settle_outcome(session, invasion_id: int, status: str) -> None:
     if status not in (InvasionStatus.VICTORY.value, InvasionStatus.DEFEAT.value):
         return
     inv = await session.scalar(select(Inv2Invasion).where(
-        Inv2Invasion.id == invasion_id).with_for_update())
+        Inv2Invasion.id == invasion_id).with_for_update().execution_options(populate_existing=True))
     if inv is None or inv.status != status:
         return
     if status == InvasionStatus.VICTORY.value:
