@@ -12,6 +12,7 @@ from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
 
+import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageOps, features
 
 try:
@@ -116,6 +117,36 @@ def _paste_enemy(image, enemy_type, position, *, opacity=1.0, scale=1.0):
     if opacity != 1.0:
         enemy.putalpha(enemy.getchannel("A").point(lambda value: round(value * opacity)))
     image.alpha_composite(enemy, position)
+
+
+def _draw_radial_vignette(img, center_xy, radius_x, radius_y, inner_alpha, outer_alpha=0.0,
+                          color=(0, 0, 0)):
+    """Smooth radial fade from inner_alpha at the center to outer_alpha at the
+    ellipse edge, pasted as an RGBA layer (numpy gradient for smoothness)."""
+    cx, cy = center_xy
+    width, height = img.size
+    ys, xs = np.ogrid[:height, :width]
+    distance = np.sqrt(((xs - cx) / radius_x) ** 2 + ((ys - cy) / radius_y) ** 2)
+    blend = np.clip(distance, 0.0, 1.0)
+    alpha = (inner_alpha + (outer_alpha - inner_alpha) * blend) * 255
+    layer = Image.new("RGBA", img.size, (int(color[0]), int(color[1]), int(color[2]), 0))
+    layer.putalpha(Image.fromarray(alpha.astype("uint8"), mode="L"))
+    img.alpha_composite(layer)
+
+
+# Phase 8E status words: dramatic, not pastel. Vignette -> glow -> text.
+_STATUS_WORDS = {
+    "victory": (
+        "پیوروزی", "#C8A02E", "#3A2408", 8,      # deep gold, warm dark-brown stroke
+        "#E8C766", 0.60, 20,                    # glow: color, opacity, blur radius
+        (640, 325), 450, 180, 0.55, (60, 40, 10)  # warm halo vignette
+    ),
+    "defeat": (
+        "شکست", "#7A0E0E", "#1A0202", 10,       # deep blood red, near-black stroke
+        "#8B0000", 0.70, 24,                    # glow: color, opacity, blur radius
+        (640, 325), 450, 200, 0.75, (0, 0, 0)   # dark radial vignette
+    ),
+}
 
 
 def _text_ink_box(size, xy, text, font, anchor="mm"):
@@ -296,10 +327,16 @@ def _result(status, region_name, enemy_type, reward_lines):
     region_size = _fit_size(region_name, 88, max_width=1120)
     _draw_text_with_shadow(image, (640, 52), region_name, templates.font(region_size),
                            fill="#FCECD8", stroke_fill="#3A1A08", stroke_width=2, anchor="ma")
-    word = "پیروزی" if status == "victory" else "شکست"
-    _draw_text_with_shadow(image, (640, 350), word, templates.font(200),
-                           fill="#FCECD8" if status == "victory" else "#efa7a0",
-                           stroke_width=4, anchor="mm")
+    # Dramatic status word: vignette behind, glow, then the stroked word.
+    (word, fill, stroke, stroke_width, glow_color, glow_opacity, glow_blur,
+     center, radius_x, radius_y, inner_alpha, vignette_color) = _STATUS_WORDS[status]
+    _draw_radial_vignette(image, center, radius_x, radius_y, inner_alpha,
+                          color=vignette_color)
+    word_font = templates.font(200)
+    _glow(image, center, word, word_font, glow_color, opacity=glow_opacity,
+          blur=glow_blur, anchor="mm")
+    _draw_text_with_shadow(image, center, word, word_font, fill=fill,
+                           stroke_fill=stroke, stroke_width=stroke_width, anchor="mm")
     if status == "victory":
         lines = list(reward_lines)
         spacing = min(64, 192 // max(1, len(lines)))
