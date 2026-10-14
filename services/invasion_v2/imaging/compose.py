@@ -89,6 +89,25 @@ def _draw_text_with_shadow(img, xy, text, font, fill,
                              stroke_width=stroke_width, stroke_fill=stroke_fill, **kwargs)
 
 
+def _glow(image, xy, text, font, color, *, opacity, blur, anchor="mm", dilate=2):
+    """Soft glow behind text: a dilated, blurred copy of the glyphs."""
+    layer = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    visual, kwargs = _shaped(text)
+    ImageDraw.Draw(layer).text(xy, visual, font=font, fill=color, anchor=anchor, **kwargs)
+    box = layer.getchannel("A").getbbox()
+    if box is None:
+        return
+    pad = blur * 2 + dilate * 2 + 2
+    box = (max(0, box[0] - pad), max(0, box[1] - pad),
+           min(image.width, box[2] + pad), min(image.height, box[3] + pad))
+    cropped = layer.crop(box)
+    for _ in range(dilate):
+        cropped = cropped.filter(ImageFilter.MaxFilter(3))
+    cropped = cropped.filter(ImageFilter.GaussianBlur(blur))
+    cropped.putalpha(cropped.getchannel("A").point(lambda value: round(value * opacity)))
+    image.alpha_composite(cropped, (box[0], box[1]))
+
+
 def _paste_enemy(image, enemy_type, position, *, opacity=1.0, scale=1.0):
     enemy = load_silhouette(enemy_type)
     if scale != 1.0:
@@ -179,7 +198,7 @@ def _join(enemy_type, card_image_bytes, username, damage, is_crit, enemy_hp_rema
         draw = ImageDraw.Draw(image)
         label(draw, (1216, 64), username, 32, fill="white", stroke_width=2, max_width=310)
         damage_text = _digits(damage)
-        damage_text = f"{damage_text} آسیب" if damage else "سایه بر میدان افتاد"
+        damage_text = f"{damage_text} اسیب" if damage else "سایه بر میدان افتاد"
         if is_crit:
             glow = Image.new("RGBA", (780, 160))
             label(ImageDraw.Draw(glow), (390, 122), damage_text, 64,
@@ -197,9 +216,16 @@ def _join(enemy_type, card_image_bytes, username, damage, is_crit, enemy_hp_rema
     if is_crit:
         _draw_text_with_shadow(image, (70, 52), "ضربه کاری", templates.font(28),
                                fill="#FFD24A", stroke_fill="#3A1A08", stroke_width=1, anchor="la")
+    # Post-attack HP is stored on the row: 0 means this blow was the kill.
+    is_kill = enemy_hp_remaining is not None and enemy_hp_remaining <= 0
     damage_text = _digits(damage)
+    damage_fill = "#B8E986" if is_kill else "#FFD24A" if is_crit else "#FCECD8"
+    glow_opacity = 0.60 if (is_crit or is_kill) else 0.40
+    glow_blur = 16 if (is_crit or is_kill) else 12
+    _glow(image, (640, 648), damage_text, templates.font(160), damage_fill,
+          opacity=glow_opacity, blur=glow_blur, anchor="ms")
     _draw_text_with_shadow(image, (640, 648), damage_text, templates.font(160),
-                           fill="#FFD24A" if is_crit else "#FCECD8", stroke_width=2, anchor="ms")
+                           fill=damage_fill, stroke_fill="#2A1408", stroke_width=2, anchor="ms")
     if enemy_hp_remaining is not None:
         _draw_text_with_shadow(image, (1216, 662), _digits(enemy_hp_remaining),
                                templates.font(44), fill="#B8A98F", stroke_fill="#1A0E06",
