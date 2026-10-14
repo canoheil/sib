@@ -206,7 +206,7 @@ def _announcement(enemy_type, region_name, enemy_label_fa, *, legacy=False):
     _paste_enemy(image, enemy_type, (80, 80))
     if legacy:
         draw = ImageDraw.Draw(image)
-        label(draw, (1216, 100), "تهاجم شیاسیب", 44, fill="#FCECD8",
+        label(draw, (1216, 100), "یورش شیاسیب", 44, fill="#FCECD8",
               stroke_width=2, stroke_fill="#3A1A08", max_width=350)
         label(draw, (1216, 200), region_name, 44, fill="#FCECD8",
               stroke_width=2, stroke_fill="#3A1A08", max_width=350)

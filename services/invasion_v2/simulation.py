@@ -53,7 +53,7 @@ async def simulate(session, group_raw: str, enemy_raw: str | None = None) -> str
     raw_difficulty = await ConfigService.get(session, "invasion_difficulty_multiplier")
     difficulty = float(DEFAULT_INVASION_DIFFICULTY_MULTIPLIER if raw_difficulty is None else raw_difficulty)
     if not math.isfinite(difficulty) or difficulty <= 0:
-        return "سختی نبرد معتبر نیست."
+        return "سختی یورش معتبر نیست."
     hp = compute_enemy_hp(average, enemy, difficulty)
     if hp <= 0:
         return "جان دشمن معتبر نیست."

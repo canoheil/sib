@@ -169,7 +169,7 @@ def join_keyboard(invasion_id: int) -> InlineKeyboardMarkup:
     every caption edit of a still-joinable announcement must re-send it.
     """
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
-        text="⚔️ پیوستن به نبرد", callback_data=f"inv2:join:{invasion_id}")]])
+        text="⚔️ پیوستن به یورش", callback_data=f"inv2:join:{invasion_id}")]])
 
 
 async def _edit_announcement_caption(

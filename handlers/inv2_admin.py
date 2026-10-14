@@ -105,7 +105,7 @@ async def simulate(message: Message) -> None:
         low, high = round(average * .85), round(average * 1.15 * 2)
         likely = "محتمل" if count * average >= hp else "دور از انتظار"
         await _telegram(None, message.answer, text=(
-            f"⚔️ پیش‌بینی نبرد، بدون ثبت در پایگاه داده\n"
+            f"⚔️ پیش‌بینی یورش، بدون ثبت در پایگاه داده\n"
             f"جان دشمن: {fa_number(hp)}\nدامنهٔ ضربهٔ هر نگهبان: {fa_number(low)} تا {fa_number(high)}\n"
             f"با {fa_number(count)} نگهبان، پیروزی {likely} است؛ این تنها برآورد است."))
     except (ValueError, IndexError):

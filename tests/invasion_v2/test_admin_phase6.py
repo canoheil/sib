@@ -144,7 +144,7 @@ async def test_spawn_respects_limit_mute_group_and_flag(db, monkeypatch):
     assert "غیرفعال" in await handler._run(1, "inv2_force_spawn", ["-100", "moon", "soldier"])
     circuit_breaker._enabled.return_value = True
     first = await handler._run(1, "inv2_force_spawn", ["-100", "moon", "soldier"])
-    assert "نبرد شمارهٔ" in first
+    assert "یورش شمارهٔ" in first
     assert "سقف" in await handler._run(1, "inv2_force_spawn", ["-100"])
     async with factory.begin() as s:
         s.add(Inv2GroupState(group_id=-100, muted_until=NOW + timedelta(hours=2)))
@@ -254,8 +254,8 @@ async def test_read_commands_mute_unmute_reset_and_bad_inputs_audited(db):
     assert "خاموشی بیرون" in await handler._run(1, "inv2_unmute", ["-100"])
     assert "آزاد شد" in await handler._run(1, "inv2_reset_region", ["moon"])
     assert "تنظیمات" in await handler._run(1, "inv2_config", [])
-    assert "نبردهای اخیر" in await handler._run(1, "inv2_invasions", [])
-    assert "وضعیت تهاجم" in await handler._run(1, "inv2_status", [])
+    assert "یورش‌های اخیر" in await handler._run(1, "inv2_invasions", [])
+    assert "وضعیت یورش" in await handler._run(1, "inv2_status", [])
     assert "ورودی" in await handler._run(1, "inv2_toggle", [])
     assert "نامعتبر" in await handler._run(1, "inv2_mute", ["n/a", "a"])
     async with factory() as s:

@@ -22,7 +22,7 @@ def keyboard(admin_id: int) -> InlineKeyboardMarkup:
         return InlineKeyboardButton(text=text, callback_data=f"inv2adm:{admin_id}:{action}")
     return InlineKeyboardMarkup(inline_keyboard=[
         [b("روشن‌کردن", "on"), b("خاموش‌کردن", "off"), b("تازه‌سازی", "refresh")],
-        [b("نواحی", "regions"), b("گروه‌های خاموش", "muted"), b("نبردهای فعال", "active")],
+        [b("نواحی", "regions"), b("گروه‌های خاموش", "muted"), b("یورش‌های فعال", "active")],
         [b("تنظیمات", "config"), b("سلامت", "health"), b("شبیه‌سازی", "simulate")],
     ])
 
@@ -59,11 +59,11 @@ async def dashboard_action(callback: CallbackQuery):
     admin_id = callback.from_user.id
     if action == "on":
         text = await _run(admin_id, "inv2_toggle", ["on"])
-        if text.startswith("⚔️ تهاجم"):
+        if text.startswith("⚔️ یورش"):
             invalidate_invasion_config_cache()
     elif action == "off":
         text = await _run(admin_id, "inv2_toggle", ["off"])
-        if text.startswith("⚔️ تهاجم"):
+        if text.startswith("⚔️ یورش"):
             invalidate_invasion_config_cache()
     elif action == "refresh":
         text = await _execute(admin_id, "inv2adm_refresh", [], ops.status, 0, 0)

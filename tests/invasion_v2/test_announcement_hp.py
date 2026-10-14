@@ -68,7 +68,7 @@ async def test_announcement_caption_contains_hp(db):
         assert inv.message_id == 123 and inv.message_chat_id == -100
     # The join button is untouched.
     button = kwargs["reply_markup"].inline_keyboard[0][0]
-    assert button.text == "⚔️ پیوستن به نبرد"
+    assert button.text == "⚔️ پیوستن به یورش"
     assert button.callback_data == f"inv2:join:{inv_id}"
 
 
@@ -109,7 +109,7 @@ async def test_hp_edit_keeps_the_join_button(db, monkeypatch):
     markup = bot.edit_message_caption.await_args.kwargs.get("reply_markup")
     assert markup is not None, "live HP edit dropped the join button"
     button = markup.inline_keyboard[0][0]
-    assert button.text == "⚔️ پیوستن به نبرد"
+    assert button.text == "⚔️ پیوستن به یورش"
     assert button.callback_data == f"inv2:join:{inv_id}"
 
 

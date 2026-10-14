@@ -277,10 +277,10 @@ async def test_join_passes_invasion_id_without_changing_damage_flow(db, monkeypa
 
 # Phase 8B pool fingerprints: existing prose must remain byte-for-byte intact.
 # Refreshed twice by the Persian copy audit: phase 1 (ANNOUNCEMENT, «چشم‌به‌راه»)
-# and phase 4 (every pool, grammar of the plural defender subjects, «سردار
-# شیاسیب», «۱۲۳ ضربه», and the «می‌گردد» register) — the wording changed on
-# purpose, so these hashes are the new contract, not a regression.
-ORIGINAL_POOLS = {'ANNOUNCEMENT': (12, '0d90ff8560d578e9ba4d65a074228ddd363f7e8b5023c5b18d34ad3b4a59efa7'), 'JOIN_NORMAL': (22, 'b4fe62e069057b4e2d8972c2a651374fcc21bbe9905eed983f84e8c4ff592537'), 'JOIN_CRIT': (16, '9913c46e17998332aa3d27e7f927a55e6e37a2913f7e64a3e88a35f36585928f'), 'JOIN_KILL': (10, 'cbe6b1801a929c5586c804e747541d442a6b4a6494d72d3eb877aa35049e37b3'), 'VICTORY': (12, '4be138d58cf41098afd69248b4d7aaca26991306aa0f9a751648767034bb1055'), 'DEFEAT': (12, 'ff92a50dadd7f9e0ed5047de2e26f608ce8175f39024fc4bad970da34b2ad6e3'), 'EXPIRED': (8, '7a4dd2cc053d1d28dcf69b906da2b2b7da7313d3088b3303c66708ddf3913185')}
+# and phases 4-5 (every pool: grammar of the plural defender subjects,
+# «سردار شیاسیب», «۱۲۳ ضربه», the «می‌گردد» register, and the «هٔ» style) —
+# the wording changed on purpose; these hashes are the new contract.
+ORIGINAL_POOLS = {'ANNOUNCEMENT': (12, '42ba587da7f3252bbdd20f875a3a224795c41a536bded3ca7ba4c39e249208e1'), 'JOIN_NORMAL': (22, 'd8d7c6cb9bc7f5fe4ad3ab22086e06d96a821a01bc6a0702d4fbf437967e87d8'), 'JOIN_CRIT': (16, '7ab7da9057315614756cf145469722bdc1e56570eba9620097609a2bd2da63d7'), 'JOIN_KILL': (10, '58eeb44fb1a36cb1b77ef5f02bfbb9b4bb8c55963ef1f990df6535f6ff693e13'), 'VICTORY': (12, '4be138d58cf41098afd69248b4d7aaca26991306aa0f9a751648767034bb1055'), 'DEFEAT': (12, 'ff92a50dadd7f9e0ed5047de2e26f608ce8175f39024fc4bad970da34b2ad6e3'), 'EXPIRED': (8, '7a4dd2cc053d1d28dcf69b906da2b2b7da7313d3088b3303c66708ddf3913185')}
 
 @pytest.mark.parametrize("name", ORIGINAL_POOLS)
 def test_existing_narrative_variants_unchanged(name):
