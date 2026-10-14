@@ -1,6 +1,6 @@
 # Phase 1 — Invasion v2 design specification
 
-**Status:** design reference only. Phase 0 keeps the old invasion system disabled behind `invasion_enabled`; this phase does not create tables, change code, seed a database, generate images, or turn the flag on. Subsequent phases should implement this specification without silently changing its names, numbers, or probabilities. See [region seeds](PHASE-1-REGION-SEEDS.md), [narrative samples](PHASE-1-NARRATIVE.md), and [asset plan](PHASE-1-ASSETS.md).
+**Status:** original Phase 1 design reference, with a Phase 4.5 implementation addendum below. Phase 0 kept the old invasion system disabled behind `invasion_enabled`; Phase 1 itself did not create tables, change code, seed a database, generate images, or turn the flag on. Later phases implement this specification without silently changing its numbers/probabilities. See [region seeds](PHASE-1-REGION-SEEDS.md), [narrative samples](PHASE-1-NARRATIVE.md), [asset plan](PHASE-1-ASSETS.md), and [Phase 4.5 report](PHASE-4.5-REPORT.md).
 
 ## World
 
@@ -61,7 +61,7 @@ enemy_hp = round(
 )
 ```
 
-`difficulty_multiplier` defaults to **4.0**, configurable via `system_config`. The enemy type's `power_multiplier` is the `type_multiplier` in this formula. `avg_card_power_of_all_group_members` must come from `GroupPowerResolver.average_main_card_power(group_id=..., session=...)`. If it returns `None` (or no resolver is configured), scheduling fails closed and does **not** substitute a guessed number. The concrete resolver is deferred to Phase 4.5.
+`difficulty_multiplier` defaults to **4.0**, configurable via `system_config`. The enemy type's `power_multiplier` is the `type_multiplier` in this formula. `avg_card_power_of_all_group_members` must come from `GroupPowerResolver.average_main_card_power(group_id=..., session=...)`. If it returns `None` (or no resolver is configured), scheduling fails closed and does **not** substitute a guessed number. The concrete resolver is implemented in Phase 4.5; its observation-based definition of active group membership and fail-closed semantics are documented below.
 
 ## Join and attack mechanics
 
@@ -131,15 +131,52 @@ On defeat: **no rewards**.
 | invasion_max_active_per_group | 1 | int |
 | invasion_circuit_breaker_threshold | 3 | int |
 | invasion_mute_hours | 24 | int |
+| inv2_member_active_window_days | 30 | int (Phase 4.5) |
 
-These are **design defaults**, not a request to insert or change configuration rows in Phase 1.
+These were **design defaults** in Phase 1. Migration 037 now inserts `inv2_member_active_window_days = 30` if absent, without touching `invasion_enabled`. Its description is “Days after which a group member is considered inactive.” The existing `system_config` table has only key/value/timestamps, so this description lives in migration/code/docs, not in a DB description column.
 
 ## Decisions needed before implementation (do not infer defaults)
 
 1. Does joining itself consume the user's single attack and deal damage, or is attack a separate post-join action? The phrase “Join — normal/critical/very high damage” in the narrative request suggests a combined event, but the mechanics do not specify one.
 2. What is the defeat timer's duration/start point relative to the 300-second join window, and how should bot downtime be handled (expired with defeat, void, or a separate terminal state)?
 3. What is the source of a group's “current region,” and exactly how does “prefer lost regions” affect the 70% current-region / 30% random selection without changing those probabilities?
-4. **Open question (Phase 4.5):** how will the concrete `GroupPowerResolver` use the proposed `inv2_group_members` membership record and existing group-interaction hooks to compute `avg_card_power_of_all_group_members` for members without a main card or groups with no eligible cards? Which card-power snapshot applies if a profile changes mid-invasion? Phase 4 intentionally installs no resolver and cannot spawn.
+4. **Resolved in Phase 4.5:** `DbGroupPowerResolver` requires a valid selected Main Card for *every* recently observed member, otherwise it returns `None` and skips spawn. Power is read at spawn time from the current card definition + level, then snapshotted indirectly into `enemy_hp`; later profile edits do not recompute an invasion already scheduled. See the addendum below. Phase 4 originally installed no resolver.
 5. Does “all joiners” include a joiner who never attacks? Are the 10% and 2% reward rolls independent **per joiner**, or per invasion? The text specifies each joiner but not roll correlation.
 6. Does `now > muted_until + 7 days` apply literally on a later scan even though normal scheduling skips a muted group only until `muted_until`? Define when the seven-day deactivation check runs and whether consecutive failures persist after mute expiry.
 7. Is the neutral literal `بی‌طرف` a faction record or a display value? The table is not created until Phase 2; decide the column representation then. Also confirm whether round-robin advances at each interval globally or per group.
+
+## Phase 4.5 implementation addendum — observed group power
+
+- Migration `037_inv2_group_members` (after `036_invasion_v2`) adds only
+  `inv2_group_members`: BIGINT auto-ID, FKs to `users.id`/`groups.id`, unique
+  `(user_id, group_id)`, individual FK indexes and `(group_id, last_seen_at)`
+  index, non-null UTC `last_seen_at` plus creation/update timestamps. Downgrade
+  removes the table; existing configuration values are deliberately retained.
+- A single `GroupMembershipMiddleware` instance is registered on **both**
+  message and callback outer middleware in `bot.py`, ahead of rate limiting.
+  A group/supergroup update with a real user queues one write per user/group
+  per 60 seconds, with at most 256 pending writes. It never awaits the DB in
+  an incoming handler; errors (including unregistered FK rows) log at DEBUG
+  and allow retry on the next update. The atomic upsert only advances
+  `last_seen_at`, never rewinds it. No channel, private-chat, bot or anonymous
+  activity is inferred to be a human group member. This is *observed activity*,
+  **not** a Telegram member-list API; silent members cannot be discovered.
+- `DbGroupPowerResolver.average_main_card_power` reads observations within
+  `inv2_member_active_window_days` (default **30**); zero observations means
+  unknown (`None`). For **every** active member it calls the same Main Card
+  selection logic as the existing profile (`PlayerCard.is_favorite`, first ID
+  for legacy duplicate flags) and derives displayed power via
+  `card_attributes(card, character).power` (character base + 10 per level above
+  1). A missing Main Card, missing character, invalid level/stats, invalid
+  window, or DB error returns `None` for the whole group. It does not drop
+  incomplete members from the divisor, use party composition, or guess power.
+  Only observed members are in scope; no claim of complete Telegram roster.
+- At startup `bot.main` registers `DbGroupPowerResolver` before recovery and
+  logs `inv2 power resolver: DbGroupPowerResolver`. Registration does **not**
+  enable `invasion_enabled`: existing flag checks still govern all inv2 ticks
+  and recovery. Phase 5 still owns Telegram announcements/activation.
+- An optional, guarded backfill from `match_players` uses the latest historical
+  `created_at`/`updated_at` per non-bot user/group, retaining the timestamp's
+  age. It never fabricates a Main Card or treats old participation as recent.
+  Use `python -m sib.scripts.backfill_inv2_group_members --dry-run` before a
+  confirmed write; it is not part of startup.
