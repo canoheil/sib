@@ -1,4 +1,4 @@
-"""Pure Persian prose: rendering, seeded replay, and event variety."""
+"""Persian prose: pool rendering, history-aware replay, and event variety."""
 
 import re
 from random import Random
@@ -14,6 +14,18 @@ from sib.services.invasion_v2 import (
     render_join,
     render_victory,
 )
+
+
+from sib.services.invasion_v2 import narrative_pool as pool
+
+
+@pytest.fixture(autouse=True)
+def clean_history():
+    with pool._lock:
+        pool._history.clear()
+    yield
+    with pool._lock:
+        pool._history.clear()
 
 
 EVENTS = (
@@ -49,28 +61,35 @@ def test_narrative_has_no_placeholders_repetitions_or_english(event):
     assert "{" not in text and "}" not in text
     assert not re.search(r"[A-Za-z]", text)
     assert re.search(r"[\u0600-\u06ff]", text)
-    assert text.count("داریوش1") == 1
-    assert text.count("سیب سرخ1") == 1
+    # Supplied reference paragraphs sometimes omit names or combat numbers.
+    # Values must be injected exactly when their selected template asks for them.
+    pools = {"announcement": pool.ANNOUNCEMENT, "join_normal": pool.JOIN_NORMAL,
+             "join_critical": pool.JOIN_CRIT, "join_high": pool.JOIN_CRIT,
+             "finisher": pool.JOIN_KILL, "victory": pool.VICTORY,
+             "defeat": pool.DEFEAT, "expired": pool.EXPIRED}
+    values = dict(user="داریوش1", card="سیب سرخ1", damage="۱۲۳", hp_remaining="۴۵۶",
+                  region="درّه ماه", enemy_name="شیاسیب سایه")
+    assert text in {template.format(**values) for template in pools[event]}
     # Repeated sentences/clauses in one render are never deliberate variety.
     clauses = [part.strip() for part in re.split(r"[.!؟؛]", text) if part.strip()]
     assert len(clauses) == len(set(clauses))
-    if event.startswith("join"):
-        assert "۱۲۳" in text and "۴۵۶" in text
-    else:
-        assert text.count("درّه ماه") == 1
-        assert text.count("شیاسیب سایه") == 1
 
 
 @pytest.mark.parametrize("event", EVENTS)
-def test_narrative_is_deterministic_given_seed(event):
-    assert render_event(event, 3, 123) == render_event(event, 3, 123)
-    assert render_event(event, 3, 123) != render_event(event, 4, 123)
+def test_narrative_is_deterministic_given_seed_and_history(event):
+    first = [render_event(event, 3, seed) for seed in range(20)]
+    with pool._lock:
+        pool._history.clear()
+    assert first == [render_event(event, 3, seed) for seed in range(20)]
 
 
 @pytest.mark.parametrize("event", EVENTS)
-def test_twenty_varied_inputs_never_repeat_an_output(event):
-    outputs = [render_event(event, index, 500 + index) for index in range(20)]
-    assert len(outputs) == len(set(outputs))
+def test_twenty_picks_in_one_context_avoid_recent_repeats(event):
+    outputs = []
+    for index in range(20):
+        text = render_event(event, 1, 500 + index)
+        assert text not in outputs[-5:]
+        outputs.append(text)
 
 
 @pytest.mark.parametrize("event", EVENTS)
