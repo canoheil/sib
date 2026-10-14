@@ -20,7 +20,7 @@ from sib.database.models import (Base, Character, Group, Inv2Attack, Inv2GroupSt
     Inv2Invasion, Inv2Region, Inv2Reward, PlayerCard, SystemConfig, User, UserItem)
 from sib.handlers import inv2_admin, inv2_join
 from sib.services.invasion_v2 import presentation
-from sib.services.invasion_v2.imaging import cache, compose, backgrounds
+from sib.services.invasion_v2.imaging import cache, compose, backgrounds, templates
 from sib.services.invasion_v2.rewards_service import grant_victory_rewards, settle_outcome
 from sib.services.maintenance.service import MaintenanceService
 
@@ -230,8 +230,8 @@ async def test_finalize_victory_and_defeat_messages(db):
 
 
 def test_images_dimensions_cache_pruning_and_missing_art(tmp_path):
-    assert set(backgrounds.PALETTES) == {"soldier", "shadow", "commander", "brute", "king"}
-    for enemy in backgrounds.PALETTES:
+    assert set(templates.ENEMY_TYPES) == {"soldier", "shadow", "commander", "brute", "king"}
+    for enemy in templates.ENEMY_TYPES:
         assert backgrounds.background(enemy).size == (1280, 720)
     renders = [compose.announcement_image("soldier", "درّه ماه", "فرزندان ماه"),
         compose.join_image("shadow", ART, "داریوش", 88, True),
