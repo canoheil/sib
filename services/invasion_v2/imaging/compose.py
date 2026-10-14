@@ -21,6 +21,8 @@ try:
 except ImportError as exc:
     raise ImportError("Persian invasion imaging needs arabic-reshaper and python-bidi") from exc
 
+from sib.core.logging import logger
+
 from . import templates
 from .templates import SIZE, label, load_layout, load_silhouette
 
@@ -48,12 +50,14 @@ def _shaped(text):
 _MEASURE = ImageDraw.Draw(Image.new("L", (1, 1)))
 
 
-def _fit_size(text, nominal, *, max_width, min_size=16):
+def _fit_size(text, nominal, *, max_width, min_size=16, warn_key=None):
     """Whole-point shrink until the shaped text fits (same loop as label)."""
     visual, kwargs = _shaped(text)
     size = nominal
     while size > min_size and _MEASURE.textlength(visual, font=templates.font(size), **kwargs) > max_width:
         size -= 1
+    if warn_key is not None and size < nominal:
+        logger.warning("%s: font shrunk %s -> %s", warn_key, nominal, size)
     return size
 
 
@@ -156,6 +160,17 @@ def _text_ink_box(size, xy, text, font, anchor="mm"):
     ImageDraw.Draw(layer).text(xy, visual, font=font, fill=(255, 255, 255, 255),
                                anchor=anchor, **kwargs)
     return layer.getchannel("A").getbbox()
+
+
+_PILL_FILL = (0, 0, 0, 140)  # rgba(0, 0, 0, 0.55)
+
+
+def _pill_backdrop(image, ink_box, *, padding=20, radius=20, fill=_PILL_FILL):
+    """Subtle dark rounded pill behind text, padding around the ink box."""
+    left, top, right, bottom = ink_box
+    ImageDraw.Draw(image).rounded_rectangle(
+        (left - padding, top - padding, right + padding, bottom + padding),
+        radius=radius, fill=fill)
 
 
 def _decorative_line(image, center):
@@ -324,9 +339,15 @@ def _result(status, region_name, enemy_type, reward_lines):
         raise ValueError("Result image requires victory or defeat")
     image = load_layout(status).convert("RGBA")
     _paste_enemy(image, enemy_type, (360, -32), opacity=.35, scale=1.4)
-    region_size = _fit_size(region_name, 88, max_width=1120)
-    _draw_text_with_shadow(image, (640, 52), region_name, templates.font(region_size),
-                           fill="#FCECD8", stroke_fill="#3A1A08", stroke_width=2, anchor="ma")
+    # Region name: always readable - 88px on its own dark pill, y=70.
+    region_size = _fit_size(region_name, 88, max_width=int(SIZE[0] * 0.9), min_size=56,
+                            warn_key="inv2 result region name too long")
+    region_font = templates.font(region_size)
+    region_box = _text_ink_box(image.size, (640, 70), region_name, region_font, anchor="ma")
+    if region_box:
+        _pill_backdrop(image, region_box)
+    _draw_text_with_shadow(image, (640, 70), region_name, region_font,
+                           fill="#FCECD8", stroke_fill="#2A1408", stroke_width=3, anchor="ma")
     # Dramatic status word: vignette behind, glow, then the stroked word.
     (word, fill, stroke, stroke_width, glow_color, glow_opacity, glow_blur,
      center, radius_x, radius_y, inner_alpha, vignette_color) = _STATUS_WORDS[status]
@@ -338,13 +359,19 @@ def _result(status, region_name, enemy_type, reward_lines):
     _draw_text_with_shadow(image, center, word, word_font, fill=fill,
                            stroke_fill=stroke, stroke_width=stroke_width, anchor="mm")
     if status == "victory":
+        # Reward lines: 54px, each on its own subtle dark pill, bottom-center.
         lines = list(reward_lines)
-        spacing = min(64, 192 // max(1, len(lines)))
+        spacing = 86
         for index, line in enumerate(lines):
-            center_y = 680 - (len(lines) - 1 - index) * spacing
-            line_size = min(54, max(1, spacing - 10))
-            _draw_text_with_shadow(image, (640, center_y), line, templates.font(line_size),
-                                   fill="#FCECD8", stroke_width=1, anchor="ms")
+            center_y = 672 - (len(lines) - 1 - index) * spacing
+            line_size = _fit_size(line, 54, max_width=1080)
+            line_font = templates.font(line_size)
+            line_box = _text_ink_box(image.size, (640, center_y), line, line_font, anchor="ms")
+            if line_box:
+                _pill_backdrop(image, line_box)
+            _draw_text_with_shadow(image, (640, center_y), line, line_font,
+                                   fill="#FCECD8", stroke_fill="#2A1408", stroke_width=1,
+                                   anchor="ms")
     return image
 
 
