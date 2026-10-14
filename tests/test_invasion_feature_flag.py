@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from sib.handlers import invasion as invasion_handler
 from sib.services.maintenance import service as maintenance_module
 from sib.services.maintenance.service import MaintenanceService
 
