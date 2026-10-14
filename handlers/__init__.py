@@ -31,6 +31,7 @@ from sib.handlers.marriage import router as marriage_router
 from sib.handlers.invasion import router as invasion_router
 from sib.handlers.inv2_join import router as inv2_join_router
 from sib.handlers.inv2_admin import router as inv2_admin_router
+from sib.handlers.inv2_controls import router as inv2_controls_router
 from sib.handlers.sib_hug import router as sib_hug_router
 from sib.handlers.sib_kiss import router as sib_kiss_router
 from sib.handlers.daily_chest import router as daily_chest_router
@@ -65,6 +66,7 @@ def register_all_handlers(dp: Dispatcher) -> None:
     dp.include_router(sib_hug_router)
     dp.include_router(sib_kiss_router)
     dp.include_router(daily_chest_router)
+    dp.include_router(inv2_controls_router)
     dp.include_router(inv2_admin_router)
     dp.include_router(inv2_join_router)
     dp.include_router(invasion_router)
