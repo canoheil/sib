@@ -1,5 +1,8 @@
-"""Actual repository font and 16:9 composition geometry."""
+"""Verified static assets and the existing Persian text shaping pipeline."""
 from pathlib import Path
+from functools import lru_cache
+import json
+from PIL import Image
 from PIL import ImageFont, features
 try:
     import arabic_reshaper
@@ -17,36 +20,27 @@ if FONT_PATH is None:
     raise FileNotFoundError("Persian font missing; searched: " + ", ".join(map(str, FONT_CANDIDATES)))
 
 SIZE = (1280, 720)
-PALETTES = {
-    "soldier": ((9, 11, 18), (66, 41, 59)),
-    "shadow": ((6, 15, 31), (40, 60, 99)),
-    "commander": ((15, 17, 33), (88, 48, 76)),
-    "brute": ((19, 20, 28), (89, 47, 36)),
-    "king": ((8, 10, 27), (87, 58, 113)),
-}
-SILHOUETTE_BOX = (95, 145, 510, 625)
-CARD_BOX = (500, 88, 884, 590)
-BAND = (0, 565, 1280, 720)
 
-
+@lru_cache(maxsize=32)
 def font(size: int):
     return ImageFont.truetype(str(FONT_PATH), size)
 
 
-def label(draw, xy, text: str, size: int, *, fill="#f3eee1", anchor="ra"):
+def label(draw, xy, text: str, size: int, *, fill="#f3eee1", anchor="ra",
+          stroke_width=1, stroke_fill="#090b12", max_width=None):
     """Shape with libraqm where available, otherwise local reshaper + bidi."""
-    if features.check("raqm"):
-        draw.text(xy, str(text), font=font(size), fill=fill, anchor=anchor, direction="rtl", stroke_width=1, stroke_fill="#090b12")
-    else:
-        visual = get_display(arabic_reshaper.reshape(str(text)))
-        draw.text(xy, visual, font=font(size), fill=fill, anchor=anchor, stroke_width=1, stroke_fill="#090b12")
+    # Keep the established raqm / reshaper+bidi selection and shaping unchanged.
+    raqm = features.check("raqm")
+    visual = str(text) if raqm else get_display(arabic_reshaper.reshape(str(text)))
+    kwargs = {"direction": "rtl"} if raqm else {}
+    if max_width:
+        while size > 1 and draw.textlength(visual, font=font(size), **kwargs) > max_width:
+            size -= 1
+    draw.text(xy, visual, font=font(size), fill=fill, anchor=anchor,
+              stroke_width=stroke_width, stroke_fill=stroke_fill, **kwargs)
 
 
 # Static source assets: copied on access so composition never mutates the cache.
-import json
-from functools import lru_cache
-from PIL import Image
-
 ASSETS_ROOT = Path(__file__).resolve().parents[3] / "assets" / "invasion_v2"
 ENEMY_TYPES = ["soldier", "shadow", "commander", "brute", "king"]
 LAYOUT_NAMES = ("announcement", "join", "victory", "defeat")
