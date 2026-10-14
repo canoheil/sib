@@ -3,23 +3,90 @@
 The compose_* API returns JPEG bytes. The three older image-returning adapters
 remain for compatibility; production presentation and private admin preview use
 the compose_* API directly. No gameplay-handler changes are required.
+
+Phase 8E: phone-legible typography (1280x720 displays ~360px wide on mobile),
+drop shadows on every Persian string, damage-number glow, and dramatic
+victory/defeat status words with radial vignettes.
 """
 from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFilter, ImageOps
+from PIL import Image, ImageDraw, ImageFilter, ImageOps, features
 
+try:
+    import arabic_reshaper
+    from bidi.algorithm import get_display
+except ImportError as exc:
+    raise ImportError("Persian invasion imaging needs arabic-reshaper and python-bidi") from exc
+
+from . import templates
 from .templates import SIZE, label, load_layout, load_silhouette
 
 
-__all__ = ["compose_announcement_image", "compose_join_image", "compose_result_image"]
+__all__ = [
+    "compose_announcement_image", "compose_join_image", "compose_result_image",
+    "_draw_text_with_shadow", "_draw_radial_vignette",
+]
 
 
 def _jpeg(image: Image.Image) -> bytes:
     output = BytesIO()
     image.convert("RGB").save(output, format="JPEG", quality=88)
     return output.getvalue()
+
+
+def _shaped(text):
+    """The established shaping pipeline shared with templates.label: libraqm
+    where available, otherwise local reshaper + bidi. Never fork this."""
+    if features.check("raqm"):
+        return str(text), {"direction": "rtl"}
+    return get_display(arabic_reshaper.reshape(str(text))), {}
+
+
+_MEASURE = ImageDraw.Draw(Image.new("L", (1, 1)))
+
+
+def _fit_size(text, nominal, *, max_width, min_size=16):
+    """Whole-point shrink until the shaped text fits (same loop as label)."""
+    visual, kwargs = _shaped(text)
+    size = nominal
+    while size > min_size and _MEASURE.textlength(visual, font=templates.font(size), **kwargs) > max_width:
+        size -= 1
+    return size
+
+
+def _draw_text_with_shadow(img, xy, text, font, fill,
+                           stroke_fill=None, stroke_width=0,
+                           shadow_offset=(3, 3),
+                           shadow_blur=6,
+                           shadow_opacity=0.7,
+                           anchor="mm"):
+    """Blurred black drop shadow first, then the (optionally stroked) text.
+
+    Every Persian string on every invasion image goes through this helper so
+    the shared reshaper/bidi shaping and a readable shadow are guaranteed.
+    The shadow is blurred on a tight crop, not the whole canvas.
+    """
+    visual, kwargs = _shaped(text)
+    if stroke_width and stroke_fill is None:
+        stroke_fill = fill
+    shadow = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    ImageDraw.Draw(shadow).text(
+        (xy[0] + shadow_offset[0], xy[1] + shadow_offset[1]), visual, font=font,
+        fill=(0, 0, 0, 255), anchor=anchor, stroke_width=stroke_width,
+        stroke_fill=(0, 0, 0, 255), **kwargs)
+    box = shadow.getchannel("A").getbbox()
+    if box is not None:
+        pad = max(shadow_blur * 3, 4)
+        box = (max(0, box[0] - pad), max(0, box[1] - pad),
+               min(img.width, box[2] + pad), min(img.height, box[3] + pad))
+        blurred = shadow.crop(box).filter(ImageFilter.GaussianBlur(shadow_blur))
+        blurred.putalpha(blurred.getchannel("A").point(
+            lambda value: round(value * shadow_opacity)))
+        img.alpha_composite(blurred, (box[0], box[1]))
+    ImageDraw.Draw(img).text(xy, visual, font=font, fill=fill, anchor=anchor,
+                             stroke_width=stroke_width, stroke_fill=stroke_fill, **kwargs)
 
 
 def _paste_enemy(image, enemy_type, position, *, opacity=1.0, scale=1.0):
@@ -35,14 +102,21 @@ def _paste_enemy(image, enemy_type, position, *, opacity=1.0, scale=1.0):
 def _announcement(enemy_type, region_name, enemy_label_fa, *, legacy=False):
     image = load_layout("announcement").convert("RGBA")
     _paste_enemy(image, enemy_type, (80, 80))
-    draw = ImageDraw.Draw(image)
     if legacy:
+        draw = ImageDraw.Draw(image)
         label(draw, (1216, 100), "تهاجم شیاسیب", 44, fill="#FCECD8",
               stroke_width=2, stroke_fill="#3A1A08", max_width=350)
-    label(draw, (1216, 200 if legacy else 110), region_name, 88, fill="#FCECD8",
-          stroke_width=2, stroke_fill="#3A1A08", max_width=350)
-    label(draw, (1216, 280 if legacy else 190), enemy_label_fa, 52,
-          fill="#D9C29A", stroke_width=0, max_width=350)
+        label(draw, (1216, 200), region_name, 44, fill="#FCECD8",
+              stroke_width=2, stroke_fill="#3A1A08", max_width=350)
+        label(draw, (1216, 280), enemy_label_fa, 28,
+              fill="#D9C29A", stroke_width=0, max_width=350)
+        return image
+    region_size = _fit_size(region_name, 88, max_width=380)
+    _draw_text_with_shadow(image, (1216, 110), region_name, templates.font(region_size),
+                           fill="#FCECD8", stroke_fill="#3A1A08", stroke_width=2, anchor="ra")
+    enemy_size = _fit_size(enemy_label_fa, 52, max_width=350)
+    _draw_text_with_shadow(image, (1216, 190), enemy_label_fa, templates.font(enemy_size),
+                           fill="#D9C29A", stroke_fill="#2A1408", stroke_width=1, anchor="ra")
     return image
 
 
@@ -101,26 +175,35 @@ def _join(enemy_type, card_image_bytes, username, damage, is_crit, enemy_hp_rema
     if is_crit:
         image.alpha_composite(_critical_light())
     _paste_card(image, card_image_bytes)
-    draw = ImageDraw.Draw(image)
-    label(draw, (1216, 72), username, 60, fill="white", stroke_width=2, max_width=350)
-    damage_text = _digits(damage)
     if legacy:
-        damage_text = f"{damage_text} آسیب" if damage else "سایه بر میدان افتاد"
-    damage_size = 64 if legacy else 160
-    if is_crit:
-        glow = Image.new("RGBA", (780, 160))
-        label(ImageDraw.Draw(glow), (390, 122), damage_text, damage_size,
-              anchor="ms", fill="#FFD24A", stroke_width=3,
-              stroke_fill="#FFD24A", max_width=740)
-        image.alpha_composite(glow.filter(ImageFilter.GaussianBlur(9)), (250, 560))
         draw = ImageDraw.Draw(image)
-        label(draw, (70, 40), "کریتیکال" if legacy else "ضربه کاری", 28,
-              anchor="la", fill="#FFD24A", stroke_width=2)
-    label(draw, (640, 648), damage_text, damage_size, anchor="ms",
-          fill="#FFD24A" if is_crit else "#FCECD8", stroke_width=2, max_width=720)
+        label(draw, (1216, 64), username, 32, fill="white", stroke_width=2, max_width=310)
+        damage_text = _digits(damage)
+        damage_text = f"{damage_text} آسیب" if damage else "سایه بر میدان افتاد"
+        if is_crit:
+            glow = Image.new("RGBA", (780, 160))
+            label(ImageDraw.Draw(glow), (390, 122), damage_text, 64,
+                  anchor="ms", fill="#FFD24A", stroke_width=3,
+                  stroke_fill="#FFD24A", max_width=740)
+            image.alpha_composite(glow.filter(ImageFilter.GaussianBlur(9)), (250, 560))
+            draw = ImageDraw.Draw(image)
+            label(draw, (70, 40), "کریتیکال", 28, anchor="la", fill="#FFD24A", stroke_width=2)
+        label(draw, (640, 682), damage_text, 64, anchor="ms",
+              fill="#FFD24A" if is_crit else "#FCECD8", stroke_width=2, max_width=720)
+        return image
+    user_size = _fit_size(username, 60, max_width=350)
+    _draw_text_with_shadow(image, (1216, 72), username, templates.font(user_size),
+                           fill="white", stroke_fill="#2A1408", stroke_width=2, anchor="ra")
+    if is_crit:
+        _draw_text_with_shadow(image, (70, 52), "ضربه کاری", templates.font(28),
+                               fill="#FFD24A", stroke_fill="#3A1A08", stroke_width=1, anchor="la")
+    damage_text = _digits(damage)
+    _draw_text_with_shadow(image, (640, 648), damage_text, templates.font(160),
+                           fill="#FFD24A" if is_crit else "#FCECD8", stroke_width=2, anchor="ms")
     if enemy_hp_remaining is not None:
-        label(draw, (1216, 662), _digits(enemy_hp_remaining), 44,
-              fill="#B8A98F", anchor="rs", max_width=240)
+        _draw_text_with_shadow(image, (1216, 662), _digits(enemy_hp_remaining),
+                               templates.font(44), fill="#B8A98F", stroke_fill="#1A0E06",
+                               stroke_width=1, anchor="rs")
     return image
 
 
@@ -135,19 +218,21 @@ def _result(status, region_name, enemy_type, reward_lines):
         raise ValueError("Result image requires victory or defeat")
     image = load_layout(status).convert("RGBA")
     _paste_enemy(image, enemy_type, (360, -32), opacity=.35, scale=1.4)
-    draw = ImageDraw.Draw(image)
-    label(draw, (640, 52), region_name, 88, anchor="ma", fill="#FCECD8",
-          stroke_width=2, max_width=1120)
-    label(draw, (640, 350), "پیروزی" if status == "victory" else "شکست", 200,
-          anchor="mm", fill="#FCECD8" if status == "victory" else "#efa7a0",
-          stroke_width=4)
+    region_size = _fit_size(region_name, 88, max_width=1120)
+    _draw_text_with_shadow(image, (640, 52), region_name, templates.font(region_size),
+                           fill="#FCECD8", stroke_fill="#3A1A08", stroke_width=2, anchor="ma")
+    word = "پیروزی" if status == "victory" else "شکست"
+    _draw_text_with_shadow(image, (640, 350), word, templates.font(200),
+                           fill="#FCECD8" if status == "victory" else "#efa7a0",
+                           stroke_width=4, anchor="mm")
     if status == "victory":
         lines = list(reward_lines)
         spacing = min(64, 192 // max(1, len(lines)))
         for index, line in enumerate(lines):
-            label(draw, (640, 680-(len(lines)-1-index)*spacing), line,
-                  min(54, max(1, spacing-10)), anchor="ms", fill="#FCECD8",
-                  stroke_width=1, max_width=1120)
+            center_y = 680 - (len(lines) - 1 - index) * spacing
+            line_size = min(54, max(1, spacing - 10))
+            _draw_text_with_shadow(image, (640, center_y), line, templates.font(line_size),
+                                   fill="#FCECD8", stroke_width=1, anchor="ms")
     return image
 
 
@@ -165,8 +250,9 @@ def load_card_image_bytes(card_path: Path | None, *, placeholder=False) -> bytes
     if card_path is None:
         if not placeholder:
             raise FileNotFoundError("No local framed Main Card art under assets/characters/{code}.jpg")
-        card = Image.new("RGB", (384, 502), "#141c2f")
-        label(ImageDraw.Draw(card), (335, 285), "کارت اصلی انتخاب نشده", 25)
+        card = Image.new("RGBA", (384, 502), "#141c2f")
+        _draw_text_with_shadow(card, (335, 285), "کارت اصلی انتخاب نشده",
+                               templates.font(25), fill="#f3eee1", anchor="ra")
         data = _jpeg(card)
     else:
         if not Path(card_path).is_file():
