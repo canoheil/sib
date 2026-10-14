@@ -21,6 +21,21 @@ _INVASION_FLAG_TTL_SECONDS = 60
 _invasion_flag_value = False
 _invasion_flag_expires_at = 0.0
 _invasion_flag_lock = asyncio.Lock()
+_invasion_flag_generation = 0
+
+
+def invalidate_invasion_config_cache() -> None:
+    """After a committed admin config write, force the next flag read to DB.
+
+    Generation protects against an overlapping pre-commit read repopulating
+    the 60-second cache after this invalidation. In-flight work cannot be
+    undone; the next maintenance tick will see the committed value.
+    """
+    global _invasion_flag_value, _invasion_flag_expires_at, _invasion_flag_generation
+    _invasion_flag_generation += 1
+    _invasion_flag_value = False
+    _invasion_flag_expires_at = 0.0
+
 
 
 @dataclass(frozen=True)
@@ -54,6 +69,7 @@ class MaintenanceService:
         if time.monotonic() < _invasion_flag_expires_at:
             return _invasion_flag_value
         async with _invasion_flag_lock:
+            generation = _invasion_flag_generation
             if time.monotonic() < _invasion_flag_expires_at:
                 return _invasion_flag_value
             try:
@@ -74,6 +90,10 @@ class MaintenanceService:
             except Exception:
                 _invasion_flag_value = False
                 logger.exception("Could not read invasion_enabled; invasion disabled")
+            if generation != _invasion_flag_generation:
+                _invasion_flag_value = False
+                _invasion_flag_expires_at = 0.0
+                return False
             _invasion_flag_expires_at = time.monotonic() + _INVASION_FLAG_TTL_SECONDS
             return _invasion_flag_value
 
@@ -1168,6 +1188,9 @@ class MaintenanceService:
                 from sib.services.invasion_v2.scheduler import InvasionScheduler
 
                 terminal = await InvasionScheduler.tick()
+                from sib.services.invasion_v2 import admin_runtime
+                admin_runtime.last_successful_tick = datetime.now(timezone.utc)
+                admin_runtime.last_error = None
                 # Presentation never runs in the scheduler or on startup recovery.
                 # Terminal IDs come only from a newly committed maintenance tick.
                 if cls._bot is not None:
@@ -1182,7 +1205,9 @@ class MaintenanceService:
                         except Exception:
                             logger.exception("inv2 terminal settlement failed id=%s", inv_id)
                     await presenter.publish_pending(cls._bot)
-            except Exception:
+            except Exception as exc:
+                from sib.services.invasion_v2 import admin_runtime
+                admin_runtime.last_error = str(exc)[:240]
                 logger.exception("Invasion v2 maintenance cycle failed")
 
         # Committed bot matches whose bot turn needs a task (a fallback match
