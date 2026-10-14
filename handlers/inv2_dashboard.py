@@ -31,11 +31,11 @@ async def _muted(session):
     rows = (await session.scalars(select(Inv2GroupState).where(
         Inv2GroupState.muted_until > ops.NOW()).order_by(Inv2GroupState.group_id).limit(20))).all()
     return "🔕 گروه‌های خاموش\n" + ("\n".join(
-        f"{r.group_id} | تا {ops._date(r.muted_until)}" for r in rows) or "گروهی خاموش نیست.")
+        f"{r.group_id} · تا {ops._date(r.muted_until)}" for r in rows) or "گروهی خاموش نیست.")
 
 
 async def _simulate_hint(session):
-    return "⚔️ برای شبیه‌سازی: /inv2_simulate شناسهٔ گروه [گونهٔ دشمن]"
+    return "⚔️ برای شبیه‌سازی: /inv2_simulate شناسهٔ گروه و (اختیاری) گونهٔ دشمن"
 
 
 @router.message(Command("inv2_dashboard"))

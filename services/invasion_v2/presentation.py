@@ -144,7 +144,7 @@ def _fit_caption(narrative_text: str, suffix: str, limit: int = 1024) -> str:
 
 def announcement_hp_line(current_hp: int, total_hp: int) -> str:
     """Live enemy HP block appended after the announcement narrative."""
-    return f"\n\n⚔️ سلامتی شیاسیب: {fa_digits(max(0, current_hp))} / {fa_digits(total_hp)}"
+    return f"\n\n⚔️ جان شیاسیب: {fa_digits(max(0, current_hp))} / {fa_digits(total_hp)}"
 
 
 def build_announcement_caption(narrative_text: str, current_hp: int, total_hp: int) -> str:

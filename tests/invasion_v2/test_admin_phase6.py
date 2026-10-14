@@ -18,6 +18,7 @@ from sib.database.models import (AdminLog, Base, Character, Group, Inv2Attack,
     PlayerCard, SystemConfig, User, UserItem)
 from sib.handlers import inv2_controls as handler, inv2_dashboard as dashboard
 from sib.services.invasion_v2 import admin_controls as ops, admin_runtime, circuit_breaker
+from sib.services.invasion_v2.farsi import fa_number
 from sib.services.invasion_v2.power_resolver import set_power_resolver
 from sib.services.maintenance import service as maintenance
 from sib.services.maintenance.service import MaintenanceService
@@ -210,7 +211,7 @@ async def test_simulation_is_readonly_except_required_audit(db):
     msg = event("/inv2_simulate -100 soldier")
     await handler.simulate_command(msg)
     text = msg.answer.await_args.kwargs["text"]
-    assert all(f"{n} نگهبان" in text for n in (1, 3, 5, 10))
+    assert all(f"{fa_number(n)} نگهبان" in text for n in (1, 3, 5, 10))
     assert "بخت پیروزی" in text and "جان دشمن" in text
     async with factory() as s:
         assert before == {table: await s.scalar(select(func.count()).select_from(table)) for table in before}

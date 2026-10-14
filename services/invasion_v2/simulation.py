@@ -10,6 +10,7 @@ from sib.services.config_store import ConfigService, DEFAULT_INVASION_DIFFICULTY
 from sib.services.player_cards import PlayerCardService
 from .damage import compute_damage
 from .enemy import choose_enemy_type, compute_enemy_hp, enemy_spec
+from .farsi import fa_number, fa_percent
 from .enums import EnemyType
 from .power_resolver import get_power_resolver
 from .power_resolver_impl import DbGroupPowerResolver
@@ -57,14 +58,16 @@ async def simulate(session, group_raw: str, enemy_raw: str | None = None) -> str
     if hp <= 0:
         return "جان دشمن معتبر نیست."
     rng = random.Random(f"inv2sim:{group_id}:{enemy.value}:{','.join(map(str, powers))}:{hp}")
-    lines = [f"⚔️ شبیه‌سازی گروه {group_id} | {enemy_spec(enemy).name_fa}",
-             f"جان دشمن: {hp} | میانگین کارت: {average:.1f} | اعضای مشاهده‌شده: {len(powers)}"]
+    lines = [f"⚔️ شبیه‌سازی گروه {group_id} · {enemy_spec(enemy).name_fa}",
+             f"جان دشمن: {fa_number(hp)} · میانگین کارت: {fa_number(f'{average:.1f}')}"
+             f" · اعضای مشاهده‌شده: {fa_number(len(powers))}"]
     for count in JOINERS:
         wins = total_damage = 0
         for _ in range(TRIALS):
             damage = sum(compute_damage(rng.choice(powers), rng)[0] for _ in range(count))
             total_damage += damage
             wins += damage >= hp
-        lines.append(f"{count} نگهبان: آسیب موردانتظار {round(total_damage / TRIALS)} | بخت پیروزی {wins / TRIALS:.1%}")
+        lines.append(f"{fa_number(count)} نگهبان: آسیب موردانتظار {fa_number(round(total_damage / TRIALS))}"
+                     f" · بخت پیروزی {fa_percent(wins / TRIALS)}")
     lines.append("برآورد با نمونه‌گیری مجدد از کارت‌های مشاهده‌شده؛ تضمین پیروزی نیست.")
     return "\n".join(lines)

@@ -15,7 +15,7 @@ from sib.services.invasion_v2 import presentation
 from sib.services.sib_claim import fa_digits
 from sib.tests.invasion_v2.test_presentation_phase5 import NOW, create_inv, db
 
-HP = "⚔️ سلامتی شیاسیب"
+HP = "⚔️ جان شیاسیب"
 DAMAGE = "آسیب وارده به دشمن"
 
 

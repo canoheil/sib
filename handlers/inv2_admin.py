@@ -14,6 +14,7 @@ from sib.services.character_art import artwork_path
 from sib.services.config_store import ConfigService, DEFAULT_INVASION_DIFFICULTY_MULTIPLIER
 from sib.services.invasion_v2.enemy import compute_enemy_hp, enemy_spec
 from sib.services.invasion_v2.enums import EnemyType
+from sib.services.invasion_v2.farsi import fa_number
 from sib.services.invasion_v2.imaging.cache import cached_image
 from sib.services.invasion_v2.imaging import (
     compose_announcement_image, compose_join_image, compose_result_image,
@@ -73,7 +74,10 @@ async def preview(message: Message) -> None:
         # no GROUP circuit state exists to mutate; preview performs no DB writes.
         await _telegram(None, message.answer_media_group, media=album)
     except (ValueError, IndexError):
-        await _telegram(None, message.answer, text="گونهٔ دشمن را بنویسید: soldier، shadow، commander، brute یا king.")
+        species = [f"{enemy.value} ({enemy_spec(enemy).name_fa.removeprefix('شیاسیب ')})"
+                   for enemy in EnemyType]
+        await _telegram(None, message.answer,
+                        text="گونهٔ دشمن را بنویسید: " + "، ".join(species[:-1]) + " یا " + species[-1] + ".")
     except Exception:
         logger.exception("inv2 admin preview failed")
         await _telegram(None, message.answer, text="پیش‌نمایش آماده نشد؛ تصویر کارت یا قلم فارسی را بررسی کنید.")
@@ -102,8 +106,8 @@ async def simulate(message: Message) -> None:
         likely = "محتمل" if count * average >= hp else "دور از انتظار"
         await _telegram(None, message.answer, text=(
             f"⚔️ پیش‌بینی نبرد، بدون ثبت در پایگاه داده\n"
-            f"جان دشمن: {hp}\nدامنهٔ ضربهٔ هر نگهبان: {low} تا {high}\n"
-            f"با {count} نگهبان، پیروزی {likely} است؛ این تنها برآورد است."))
+            f"جان دشمن: {fa_number(hp)}\nدامنهٔ ضربهٔ هر نگهبان: {fa_number(low)} تا {fa_number(high)}\n"
+            f"با {fa_number(count)} نگهبان، پیروزی {likely} است؛ این تنها برآورد است."))
     except (ValueError, IndexError):
         await _telegram(None, message.answer, text="نمونه: /inv2_simulate -100 soldier 5")
     except Exception:
