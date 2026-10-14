@@ -72,7 +72,7 @@ class InvasionPresentation:
                     lambda: compose_announcement_image(*image_args))
                 caption = _caption(narrative.render_announcement(
                     username="نگهبانان", card_name="کارت‌های اصلی", region_name=region.name_fa,
-                    enemy_name=inv.enemy_name_fa, rng=random.Random(inv.id)))
+                    enemy_name=inv.enemy_name_fa, rng=random.Random(inv.id), invasion_id=inv.id))
                 kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
                     text="⚔️ پیوستن به نبرد", callback_data=f"inv2:join:{inv.id}")]])
                 raw_window = await ConfigService.get(session, "invasion_join_window_seconds")
@@ -145,7 +145,7 @@ class InvasionPresentation:
                     return
                 render = narrative.render_victory if inv.status == InvasionStatus.VICTORY.value else narrative.render_defeat
                 final = _caption(render(username="نگهبانان", card_name="کارت‌های اصلی",
-                    region_name=region.name_fa, enemy_name=inv.enemy_name_fa, rng=random.Random(inv.id)))
+                    region_name=region.name_fa, enemy_name=inv.enemy_name_fa, rng=random.Random(inv.id), invasion_id=inv.id))
                 # Telegram caption edit and photo send are separate metered calls.
                 await _telegram(inv.group_id, bot.edit_message_caption,
                     chat_id=inv.message_chat_id or inv.group_id, message_id=inv.message_id,
