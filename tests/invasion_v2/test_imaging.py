@@ -321,7 +321,7 @@ def test_defeat_fill_is_deep_red(monkeypatch):
 def test_victory_fill_is_deep_gold(monkeypatch):
     events = _spy_draw(monkeypatch)
     compose.compose_result_image("victory", "درّه ماه", "king", [])
-    word = compose._shaped("پیوروزی")[0]
+    word = compose._shaped("پیروزی")[0]
     fills = {kw["fill"] for kind, text, kw in events if kind == "text" and text == word}
     assert fills == {"#C8A02E", "#E8C766", (0, 0, 0, 255)}
 
@@ -401,17 +401,40 @@ def test_vignette_produces_alpha_gradient():
     assert corner <= 2
 
 
-def test_region_name_backdrop_present(monkeypatch):
+def test_result_text_has_no_dark_backdrop(monkeypatch):
+    """No plate, pill or box is painted behind the region name or rewards."""
     events = _spy_draw(monkeypatch, record=True)
-    compose.compose_result_image("victory", "درّه ماه", "king", [])
-    pills = [e for e in events if e[0] == "pill"]
-    assert pills, "no rounded pill backdrop was drawn"
-    first_pill = next(i for i, e in enumerate(events) if e[0] == "pill")
-    assert pills[0][2]["fill"] == (0, 0, 0, 140) and pills[0][2]["radius"] == 20
+    compose.compose_result_image("victory", "درّه ماه", "king",
+                                 ["سیب طلایی ×۵", "سیب الماسی ×۱"])
+    assert not [e for e in events if e[0] == "pill"], "a solid backdrop was drawn"
     region_text = compose._shaped("درّه ماه")[0]
-    region_draws = [i for i, e in enumerate(events)
-                    if e[0] == "text" and e[1] == region_text]
-    assert any(i > first_pill for i in region_draws)  # pill before the visible text
+    reward_text = compose._shaped("سیب طلایی ×۵")[0]
+    drawn = {e[1] for e in events if e[0] == "text"}
+    assert region_text in drawn and reward_text in drawn
+
+
+@pytest.mark.parametrize("status", ["victory", "defeat"])
+def test_result_art_stays_visible_around_region_name(status):
+    """The painted art next to the region name is not blacked out by a plate."""
+    rendered = Image.open(BytesIO(compose.compose_result_image(
+        status, "درّه ماه", "king", ["سیب طلایی ×۵"]))).convert("RGB")
+    font = templates.font(88)
+    box = compose._text_ink_box((1280, 720), (640, 70), "درّه ماه", font, anchor="ma")
+    # Band that the old 20px-padded pill covered, sampled clear of the ink and
+    # of the drop shadow: still artwork, never a flat black rectangle.
+    samples = [rendered.getpixel((x, y))
+               for x in (box[0] - 18, box[0] - 12, box[2] + 12, box[2] + 18)
+               for y in (box[1] + 4, (box[1] + box[3]) // 2, box[3] - 4)]
+    assert all(sum(pixel) > 60 for pixel in samples), "text still sits on a dark plate"
+    assert len({pixel for pixel in samples}) > 1  # real art, not a flat fill
+
+
+def test_victory_word_is_spelled_correctly(monkeypatch):
+    events = _spy_draw(monkeypatch)
+    compose.compose_result_image("victory", "درّه ماه", "king", [])
+    drawn = {e[1] for e in events if e[0] == "text"}
+    assert compose._shaped("پیروزی")[0] in drawn
+    assert compose._STATUS_WORDS["victory"][0] == "پیروزی"
 
 
 def test_long_region_name_auto_shrinks(monkeypatch, caplog):

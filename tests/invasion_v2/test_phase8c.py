@@ -112,17 +112,20 @@ def test_migration_040_downgrade_only_new_default(value, expected):
     engine.dispose()
 
 
-def test_migration_041_is_new_head():
+def test_migration_chain_head():
     cfg = Config()
     cfg.set_main_option("script_location", str(ROOT / "database/migrations"))
     scripts = ScriptDirectory.from_config(cfg)
-    assert scripts.get_current_head() == "041_inv2_announcement_narrative"
+    assert scripts.get_current_head() == "042_inv2_pinned_announcement"
     assert _migration().down_revision == "039_archive_inv1_tables"
-    path = ROOT / "database/migrations/versions/041_inv2_announcement_narrative.py"
-    spec = importlib.util.spec_from_file_location("migration_041", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    assert module.down_revision == "040_inv2_difficulty_default"
+    chain = {"041_inv2_announcement_narrative": "040_inv2_difficulty_default",
+             "042_inv2_pinned_announcement": "041_inv2_announcement_narrative"}
+    for revision, parent in chain.items():
+        path = ROOT / f"database/migrations/versions/{revision}.py"
+        spec = importlib.util.spec_from_file_location(f"migration_{revision}", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        assert module.down_revision == parent
 
 
 @pytest.mark.parametrize("case", CASES)

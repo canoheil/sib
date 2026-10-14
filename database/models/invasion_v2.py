@@ -67,6 +67,11 @@ class Inv2Invasion(Base, TimestampMixin):
     )
     message_chat_id: Mapped[Optional[int]] = mapped_column(BigInteger)
     message_id: Mapped[Optional[int]] = mapped_column(BigInteger)
+    # Stamped when the group announcement is pinned and cleared once a later
+    # invasion of the same group unpins it. NOT NULL therefore means "this
+    # message is the pin we placed", so the bot never pins twice and never
+    # unpins a message an admin pinned themselves.
+    pinned_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     # Exact rendered narrative of the sent announcement, so live-HP caption
     # edits rebuild the message with the same prose (pool picks are not
     # replayable once made).

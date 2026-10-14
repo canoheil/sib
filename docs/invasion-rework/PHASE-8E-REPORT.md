@@ -1,5 +1,11 @@
 # Phase 8E Report — Phone-legible typography, shadows, glow, dramatic status words
 
+> **Superseded in part by Phase 8G** (`PHASE-8G-REPORT.md`): the dark "pill"
+> backdrops behind the result region name and reward lines were removed (they
+> rendered as solid black boxes), and the victory word — written «پیوروزی» in
+> the Phase 8E code and samples below — is now spelled «پیروزی». Everything
+> else in this report still describes the current renderer.
+
 Scope: `services/invasion_v2/imaging/compose.py` (rendering only), 11 new tests,
 cache-key bump in `presentation.py` (v2 → v3 so old images are never reused),
 `numpy` added to `requirements.txt` (needed by the radial vignette gradient).
