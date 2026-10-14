@@ -21,16 +21,16 @@ depends_on = None
 def upgrade() -> None:
     op.execute(sa.text("""
         UPDATE system_config
-        SET value = '2.5'
-        WHERE key = 'invasion_difficulty_multiplier'
-          AND value = '4.0'
+        SET `value` = '2.5'
+        WHERE `key` = 'invasion_difficulty_multiplier'
+          AND `value` = '4.0'
     """))
 
 
 def downgrade() -> None:
     op.execute(sa.text("""
         UPDATE system_config
-        SET value = '4.0'
-        WHERE key = 'invasion_difficulty_multiplier'
-          AND value = '2.5'
+        SET `value` = '4.0'
+        WHERE `key` = 'invasion_difficulty_multiplier'
+          AND `value` = '2.5'
     """))
