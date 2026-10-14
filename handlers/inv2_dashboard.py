@@ -35,7 +35,7 @@ async def _muted(session):
 
 
 async def _simulate_hint(session):
-    return "⚔️ برای شبیه‌سازی: /inv2_simulate شناسهٔ‌گروه [گونهٔ‌دشمن]"
+    return "⚔️ برای شبیه‌سازی: /inv2_simulate شناسهٔ گروه [گونهٔ دشمن]"
 
 
 @router.message(Command("inv2_dashboard"))

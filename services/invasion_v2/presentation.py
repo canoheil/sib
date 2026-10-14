@@ -159,7 +159,7 @@ def build_join_caption(narrative_text: str, damage: int, *, is_crit: bool, is_ki
     (the kill marker wins when a critical lands the finishing hit).
     """
     emoji = "🏆" if is_kill else "💥" if is_crit else "🔥"
-    return _fit_caption(narrative_text, f"\n\n{emoji} اسیب وارده به دشمن: {fa_digits(damage)}")
+    return _fit_caption(narrative_text, f"\n\n{emoji} آسیب وارده به دشمن: {fa_digits(damage)}")
 
 
 def join_keyboard(invasion_id: int) -> InlineKeyboardMarkup:

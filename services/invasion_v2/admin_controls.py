@@ -143,7 +143,7 @@ async def force_end(session, inv_raw: str, result_raw: str) -> str:
 async def regions(session) -> str:
     rows = (await session.scalars(select(Inv2Region).order_by(Inv2Region.code))).all()
     return "🗺️ نواحی اواریا\n" + ("\n".join(
-        f"{r.code} | {r.name_fa} | {r.controlling_faction} | {'ازدست‌رفته' if r.is_lost_to_enemy else 'آزاد'} | آخرین: {r.last_invasion_id or '—'}"
+        f"{r.code} | {r.name_fa} | {r.controlling_faction} | {'از‌دست‌رفته' if r.is_lost_to_enemy else 'آزاد'} | آخرین: {r.last_invasion_id or '—'}"
         for r in rows) or "ناحیه‌ای ثبت نشده است.")
 
 
@@ -230,7 +230,7 @@ async def health(session) -> str:
     muted = await session.scalar(select(func.count()).select_from(Inv2GroupState).where(Inv2GroupState.muted_until > NOW()))
     lost = await session.scalar(select(func.count()).select_from(Inv2Region).where(Inv2Region.is_lost_to_enemy.is_(True)))
     return (f"🩺 سلامت تهاجم | {'فعال' if flag is True or str(flag).lower() == 'true' else 'غیرفعال'}\n"
-            f"نبرد: {active} | گروه خاموش: {muted} | ناحیهٔ ازدست‌رفته: {lost}\n"
+            f"نبرد: {active} | گروه خاموش: {muted} | ناحیهٔ از‌دست‌رفته: {lost}\n"
             f"آخرین تیک موفق: {_date(admin_runtime.last_successful_tick)}\n"
             f"آخرین اجرای تیک: {_date(admin_runtime.last_tick_at)} | مدت: {admin_runtime.last_tick_duration_ms if admin_runtime.last_tick_duration_ms is not None else '—'} میلی‌ثانیه\n"
             f"زمان آخرین خطا: {_date(admin_runtime.last_error_at)}\n"

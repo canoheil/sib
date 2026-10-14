@@ -308,7 +308,7 @@ def _join(enemy_type, card_image_bytes, username, damage, is_crit, enemy_hp_rema
     _draw_text_with_shadow(image, (1216, 72), username, templates.font(user_size),
                            fill="white", stroke_fill="#2A1408", stroke_width=2, anchor="ra")
     if is_crit:
-        _draw_text_with_shadow(image, (70, 52), "ضربه کاری", templates.font(28),
+        _draw_text_with_shadow(image, (70, 52), "ضربهٔ کاری", templates.font(28),
                                fill="#FFD24A", stroke_fill="#3A1A08", stroke_width=1, anchor="la")
     # Post-attack HP is stored on the row: 0 means this blow was the kill.
     is_kill = enemy_hp_remaining is not None and enemy_hp_remaining <= 0

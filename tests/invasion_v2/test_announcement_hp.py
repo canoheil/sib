@@ -16,7 +16,7 @@ from sib.services.sib_claim import fa_digits
 from sib.tests.invasion_v2.test_presentation_phase5 import NOW, create_inv, db
 
 HP = "⚔️ سلامتی شیاسیب"
-DAMAGE = "اسیب وارده به دشمن"
+DAMAGE = "آسیب وارده به دشمن"
 
 
 def _join_bot(**edit_kwargs):

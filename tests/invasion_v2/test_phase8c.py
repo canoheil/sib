@@ -276,7 +276,9 @@ async def test_join_passes_invasion_id_without_changing_damage_flow(db, monkeypa
 
 
 # Phase 8B pool fingerprints: existing prose must remain byte-for-byte intact.
-ORIGINAL_POOLS = {'ANNOUNCEMENT': (12, '9be6a22689cdc77d07abf5badd34ef761452580cc1169b0188a91a8f5ac96896'), 'JOIN_NORMAL': (22, '1ff97177b187cdbe5923cec9b73b4fdc9d966f3826cdc0dcb8b9aafe7dded901'), 'JOIN_CRIT': (16, '8c14dda3f60db2c2ae35c1755232964bb201e5cd12b6401f54c0d77d72608464'), 'JOIN_KILL': (10, '3fa197a29837874239167f254cd3ff37f024d5306c628005c1ea2e976d1ee653'), 'VICTORY': (12, '41cb3d57b7d062e8dca38436fcb95d86e6793c561d67dd3272bbf6719d07484a'), 'DEFEAT': (12, '709e4316427f80041f1a5e3d09287a5879cb915ae306ced6614b6e4f6d5d521b'), 'EXPIRED': (8, 'df0a55a077d09f23b0a083e29fcfbd98e186549a6f2d3355f9b5dab4073456f6')}
+# ANNOUNCEMENT was refreshed once, in the Persian copy audit, for the compound
+# spelling «چشم‌به‌راه» (was «چشم به راه»); every other pool is still the original.
+ORIGINAL_POOLS = {'ANNOUNCEMENT': (12, '8c057889fcb4c0ac8ff6a0c74d6d44d3f85fbf3bee454a3366e30d992cd48ed7'), 'JOIN_NORMAL': (22, '1ff97177b187cdbe5923cec9b73b4fdc9d966f3826cdc0dcb8b9aafe7dded901'), 'JOIN_CRIT': (16, '8c14dda3f60db2c2ae35c1755232964bb201e5cd12b6401f54c0d77d72608464'), 'JOIN_KILL': (10, '3fa197a29837874239167f254cd3ff37f024d5306c628005c1ea2e976d1ee653'), 'VICTORY': (12, '41cb3d57b7d062e8dca38436fcb95d86e6793c561d67dd3272bbf6719d07484a'), 'DEFEAT': (12, '709e4316427f80041f1a5e3d09287a5879cb915ae306ced6614b6e4f6d5d521b'), 'EXPIRED': (8, 'df0a55a077d09f23b0a083e29fcfbd98e186549a6f2d3355f9b5dab4073456f6')}
 
 @pytest.mark.parametrize("name", ORIGINAL_POOLS)
 def test_existing_narrative_variants_unchanged(name):
