@@ -117,3 +117,61 @@ EXPIRED: list[str] = [
     "در فاصلهٔ خاموشی فانوس‌ها، خبر میدان گم شد. پیک‌ها به {region} بازگشتند، اما هیچ‌یک پایان رویارویی با {enemy_name} را ندیده بودند. نگهبانان چراغ‌ها را از نو افروختند؛ این بار نه برای جشن، برای آنکه یورش بعدی در بی‌خبری آغاز نشود.",
     "بر سنگ دیده‌بانی تنها غبار مانده است. فرصت پاسخ گذشته و هیچ خبری سرانجام نبرد را روشن نمی‌کند؛ مدافعان گوش به راه تازه دارند، بی‌آنکه این سکوت را نشانهٔ پیروزی بدانند.",
 ]
+
+
+# Recent selection is process-local. Store only the latest use of each distinct
+# template, not an ever-growing list of picks. This also supports callers changing
+# history_size: a template's last position answers any look-back window exactly.
+import random
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field
+from threading import Lock
+
+
+@dataclass
+class _History:
+    position: int = 0
+    last_used: dict[str, int] = field(default_factory=dict)
+
+
+_history: dict[str, _History] = {}
+_lock = Lock()
+_rng: ContextVar[random.Random | None] = ContextVar("inv2_narrative_rng", default=None)
+
+
+@contextmanager
+def _using_rng(rng: random.Random):
+    """Let the unchanged render API supply randomness without global seeding."""
+    token = _rng.set(rng)
+    try:
+        yield
+    finally:
+        _rng.reset(token)
+
+
+def pick(pool: list[str], *, key: str, history_size: int = 5) -> str:
+    """Pick atomically, avoiding the last N selections for this key when possible.
+
+    Repeated entries count as one variant. A pool with at most N distinct entries
+    cannot sustain a strict N-pick exclusion, so that constraint is skipped for
+    that call. Zero disables exclusion; negative sizes and empty pools are errors.
+    History is shared across pools when the caller deliberately shares a key.
+    """
+    if history_size < 0:
+        raise ValueError("history_size must be nonnegative")
+    variants = list(dict.fromkeys(pool))
+    if not variants:
+        raise ValueError("Cannot pick from an empty narrative pool")
+    with _lock:
+        history = _history.setdefault(key, _History())
+        choices = variants
+        if len(variants) > history_size:
+            cutoff = history.position - history_size
+            choices = [text for text in variants
+                       if text not in history.last_used or history.last_used[text] < cutoff]
+        # More than N distinct variants guarantees at least one eligible entry.
+        selected = (_rng.get() or random).choice(choices)
+        history.last_used[selected] = history.position
+        history.position += 1
+        return selected
