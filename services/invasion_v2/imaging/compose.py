@@ -1,8 +1,8 @@
 """Fast static-art composition. No scenery or enemy geometry is drawn here.
 
 The compose_* API returns JPEG bytes. The three older image-returning adapters
-remain for the production presentation/admin callers, without changing their
-Persian labels or requiring changes to gameplay handlers.
+remain for compatibility; production presentation and private admin preview use
+the compose_* API directly. No gameplay-handler changes are required.
 """
 from functools import lru_cache
 from io import BytesIO
@@ -160,8 +160,8 @@ def announcement_image(enemy_type: str, region: str, faction: str) -> Image.Imag
     return _announcement(enemy_type, region[:36], faction[:34], legacy=True).convert("RGB")
 
 
-def join_image(enemy_type: str, card_path: Path | None, username: str, damage: int,
-               is_crit: bool, *, placeholder=False) -> Image.Image:
+def load_card_image_bytes(card_path: Path | None, *, placeholder=False) -> bytes:
+    """Read local art; only private preview may explicitly request a placeholder."""
     if card_path is None:
         if not placeholder:
             raise FileNotFoundError("No local framed Main Card art under assets/characters/{code}.jpg")
@@ -172,6 +172,12 @@ def join_image(enemy_type: str, card_path: Path | None, username: str, damage: i
         if not Path(card_path).is_file():
             raise FileNotFoundError(f"Main Card artwork missing: {card_path}")
         data = Path(card_path).read_bytes()
+    return data
+
+
+def join_image(enemy_type: str, card_path: Path | None, username: str, damage: int,
+               is_crit: bool, *, placeholder=False) -> Image.Image:
+    data = load_card_image_bytes(card_path, placeholder=placeholder)
     return _join(enemy_type, data, username[:28], damage, is_crit, None,
                  legacy=True).convert("RGB")
 

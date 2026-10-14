@@ -1,5 +1,6 @@
 """Admin-only offline artwork preview and read-only HP simulation."""
 import asyncio
+import hashlib
 
 from aiogram import Router
 from aiogram.filters import Command
@@ -11,10 +12,13 @@ from sib.database.connection import get_session
 from sib.database.models import Character
 from sib.services.character_art import artwork_path
 from sib.services.config_store import ConfigService
-from sib.services.invasion_v2.enemy import compute_enemy_hp
+from sib.services.invasion_v2.enemy import compute_enemy_hp, enemy_spec
 from sib.services.invasion_v2.enums import EnemyType
 from sib.services.invasion_v2.imaging.cache import cached_image
-from sib.services.invasion_v2.imaging.compose import announcement_image, join_image, result_image
+from sib.services.invasion_v2.imaging import (
+    compose_announcement_image, compose_join_image, compose_result_image,
+)
+from sib.services.invasion_v2.imaging.compose import load_card_image_bytes
 from sib.services.invasion_v2.power_resolver_impl import DbGroupPowerResolver
 from sib.services.invasion_v2.presentation import _telegram
 from sib.services.player_cards import PlayerCardService
@@ -45,13 +49,22 @@ async def preview(message: Message) -> None:
                 card_path = artwork_path(character)
                 if card_path is None:
                     raise FileNotFoundError(f"Main Card local artwork missing for {character.code}")
-        region, faction = "درّه ماه", "فرزندان ماه"
+        region, _faction = "درّه ماه", "فرزندان ماه"
+        card_bytes = await asyncio.to_thread(load_card_image_bytes, card_path,
+                                             placeholder=card_path is None)
+        announcement_args = (enemy.value, region, enemy_spec(enemy).name_fa)
+        # Explicit preview-only example HP; no invasion row or reward is created.
+        join_args = (enemy.value, card_bytes, message.from_user.first_name, 42, False, 958)
         specs = [
-            (("preview", enemy.value, "announcement"), lambda: announcement_image(enemy.value, region, faction)),
-            (("preview", enemy.value, "join", message.from_user.id, str(card_path)),
-                lambda: join_image(enemy.value, card_path, message.from_user.first_name, 42, False, placeholder=card_path is None)),
-            (("preview", enemy.value, "VICTORY"), lambda: result_image(enemy.value, "VICTORY", region, faction)),
-            (("preview", enemy.value, "DEFEAT"), lambda: result_image(enemy.value, "DEFEAT", region, faction)),
+            (("compose-v2", "preview", "announcement", *announcement_args),
+                lambda: compose_announcement_image(*announcement_args)),
+            (("compose-v2", "preview", "join", message.from_user.id, join_args[0],
+              hashlib.sha256(card_bytes).hexdigest(), *join_args[2:]),
+                lambda: compose_join_image(*join_args)),
+            (("compose-v2", "preview", "victory", enemy.value, region),
+                lambda: compose_result_image("victory", region, enemy.value, ())),
+            (("compose-v2", "preview", "defeat", enemy.value, region),
+                lambda: compose_result_image("defeat", region, enemy.value, ())),
         ]
         paths = [await asyncio.to_thread(cached_image, key, render) for key, render in specs]
         album = [InputMediaPhoto(media=FSInputFile(path), caption=caption, parse_mode=None) for path, caption in zip(

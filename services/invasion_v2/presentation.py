@@ -1,5 +1,6 @@
 """Best-effort Telegram adapter. All sends/edits are circuit-breaker metered."""
 import asyncio
+import hashlib
 import random
 from datetime import datetime, timedelta, timezone
 
@@ -16,7 +17,8 @@ from . import narrative
 from .circuit_breaker import is_group_available, record_send_failure, record_send_success
 from .enums import InvasionStatus
 from .imaging.cache import cached_image
-from .imaging.compose import announcement_image, join_image, result_image
+from .imaging import compose_announcement_image, compose_join_image, compose_result_image
+from .imaging.compose import load_card_image_bytes
 
 
 async def _telegram(group_id, method, **kwargs):
@@ -64,8 +66,10 @@ class InvasionPresentation:
                 group_id = inv.group_id
                 if not await is_group_available(group_id, session=session):
                     return
-                path = await asyncio.to_thread(cached_image, ("announcement", inv.id, inv.enemy_type),
-                    lambda: announcement_image(inv.enemy_type, region.name_fa, region.controlling_faction))
+                image_args = (inv.enemy_type, region.name_fa, inv.enemy_name_fa)
+                path = await asyncio.to_thread(cached_image,
+                    ("compose-v2", "announcement", inv.id, *image_args),
+                    lambda: compose_announcement_image(*image_args))
                 caption = _caption(narrative.render_announcement(
                     username="نگهبانان", card_name="کارت‌های اصلی", region_name=region.name_fa,
                     enemy_name=inv.enemy_name_fa, rng=random.Random(inv.id)))
@@ -109,9 +113,15 @@ class InvasionPresentation:
                 local_art = artwork_path(character)
                 if local_art is None:
                     raise FileNotFoundError(f"Missing local card art for character {character.code}")
+                card_bytes = await asyncio.to_thread(load_card_image_bytes, local_art)
+                # Freeze display inputs before handing them to the render worker.
+                # HP is the persisted snapshot read for presentation, not recalculated damage.
+                image_args = (inv.enemy_type, card_bytes, user.display_name, attack.damage,
+                              bool(attack.is_crit), inv.enemy_hp_remaining)
                 path = await asyncio.to_thread(cached_image,
-                    (inv.id, user_id, attack.damage, bool(attack.is_crit), inv.enemy_type),
-                    lambda: join_image(inv.enemy_type, local_art, user.display_name, attack.damage, attack.is_crit))
+                    ("compose-v2", "join", inv.id, user_id, attack_id, image_args[0],
+                     hashlib.sha256(card_bytes).hexdigest(), *image_args[2:]),
+                    lambda: compose_join_image(*image_args))
                 caption = _caption(attack.narrative + ("\n💥 ضربه کاری!" if attack.is_crit else ""))
                 await _telegram(inv.group_id, bot.send_photo, chat_id=inv.group_id,
                     photo=FSInputFile(path), caption=caption,
@@ -140,9 +150,8 @@ class InvasionPresentation:
                 await _telegram(inv.group_id, bot.edit_message_caption,
                     chat_id=inv.message_chat_id or inv.group_id, message_id=inv.message_id,
                     caption=final, reply_markup=None, parse_mode=None)
-                path = await asyncio.to_thread(cached_image, (inv.id, inv.status),
-                    lambda: result_image(inv.enemy_type, inv.status, region.name_fa, region.controlling_faction))
                 caption = final
+                reward_lines = ()
                 if inv.status == InvasionStatus.VICTORY.value:
                     rewards = (await session.execute(select(Inv2Reward.reward_type, Inv2Reward.reward_amount)
                         .where(Inv2Reward.invasion_id == inv.id))).all()
@@ -154,8 +163,13 @@ class InvasionPresentation:
                         labels = (("golden_apple", "سیب طلایی"),
                                   ("diamond_apple", "سیب الماسی"),
                                   ("obsidian_apple", "سیب ابسیدینی"))
-                        summary = "، ".join(f"{name} ×{totals[key]}" for key, name in labels if totals[key])
+                        reward_lines = tuple(f"{name} ×{totals[key]}" for key, name in labels if totals[key])
+                        summary = "، ".join(reward_lines)
                         caption += "\n🎁 پاداش مدافعان: " + summary
+                image_args = (inv.status.lower(), region.name_fa, inv.enemy_type, reward_lines)
+                path = await asyncio.to_thread(cached_image,
+                    ("compose-v2", "result", inv.id, *image_args),
+                    lambda: compose_result_image(*image_args))
                 sent = await _telegram(inv.group_id, bot.send_photo, chat_id=inv.group_id,
                     photo=FSInputFile(path), caption=_caption(caption), parse_mode=None)
                 if sent is None:
