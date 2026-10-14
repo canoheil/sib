@@ -47,13 +47,6 @@ from sib.database.models import (
     FlowerGift,
     FlowerGiftStatus,
     canonical_spouse_ids,
-    Invasion,
-    InvasionWave,
-    InvasionParticipant,
-    InvasionStatus,
-    InvasionOutcome,
-    InvasionContribution,
-    InvasionDefenseAction,
 )
 
 __all__ = [
@@ -101,11 +94,4 @@ __all__ = [
     "FlowerGift",
     "FlowerGiftStatus",
     "canonical_spouse_ids",
-    "Invasion",
-    "InvasionWave",
-    "InvasionParticipant",
-    "InvasionStatus",
-    "InvasionOutcome",
-    "InvasionContribution",
-    "InvasionDefenseAction",
 ]

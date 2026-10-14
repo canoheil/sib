@@ -47,15 +47,6 @@ from sib.database.models.marriage import (
     ProposalStatus,
     canonical_spouse_ids,
 )
-from sib.database.models.invasion import (
-    Invasion,
-    InvasionOutcome,
-    InvasionParticipant,
-    InvasionStatus,
-    InvasionWave,
-)
-from sib.database.models.invasion_contribution import InvasionContribution
-from sib.database.models.invasion_defense_action import InvasionDefenseAction
 from sib.database.models.daily_chest import DailyChestClaim
 from sib.database.models.shop_chest import (
     ShopChest,
@@ -117,13 +108,6 @@ __all__ = [
     "FlowerGift",
     "FlowerGiftStatus",
     "canonical_spouse_ids",
-    "Invasion",
-    "InvasionWave",
-    "InvasionParticipant",
-    "InvasionStatus",
-    "InvasionOutcome",
-    "InvasionContribution",
-    "InvasionDefenseAction",
     "DailyChestClaim",
     "ShopChest",
     "ShopChestReward",
@@ -133,3 +117,20 @@ __all__ = [
 from sib.database.models.apple_duel import AppleDuel, AppleDuelSlot
 
 __all__ += ["AppleDuel", "AppleDuelSlot"]
+
+from sib.database.models.invasion_v2 import (
+    Inv2Region,
+    Inv2Invasion,
+    Inv2Attack,
+    Inv2Reward,
+    Inv2GroupState,
+)
+
+__all__ += ["Inv2Region", "Inv2Invasion", "Inv2Attack", "Inv2Reward", "Inv2GroupState"]
+
+from sib.database.models.invasion_v2_group_member import Inv2GroupMember
+
+__all__ += ["Inv2GroupMember"]
+
+from sib.database.models.admin_log import AdminLog
+__all__ += ["AdminLog"]

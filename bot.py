@@ -11,6 +11,7 @@ from sib.database.connection import init_db
 from sib.handlers import register_all_handlers
 from sib.middleware.rate_limit import RateLimitMiddleware
 from sib.middleware.panel_guard import PanelGuardMiddleware
+from sib.middleware.group_membership import GroupMembershipMiddleware
 
 
 async def create_bot_and_dispatcher() -> tuple[Bot, Dispatcher]:
@@ -24,6 +25,12 @@ async def create_bot_and_dispatcher() -> tuple[Bot, Dispatcher]:
         default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN),
     )
     dp = Dispatcher()
+
+    # Observe group activity before rate limiting, including dropped updates.
+    # Both observers share one throttle; writes run in detached bounded tasks.
+    membership = GroupMembershipMiddleware()
+    dp.message.outer_middleware(membership)
+    dp.callback_query.outer_middleware(membership)
 
     # Global anti-spam protection. Dropped updates never reach handlers.
     dp.message.outer_middleware(RateLimitMiddleware())
@@ -43,14 +50,30 @@ async def main():
     # Initialize database tables and seed data
     await init_db()
 
+    # Best-effort local artwork-cache cleanup; never enables invasion sends.
+    from sib.services.invasion_v2.imaging.cache import prune as prune_inv2_cache
+    try:
+        prune_inv2_cache()
+    except OSError:
+        logger.debug("inv2 image cache pruning failed", exc_info=True)
+
+    # Register the authoritative inv2 resolver before recovery/maintenance.
+    # This does NOT change the invasion_enabled feature flag.
+    from sib.services.invasion_v2.power_resolver import set_power_resolver
+    from sib.services.invasion_v2.power_resolver_impl import DbGroupPowerResolver
+    set_power_resolver(DbGroupPowerResolver())
+    logger.info("inv2 power resolver: DbGroupPowerResolver")
+
+    # Create the bot before recovery so V2 can retry committed, undelivered
+    # victory photos. The feature gate still controls all invasion operations.
+    bot, dp = await create_bot_and_dispatcher()
+
     # Perform startup recovery and cleanup
     from sib.database.connection import get_session
     from sib.services.recovery import RecoveryService
     from sib.services.maintenance import MaintenanceService
     async with get_session() as session:
-        await RecoveryService.recover_on_startup(session)
-
-    bot, dp = await create_bot_and_dispatcher()
+        await RecoveryService.recover_on_startup(session, bot=bot)
 
     maintenance_stop = asyncio.Event()
     maintenance_task = asyncio.create_task(
