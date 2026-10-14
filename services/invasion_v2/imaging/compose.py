@@ -39,9 +39,9 @@ def _announcement(enemy_type, region_name, enemy_label_fa, *, legacy=False):
     if legacy:
         label(draw, (1216, 100), "تهاجم شیاسیب", 44, fill="#FCECD8",
               stroke_width=2, stroke_fill="#3A1A08", max_width=350)
-    label(draw, (1216, 200 if legacy else 110), region_name, 44, fill="#FCECD8",
+    label(draw, (1216, 200 if legacy else 110), region_name, 88, fill="#FCECD8",
           stroke_width=2, stroke_fill="#3A1A08", max_width=350)
-    label(draw, (1216, 280 if legacy else 190), enemy_label_fa, 28,
+    label(draw, (1216, 280 if legacy else 190), enemy_label_fa, 52,
           fill="#D9C29A", stroke_width=0, max_width=350)
     return image
 
@@ -102,11 +102,11 @@ def _join(enemy_type, card_image_bytes, username, damage, is_crit, enemy_hp_rema
         image.alpha_composite(_critical_light())
     _paste_card(image, card_image_bytes)
     draw = ImageDraw.Draw(image)
-    label(draw, (1216, 64), username, 32, fill="white", stroke_width=2, max_width=310)
+    label(draw, (1216, 72), username, 60, fill="white", stroke_width=2, max_width=350)
     damage_text = _digits(damage)
     if legacy:
         damage_text = f"{damage_text} آسیب" if damage else "سایه بر میدان افتاد"
-    damage_size = 64 if legacy else 96
+    damage_size = 64 if legacy else 160
     if is_crit:
         glow = Image.new("RGBA", (780, 160))
         label(ImageDraw.Draw(glow), (390, 122), damage_text, damage_size,
@@ -116,10 +116,10 @@ def _join(enemy_type, card_image_bytes, username, damage, is_crit, enemy_hp_rema
         draw = ImageDraw.Draw(image)
         label(draw, (70, 40), "کریتیکال" if legacy else "ضربه کاری", 28,
               anchor="la", fill="#FFD24A", stroke_width=2)
-    label(draw, (640, 682), damage_text, damage_size, anchor="ms",
+    label(draw, (640, 648), damage_text, damage_size, anchor="ms",
           fill="#FFD24A" if is_crit else "#FCECD8", stroke_width=2, max_width=720)
     if enemy_hp_remaining is not None:
-        label(draw, (1216, 662), _digits(enemy_hp_remaining), 28,
+        label(draw, (1216, 662), _digits(enemy_hp_remaining), 44,
               fill="#B8A98F", anchor="rs", max_width=240)
     return image
 
@@ -136,17 +136,17 @@ def _result(status, region_name, enemy_type, reward_lines):
     image = load_layout(status).convert("RGBA")
     _paste_enemy(image, enemy_type, (360, -32), opacity=.35, scale=1.4)
     draw = ImageDraw.Draw(image)
-    label(draw, (640, 52), region_name, 44, anchor="ma", fill="#FCECD8",
+    label(draw, (640, 52), region_name, 88, anchor="ma", fill="#FCECD8",
           stroke_width=2, max_width=1120)
-    label(draw, (640, 350), "پیروزی" if status == "victory" else "شکست", 120,
+    label(draw, (640, 350), "پیروزی" if status == "victory" else "شکست", 200,
           anchor="mm", fill="#FCECD8" if status == "victory" else "#efa7a0",
           stroke_width=4)
     if status == "victory":
         lines = list(reward_lines)
-        spacing = min(48, 192 // max(1, len(lines)))
+        spacing = min(64, 192 // max(1, len(lines)))
         for index, line in enumerate(lines):
             label(draw, (640, 680-(len(lines)-1-index)*spacing), line,
-                  min(32, max(1, spacing-10)), anchor="ms", fill="#FCECD8",
+                  min(54, max(1, spacing-10)), anchor="ms", fill="#FCECD8",
                   stroke_width=1, max_width=1120)
     return image
 
