@@ -65,7 +65,7 @@ def test_narrative_has_no_placeholders_repetitions_or_english(event):
     # Values must be injected exactly when their selected template asks for them.
     pools = {"announcement": pool.ANNOUNCEMENT, "join_normal": pool.JOIN_NORMAL,
              "join_critical": pool.JOIN_CRIT, "join_high": pool.JOIN_CRIT,
-             "finisher": pool.JOIN_KILL, "victory": pool.VICTORY,
+             "finisher": pool.JOIN_KILL, "victory": [text for text in pool.VICTORY if "{n}" not in text],
              "defeat": pool.DEFEAT, "expired": pool.EXPIRED}
     values = dict(user="داریوش1", card="سیب سرخ1", damage="۱۲۳", hp_remaining="۴۵۶",
                   region="درّه ماه", enemy_name="شیاسیب سایه")

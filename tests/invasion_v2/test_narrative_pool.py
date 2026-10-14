@@ -29,11 +29,14 @@ def clean_history():
 
 def _render_category(category, **overrides):
     values = {**COMMON, **overrides}
+    participant_count = values.pop("participant_count", None)
     rng = random.Random(17)
     if category.startswith("JOIN_"):
         return narrative.render_join(username=values["username"], card_name=values["card_name"],
             damage=123, is_crit=category == "JOIN_CRIT",
             enemy_hp_remaining=0 if category == "JOIN_KILL" else 456, rng=rng)
+    if category == "VICTORY":
+        return narrative.render_victory(**values, rng=rng, participant_count=participant_count)
     return getattr(narrative, "render_" + category.lower())(**values, rng=rng)
 
 
@@ -157,10 +160,11 @@ def test_render_join_selects_normal_pool(monkeypatch):
 @pytest.mark.parametrize("category,index,template", TEMPLATES, ids=[f"{n}-{i}" for n,i,_ in TEMPLATES])
 def test_all_renders_stay_under_900_chars(monkeypatch, category, index, template):
     monkeypatch.setattr(pool, "pick", lambda *args, **kwargs: template)
-    text = _render_category(category)
+    context = {"participant_count": 7} if "{n}" in template else {}
+    text = _render_category(category, **context)
     assert 0 < len(text) < 900 and "{" not in text and "}" not in text
     long = _render_category(category, username="داریوش " * 1000,
-        card_name="سیب " * 1000, region_name="درّه " * 1000, enemy_name="شیاسیب " * 1000)
+        card_name="سیب " * 1000, region_name="درّه " * 1000, enemy_name="شیاسیب " * 1000, **context)
     assert 0 < len(long) < 900
 
 
@@ -171,7 +175,8 @@ def test_no_english_letters(monkeypatch, category):
         literal = "".join(part for part, _, _, _ in Formatter().parse(template))
         assert not re.search(r"[A-Za-z0-9]", literal)
         monkeypatch.setattr(pool, "pick", lambda *args, _template=template, **kwargs: _template)
-        text = _render_category(category, **injected)
+        context = {"participant_count": 7} if "{n}" in template else {}
+        text = _render_category(category, **injected, **context)
         for value in injected.values():
             text = text.replace(value, "")
         assert not re.search(r"[A-Za-z0-9]", text)
@@ -223,7 +228,7 @@ def test_render_repetition_and_rng_scope():
     assert pool._rng.get() is None
 
 
-def test_public_signatures_unchanged():
+def test_public_signatures_backwards_compatible():
     expected = {
         "render_join": ("username", "card_name", "damage", "is_crit", "enemy_hp_remaining", "rng"),
         "render_high_damage": ("username", "card_name", "damage", "enemy_hp_remaining", "rng"),
@@ -234,9 +239,13 @@ def test_public_signatures_unchanged():
     assert public == set(expected)
     for name, names in expected.items():
         sig = inspect.signature(getattr(narrative, name))
-        assert tuple(sig.parameters) == names and sig.return_annotation is str
+        optional = ("invasion_id", "participant_count") if name == "render_victory" else ("invasion_id",)
+        assert tuple(sig.parameters) == names + optional and sig.return_annotation is str
         for parameter in sig.parameters.values():
             assert parameter.kind == inspect.Parameter.KEYWORD_ONLY
+            if parameter.name in optional:
+                assert parameter.default is None and parameter.annotation == (int | None)
+                continue
             assert parameter.default is inspect.Parameter.empty
             annotation = {"damage": int, "enemy_hp_remaining": int, "is_crit": bool, "rng": random.Random}.get(parameter.name, str)
             assert parameter.annotation is annotation

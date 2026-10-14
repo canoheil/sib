@@ -1,5 +1,12 @@
 # Phase 8B — narrative pool rewrite
 
+> **Phase 8C update:** `{n}` now works end-to-end. Production callers pass invasion
+> IDs, and victory finalization passes the count of that invasion's stored attacks.
+> VICTORY now has **18 variants: 6 with `{n}`, 12 without**; the full pool has **98**.
+> All 92 Phase 8B variants are unchanged. Original inventory, example seeds and
+> Phase 8B test results below are historical; see [PHASE-8C-REPORT.md](PHASE-8C-REPORT.md)
+> for the current optional signatures, wiring, difficulty and 421-test validation.
+
 ## Pre-change inspection (recorded before modifying narrative.py)
 
 Baseline: `628ea344e12d00b80aa68072a076fa0b6f821d27`.
@@ -98,7 +105,7 @@ These are the exact 40 base strings, before variable interpolation. The module c
 
 ## New pool inventory
 
-**92 variants total: 21 required reference paragraphs + 71 original additions.**
+**98 variants currently: 21 reference paragraphs + 71 Phase 8B additions + 6 Phase 8C counted-victory additions.**
 All seven requested minimum counts are exceeded or met. Each list starts with
 exactly its first three supplied samples, preserving wording, spelling and
 punctuation (only presentation line wrapping was removed). The fourth/fifth join
@@ -115,7 +122,7 @@ tests separately render every variant with normal and very long injected values.
 | `JOIN_NORMAL` | 22 | 2 | 18 | 2 | 226 |
 | `JOIN_CRIT` | 16 | 2 | 12 | 2 | 223 |
 | `JOIN_KILL` | 10 | 2 | 6 | 2 | 219 |
-| `VICTORY` | 12 | 2 | 8 | 2 | 217 |
+| `VICTORY` | 18 | 2 | 14 | 2 | 217 |
 | `DEFEAT` | 12 | 2 | 8 | 2 | 228 |
 | `EXPIRED` | 8 | 3 | 3 | 2 | 229 |
 
@@ -130,9 +137,10 @@ variety, and adjacent final verbs were edited to avoid repetition.
 
 ## API mapping and rendering
 
-All seven public function names, keyword-only argument order, annotations, required
-arguments and return annotations remain exactly as inventoried above. No new public
-argument was introduced. No caller was modified.
+Phase 8B preserved all public signatures exactly. Phase 8C retains every original
+argument and appends optional `invasion_id=None` to all seven functions, plus
+`participant_count=None` to victory; announcement/join/result callers are now wired.
+The inventory above records the original signatures, not the Phase 8C additions.
 
 | Function / condition | Pool |
 |---|---|
@@ -195,32 +203,20 @@ def pick(pool: list[str], *, key: str, history_size: int = 5) -> str
   that would contradict anti-repetition. Existing replay tests were updated to
   make starting history explicit rather than disabling the new feature.
 
-### Key scope: unavoidable frozen-API limitation
+### Key scope (Phase 8C resolves the original caller limitation)
 
-The current public functions do **not** receive `invasion_id`, `group_id`, or `n`.
-The prohibited caller files cannot supply them without a future approved change.
-No IDs/counts are inferred from usernames or RNG internals, and no DB lookup is
-added to narrative rendering.
+With `invasion_id`, renderers now use the requested event/invasion keys:
+`announcement`, `join_normal`, `join_crit`, `join_kill`, `victory`, `defeat`, `expired`.
+Without an ID, the exact original player/card or region/enemy hash fallback remains.
+Victory uses only counted variants when `participant_count` is supplied (including
+zero), otherwise only the original uncounted variants. `{n}` is formatted in Persian
+digits. Presentation counts that invasion's attack rows once on victory, not its
+reward rows. Six counted variants support the existing recent-five exclusion.
 
-- Join, critical/high-impact and finisher share `join:<digest(user, card)>` so a
-  change in damage, HP or RNG does not bypass recent history.
-- Announcement, victory, defeat and expiry use an event prefix plus a digest of
-  `(region, enemy_name)`. Structured JSON before hashing prevents delimiter
-  collisions; the history keys do not retain raw player names.
-- This gives meaningful available-context anti-repetition, **not exact per-invasion
-  or per-group isolation**. A player's same card can share history across invasions,
-  and groups facing the same enemy/region can share event history in one process.
-  The public picker already accepts explicit keys such as `join:123`, if a future
-  caller API is permitted to provide that scope.
-- `{n}` is allowed by the requested template vocabulary but deliberately unused:
-  victory has no participant-count parameter. Attack pools likewise do not invent
-  unavailable region/enemy labels; the shared finisher pool uses only user/card.
-- History resets on process restart, is not shared between workers, and records
-  selection rather than successful Telegram delivery. A rejected transaction or
-  failed send may consume a recent-history slot. No persistence coupling is added.
-- Per-key storage is bounded by the distinct templates encountered, not total pick
-  count. The number of keys can grow with distinct contexts until restart; there
-  is intentionally no eviction that would silently weaken the exclusion promise.
+The original lack of ID/count inputs is no longer a production caller limitation.
+Process-local history still resets on restart, is not shared across workers, records
+selection rather than successful delivery and grows with the number of context keys.
+Legacy callers that omit the ID still share the broader Phase 8B fallback scope.
 
 ## Seven example rendered outputs
 
@@ -300,10 +296,9 @@ PYTHONPATH="$(dirname "$PWD"):$PWD" \
    a singular reader; some expiry samples assert enemy disappearance rather than
    uncertainty. Those were preserved, not silently rewritten. New expiry copy
    avoids declaring an unobserved victory, defeat or territory change.
-2. Exact per-invasion keys and participant-count prose cannot be added through
-   the immutable signatures. Available-context scoping and omission of `{n}` are
-   deliberate, documented constraints, not invented data or a claim of full ID
-   isolation. A future explicit API/caller change would be needed for those inputs.
+2. **Resolved in Phase 8C:** optional ID/count arguments were authorized and wired.
+   Only legacy calls omitting the new arguments retain context-based anti-repetition
+   and uncounted victory prose. No participant count is fabricated.
 3. Existing persisted `Inv2Attack.narrative` rows are not rewritten. New renders
    use the new pools; replay of old stored attack text naturally retains old copy.
 4. Imaging text, button labels, separate reward summaries/critical caption suffixes,

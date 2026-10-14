@@ -118,7 +118,8 @@ async def test_resolved_power_spawns_with_formula_and_round_robin(db, monkeypatc
         assert len(rows) == 1
         first = rows[0]
         assert first.group_id == 1
-        assert first.enemy_hp == first.enemy_hp_remaining == round(500 * 1.6 * 4.0)
+        assert first.enemy_hp == first.enemy_hp_remaining == round(500 * 1.6 * 2.5)
+        assert first.difficulty_multiplier == 2.5
         assert first.status == InvasionStatus.PENDING.value
         assert first.ends_at is None and first.started_at is None  # Phase 5 sends first
         assert first.occurrence_key.startswith("inv2:v1:group:1:region:")
