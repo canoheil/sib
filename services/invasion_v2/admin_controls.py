@@ -232,4 +232,6 @@ async def health(session) -> str:
     return (f"🩺 سلامت تهاجم | {'فعال' if flag is True or str(flag).lower() == 'true' else 'غیرفعال'}\n"
             f"نبرد: {active} | گروه خاموش: {muted} | ناحیهٔ ازدست‌رفته: {lost}\n"
             f"آخرین تیک موفق: {_date(admin_runtime.last_successful_tick)}\n"
-            f"آخرین خطای این فرایند: {admin_runtime.last_error or '—'}")
+            f"آخرین اجرای تیک: {_date(admin_runtime.last_tick_at)} | مدت: {admin_runtime.last_tick_duration_ms if admin_runtime.last_tick_duration_ms is not None else '—'} میلی‌ثانیه\n"
+            f"زمان آخرین خطا: {_date(admin_runtime.last_error_at)}\n"
+            f"آخرین خطای این فرایند: {admin_runtime.last_error_message or admin_runtime.last_error or '—'}")

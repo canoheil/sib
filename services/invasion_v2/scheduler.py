@@ -2,6 +2,7 @@
 
 import math
 import random
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Sequence
 
@@ -13,6 +14,7 @@ from sib.database.connection import get_session
 from sib.database.models import Group, Inv2GroupState, Inv2Invasion, Inv2Region
 from sib.services.config_store import ConfigService
 
+from . import admin_runtime
 from .circuit_breaker import is_group_available, maybe_permanently_disable
 from .enemy import choose_enemy_type, compute_enemy_hp, enemy_spec
 from .enums import InvasionStatus
@@ -58,7 +60,7 @@ class InvasionScheduler:
         return rng.choice(regions)
 
     @classmethod
-    async def _finalize_due(cls, session: AsyncSession, now: datetime) -> list[tuple[int, str]]:
+    async def _finalize_due(cls, session: AsyncSession, now: datetime, stats: dict | None = None) -> list[tuple[int, str]]:
         due = list((await session.scalars(
             select(Inv2Invasion).where(
                 Inv2Invasion.status.in_((InvasionStatus.PENDING.value, InvasionStatus.ACTIVE.value)),
@@ -70,6 +72,8 @@ class InvasionScheduler:
         for invasion in due:
             if invasion.status == InvasionStatus.PENDING.value:
                 invasion.status = InvasionStatus.EXPIRED.value
+                if stats is not None:
+                    stats["expired"] += 1
             elif invasion.enemy_hp_remaining <= 0:
                 invasion.status = InvasionStatus.VICTORY.value
                 region = await session.get(Inv2Region, invasion.region_code)
@@ -104,10 +108,13 @@ class InvasionScheduler:
             cls._missing_resolver_logged = True
 
     @classmethod
-    async def _spawn_if_due(cls, session: AsyncSession, now: datetime, rng: random.Random) -> None:
+    async def _spawn_if_due(cls, session: AsyncSession, now: datetime, rng: random.Random,
+                            stats: dict | None = None) -> None:
         # Avoid scanning groups without an installed authoritative resolver.
         if get_power_resolver() is None:
             cls._log_missing_resolver_once()
+            if stats is not None:
+                stats["skipped_no_resolver"] += 1
             return
         cls._missing_resolver_logged = False
         raw_interval = await ConfigService.get(session, "invasion_interval_seconds")
@@ -147,6 +154,8 @@ class InvasionScheduler:
             ordered += [g for g in groups if g.id <= next_id]
         for group in ordered:
             if not await is_group_available(group.id, session=session, now=now):
+                if stats is not None:
+                    stats["skipped_muted"] += 1
                 continue
             live = await session.scalar(
                 select(Inv2Invasion.id).where(
@@ -155,10 +164,14 @@ class InvasionScheduler:
                 ).limit(1)
             )
             if live is not None:
+                if stats is not None:
+                    stats["skipped_active"] += 1
                 continue
             resolver = get_power_resolver()
             if resolver is None:  # resolver can be unregistered during a sweep
                 cls._log_missing_resolver_once()
+                if stats is not None:
+                    stats["skipped_no_resolver"] += 1
                 return
             average = await resolver.average_main_card_power(group_id=group.id, session=session)
             if average is None:
@@ -196,6 +209,8 @@ class InvasionScheduler:
             session.add(invasion)
             await session.flush()
             region.last_invasion_id = invasion.id
+            if stats is not None:
+                stats["spawned"] += 1
             return  # at most one new invasion per global interval
 
     @classmethod
@@ -205,14 +220,31 @@ class InvasionScheduler:
         False/missing flag means *no session and no writes*, even when this
         method is called directly instead of via MaintenanceService.
         """
-        if not await _enabled():
-            return
-        current = _utc(now or datetime.now(timezone.utc))
-        async with get_session() as session:
-            terminal = await cls._finalize_due(session, current)
-            await cls._deactivate_stale_mutes(session, current)
-            await cls._spawn_if_due(session, current, rng or random.Random())
-        return terminal
+        start = time.monotonic()
+        stats = {"spawned": 0, "finalized": 0, "expired": 0,
+                 "skipped_muted": 0, "skipped_active": 0,
+                 "skipped_no_resolver": 0}
+        try:
+            if not await _enabled():
+                return
+            current = _utc(now or datetime.now(timezone.utc))
+            async with get_session() as session:
+                terminal = await cls._finalize_due(session, current, stats)
+                await cls._deactivate_stale_mutes(session, current)
+                await cls._spawn_if_due(session, current, rng or random.Random(), stats)
+            stats["finalized"] = len(terminal)
+            admin_runtime.last_successful_tick = datetime.now(timezone.utc)
+            return terminal
+        except Exception as exc:
+            admin_runtime.last_error_at = datetime.now(timezone.utc)
+            admin_runtime.last_error_message = str(exc)[:240]
+            admin_runtime.last_error = admin_runtime.last_error_message
+            raise
+        finally:
+            admin_runtime.last_tick_at = datetime.now(timezone.utc)
+            stats["duration_ms"] = max(0, round((time.monotonic() - start) * 1000))
+            admin_runtime.last_tick_duration_ms = stats["duration_ms"]
+            logger.info("inv2_tick", extra=stats)
 
     @classmethod
     async def recover(cls, *, now: datetime | None = None) -> int:
