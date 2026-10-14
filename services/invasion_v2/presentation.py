@@ -92,8 +92,23 @@ def build_join_caption(narrative_text: str, damage: int, *, is_crit: bool, is_ki
     return _fit_caption(narrative_text, f"\n\n{emoji} اسیب وارده به دشمن: {fa_digits(damage)}")
 
 
-async def _edit_announcement_caption(bot, group_id, chat_id, message_id, caption) -> None:
+def join_keyboard(invasion_id: int) -> InlineKeyboardMarkup:
+    """The single join button; the one source of truth for its label/callback.
+
+    Telegram clears an inline keyboard whenever an edit omits reply_markup, so
+    every caption edit of a still-joinable announcement must re-send it.
+    """
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+        text="⚔️ پیوستن به نبرد", callback_data=f"inv2:join:{invasion_id}")]])
+
+
+async def _edit_announcement_caption(
+    bot, group_id, chat_id, message_id, caption, reply_markup=None
+) -> None:
     """One metered announcement caption edit.
+
+    reply_markup is re-sent for a live battle and deliberately omitted (None)
+    for a finished one, where omitting it is how Telegram removes the button.
 
     "Message is not modified" is an expected no-op when joins coalesce into an
     identical caption; it is swallowed at DEBUG and is NOT a breaker failure.
@@ -101,7 +116,8 @@ async def _edit_announcement_caption(bot, group_id, chat_id, message_id, caption
     Never raises into the join flow.
     """
     try:
-        await bot.edit_message_caption(chat_id=chat_id, message_id=message_id, caption=caption)
+        await bot.edit_message_caption(chat_id=chat_id, message_id=message_id,
+                                       caption=caption, reply_markup=reply_markup)
     except TelegramBadRequest as exc:
         if _is_not_modified(exc):
             logger.debug("inv2 HP edit unchanged, skipping group=%s message=%s", group_id, message_id)
@@ -150,10 +166,16 @@ async def _apply_hp_edit(bot, invasion_id: int, *, allow_victory: bool = False) 
             group_id = inv.group_id
             chat_id = inv.message_chat_id or group_id
             message_id = inv.message_id
+            # A live edit must re-send the button (Telegram drops the keyboard of
+            # an edit that omits reply_markup). Starting at 0 HP the battle is
+            # over, so the kill edit deliberately omits it and clears the button.
+            reply_markup = (join_keyboard(inv.id)
+                            if inv.status == InvasionStatus.ACTIVE.value else None)
     except Exception:
         logger.exception("inv2 HP edit state read failed invasion=%s", invasion_id)
         return
-    await _edit_announcement_caption(bot, group_id, chat_id, message_id, caption)
+    await _edit_announcement_caption(bot, group_id, chat_id, message_id, caption,
+                                     reply_markup=reply_markup)
 
 
 # Per-invasion coalescing of announcement HP edits: rapid joins within the
@@ -218,8 +240,7 @@ class InvasionPresentation:
                     username="نگهبانان", card_name="کارت‌های اصلی", region_name=region.name_fa,
                     enemy_name=inv.enemy_name_fa, rng=random.Random(inv.id), invasion_id=inv.id)
                 caption = build_announcement_caption(narrative_text, inv.enemy_hp_remaining, inv.enemy_hp)
-                kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
-                    text="⚔️ پیوستن به نبرد", callback_data=f"inv2:join:{inv.id}")]])
+                kb = join_keyboard(inv.id)
                 raw_window = await ConfigService.get(session, "invasion_join_window_seconds")
                 window = int(300 if raw_window is None else raw_window)
                 if window <= 0:

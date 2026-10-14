@@ -92,6 +92,42 @@ async def test_join_edits_announcement_to_new_hp(db, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_hp_edit_keeps_the_join_button(db, monkeypatch):
+    """Regression: Telegram clears an inline keyboard whenever an edit omits
+    reply_markup, so the live HP edit must re-send the join button. Without
+    this, the button vanished after the first join and nobody else could join.
+    """
+    factory, _ = db
+    monkeypatch.setattr(presentation, "HP_EDIT_DEBOUNCE_SECONDS", 0.01)
+    inv_id = await create_inv(factory, status="ACTIVE", hp=200, message_id=123)
+    attack_id = await _attack(factory, inv_id, damage=41)
+    await _set_hp(factory, inv_id, 159)
+    bot = _join_bot()
+    await presentation.InvasionPresentation().on_join(bot, inv_id, 1, attack_id)
+    await asyncio.sleep(0.2)
+    assert bot.edit_message_caption.await_count == 1
+    markup = bot.edit_message_caption.await_args.kwargs.get("reply_markup")
+    assert markup is not None, "live HP edit dropped the join button"
+    button = markup.inline_keyboard[0][0]
+    assert button.text == "⚔️ پیوستن به نبرد"
+    assert button.callback_data == f"inv2:join:{inv_id}"
+
+
+@pytest.mark.asyncio
+async def test_kill_edit_removes_the_join_button(db):
+    """At 0 HP the battle is over: the synchronous kill edit clears the button
+    (the request omits reply_markup, which is how Telegram removes it)."""
+    factory, _ = db
+    inv_id = await create_inv(factory, status="ACTIVE", hp=1, message_id=123)
+    attack_id = await _attack(factory, inv_id, damage=41, crit=True)
+    await _set_hp(factory, inv_id, 0, status="VICTORY")
+    bot = _join_bot()
+    await presentation.InvasionPresentation().on_join(bot, inv_id, 1, attack_id)
+    assert bot.edit_message_caption.await_count == 1
+    assert bot.edit_message_caption.await_args.kwargs.get("reply_markup") is None
+
+
+@pytest.mark.asyncio
 async def test_kill_edits_announcement_to_zero(db):
     factory, _ = db
     inv_id = await create_inv(factory, status="ACTIVE", hp=1, message_id=123)

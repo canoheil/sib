@@ -235,6 +235,11 @@ this phase.
 - **`reply_markup` on edit**: `edit_message_caption` is called without
   `reply_markup`, which for photo messages keeps the existing inline keyboard
   (the "⚔️ پیوستن به نبرد" button stays alive throughout the battle).
+  > **Correction (2026-10-14, [Phase 8F](PHASE-8F-REPORT.md)):** this claim was
+  > wrong. Telegram *clears* an inline keyboard when an edit omits
+  > `reply_markup`, so this edit removed the join button after the first join
+  > and blocked every later joiner. Phase 8F re-sends `join_keyboard(inv.id)`
+  > on live HP edits (and clears the button on the killing blow).
 - **Back-to-back joins**: coalesced by the debounce; the residual
   "Message is not modified" race (caption identical to the live one) is
   swallowed at DEBUG, no breaker penalty.
