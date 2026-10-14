@@ -118,6 +118,44 @@ def _paste_enemy(image, enemy_type, position, *, opacity=1.0, scale=1.0):
     image.alpha_composite(enemy, position)
 
 
+def _text_ink_box(size, xy, text, font, anchor="mm"):
+    """Bbox of the drawn ink for a shaped string at an anchored position."""
+    layer = Image.new("RGBA", size, (0, 0, 0, 0))
+    visual, kwargs = _shaped(text)
+    ImageDraw.Draw(layer).text(xy, visual, font=font, fill=(255, 255, 255, 255),
+                               anchor=anchor, **kwargs)
+    return layer.getchannel("A").getbbox()
+
+
+def _decorative_line(image, center):
+    """Thin 160x3 line in #6E3511 with a soft glow, centered on center."""
+    x, y = center
+    layer = Image.new("RGBA", (200, 44), (0, 0, 0, 0))
+    ImageDraw.Draw(layer).rectangle((20, 20, 180, 23), fill=(164, 92, 44, 230))
+    layer = layer.filter(ImageFilter.GaussianBlur(4))
+    image.alpha_composite(layer, (x - 100, y - 22))
+    ImageDraw.Draw(image).rectangle((x - 80, y - 1, x + 80, y + 2), fill=(110, 53, 17))
+
+
+def _draw_apple_icon(image, center):
+    """Small Pillow-drawn decorative apple: red circle (~20px radius) + leaf."""
+    x, y = center
+    leaf = Image.new("RGBA", (40, 26), (0, 0, 0, 0))
+    ImageDraw.Draw(leaf).ellipse((4, 5, 36, 21), fill=(84, 132, 48, 255))
+    leaf = leaf.rotate(-35, expand=True, resample=Image.Resampling.BICUBIC)
+    image.alpha_composite(leaf, (round(x + 4 - leaf.width // 2), round(y - 36)))
+    draw = ImageDraw.Draw(image)
+    draw.line((x + 8, y - 15, x + 14, y - 26), fill=(92, 56, 22, 255), width=4)
+    radius = 20
+    draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=(176, 32, 26, 255))
+    draw.ellipse((x - 13, y - 13, x - 3, y - 4), fill=(224, 96, 76, 210))
+
+
+# Announcement panel: the dark plate on the right third (x ~860..1280).
+_PANEL_X = 1070
+_REGION_Y = 216  # ~30% of panel height
+
+
 def _announcement(enemy_type, region_name, enemy_label_fa, *, legacy=False):
     image = load_layout("announcement").convert("RGBA")
     _paste_enemy(image, enemy_type, (80, 80))
@@ -130,12 +168,23 @@ def _announcement(enemy_type, region_name, enemy_label_fa, *, legacy=False):
         label(draw, (1216, 280), enemy_label_fa, 28,
               fill="#D9C29A", stroke_width=0, max_width=350)
         return image
+    # Rebalanced panel: region name centered at ~30% height, decorative line,
+    # enemy label below the line with a small apple icon to its right.
     region_size = _fit_size(region_name, 88, max_width=380)
-    _draw_text_with_shadow(image, (1216, 110), region_name, templates.font(region_size),
-                           fill="#FCECD8", stroke_fill="#3A1A08", stroke_width=2, anchor="ra")
-    enemy_size = _fit_size(enemy_label_fa, 52, max_width=350)
-    _draw_text_with_shadow(image, (1216, 190), enemy_label_fa, templates.font(enemy_size),
-                           fill="#D9C29A", stroke_fill="#2A1408", stroke_width=1, anchor="ra")
+    region_font = templates.font(region_size)
+    _draw_text_with_shadow(image, (_PANEL_X, _REGION_Y), region_name, region_font,
+                           fill="#FCECD8", stroke_fill="#3A1A08", stroke_width=2, anchor="mm")
+    region_box = _text_ink_box(image.size, (_PANEL_X, _REGION_Y), region_name, region_font)
+    line_y = region_box[3] + 36
+    _decorative_line(image, (_PANEL_X, line_y))
+    enemy_size = _fit_size(enemy_label_fa, 52, max_width=340)
+    enemy_font = templates.font(enemy_size)
+    enemy_center_y = line_y + 64
+    _draw_text_with_shadow(image, (_PANEL_X, enemy_center_y), enemy_label_fa, enemy_font,
+                           fill="#D9C29A", stroke_fill="#2A1408", stroke_width=1, anchor="mm")
+    enemy_box = _text_ink_box(image.size, (_PANEL_X, enemy_center_y), enemy_label_fa, enemy_font)
+    icon_x = min(SIZE[0] - 28, enemy_box[2] + 34)
+    _draw_apple_icon(image, (icon_x, enemy_center_y))
     return image
 
 
