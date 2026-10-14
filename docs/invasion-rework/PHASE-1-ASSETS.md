@@ -4,12 +4,12 @@ The historical Phase 1 square-canvas proposal and Phase 5 procedural art are
 superseded. Runtime now loads committed static artwork from
 `assets/invasion_v2/`; it does not generate backgrounds or enemy shapes.
 
-**Art acceptance is not complete:** ten independent AI paintings were generated.
-A service limit of ten image generations per turn prevented the four dedicated
-layout generations. Four static derivatives are present for integration/testing;
-victory/defeat in particular need replacement before visual sign-off. See
-[PHASE-8A-REPORT.md](PHASE-8A-REPORT.md) for provenance, exact sizes and limitations.
-Do not treat these provisional layouts as approval to enable invasions.
+**Phase 8A inventory complete:** all 14 images now have independently generated
+AI source artwork. Four dedicated layouts replaced the provisional derivatives
+in the continuation turn after the initial generation cap. Manifest version **2**
+invalidates old cached compositions. See [PHASE-8A-REPORT.md](PHASE-8A-REPORT.md)
+for provenance, exact sizes, current timings and validation limitations.
+This does not enable invasions or change the feature flag.
 
 ## Current runtime inventory (14 images)
 
@@ -29,10 +29,10 @@ sprites are RGBA with baked colored halos and a fully transparent bottom 60 px.
 | `silhouettes/commander.png` | 400×560 | AI-painted horned armored commander, red halo |
 | `silhouettes/brute.png` | 400×560 | AI-painted broad spiked brute, orange halo |
 | `silhouettes/king.png` | 400×560 | AI-painted skeletal crowned apple king, green halo |
-| `layouts/announcement.jpg` | 1280×720 | Static orchard derivative, dark right panel and subtle frame |
-| `layouts/join.jpg` | 1280×720 | Static throne-room derivative, soft dark central portrait inset |
-| `layouts/victory.jpg` | 1280×720 | **Provisional** gold/green-graded orchard; dedicated triumphant painting pending |
-| `layouts/defeat.jpg` | 1280×720 | **Provisional** red/black-graded war camp; dedicated defeat painting pending |
+| `layouts/announcement.jpg` | 1280×720 | Dedicated AI orchard clearing, dark right panel and subtle frame |
+| `layouts/join.jpg` | 1280×720 | Dedicated AI orchard shrine, soft dark central portrait inset |
+| `layouts/victory.jpg` | 1280×720 | Dedicated AI restored grove, golden light, green foliage and floating petals |
+| `layouts/defeat.jpg` | 1280×720 | Dedicated AI somber ruins, falling ash and shattered crimson apple |
 
 `manifest.json` records version, UTC timestamp, generator, dimensions and SHA-256
 of every final image's actual file bytes. Bump its version and recalculate hashes
@@ -43,7 +43,7 @@ when replacing artwork. No generation tool or preparation script runs in the bot
 - 1280×720 output JPEGs, quality 88.
 - Announcement: static announcement plate, natural-size sprite at (80, 80),
   right-aligned region/enemy text. The plate's right third has a measured minimum
-  **10.69:1** contrast against pure white (requirement: 4.5:1).
+  **6.33:1** contrast against pure white (requirement: 4.5:1).
 - Join: static join plate, 40%-opacity enemy, centered local card contained within
   420×580 without aspect distortion/cropping; rounded 16 px corners, 4 px dark
   border, shadow. Username, damage, optional critical treatment and remaining HP.

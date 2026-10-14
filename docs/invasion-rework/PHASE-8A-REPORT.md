@@ -4,26 +4,30 @@ Date: 2026-10-14 UTC
 Branch: `arena/0e56f627-sib`  
 Base: `8cc18ed5a9f93c631a3dcd21c49c0958e16b671d`
 
-## Status / release limitation
+## Final status
 
-**Static renderer implemented and tested; art acceptance partially blocked.**
-All 14 requested file paths exist and are committed, but there are **10 independent
-AI-generated source paintings plus 4 offline-derived layout plates**, not 14
-independent generations. The image service rejected all four layout requests with
-“Image generation limit of 10 reached for this turn.” No further generation was
-attempted after that response. These layouts are provisional integration assets,
-not final art approval. In particular:
+**All 14 independent AI-generated source images are now present, reviewed and
+committed. Static composition and the scoped regression checks are complete.**
+The original ten backgrounds/silhouettes are unchanged. Four dedicated layout
+paintings now replace every provisional derivative. Manifest version is **2**.
 
-- Victory is a gold/green-graded corrupted orchard, still too ominous; it does not
-  fully deliver the requested lush restored foliage and floating petals.
-- Defeat is a somber red/black ruined camp; the prominent shattered-apple motif
-  and falling ash requested for a dedicated painting are not fully realized.
-- Announcement and join have the required legibility/inset treatment, but are
-  derived from the soldier/king paintings rather than separately generated art.
+The first turn reached the service limit of ten image generations, as previously
+reported. Following the user's explicit continuation request, the four remaining
+images were generated successfully in the next turn; no generation limit was hit
+in that continuation. The earlier art-generation blocker is resolved.
 
-**Follow-up:** generate the four dedicated layouts in a subsequent turn, visually
-review them, update manifest hashes/version, rerun tests/benchmarks and refresh
-samples. Do not enable invasions or claim full visual completion on this basis.
+- Announcement: empty atmospheric orchard clearing on the left, dark caption panel
+  on the right, subtle botanical frame. An offline contrast pass ensures legibility.
+- Join: painterly corrupted orchard shrine with a soft neutral central portrait
+  inset; the 40%-opacity enemy reads clearly in the mist on the left.
+- Victory: restored green apple grove, radiant golden light, blossoms and floating
+  petals; an atmospheric painting without a border.
+- Defeat: charcoal ruins, cold ash, crimson embers and a prominent shattered red
+  apple; an atmospheric painting without a border.
+
+All four raw plates and the refreshed final compositions were visually reviewed
+for motifs, placement, absence of embedded text and legibility. This is local
+asset/compositor validation, not a live Telegram deployment or a flag activation.
 
 ## Style reference and font inspection
 
@@ -64,10 +68,10 @@ RGBA PNGs. All five silhouettes have an entirely transparent final 60 rows.
 | `backgrounds/king.jpg` | 1280×720 | 467,883 | RGB JPEG |
 | `backgrounds/shadow.jpg` | 1280×720 | 433,278 | RGB JPEG |
 | `backgrounds/soldier.jpg` | 1280×720 | 478,544 | RGB JPEG |
-| `layouts/announcement.jpg` | 1280×720 | 430,591 | RGB JPEG |
-| `layouts/defeat.jpg` | 1280×720 | 368,210 | RGB JPEG |
-| `layouts/join.jpg` | 1280×720 | 359,519 | RGB JPEG |
-| `layouts/victory.jpg` | 1280×720 | 547,877 | RGB JPEG |
+| `layouts/announcement.jpg` | 1280×720 | 296,459 | RGB JPEG |
+| `layouts/defeat.jpg` | 1280×720 | 324,258 | RGB JPEG |
+| `layouts/join.jpg` | 1280×720 | 330,404 | RGB JPEG |
+| `layouts/victory.jpg` | 1280×720 | 442,548 | RGB JPEG |
 | `silhouettes/brute.png` | 400×560 | 134,097 | RGBA PNG |
 | `silhouettes/commander.png` | 400×560 | 117,284 | RGBA PNG |
 | `silhouettes/king.png` | 400×560 | 113,877 | RGBA PNG |
@@ -83,16 +87,21 @@ RGBA PNGs. All five silhouettes have an entirely transparent final 60 rows.
   fitted each figure within a 352×452 safe area on a 400×560 transparent canvas,
   and baked a faint type-colored halo into alpha. There is no white background or
   extraction step at runtime. Silhouettes were reviewed against a dark surface.
-- Announcement derives from soldier: a soft right-side darkening and subtle
-  static frame. Join derives from king: dark softly vignetted portrait inset.
-  Victory derives from soldier with a brighter green/gold split grade; defeat
-  derives from commander with a dark red/black grade. These changes happen offline
-  and are baked into the committed JPEGs, not redrawn by the bot.
-- `manifest.json` version `1`, generator `manual-ai`, uses the actual UTC
-  preparation timestamp and SHA-256 calculated from each final file's bytes.
+- Four dedicated layout paintings were generated separately, using the existing
+  orchard/throne-room paintings and Green Knight's foliage/light as style
+  references only. They are not crops or grades substituted for new artwork.
+  Each was fitted to 1280×720 using Lanczos and saved as quality-94 JPEG (4:4:4).
+- Announcement's decorative edge had bright pixels in the right third. A smooth
+  offline-only darkening pass was baked into the right panel before final JPEG
+  export. No runtime background drawing or extra asset is needed.
+- `manifest.json` version **`2`**, generator `manual-ai`, uses the final preparation
+  UTC timestamp and recomputed SHA-256 for all 14 final files. The original ten
+  background/silhouette files retain exactly the same hashes as version 1.
   Source scratch images and processing intermediates are not tracked.
-- WCAG relative luminance computed over **every decoded JPEG pixel** in the
-  announcement right third yields a minimum white-text contrast of **10.6904:1**.
+- WCAG relative luminance computed over **every decoded JPEG pixel** in the final
+  announcement right third yields minimum white-text contrast **6.3315:1**,
+  exceeding the required 4.5:1. The previous derivative's 10.69:1 measurement
+  does not describe the replacement plate.
 
 ## Runtime implementation and compatibility
 
@@ -137,11 +146,11 @@ Python 3.11.2; Pillow 12.3.0; Linux x86_64; `raqm=False`.
 
 | Output | Mean ms (20 runs) | Max ms | First call ms* |
 |---|---:|---:|---:|
-| announcement | 11.31 | 12.29 | 38.00 |
-| join-normal | 106.87 | 118.78 | 139.40 |
-| join-crit | 125.01 | 161.52 | 121.80 |
-| victory | 25.56 | 26.16 | 40.25 |
-| defeat | 21.21 | 21.53 | 33.54 |
+| announcement | 10.70 | 13.11 | 36.70 |
+| join-normal | 104.45 | 112.30 | 128.14 |
+| join-crit | 113.97 | 116.69 | 120.49 |
+| victory | 24.24 | 25.19 | 39.02 |
+| defeat | 20.48 | 21.35 | 32.82 |
 
 *First call for each case in a shared process; earlier cases can warm shared
 fonts/effects. It is not five separate process-start benchmarks. All measured
@@ -164,7 +173,8 @@ PYTHONPATH="$(dirname "$PWD"):$PWD" .venv/bin/python scripts/invasion_v2/benchma
 - `docs/invasion-rework/samples/phase-8a/victory.jpg`
 - `docs/invasion-rework/samples/phase-8a/defeat.jpg`
 
-Each is a 1280×720 quality-88 JPEG. The benchmark regenerates them deliberately;
+Each is a 1280×720 quality-88 JPEG, regenerated with manifest v2's dedicated
+layouts. The benchmark regenerates them deliberately;
 normal bot execution does not write into the repository. Older Phase 5 samples
 are retained as historical documentation.
 
@@ -177,11 +187,14 @@ are retained as historical documentation.
   import-time missing-path reporting, copy isolation, invalid names/status,
   minimum panel contrast, atomic byte cache/pruning, card aspect/placeholder,
   and normal/critical performance.
+- Manifest version invalidation test now bumps relative to whatever version is
+  deployed instead of hardcoding `2`, so later asset releases cannot make it a no-op.
 - Updated Phase 5's palette-key assertion to use `templates.ENEMY_TYPES`; old
   image-returning signature coverage remains intact.
-- **183 passed, 0 failed**: all `tests/invasion_v2` plus
-  `tests/test_invasion_feature_flag.py`.
-- Broader optional character-art run: **190 passed, 4 failed** total. The same
+- **183 passed, 0 failed** (rerun after all four dedicated layouts and manifest v2
+  were installed; 12.11 seconds): all `tests/invasion_v2` plus
+  `tests/test_invasion_feature_flag.py`. This includes all 37 imaging cases.
+- Earlier broader optional character-art run (before layout replacement): **190 passed, 4 failed** total. The same
   four failures reproduced with the base commit's entire imaging package loaded
   in-memory instead of this implementation (**7 passed, 4 failed** for the
   character-art module alone). Existing failure reasons:
@@ -217,15 +230,19 @@ and `numpy` (offline asset preparation only). Runtime dependency files are uncha
   presentation and admin handlers are byte-for-byte unchanged from the base.
 - No production or archived `_archive_inv1_*` tables were accessed. Existing
   migration tests operate solely on isolated disposable SQLite databases.
-- No push, merge, bot startup, or feature activation was performed. The four
-  requested commit chunks are on the session branch only.
+- No push, merge, bot startup, or feature activation was performed. The original four
+  requested commit chunks plus the final-layout completion commits are on the
+  session branch only.
 
 ## Remaining limitations
 
-The four dedicated AI layout generations and final visual sign-off are the main
-blocker. No request to regenerate unsatisfactory art could be completed after
-the per-turn generation cap; the provisional result plates must be replaced,
-not described as final high-quality fulfillment. Real Telegram preview and
-MariaDB integration were not exercised. The unchanged raqm path was not executable
-on this Pillow build. Existing card lettering and legacy caller data limitations
-are described above; they are not altered silently in this phase.
+There is **no remaining image-generation blocker** and no provisional layout in
+the runtime inventory. Final image quality and text placement were reviewed locally;
+a real Telegram preview and MariaDB integration were not exercised. The unchanged
+raqm path was not executable on this Pillow build. The earlier unrelated four
+character-art test failures remain outside this phase; the whole repository suite
+is not claimed green. Existing card lettering and legacy caller data limitations
+are described above and were not altered silently.
+
+`invasion_enabled` stays untouched at the supplied false state; no live DB audit
+was performed and enabling the feature is not part of this delivery.

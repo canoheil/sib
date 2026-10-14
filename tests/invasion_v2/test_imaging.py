@@ -98,7 +98,7 @@ def test_cache_key_changes_with_manifest_version(tmp_path, monkeypatch):
     manifest_path.write_text(json.dumps(manifest))
     monkeypatch.setattr(templates, "ASSETS_ROOT", tmp_path)
     original = cache.cache_key("announcement", 123, "soldier")
-    manifest["version"] = "2"
+    manifest["version"] = f"{manifest['version']}-test-bump"
     manifest_path.write_text(json.dumps(manifest))
     assert cache.cache_key("announcement", 123, "soldier") != original
 
