@@ -69,6 +69,16 @@ def build_announcement_caption(narrative_text: str, current_hp: int, total_hp: i
     return _fit_caption(narrative_text, announcement_hp_line(current_hp, total_hp))
 
 
+def build_join_caption(narrative_text: str, damage: int, *, is_crit: bool, is_kill: bool) -> str:
+    """Join caption: narrative, blank line, then the explicit damage line.
+
+    The emoji marks the blow: 🔥 normal, 💥 critical, 🏆 killing blow
+    (the kill marker wins when a critical lands the finishing hit).
+    """
+    emoji = "🏆" if is_kill else "💥" if is_crit else "🔥"
+    return _fit_caption(narrative_text, f"\n\n{emoji} اسیب وارده به دشمن: {fa_digits(damage)}")
+
+
 class InvasionPresentation:
     async def announce(self, bot, invasion_id: int) -> None:
         if bot is None:
@@ -145,7 +155,10 @@ class InvasionPresentation:
                     ("compose-v2", "join", inv.id, user_id, attack_id, image_args[0],
                      hashlib.sha256(card_bytes).hexdigest(), *image_args[2:]),
                     lambda: compose_join_image(*image_args))
-                caption = _caption(attack.narrative + ("\n💥 ضربه کاری!" if attack.is_crit else ""))
+                # Post-attack HP is already committed: 0 means this blow was fatal.
+                caption = build_join_caption(attack.narrative, int(attack.damage),
+                                             is_crit=bool(attack.is_crit),
+                                             is_kill=inv.enemy_hp_remaining <= 0)
                 await _telegram(inv.group_id, bot.send_photo, chat_id=inv.group_id,
                     photo=FSInputFile(path), caption=caption,
                     reply_to_message_id=inv.message_id, parse_mode=None)
