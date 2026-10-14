@@ -1,8 +1,8 @@
 """Optional authoritative group-power provider for the inv2 scheduler.
 
-Phase 4.5 will supply a concrete implementation using an inv2_group_members
-record populated by existing group-interaction hooks. Until then there is no
-trustworthy group-member average: no resolver means no invasion spawn.
+Phase 4.5 supplies DbGroupPowerResolver using inv2_group_members populated
+by group-interaction hooks. Registration occurs at bot startup; a missing
+resolver still means no invasion spawn.
 """
 
 from typing import Optional, Protocol

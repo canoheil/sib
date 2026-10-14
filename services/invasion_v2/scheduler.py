@@ -101,8 +101,7 @@ class InvasionScheduler:
 
     @classmethod
     async def _spawn_if_due(cls, session: AsyncSession, now: datetime, rng: random.Random) -> None:
-        # No authoritative membership data until Phase 4.5. Avoid scanning
-        # every Group and Region every five seconds merely to skip them all.
+        # Avoid scanning groups without an installed authoritative resolver.
         if get_power_resolver() is None:
             cls._log_missing_resolver_once()
             return

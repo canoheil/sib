@@ -50,6 +50,13 @@ async def main():
     # Initialize database tables and seed data
     await init_db()
 
+    # Register the authoritative inv2 resolver before recovery/maintenance.
+    # This does NOT change the invasion_enabled feature flag.
+    from sib.services.invasion_v2.power_resolver import set_power_resolver
+    from sib.services.invasion_v2.power_resolver_impl import DbGroupPowerResolver
+    set_power_resolver(DbGroupPowerResolver())
+    logger.info("inv2 power resolver: DbGroupPowerResolver")
+
     # Perform startup recovery and cleanup
     from sib.database.connection import get_session
     from sib.services.recovery import RecoveryService

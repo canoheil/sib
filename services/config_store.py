@@ -16,6 +16,8 @@ from sib.database.models import SystemConfig
 # Safe built-in defaults. Everything here is overridable via the
 # system_config table and the admin panel.
 CONFIG_DEFAULTS: dict[str, Any] = {
+    # Days after which a group member is considered inactive for inv2 power.
+    "inv2_member_active_window_days": 30,
     # Garden
     "garden_initial_plots": 5,
     "garden_max_plots": 10,
