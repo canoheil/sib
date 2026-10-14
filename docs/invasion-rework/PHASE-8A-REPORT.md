@@ -8,7 +8,9 @@ Base: `8cc18ed5a9f93c631a3dcd21c49c0958e16b671d`
 
 **All 14 independent AI-generated source images are now present, reviewed and
 committed. Static composition and the scoped regression checks are complete.**
-The original ten backgrounds/silhouettes are unchanged. Four dedicated layout
+Production message delivery and private admin preview are now wired to the byte
+composition API and covered by real-composition delivery tests. The original ten
+backgrounds/silhouettes are unchanged. Four dedicated layout
 paintings now replace every provisional derivative. Manifest version is **2**.
 
 The first turn reached the service limit of ten image generations, as previously
@@ -122,15 +124,49 @@ The public package exports only `compose_announcement_image`,
 The cache also accepts bytes to avoid unnecessary JPEG decoding/re-encoding.
 Atomic cache publication and 30-day pruning remain intact.
 
-The older `announcement_image`, `join_image`, `result_image` adapters are retained
-inside `compose.py` for existing presentation/admin callers. They return PIL RGB
-images and retain existing Persian literals, including the admin-only missing-card
-placeholder. Production callers were not rewired. Consequently the older join
-adapter has no HP argument and the old result adapter has no reward-line argument:
-those overlays are available through the new API, while existing callers retain
-HP/reward behavior in their existing captions. Announcement's existing faction
-label and title likewise remain unchanged in the old adapter. This avoids changing
-user-facing strings or gameplay handlers in an imaging-only phase.
+### Production and preview wiring (completed)
+
+`services/invasion_v2/presentation.py` now calls the public byte-returning API:
+
+- Announcement passes the stored `inv.enemy_name_fa`, not the controlling faction.
+- Join reads the existing local card bytes off the event loop and passes username,
+  stored damage/critical flag and `inv.enemy_hp_remaining`. The image uses the
+  requested 96 px damage treatment and new critical badge, not the legacy overlay.
+  HP is the persisted snapshot read for presentation; it is never recalculated or
+  deducted here. Attack rows do not store a historical post-hit HP snapshot, so
+  concurrent later attacks may already be reflected in the displayed value.
+- Result maps terminal status to lowercase and passes region, enemy type and
+  ordered reward lines. Victory lines aggregate only the existing granted reward
+  rows using exactly the same labels/order/totals as the existing caption. Defeat
+  passes no rewards, even if unrelated/stale reward rows exist. No rewards are
+  granted by image composition or presentation.
+- Captions/narrative, send-success activation and delivered-at semantics remain
+  unchanged. A failed render cannot activate a pending announcement; a failed
+  result send cannot mark a victory delivered. Circuit-breaker metering is intact.
+- All image work remains in `asyncio.to_thread`. Worker arguments are captured
+  plain values/bytes, not deferred ORM field reads.
+
+`handlers/inv2_admin.py`'s private preview uses the same API. The existing
+missing-main-card placeholder is reused through `load_card_image_bytes`; production
+never enables that fallback. Preview-only HP is an explicit example (958 after a
+42-point hit), and result previews use empty reward lines rather than inventing
+DB rewards. Preview remains private, read-only, and usable while invasions are off.
+The admin simulation function is unchanged.
+
+Cache keys carry a `compose-v2` namespace to avoid reusing earlier adapter output
+under the same asset version. They include visible input values (region/enemy
+labels, username, damage, critical flag, remaining HP and reward lines), and card
+**byte SHA-256**, not just its path. Exact replays hit cache; changed HP, username,
+card contents, reward totals or announcement labels produce a different file.
+Manifest versioning and 30-day pruning remain in effect. Asset version is still 2:
+no artwork changed in this wiring step.
+
+The older image-returning adapters remain only for backwards compatibility/tests;
+production presentation and private preview no longer call them. Existing Persian
+string literals in presentation, preview and composition were checked by AST
+comparison against the pre-wiring files and are unchanged. The requested new
+image fields/styles are selected by routing to the already-implemented new API,
+not by rewriting narrative or caption copy.
 
 Card aspect ratio is preserved inside 420×580 rather than cropped. The card is
 centered horizontally, with slight upward placement for the 96 px damage footer.
@@ -146,11 +182,11 @@ Python 3.11.2; Pillow 12.3.0; Linux x86_64; `raqm=False`.
 
 | Output | Mean ms (20 runs) | Max ms | First call ms* |
 |---|---:|---:|---:|
-| announcement | 10.70 | 13.11 | 36.70 |
-| join-normal | 104.45 | 112.30 | 128.14 |
-| join-crit | 113.97 | 116.69 | 120.49 |
-| victory | 24.24 | 25.19 | 39.02 |
-| defeat | 20.48 | 21.35 | 32.82 |
+| announcement | 10.85 | 12.28 | 35.99 |
+| join-normal | 104.20 | 106.80 | 125.89 |
+| join-crit | 117.02 | 130.13 | 123.34 |
+| victory | 24.77 | 26.09 | 40.69 |
+| defeat | 21.87 | 22.43 | 34.90 |
 
 *First call for each case in a shared process; earlier cases can warm shared
 fonts/effects. It is not five separate process-start benchmarks. All measured
@@ -191,9 +227,19 @@ are retained as historical documentation.
   deployed instead of hardcoding `2`, so later asset releases cannot make it a no-op.
 - Updated Phase 5's palette-key assertion to use `templates.ENEMY_TYPES`; old
   image-returning signature coverage remains intact.
-- **183 passed, 0 failed** (rerun after all four dedicated layouts and manifest v2
-  were installed; 12.11 seconds): all `tests/invasion_v2` plus
-  `tests/test_invasion_feature_flag.py`. This includes all 37 imaging cases.
+- **18 added delivery-integration cases** in `test_presentation_phase5.py` execute
+  the actual byte composers and actual temporary disk cache, with SQLite and mocked
+  Telegram only. They verify announcement enemy label, normal/critical join bytes
+  and stored HP, victory reward aggregation/defeat suppression/no-reward victory,
+  cache invalidation for HP/username/card bytes/reward totals/announcement labels,
+  private preview with and without a main card, disabled-flag no-render behavior,
+  failed result delivery, missing local card and failed announcement composition.
+  Sent JPEG bytes are compared to the new compositor output. Render/cache work is
+  asserted to run off the event-loop thread; reward/damage side effects are checked.
+- **201 passed, 0 failed** after production/preview wiring (14.43 seconds): all
+  `tests/invasion_v2` plus `tests/test_invasion_feature_flag.py`. This includes
+  all 37 imaging cases and 18 added delivery cases. Earlier 183-pass results
+  predated those new integration cases.
 - Earlier broader optional character-art run (before layout replacement): **190 passed, 4 failed** total. The same
   four failures reproduced with the base commit's entire imaging package loaded
   in-memory instead of this implementation (**7 passed, 4 failed** for the
@@ -226,12 +272,14 @@ and `numpy` (offline asset preparation only). Runtime dependency files are uncha
   missing flags to `false`; feature-flag tests pass. No production DB connection
   or independent live-value query was performed, so this is preservation of the
   supplied state, not a claimed live DB audit.
-- `narrative.py`, scheduler, resolver, join handler, circuit breaker, migrations,
-  presentation and admin handlers are byte-for-byte unchanged from the base.
+- `narrative.py`, scheduler, resolver, join handler, circuit breaker and migrations
+  remain byte-for-byte unchanged from the base. Only presentation's image wiring
+  and the admin private-preview image wiring changed in this completion step;
+  the admin simulation and Telegram exception/metering wrapper remain unchanged.
 - No production or archived `_archive_inv1_*` tables were accessed. Existing
   migration tests operate solely on isolated disposable SQLite databases.
 - No push, merge, bot startup, or feature activation was performed. The original four
-  requested commit chunks plus the final-layout completion commits are on the
+  requested commit chunks plus the final-layout and presentation-wiring commits are on the
   session branch only.
 
 ## Remaining limitations
@@ -241,8 +289,9 @@ the runtime inventory. Final image quality and text placement were reviewed loca
 a real Telegram preview and MariaDB integration were not exercised. The unchanged
 raqm path was not executable on this Pillow build. The earlier unrelated four
 character-art test failures remain outside this phase; the whole repository suite
-is not claimed green. Existing card lettering and legacy caller data limitations
-are described above and were not altered silently.
+is not claimed green. Existing card lettering remains untouched. The legacy
+caller-wiring limitation is resolved; the current-HP snapshot and preview-only
+example inputs are explicitly documented above.
 
 `invasion_enabled` stays untouched at the supplied false state; no live DB audit
 was performed and enabling the feature is not part of this delivery.

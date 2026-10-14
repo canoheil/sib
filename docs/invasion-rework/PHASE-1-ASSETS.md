@@ -54,8 +54,14 @@ when replacing artwork. No generation tool or preparation script runs in the bot
   plates and sprites themselves contain no text.
 - Persian uses the existing Vazirmatn Bold and unchanged raqm-or-
   arabic-reshaper/python-bidi shaping decision. Long input can shrink to fit.
-- Legacy image-returning adapters preserve production callers, existing Persian
-  labels and the private admin placeholder. New `compose_*` functions return bytes.
+- Production presentation and private admin preview use the byte-returning
+  `compose_*` API: enemy name on announcement, stored remaining HP and the new
+  critical treatment on join, aggregated granted-reward lines on victory only.
+  Existing captions and narrative strings stay unchanged. Preview retains its
+  explicit private-only placeholder; production never substitutes missing art.
+- Legacy image-returning adapters remain for compatibility/tests only. Render
+  cache keys include a `compose-v2` namespace, visible text/HP/reward inputs and
+  the card's byte hash, in addition to manifest versioning.
 - Decoded image copies and UI masks are bounded in-memory caches. Content-addressed
   disk cache remains `~/.cache/inv2`, includes the manifest version and retains its
   30-day pruning policy.
