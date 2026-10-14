@@ -47,15 +47,6 @@ from sib.database.models.marriage import (
     ProposalStatus,
     canonical_spouse_ids,
 )
-from sib.database.models.invasion import (
-    Invasion,
-    InvasionOutcome,
-    InvasionParticipant,
-    InvasionStatus,
-    InvasionWave,
-)
-from sib.database.models.invasion_contribution import InvasionContribution
-from sib.database.models.invasion_defense_action import InvasionDefenseAction
 from sib.database.models.daily_chest import DailyChestClaim
 from sib.database.models.shop_chest import (
     ShopChest,
@@ -117,13 +108,6 @@ __all__ = [
     "FlowerGift",
     "FlowerGiftStatus",
     "canonical_spouse_ids",
-    "Invasion",
-    "InvasionWave",
-    "InvasionParticipant",
-    "InvasionStatus",
-    "InvasionOutcome",
-    "InvasionContribution",
-    "InvasionDefenseAction",
     "DailyChestClaim",
     "ShopChest",
     "ShopChestReward",

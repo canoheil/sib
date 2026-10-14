@@ -72,6 +72,7 @@ class Inv2Invasion(Base, TimestampMixin):
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     ends_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     finalized_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    delivered_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     occurrence_key: Mapped[str] = mapped_column(String(255), nullable=False)
 
 
