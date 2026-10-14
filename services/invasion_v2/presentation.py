@@ -26,7 +26,8 @@ async def _telegram(group_id, method, **kwargs):
     except (TelegramBadRequest, TelegramForbiddenError):
         logger.debug("inv2 Telegram send rejected group=%s", group_id, exc_info=True)
         try:
-            await record_send_failure(group_id)
+            if group_id is not None:
+                await record_send_failure(group_id)
         except Exception:
             logger.exception("inv2 circuit breaker failure recording failed")
         return None
@@ -34,7 +35,8 @@ async def _telegram(group_id, method, **kwargs):
         logger.exception("inv2 Telegram send failed group=%s", group_id)
         return None
     try:
-        await record_send_success(group_id)
+        if group_id is not None:
+            await record_send_success(group_id)
     except Exception:
         logger.exception("inv2 circuit breaker success recording failed")
     return result
