@@ -23,6 +23,18 @@ class RecoveryService:
     """Service responsible for safe system recovery and orphaned state cleanup on startup."""
 
     @classmethod
+    async def _recover_legacy_invasions(cls, now: datetime) -> Dict[str, Any]:
+        """Retained v1 path; never called alongside the v2 recovery sweep."""
+        from sib.services.maintenance.service import MaintenanceService
+
+        if await MaintenanceService._invasion_enabled():
+            # [INVASION-REWORK] guarded — see docs/invasion-rework/
+            return await MaintenanceService.run_invasion_cycle(
+                now=now, schedule_occurrences=False,
+            )
+        return {}
+
+    @classmethod
     async def recover_on_startup(
         cls,
         session: AsyncSession,
@@ -36,10 +48,8 @@ class RecoveryService:
         2. Clean up stale matchmaking queue entries and restore parties.
         3. Recover interrupted Apple Battle matches from persisted state/cursor.
         4. Terminate stale/abandoned active matches.
-        5. Bring every ACTIVE Invasion up to date through the existing DB-only
-           MaintenanceService step: restore downtime (four-wave battles, from
-           the persisted heartbeat), commit due wave boundaries, and settle any
-           finished battle that is still unpaid. Safe to repeat.
+        5. Expire past-due ACTIVE Invasion v2 rows after downtime without
+           settlement. The legacy recovery path is retained but not invoked.
         """
         from sib.services.apple_battle import AppleBattleService
 
@@ -169,22 +179,19 @@ class RecoveryService:
 
         await session.commit()
 
-        # Invasions use the same bounded, DB-only transition step as periodic
-        # maintenance. Run it after this recovery transaction commits so each
-        # event can be isolated in its own session; no Bot/Telegram dependency
-        # is passed, and ongoing work remains with MaintenanceService.
+        # V2 startup recovery expires overdue ACTIVE rows, without granting
+        # rewards or running the legacy battle cycle. The legacy call remains
+        # in _recover_legacy_invasions for Phase 7 cleanup.
         try:
             from sib.services.maintenance.service import MaintenanceService
+            from sib.services.invasion_v2.scheduler import InvasionScheduler
 
-            stats.update(
-                await MaintenanceService.run_invasion_cycle(
-                    now=now,
-                    schedule_occurrences=False,
-                )
-            )
+            if await MaintenanceService._invasion_enabled():
+                # [INVASION-REWORK] guarded — see docs/invasion-rework/
+                await InvasionScheduler.recover(now=now)
         except Exception:
             stats["invasion_failures"] += 1
-            logger.exception("Invasion startup recovery failed")
+            logger.exception("Invasion v2 startup recovery failed")
 
         for match_id in apple_recovery["resumed"]:
             AppleBattleService.schedule_narration(match_id, bot=bot)

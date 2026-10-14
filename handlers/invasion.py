@@ -47,6 +47,7 @@ from sib.services.invasion_telegram import (
     invasion_status_keyboard,
     render_invasion_status,
 )
+from sib.services.maintenance.service import MaintenanceService
 from sib.services.telegram_ui import safe_answer_callback, safe_edit_screen
 from sib.services.user import UserService
 
@@ -57,6 +58,7 @@ INVALID_GROUP_TEXT = "این دکمه در این گروه معتبر نیست."
 STALE_ANNOUNCEMENT_TEXT = "این اعلان قدیمی است؛ وضعیت از اعلان تازه نمایش داده شد."
 STALE_WAVE_TEXT = "این موج دیگر فعال نیست؛ وضعیت موج فعلی تازه شد و دفاعی ثبت نشد."
 INVASION_UNAVAILABLE_TEXT = "این یورش دیگر در دسترس نیست."
+INVASION_REWORK_TEXT = "⚔️ سیستم تهاجم موقتاً برای بازنویسی غیرفعال شده است."
 JOIN_PENDING_TEXT = "⏳ درخواست پیوستن در حال بررسی است؛ نتیجه همین‌جا نمایش داده می‌شود."
 STATUS_PENDING_TEXT = "⏳ وضعیت یورش در حال تازه‌شدن است."
 BRACE_PENDING_TEXT = "⏳ دفاع در حال ثبت است."
@@ -795,6 +797,11 @@ async def _handle_brace(
 @router.callback_query(F.data.startswith("invasion:"))
 async def handle_invasion_callback(callback: CallbackQuery, bot: Bot) -> None:
     """Handle Join, brace, and status callbacks using authenticated update data."""
+    if not await MaintenanceService._invasion_enabled():
+        # [INVASION-REWORK] guarded — see docs/invasion-rework/
+        await safe_answer_callback(callback, INVASION_REWORK_TEXT, show_alert=True)
+        return
+
     parsed = parse_invasion_callback(callback.data)
     if parsed is None:
         await safe_answer_callback(callback, INVALID_CALLBACK_TEXT, show_alert=True)

@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -11,8 +12,15 @@ from sqlalchemy.exc import DBAPIError
 
 from sib.core.logging import logger
 from sib.database.connection import get_session
+from sib.services.config_store import ConfigService
 from sib.services.invasion import LEGACY_WAVE_COUNT, MAX_SIGNED_INTEGER
 from sib.services.timeout import TimeoutService
+
+
+_INVASION_FLAG_TTL_SECONDS = 60
+_invasion_flag_value = False
+_invasion_flag_expires_at = 0.0
+_invasion_flag_lock = asyncio.Lock()
 
 
 @dataclass(frozen=True)
@@ -32,6 +40,42 @@ class MaintenanceService:
 
     INTERVAL_SECONDS = 5
     _bot = None
+
+    @classmethod
+    async def _invasion_enabled(cls) -> bool:
+        """Read `invasion_enabled` from system_config. Cache for 60 seconds.
+
+        Returns True only if the config row exists AND its value is truthy
+        ("true", "1", "yes"). Any other value, or a missing row, returns False.
+        Database read failures also fail closed for the cache lifetime.
+        """
+        global _invasion_flag_value, _invasion_flag_expires_at
+
+        if time.monotonic() < _invasion_flag_expires_at:
+            return _invasion_flag_value
+        async with _invasion_flag_lock:
+            if time.monotonic() < _invasion_flag_expires_at:
+                return _invasion_flag_value
+            try:
+                async with get_session() as session:
+                    raw = await ConfigService.get_raw(session, "invasion_enabled")
+                # ConfigService.set JSON-encodes values; accept both raw DB strings
+                # and JSON scalars, but never truth-test an arbitrary nonempty str.
+                if raw is not None:
+                    try:
+                        value = json.loads(raw)
+                    except (TypeError, ValueError):
+                        value = raw
+                    _invasion_flag_value = str(value).strip().lower() in (
+                        "true", "1", "yes"
+                    )
+                else:
+                    _invasion_flag_value = False
+            except Exception:
+                _invasion_flag_value = False
+                logger.exception("Could not read invasion_enabled; invasion disabled")
+            _invasion_flag_expires_at = time.monotonic() + _INVASION_FLAG_TTL_SECONDS
+            return _invasion_flag_value
 
     @classmethod
     async def process_expired_queue_entries(cls, session, fallback_matches=None) -> int:
@@ -901,7 +945,8 @@ class MaintenanceService:
             "invasion_failures": 0,
         }
 
-        if schedule_occurrences:
+        if schedule_occurrences and await cls._invasion_enabled():
+            # [INVASION-REWORK] guarded — see docs/invasion-rework/
             try:
                 stats.update(
                     await cls._schedule_current_invasions(
@@ -1114,15 +1159,17 @@ class MaintenanceService:
         except Exception:
             logger.exception("Marriage/Love maintenance cycle failed")
 
-        # Durable Invasion scheduling/transitions are another isolated DB-only
-        # step of this same loop. The ids are only presentation hints; all event
-        # state is committed before the Telegram adapter is called below.
-        try:
-            await cls.run_invasion_cycle(
-                presentation_ids=invasion_presentation_ids,
-            )
-        except Exception:
-            logger.exception("Invasion maintenance cycle failed")
+        # V2 is the ONLY production invasion cycle. The old
+        # run_invasion_cycle implementation remains for Phase 7 cleanup, but
+        # running both cycles when the flag is enabled would duplicate work.
+        if await cls._invasion_enabled():
+            # [INVASION-REWORK] guarded — see docs/invasion-rework/
+            try:
+                from sib.services.invasion_v2.scheduler import InvasionScheduler
+
+                await InvasionScheduler.tick()
+            except Exception:
+                logger.exception("Invasion v2 maintenance cycle failed")
 
         # Committed bot matches whose bot turn needs a task (a fallback match
         # that just started, or a task lost to a restart) are scheduled here -
@@ -1142,18 +1189,9 @@ class MaintenanceService:
         except Exception:
             logger.exception("Apple Duel maintenance failed")
 
-        # Invasion presentation follows the committed domain step and bot-turn
-        # scheduling. Pending sends can retry on later maintenance passes; edits
-        # are selected only for events whose persisted lifecycle just moved.
-        try:
-            from sib.services.invasion_telegram import InvasionTelegramService
-
-            await InvasionTelegramService.publish_maintenance_updates(
-                cls._bot,
-                invasion_presentation_ids,
-            )
-        except Exception:
-            logger.exception("Could not publish Invasion group updates")
+        # Legacy invasion presentation remains available in
+        # _publish_legacy_invasion_updates, but must not run with the v2 tick.
+        # Phase 5 will add v2 presentation after the committed DB step.
 
         if fallbacks:
             try:
@@ -1212,10 +1250,30 @@ class MaintenanceService:
                         )
 
     @classmethod
+    async def _publish_legacy_invasion_updates(cls, invasion_presentation_ids: list[int]) -> None:
+        """Retained v1 presentation path; never called alongside the v2 tick."""
+        if await cls._invasion_enabled():
+            # [INVASION-REWORK] guarded — see docs/invasion-rework/
+            try:
+                from sib.services.invasion_telegram import InvasionTelegramService
+
+                await InvasionTelegramService.publish_maintenance_updates(
+                    cls._bot,
+                    invasion_presentation_ids,
+                )
+            except Exception:
+                logger.exception("Could not publish Invasion group updates")
+
+    @classmethod
     async def run_forever(cls, stop_event: asyncio.Event, bot=None) -> None:
         """Run maintenance cycles until stop_event is set."""
         cls._bot = bot
         logger.info(f"Maintenance worker started (interval={cls.INTERVAL_SECONDS}s)")
+        logger.info(f"Invasion system enabled: {await cls._invasion_enabled()}")
+        from sib.services.invasion_v2.power_resolver import get_power_resolver
+
+        resolver = get_power_resolver()
+        logger.info("inv2 power resolver: %s", type(resolver).__name__ if resolver else "none")
 
         try:
             while not stop_event.is_set():
