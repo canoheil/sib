@@ -1,6 +1,7 @@
 """Static asset integrity and real (not disk-cache-hit) composition checks."""
 import hashlib
 import json
+import logging
 import runpy
 import shutil
 from io import BytesIO
@@ -9,7 +10,7 @@ from statistics import mean
 from time import perf_counter
 
 import pytest
-from PIL import Image, ImageChops, ImageCms
+from PIL import Image, ImageChops, ImageCms, ImageDraw, ImageFilter
 
 from sib.services.invasion_v2.imaging import (
     compose_announcement_image, compose_join_image, compose_result_image,
@@ -224,3 +225,207 @@ def test_card_aspect_ratio_and_legacy_placeholder():
     assert compose.join_image("soldier", None, "داریوش", 0, False, placeholder=True).size == (1280, 720)
     with pytest.raises(FileNotFoundError):
         compose.join_image("soldier", Path("nonexistent.jpg"), "داریوش", 1, False)
+
+
+# --- Phase 8E: phone-legible typography, shadows, glow, dramatic status words ---
+
+
+def _spy_font(monkeypatch):
+    """Record every font size requested through the shared templates.font."""
+    sizes = []
+    real_font = templates.font
+
+    def spy(size):
+        sizes.append(size)
+        return real_font(size)
+
+    monkeypatch.setattr(templates, "font", spy)
+    return sizes
+
+
+def _spy_draw(monkeypatch, record=None):
+    """Wrap ImageDraw.Draw inside compose; record (text, kwargs) and/or pills."""
+    events = []
+    real_draw = ImageDraw.Draw
+
+    class _Spy:
+        @staticmethod
+        def Draw(image):
+            draw = real_draw(image)
+            original_text = draw.text
+
+            def record_text(xy, text, **kwargs):
+                events.append(("text", text, kwargs))
+                return original_text(xy, text, **kwargs)
+
+            draw.text = record_text
+            if record is not None:
+                original_pill = draw.rounded_rectangle
+
+                def record_pill(box, **kwargs):
+                    events.append(("pill", box, kwargs))
+                    return original_pill(box, **kwargs)
+
+                draw.rounded_rectangle = record_pill
+            return draw
+
+    monkeypatch.setattr(compose, "ImageDraw", _Spy)
+    return events
+
+
+def _spy_blur_radii(monkeypatch):
+    radii = []
+    real_blur = ImageFilter.GaussianBlur
+
+    def spy(radius):
+        radii.append(radius)
+        return real_blur(radius)
+
+    monkeypatch.setattr(compose.ImageFilter, "GaussianBlur", spy)
+    return radii
+
+
+def test_announcement_region_font_size(monkeypatch):
+    sizes = _spy_font(monkeypatch)
+    compose.compose_announcement_image("soldier", "درّه ماه", "شیاسیب پیاده")
+    assert 88 in sizes and max(sizes) >= 88
+
+
+def test_join_damage_font_size(monkeypatch):
+    sizes = _spy_font(monkeypatch)
+    compose.compose_join_image("soldier", CARD.read_bytes(), "داریوش", 88, False, 123)
+    assert 160 in sizes
+
+
+def test_result_status_font_size(monkeypatch):
+    sizes = _spy_font(monkeypatch)
+    compose.compose_result_image("victory", "درّه ماه", "king", [])
+    assert 200 in sizes
+
+
+def test_region_name_font_size(monkeypatch):
+    sizes = _spy_font(monkeypatch)
+    compose.compose_result_image("defeat", "درّه ماه", "king", [])
+    assert 88 in sizes
+
+
+def test_defeat_fill_is_deep_red(monkeypatch):
+    events = _spy_draw(monkeypatch)
+    compose.compose_result_image("defeat", "درّه ماه", "king", [])
+    word = compose._shaped("شکست")[0]
+    fills = {kw["fill"] for kind, text, kw in events if kind == "text" and text == word}
+    # deep blood red fill, its #8B0000 glow, and the black shadow silhouette
+    assert fills == {"#7A0E0E", "#8B0000", (0, 0, 0, 255)}
+
+
+def test_victory_fill_is_deep_gold(monkeypatch):
+    events = _spy_draw(monkeypatch)
+    compose.compose_result_image("victory", "درّه ماه", "king", [])
+    word = compose._shaped("پیوروزی")[0]
+    fills = {kw["fill"] for kind, text, kw in events if kind == "text" and text == word}
+    assert fills == {"#C8A02E", "#E8C766", (0, 0, 0, 255)}
+
+
+def test_text_helper_adds_shadow(monkeypatch):
+    events = []
+    real_blur = ImageFilter.GaussianBlur
+
+    def spy_blur(radius):
+        events.append("blur")
+        return real_blur(radius)
+
+    monkeypatch.setattr(compose.ImageFilter, "GaussianBlur", spy_blur)
+    real_draw = ImageDraw.Draw
+
+    class _Spy:
+        @staticmethod
+        def Draw(image):
+            draw = real_draw(image)
+            original = draw.text
+
+            def record(xy, text, **kwargs):
+                events.append(f"text:{kwargs.get('fill')}")
+                return original(xy, text, **kwargs)
+
+            draw.text = record
+            return draw
+
+    monkeypatch.setattr(compose, "ImageDraw", _Spy)
+    img = Image.new("RGBA", (320, 160), (255, 255, 255, 255))
+    compose._draw_text_with_shadow(img, (160, 80), "سلام", templates.font(48),
+                                   fill=(200, 30, 30), anchor="mm")
+    assert "blur" in events
+    colored = f"text:{(200, 30, 30)}"
+    assert colored in events
+    assert events.index("blur") < events.index(colored)  # shadow before text
+    # The blurred shadow must actually darken the pixels below-right of the ink.
+    probe = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    ImageDraw.Draw(probe).text((160, 80), compose._shaped("سلام")[0],
+                               font=templates.font(48), fill=(0, 0, 0, 255), anchor="mm")
+    box = probe.getchannel("A").getbbox()
+    pixels = img.load()
+    # the (3, 3)-offset blurred shadow must darken the band right/below the ink
+    band = [sum(pixels[x, y][:3])
+            for y in range(box[3] + 1, box[3] + 20)
+            for x in range(box[0], box[2] + 20)]
+    assert min(band) < sum(pixels[2, 2][:3])
+
+
+def test_damage_glow_present_for_crit_and_kill(monkeypatch):
+    card = CARD.read_bytes()
+    radii = _spy_blur_radii(monkeypatch)
+    compose.compose_join_image("soldier", card, "داریوش", 88, False, 123)
+    assert 12 in radii  # normal hit glow
+    radii.clear()
+    compose.compose_join_image("soldier", card, "داریوش", 88, True, 123)
+    assert 16 in radii  # crit glow
+    radii.clear()
+    compose.compose_join_image("soldier", card, "داریوش", 88, True, 0)
+    assert 16 in radii  # killing-blow glow
+    events = _spy_draw(monkeypatch)
+    compose.compose_join_image("soldier", card, "داریوش", 88, True, 0)
+    digits = compose._digits(88)
+    fills = {kw["fill"] for kind, text, kw in events if kind == "text" and text == digits}
+    assert "#B8E986" in fills  # kill color wins over crit gold
+
+
+def test_vignette_produces_alpha_gradient():
+    img = Image.new("RGBA", (400, 300), (0, 0, 0, 0))
+    compose._draw_radial_vignette(img, (200, 150), 150, 100, 0.8, color=(0, 0, 0))
+    alpha = img.getchannel("A")
+    center = alpha.getpixel((200, 150))
+    mid = alpha.getpixel((275, 150))
+    corner = alpha.getpixel((5, 5))
+    assert center >= int(0.8 * 255) - 3
+    assert 0 < mid < center  # smooth fade toward the ellipse edge
+    assert corner <= 2
+
+
+def test_region_name_backdrop_present(monkeypatch):
+    events = _spy_draw(monkeypatch, record=True)
+    compose.compose_result_image("victory", "درّه ماه", "king", [])
+    pills = [e for e in events if e[0] == "pill"]
+    assert pills, "no rounded pill backdrop was drawn"
+    first_pill = next(i for i, e in enumerate(events) if e[0] == "pill")
+    assert pills[0][2]["fill"] == (0, 0, 0, 140) and pills[0][2]["radius"] == 20
+    region_text = compose._shaped("درّه ماه")[0]
+    region_draws = [i for i, e in enumerate(events)
+                    if e[0] == "text" and e[1] == region_text]
+    assert any(i > first_pill for i in region_draws)  # pill before the visible text
+
+
+def test_long_region_name_auto_shrinks(monkeypatch, caplog):
+    sizes = _spy_font(monkeypatch)
+    long_name = "محوطهٔ بزرگ نگهبانان درّهٔ ماه" * 2
+    with caplog.at_level(logging.WARNING, logger="sib"):
+        compose.compose_result_image("victory", long_name, "king", [])
+    region_run = []
+    for size in sizes:
+        if size == 200:  # status word: the region shrink loop is over
+            break
+        region_run.append(size)
+    assert region_run[0] == 88
+    final = region_run[-1]
+    assert 56 <= final < 88
+    assert any("inv2 result region name too long" in record.message
+               for record in caplog.records)

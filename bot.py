@@ -98,9 +98,11 @@ async def main():
         # half-run task behind.
         from sib.bots.runner import cancel_all_bot_turns
         from sib.services.apple_battle import AppleBattleService
+        from sib.services.invasion_v2.presentation import cancel_pending_hp_edits
 
         await cancel_all_bot_turns()
         await AppleBattleService.cancel_all_narrations()
+        await cancel_pending_hp_edits()
 
         await bot.session.close()
         logger.info("sib bot stopped cleanly.")

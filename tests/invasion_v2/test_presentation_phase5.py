@@ -70,6 +70,8 @@ async def db(monkeypatch):
         yield factory, session
     finally:
         column.type = original_type
+        # Phase 8D: never leave a debounced HP-edit task against a closed DB.
+        await presentation.cancel_pending_hp_edits()
         await engine.dispose()
 
 
@@ -287,7 +289,8 @@ async def test_on_join_renders_new_photo_and_meters_success(db):
     await presentation.InvasionPresentation().on_join(bot, inv_id, 1, 31)
     kwargs = bot.send_photo.await_args.kwargs
     assert kwargs["reply_to_message_id"] == 123
-    assert "ضربه کاری" in kwargs["caption"]
+    # Phase 8D: the crit marker moved to the explicit damage line.
+    assert kwargs["caption"] == "ضربهٔ سنگین بر زره\n\n💥 اسیب وارده به دشمن: ۴۱"
     presentation.record_send_success.assert_awaited_once_with(-100)
     await presentation.InvasionPresentation().on_join(bot, inv_id, 2, 31)  # mismatched identity
     bot.send_photo.assert_awaited_once()
@@ -460,7 +463,8 @@ async def test_phase8a_join_delivers_card_hp_and_critical_style(rendered_deliver
     spy = delivery.spies[presentation.__name__, "compose_join_image"]
     spy.assert_called_once_with("soldier", ART.read_bytes(), "داریوش", 41, critical, 159)
     kwargs = bot.send_photo.await_args.kwargs
-    assert kwargs["caption"] == "ضربهٔ سنگین بر زره" + ("\n💥 ضربه کاری!" if critical else "")
+    marker = "💥 اسیب وارده به دشمن: ۴۱" if critical else "🔥 اسیب وارده به دشمن: ۴۱"
+    assert kwargs["caption"] == "ضربهٔ سنگین بر زره\n\n" + marker
     assert kwargs["reply_to_message_id"] == 123
     assert Path(kwargs["photo"].path).read_bytes() == compose.compose_join_image(*spy.call_args.args)
     # Presentation does not apply damage a second time or grant rewards.

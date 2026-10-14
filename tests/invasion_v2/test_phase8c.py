@@ -112,12 +112,17 @@ def test_migration_040_downgrade_only_new_default(value, expected):
     engine.dispose()
 
 
-def test_migration_040_is_new_head():
+def test_migration_041_is_new_head():
     cfg = Config()
     cfg.set_main_option("script_location", str(ROOT / "database/migrations"))
     scripts = ScriptDirectory.from_config(cfg)
-    assert scripts.get_current_head() == "040_inv2_difficulty_default"
+    assert scripts.get_current_head() == "041_inv2_announcement_narrative"
     assert _migration().down_revision == "039_archive_inv1_tables"
+    path = ROOT / "database/migrations/versions/041_inv2_announcement_narrative.py"
+    spec = importlib.util.spec_from_file_location("migration_041", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.down_revision == "040_inv2_difficulty_default"
 
 
 @pytest.mark.parametrize("case", CASES)
