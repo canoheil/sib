@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 from sib.database.models import Character, Inv2GroupMember
 from sib.services.card_progression import MAX_CARD_LEVEL, card_attributes
-from sib.services.config_store import ConfigService
+from sib.services.config_store import ConfigService, DEFAULT_INVASION_DIFFICULTY_MULTIPLIER
 from sib.services.player_cards import PlayerCardService
 from .damage import compute_damage
 from .enemy import choose_enemy_type, compute_enemy_hp, enemy_spec
@@ -50,7 +50,7 @@ async def simulate(session, group_raw: str, enemy_raw: str | None = None) -> str
             return "توان یکی از کارت‌های اصلی نامشخص است."
         powers.append(card_attributes(card, char).power)
     raw_difficulty = await ConfigService.get(session, "invasion_difficulty_multiplier")
-    difficulty = float(4.0 if raw_difficulty is None else raw_difficulty)
+    difficulty = float(DEFAULT_INVASION_DIFFICULTY_MULTIPLIER if raw_difficulty is None else raw_difficulty)
     if not math.isfinite(difficulty) or difficulty <= 0:
         return "سختی نبرد معتبر نیست."
     hp = compute_enemy_hp(average, enemy, difficulty)

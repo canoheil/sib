@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sib.core.logging import logger
 from sib.database.connection import get_session
 from sib.database.models import Group, Inv2GroupState, Inv2Invasion, Inv2Region
-from sib.services.config_store import ConfigService
+from sib.services.config_store import ConfigService, DEFAULT_INVASION_DIFFICULTY_MULTIPLIER
 
 from . import admin_runtime
 from .circuit_breaker import is_group_available, maybe_permanently_disable
@@ -123,7 +123,7 @@ class InvasionScheduler:
             logger.error("inv2 spawn skipped: invasion_interval_seconds must be positive")
             return
         raw_difficulty = await ConfigService.get(session, "invasion_difficulty_multiplier")
-        difficulty = float(4.0 if raw_difficulty is None else raw_difficulty)
+        difficulty = float(DEFAULT_INVASION_DIFFICULTY_MULTIPLIER if raw_difficulty is None else raw_difficulty)
         if not math.isfinite(difficulty) or difficulty <= 0:
             logger.error("inv2 spawn skipped: invasion_difficulty_multiplier must be positive and finite")
             return

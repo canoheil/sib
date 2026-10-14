@@ -11,7 +11,7 @@ from sib.core.logging import logger
 from sib.database.connection import get_session
 from sib.database.models import Character
 from sib.services.character_art import artwork_path
-from sib.services.config_store import ConfigService
+from sib.services.config_store import ConfigService, DEFAULT_INVASION_DIFFICULTY_MULTIPLIER
 from sib.services.invasion_v2.enemy import compute_enemy_hp, enemy_spec
 from sib.services.invasion_v2.enums import EnemyType
 from sib.services.invasion_v2.imaging.cache import cached_image
@@ -97,7 +97,7 @@ async def simulate(message: Message) -> None:
         if average is None:
             await _telegram(None, message.answer, text="توان کارت‌های اصلی این گروه نامشخص است؛ شبیه‌سازی ایمن ممکن نیست.")
             return
-        hp = compute_enemy_hp(average, enemy, float(difficulty or 4))
+        hp = compute_enemy_hp(average, enemy, float(difficulty or DEFAULT_INVASION_DIFFICULTY_MULTIPLIER))
         low, high = round(average * .85), round(average * 1.15 * 2)
         likely = "محتمل" if count * average >= hp else "دور از انتظار"
         await _telegram(None, message.answer, text=(
