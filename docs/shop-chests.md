@@ -120,7 +120,95 @@ A test checks the total is exactly 100 and that each row has its weight.
 - The card identifiers are the audited codes from `data/characters_seed.json`.
   Their database ids differ per database and are resolved at apply time.
 
-### Registering it (dev or test database only)
+## Four-chest expansion
+
+Approved definitions: `data/shop_chests/additional_chests.json`. This file
+contains **only the four new chests**, so it can be applied without editing or
+reapplying the existing Green Apple Chest. No service, handler, schema or daily
+chest changes are needed. Like the starter definition, this file is not loaded
+at startup; deployment alone does **not** register these chests.
+
+| Code / image key | Display name | Price | Duplicate compensation | Order |
+| --- | --- | --- | --- | --- |
+| `enchanted_garden_chest` | صندوق باغ افسون | 80 | 0 (no cards) | 2 |
+| `empire_chest` | صندوق امپراتوری | 200 | 60 | 3 |
+| `sages_chest` | صندوق فرزانگان | 200 | 60 | 4 |
+| `moonlight_chest` | صندوق مهتاب | 200 | 60 | 5 |
+
+Each reward weight is a percentage (every table totals exactly 100). Each
+opening still grants **one** outcome, not all the listed rewards. Each item
+outcome grants one inventory item.
+
+- **Enchanted Garden:** Magic Powder 40%, Golden Apple item 30%, Diamond Apple
+  item 8%, Obsidian Apple item 2%, 40 normal apples 20%.
+- **Empire:** `sib_sorkh`, `filo`, `goje`, `igris`, `zarush`, each 14%
+  (70% cards total); Flower 19%, Wedding Ring 1%, 120 normal apples 10%.
+- **Sages:** `sib_sabz`, `sib_talayi`, `green_knight`, `sage_king`, `treyni`,
+  each 14% (70% cards total); Magic Powder 15%, Golden Apple item 5%,
+  120 normal apples 10%.
+- **Moonlight:** `sib_mahi`, `mmung`, `moon_knight`, `moon_lily`, `wizard`,
+  each 14% (70% cards total); Diamond Apple item 15%, Obsidian Apple item 5%,
+  120 normal apples 10%.
+
+The Golden Apple **inventory item** (`apple_gold`) is distinct from the Golden
+Apple **character card** (`sib_talayi`). Card codes are resolved in the target
+database and all cards must be active, released and shop-enabled.
+
+### Artwork
+
+Four AI-generated illustrations are bundled in `assets/items/<image_key>.jpg`:
+RGB, baseline JPEG, 1024×1024, centered closed chests on light parchment with
+no text. The original Green Apple Chest was used as a visual style reference
+and was not modified.
+
+- Garden: living wood, intertwined roots, leaf lid and green apple lock.
+- Empire: dark armored metal, crimson panels and a gold crown lock.
+- Sages: blue/violet coffer, silver filigree and amethyst crystal lock.
+- Moonlight: midnight navy, silver framing and a crescent moon lock.
+
+The list remains text/buttons; each detail page resolves its own artwork via
+`AssetService`. A runtime `/setasset <image_key>` registration overrides the
+bundled image, so check for old overrides if a deployed image looks different.
+
+### Expansion rollout (operator step; not run against the live game)
+
+Use the existing schema and tool. First deploy the bundled images and JSON,
+back up the selected database, confirm the character roster is seeded, then
+validate on **staging**. From the repository parent:
+
+```bash
+DATABASE_URL='<staging async URL>' python -m sib.scripts.shop_chests apply sib/data/shop_chests/additional_chests.json --dry-run
+DATABASE_URL='<staging async URL>' python -m sib.scripts.shop_chests apply sib/data/shop_chests/additional_chests.json --confirm-database <staging DB name>
+DATABASE_URL='<staging async URL>' python -m sib.scripts.shop_chests list
+```
+
+The file has `is_active: true`; the confirmed apply makes all four buyable in
+one transaction. On staging, check all five list entries (including the
+previously registered starter), each picture, name, price, reward probability
+and opening result. On production, repeat only after staging verification and
+explicit operator approval, using the production URL and exact database name.
+No production registration is performed by this repository change.
+
+`expected_version: 0` means **new chests only**. Do not reapply unchanged after
+registration: an existing code rejects the whole file. For later edits, obtain
+each current version with `show` and update the input's `expected_version`.
+To hide an individual chest, use `set-active <code> off --expected-version N`
+with the correct database confirmation; keep the opening history.
+
+With repository-default item sell prices, expected cash return (owned cards
+converted to compensation, sellable items sold, unsellable powder valued at
+zero) is 35, 61.85, 56.5 and 79 apples respectively, below each purchase price.
+This is not a guarantee for runtime overrides or a valuation of new cards.
+Check the target environment's `item_sell_prices` before activation. A rare
+high-value reward is intentional; not every individual opening must lose money.
+
+`tests/test_additional_shop_chests.py` pins the approved definitions and
+faction pools, distinct artwork, registration alongside the starter, all reward
+outcomes, duplicate compensation, replay safety, insufficient funds, daily
+chest independence, detail-page images and CLI dry-run rollback. Existing
+row-lock concurrency tests still need MariaDB; SQLite skips are not passes.
+
+### Registering the Green Apple Chest (dev or test database only)
 
 Never run these against production. Name the target database explicitly. The
 database must already have migration `032_shop_chests` applied, which is a

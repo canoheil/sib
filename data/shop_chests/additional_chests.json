@@ -1,0 +1,195 @@
+[
+  {
+    "code": "enchanted_garden_chest",
+    "name": "صندوق باغ افسون",
+    "price_apples": 80,
+    "duplicate_apples": 0,
+    "image_key": "enchanted_garden_chest",
+    "sort_order": 2,
+    "is_active": true,
+    "expected_version": 0,
+    "rewards": [
+      {
+        "kind": "item",
+        "weight": 40,
+        "item_key": "magic_powder"
+      },
+      {
+        "kind": "item",
+        "weight": 30,
+        "item_key": "apple_gold"
+      },
+      {
+        "kind": "item",
+        "weight": 8,
+        "item_key": "apple_diamond"
+      },
+      {
+        "kind": "item",
+        "weight": 2,
+        "item_key": "apple_obsidian"
+      },
+      {
+        "kind": "apples",
+        "weight": 20,
+        "apples": 40
+      }
+    ]
+  },
+  {
+    "code": "empire_chest",
+    "name": "صندوق امپراتوری",
+    "price_apples": 200,
+    "duplicate_apples": 60,
+    "image_key": "empire_chest",
+    "sort_order": 3,
+    "is_active": true,
+    "expected_version": 0,
+    "rewards": [
+      {
+        "kind": "card",
+        "weight": 14,
+        "character_code": "sib_sorkh"
+      },
+      {
+        "kind": "card",
+        "weight": 14,
+        "character_code": "filo"
+      },
+      {
+        "kind": "card",
+        "weight": 14,
+        "character_code": "goje"
+      },
+      {
+        "kind": "card",
+        "weight": 14,
+        "character_code": "igris"
+      },
+      {
+        "kind": "card",
+        "weight": 14,
+        "character_code": "zarush"
+      },
+      {
+        "kind": "item",
+        "weight": 19,
+        "item_key": "flower"
+      },
+      {
+        "kind": "item",
+        "weight": 1,
+        "item_key": "wedding_ring"
+      },
+      {
+        "kind": "apples",
+        "weight": 10,
+        "apples": 120
+      }
+    ]
+  },
+  {
+    "code": "sages_chest",
+    "name": "صندوق فرزانگان",
+    "price_apples": 200,
+    "duplicate_apples": 60,
+    "image_key": "sages_chest",
+    "sort_order": 4,
+    "is_active": true,
+    "expected_version": 0,
+    "rewards": [
+      {
+        "kind": "card",
+        "weight": 14,
+        "character_code": "sib_sabz"
+      },
+      {
+        "kind": "card",
+        "weight": 14,
+        "character_code": "sib_talayi"
+      },
+      {
+        "kind": "card",
+        "weight": 14,
+        "character_code": "green_knight"
+      },
+      {
+        "kind": "card",
+        "weight": 14,
+        "character_code": "sage_king"
+      },
+      {
+        "kind": "card",
+        "weight": 14,
+        "character_code": "treyni"
+      },
+      {
+        "kind": "item",
+        "weight": 15,
+        "item_key": "magic_powder"
+      },
+      {
+        "kind": "item",
+        "weight": 5,
+        "item_key": "apple_gold"
+      },
+      {
+        "kind": "apples",
+        "weight": 10,
+        "apples": 120
+      }
+    ]
+  },
+  {
+    "code": "moonlight_chest",
+    "name": "صندوق مهتاب",
+    "price_apples": 200,
+    "duplicate_apples": 60,
+    "image_key": "moonlight_chest",
+    "sort_order": 5,
+    "is_active": true,
+    "expected_version": 0,
+    "rewards": [
+      {
+        "kind": "card",
+        "weight": 14,
+        "character_code": "sib_mahi"
+      },
+      {
+        "kind": "card",
+        "weight": 14,
+        "character_code": "mmung"
+      },
+      {
+        "kind": "card",
+        "weight": 14,
+        "character_code": "moon_knight"
+      },
+      {
+        "kind": "card",
+        "weight": 14,
+        "character_code": "moon_lily"
+      },
+      {
+        "kind": "card",
+        "weight": 14,
+        "character_code": "wizard"
+      },
+      {
+        "kind": "item",
+        "weight": 15,
+        "item_key": "apple_diamond"
+      },
+      {
+        "kind": "item",
+        "weight": 5,
+        "item_key": "apple_obsidian"
+      },
+      {
+        "kind": "apples",
+        "weight": 10,
+        "apples": 120
+      }
+    ]
+  }
+]
