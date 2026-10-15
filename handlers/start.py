@@ -68,12 +68,17 @@ async def handle_start(message: Message, bot: Bot):
         # 1. Group / Supergroup chat
         if chat.type in ("group", "supergroup"):
             group = await GroupService.get_or_create_group(session, chat)
+            # Phase A3: Ovarya-first group welcome; keyboard unchanged.
+            # Plain text (no parse mode) so group titles can never break
+            # Markdown parsing.
             welcome_text = (
-                f"🍏 **سیب وارد شد! سلام به برو بچِ {chat.title}!**\n\n"
-                f"گروه شما ثبت شد و از این پس با هر برد، یک **برد** به افتخارات گروه‌تون اضافه می‌شه.\n\n"
-                f"برای ساخت پارتی بازی و مبارزه با گروه‌های دیگه، دکمه‌های زیر رو لمس کنید 👇"
+                f"🍏 سیب وارد شد! سلام به {chat.title}.\n\n"
+                "گروه شما به جمع مدافعان اواریا پیوست. از این پس با هر یورش شیاسیب، "
+                "در کنار هم می‌جنگید و با هر پیروزی، افتخاری به نام گروه‌تان ثبت می‌شود.\n\n"
+                "برای شروع، دکمه‌های زیر را لمس کنید 👇\n\n"
+                f"🔧 پشتیبانی: {SUPPORT_HANDLE}"
             )
-            await message.reply(welcome_text, reply_markup=get_group_welcome_keyboard(), parse_mode="Markdown")
+            await message.reply(welcome_text, reply_markup=get_group_welcome_keyboard(), parse_mode=None)
             return
 
         # 2. Private chat

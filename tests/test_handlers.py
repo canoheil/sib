@@ -64,7 +64,11 @@ async def test_start_group_chat_registers_group_and_stats(db_session):
 
     mock_msg.reply.assert_called_once()
     args, kwargs = mock_msg.reply.call_args
-    assert "گروه شما ثبت شد" in args[0]
+    # Phase A3: Ovarya-first group welcome; keyboard unchanged.
+    assert "گروه بر و بچ سیب" in args[0]
+    assert "اواریا" in args[0]
+    assert "شیاسیب" in args[0]
+    assert "@sibgame_official" in args[0]
     assert "ریتینگ" not in args[0]
     assert kwargs.get("reply_markup") is not None
 
