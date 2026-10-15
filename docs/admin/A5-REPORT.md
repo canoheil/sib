@@ -312,7 +312,15 @@ Arabic ي/ك, no Arabic-Indic digit, no em dash, no ASCII quote, and balanced
 | Tree | Result |
 |---|---|
 | baseline `728f498` (untouched, same environment) | the same 7 failures (MariaDB-only tests, missing image assets, the alembic head check) |
-| A5 tree | **7 failed, 2485 passed, 25 skipped** (255 s) |
+| A5 tree | **7 failed, 2485 passed, 25 skipped** (265 s) |
+
+> Run the suite against a **fresh** test database file. A stale
+> `sibcom_sib_test.db` keeps the seeded bot rows and produces three extra
+> `UNIQUE constraint failed: users.id` failures in
+> `tests/test_profile_skins.py`, `tests/test_sib_hug.py` and
+> `tests/test_sib_kiss.py` — they are a test-database artifact, not a
+> regression (with a fresh file those three files are **208 passed, 4
+> skipped**).
 
 The 7 failures are the pre-existing environment ones and are NOT related to
 A5 (they also fail on the untouched baseline, verified in a separate
