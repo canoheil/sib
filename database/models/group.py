@@ -1,7 +1,8 @@
 """Group model."""
 
+from datetime import datetime
 from typing import Optional
-from sqlalchemy import BigInteger, Boolean, String
+from sqlalchemy import BigInteger, Boolean, DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sib.database.base import Base, TimestampMixin
 
@@ -14,6 +15,7 @@ class Group(Base, TimestampMixin):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     username: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    welcomed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Relationships
     stats = relationship("GroupStats", back_populates="group", uselist=False, cascade="all, delete-orphan")
