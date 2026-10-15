@@ -23,6 +23,10 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     "invasion_difficulty_multiplier": DEFAULT_INVASION_DIFFICULTY_MULTIPLIER,
     # Days after which a group member is considered inactive for inv2 power.
     "inv2_member_active_window_days": 30,
+    # Minimum number of active group members who must have a main card for an
+    # invasion v2 to spawn in that group. Members of the window without a main
+    # card are ignored, and the average is taken over the ones who have one.
+    "invasion_min_players_with_card": 3,
     # Garden
     "garden_initial_plots": 5,
     "garden_max_plots": 10,

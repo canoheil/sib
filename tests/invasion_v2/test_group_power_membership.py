@@ -53,6 +53,16 @@ async def select_main(sessions, user_id, char_id, level):
         session.add(PlayerCard(id=user_id, user_id=user_id, character_id=char_id, level=level, is_favorite=True))
 
 
+async def set_min_players(sessions, value: str) -> None:
+    """Override the A6 minimum-players-with-card threshold."""
+    async with sessions.begin() as session:
+        row = await session.get(SystemConfig, "invasion_min_players_with_card")
+        if row is None:
+            session.add(SystemConfig(key="invasion_min_players_with_card", value=value))
+        else:
+            row.value = value
+
+
 @pytest.mark.asyncio
 async def test_no_members_missing_main_and_average_of_levelled_main_cards(sessions):
     resolver = DbGroupPowerResolver()
@@ -60,13 +70,17 @@ async def test_no_members_missing_main_and_average_of_levelled_main_cards(sessio
         assert await resolver.average_main_card_power(group_id=-100, session=session) is None
     await observe(sessions, 1)
     async with sessions() as session:
+        # A6: zero members with a card is below every threshold, so no average.
         assert await resolver.average_main_card_power(group_id=-100, session=session) is None
     await select_main(sessions, 1, 10, 2)  # displayed power = 20 + 10
+    # The shipped threshold is 3; a single card holder only counts once the
+    # minimum is lowered to it (the dedicated A6 suite covers the default).
+    await set_min_players(sessions, "1")
     async with sessions() as session:
         assert await resolver.average_main_card_power(group_id=-100, session=session) == 30.0
-    await observe(sessions, 2)
+    await observe(sessions, 2)  # A6: a member without a main card is ignored
     async with sessions() as session:
-        assert await resolver.average_main_card_power(group_id=-100, session=session) is None
+        assert await resolver.average_main_card_power(group_id=-100, session=session) == 30.0
     await select_main(sessions, 2, 11, 3)  # 30 + 20, average 40
     async with sessions() as session:
         assert await resolver.average_main_card_power(group_id=-100, session=session) == 40.0
@@ -75,6 +89,7 @@ async def test_no_members_missing_main_and_average_of_levelled_main_cards(sessio
 
 @pytest.mark.asyncio
 async def test_window_and_uncertain_power_fail_closed(sessions):
+    await set_min_players(sessions, "1")
     await observe(sessions, 1, seen_at=NOW - timedelta(days=35))
     await observe(sessions, 2, seen_at=NOW - timedelta(days=1))
     await select_main(sessions, 2, 10, 1)
@@ -84,7 +99,9 @@ async def test_window_and_uncertain_power_fail_closed(sessions):
     async with sessions.begin() as session:
         session.add(SystemConfig(key="inv2_member_active_window_days", value="60"))
     async with sessions() as session:
-        assert await resolver.average_main_card_power(group_id=-100, session=session) is None
+        # A6: member 1 is now inside the window but has no card, so it is
+        # ignored instead of failing the whole group closed.
+        assert await resolver.average_main_card_power(group_id=-100, session=session) == 20.0
     await select_main(sessions, 1, 10, 1)
     async with sessions() as session:
         assert await resolver.average_main_card_power(group_id=-100, session=session) == 20.0
@@ -96,6 +113,8 @@ async def test_window_and_uncertain_power_fail_closed(sessions):
         (await session.get(SystemConfig, "inv2_member_active_window_days")).value = "30"
         await session.execute(update(PlayerCard).where(PlayerCard.user_id == 2).values(level=99))
     async with sessions() as session:
+        # A6 relaxes "no card" only: a card that exists but cannot be scored is
+        # corrupt data and still fails closed.
         assert await resolver.average_main_card_power(group_id=-100, session=session) is None
     async with sessions.begin() as session:
         await session.execute(update(PlayerCard).where(PlayerCard.user_id == 2).values(level=1, character_id=999))
