@@ -137,6 +137,7 @@ async def handle_check_membership(callback: CallbackQuery, bot: Bot):
                 bot,
                 welcome_text,
                 reply_markup=get_private_start_keyboard(settings.BOT_USERNAME),
+                parse_mode=None,
             )
 
 

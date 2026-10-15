@@ -85,3 +85,136 @@ Sweep terms: «کارت بالا»، «سنگ، کاغذ، قیچی»، «دوز
 | `keyboards/leaderboard.py:26,41` | Button «🏆 برترین گروه‌ها» → `show_leaderboard` | **KEEP** — entry point to that live feature |
 
 No handler was deleted or disabled in this sweep. The only rewrite was the private `/start` mini-game list (Task 2); everything else keeps its canonical home (guide pages, seed catalog, engines, leaderboard).
+
+## Private /start — before / after
+
+### Text — BEFORE (old `handlers/start.py:73-86`)
+
+```text
+🍏 **سلام {first_name} عزیز! من سیب‌ام!**
+
+من ربات بازی گروهی آنلاین تلگرام هستم.
+من رو به گروه‌هات اضافه کن، تیم تشکیل بده و با گروه‌های دیگه در سراسر تلگرام مسابقه بده!
+
+🎮 بازی‌های فعال:
+• کارت بالا (High Card)
+• سنگ، کاغذ، قیچی (Rock Paper Scissors)
+• دوز (Tic-Tac-Toe)
+• چهار در یک ردیف (Connect Four؛ ۱v۱، ۲v۲، ۴v۴)
+• کشتی جنگی (Battleship؛ ۱v۱، ۲v۲، ۴v۴)
+
+🏆 هر گروه تلگرام با تعداد برده‌هاش تو جدول برترین‌ها قرار می‌گیره!
+برای شروع دکمه زیر رو لمس کن:
+```
+
+Problems: legacy mini-games led the message, generic "online group-game bot" self-description, English game titles, no اواریا/شیاسیب, no support handle.
+
+### Text — AFTER (`handlers/start.py`, `_private_start_text`)
+
+```text
+🍏 سلام {first_name} عزیز!
+
+سرزمین اواریا زیر یورش شیاسیب است. تو برای دفاع از آن فراخوانده شده‌ای.
+
+با کارت‌هایت به نبردها بپیوند، در معدن سیب بکن، صندوق‌ها را بگشا، گل‌هایت را پرورش بده و با هم‌گروهی‌هایت متحد شو.
+
+🎲 بازی‌های جانبی: کارت بالا، سنگ‌کاغذ‌قیچی، دوز، چهار در یک ردیف، کشتی جنگی.
+
+برای شروع، بات را به گروهت اضافه کن.
+
+🔧 پشتیبانی: @sibgame_official
+```
+
+352 chars with a short name (well under 1024). Persian only; mini-games demoted to one secondary line.
+
+### Buttons — BEFORE → AFTER
+
+| BEFORE (9 buttons, `get_private_welcome_keyboard`) | AFTER (1 button, new `get_private_start_keyboard`) |
+|---|---|
+| 🌳 باغ من (`apple_garden`) | ~~removed from /start~~ |
+| 🎴 کارت‌های من (`apple_cards`) | ~~removed from /start~~ |
+| 🛒 فروشگاه (`apple_shop`) | ~~removed from /start~~ |
+| 📚 ویکی کاراکترها (`apple_wiki`) | ~~removed from /start~~ |
+| 🔄 مبادله کارت (`apple_trade`) | ~~removed from /start~~ |
+| 🎁 صندوقچه گنج روزانه (`apple_chest`) | ~~removed from /start~~ |
+| 👤 پروفایل من (`apple_profile`) | ~~removed from /start~~ |
+| ➕ افزودن سیب به گروه (URL `https://t.me/{BOT_USERNAME}?startgroup=true`) | **KEPT — the only button** |
+| 🎮 بازی‌ها و راهنما (`help_menu`) | ~~removed from /start~~ |
+
+**No handler was deleted.** All removed buttons remain fully reachable:
+
+- `get_private_welcome_keyboard` is **unchanged** and remains the private **main menu** keyboard («سیب منو» / `main_menu`, `handlers/start.py` `_main_menu_text_and_kb`), carrying garden, cards, shop, wiki, trading, chest, profile, add-to-group and the guide.
+- The group menu (`get_group_welcome_keyboard`, unchanged) keeps shop, profile, chest, guide and group stats.
+- The profile panel keeps cards/trading/garden/shop shortcuts (`get_profile_keyboard`).
+
+**Same-flow consistency:** the membership gate (`check_membership`) is only reachable from private `/start`, so its post-verification welcome (`handle_check_membership`) was switched to the SAME new text and the SAME one-button keyboard — every private `/start` path now ends on exactly one button. The membership gate keyboard itself (join-channel + verify, `get_membership_keyboard`) is required functionality and was not touched.
+
+## Group /start — before / after
+
+### Text — BEFORE (old `handlers/start.py:47-52`)
+
+```text
+🍏 **سیب وارد شد! سلام به برو بچِ {group_title}!**
+
+گروه شما ثبت شد و از این پس با هر برد، یک **برد** به افتخارات گروه‌تون اضافه می‌شه.
+
+برای ساخت پارتی بازی و مبارزه با گروه‌های دیگه، دکمه‌های زیر رو لمس کنید 👇
+```
+
+### Text — AFTER
+
+```text
+🍏 سیب وارد شد! سلام به {group_title}.
+
+گروه شما به جمع مدافعان اواریا پیوست. از این پس با هر یورش شیاسیب، در کنار هم می‌جنگید و با هر پیروزی، افتخاری به نام گروه‌تان ثبت می‌شود.
+
+برای شروع، دکمه‌های زیر را لمس کنید 👇
+
+🔧 پشتیبانی: @sibgame_official
+```
+
+The support-handle line was added per the A3 rule "must appear in both messages". **Keyboard unchanged** (`get_group_welcome_keyboard()` — same six buttons/callbacks; asserted by test).
+
+## Other implementation notes
+
+- New keyboard: `keyboards/common.py` → `get_private_start_keyboard(bot_username)`; exported from `keyboards/__init__.py`.
+- Shared welcome builder: `handlers/start.py` → `SUPPORT_HANDLE` + `_private_start_text(first_name)` (one source of truth for both private `/start` paths).
+- Both new messages are sent with `parse_mode=None` (plain text): the new copy has no Markdown, and this prevents injected first names / group titles containing `*`, `_` etc. from breaking Markdown parsing (the bot default is Markdown).
+- `tests/test_handlers.py` assertions that pinned the three old texts were updated alongside the rewrites so every commit stays green.
+
+## Test results
+
+New suite `tests/test_a3_start_texts.py` — **12 passed, 0 failed** (11 required + 1 supplementary):
+
+| Test | Result |
+|---|---|
+| `test_private_start_shows_exactly_one_button` | PASSED |
+| `test_private_start_button_is_url_add_to_group` | PASSED |
+| `test_private_start_does_not_contain_removed_buttons` | PASSED |
+| `test_private_start_mentions_ovarya` | PASSED |
+| `test_private_start_contains_support_handle` | PASSED |
+| `test_private_start_mentions_mini_games` | PASSED |
+| `test_group_start_contains_group_title` | PASSED |
+| `test_group_start_keeps_existing_keyboard` | PASSED |
+| `test_group_start_contains_support_handle` | PASSED |
+| `test_all_start_texts_persian_only` (masked injected values) | PASSED |
+| `test_all_start_texts_under_1024_chars` (incl. ~120-char injected names) | PASSED |
+| `test_membership_gate_welcome_matches_private_start` (supplementary) | PASSED |
+
+Regression runs (SQLite test DB, `sib_TEST_DATABASE_URL`):
+
+- Targeted start/menu/chest/navigation group (`test_handlers`, `test_main_menu_layout`, `test_main_menu_style`, `test_navigation`, `test_phase2_nav_garden`, `test_daily_chest`, `test_daily_chest_group`, `test_group_menu_games_guide`, `test_screen_transitions`, `test_trade_group_flow`, `groups/test_group_lifecycle`): **208 passed, 1 failed, 3 skipped** — the single failure (`test_navigation.py::test_shop_and_battle_and_garden_and_trade_have_back_to_main`) requires a live MariaDB on `127.0.0.1:3306` and fails identically on the pre-A3 base commit `24a148e`.
+- **Full repository suite: 2458 passed, 7 failed, 25 skipped.** All 7 failures reproduce identically on the base commit `24a148e` (no MariaDB in this environment; character-art image assets; `test_phase8c.py::test_migration_chain_head`) — i.e., **zero new failures introduced by A3**.
+
+## invasion_enabled
+
+Unchanged. No invasion-v2 file, no `_archive_inv1_*` table, and no config/setting was modified by A3 (`git diff 24a148e..HEAD` touches only `handlers/start.py`, `keyboards/common.py`, `keyboards/__init__.py`, `tests/test_handlers.py`, `tests/test_a3_start_texts.py`, `docs/admin/A3-REPORT.md`).
+
+## Limitations
+
+- No live Telegram delivery test was performed; the handler was exercised with aiogram mocks (same pattern as the existing suite).
+- The new texts are plain text (no Markdown bold) because the approved copy contains no formatting; if bold is wanted later, `_private_start_text` and the group builder are the single places to change.
+- The private **main menu** still shows the full button set by design — A3 only simplifies the `/start` funnel. The membership gate keeps its two functional buttons (join channel + verify).
+- The bot's `@username` in the deep link comes from `settings.BOT_USERNAME` (default `sib_game_bot`, env-overridable); it is not hard-coded.
+- The pre-existing 7 environmental test failures (MariaDB/assets/migration-chain) are outside A3 scope and remain unfixed.
+
