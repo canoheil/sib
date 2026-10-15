@@ -220,6 +220,21 @@ def _help_keyboard(origin: Optional[str] = None) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def _help_menu_screen(origin: Optional[str] = None) -> tuple:
+    """(text, keyboard) of the Guide index - ONE builder for every entry.
+
+    Shared by the group/private menu button, the callback and the
+    «سیب راهنما» text shortcut (Phase A4), so the guide index can never
+    drift between entry points. ``origin`` only carries the contextual Back
+    target; the shortcut opens it as a top-level screen (Back -> main menu).
+    """
+    text = (
+        "🎮 **راهنمای بازی‌های سیب** 🍏\n\n"
+        "بخش مورد نظرت را انتخاب کن تا کوتاه و ساده توضیحش را ببینی:"
+    )
+    return text, _help_keyboard(origin)
+
+
 @router.callback_query(F.data.startswith("help_menu"))
 async def handle_help_menu(callback: CallbackQuery, bot: Bot):
     """Paged help index (spec #13): short pages, button navigation.
@@ -232,13 +247,10 @@ async def handle_help_menu(callback: CallbackQuery, bot: Bot):
     from sib.services.nav import parse_callback
 
     _base, origin = parse_callback(callback.data)
-    text = (
-        "🎮 **راهنمای بازی‌های سیب** 🍏\n\n"
-        "بخش مورد نظرت را انتخاب کن تا کوتاه و ساده توضیحش را ببینی:"
-    )
+    text, keyboard = _help_menu_screen(origin)
     await safe_answer_callback(callback)
     await safe_edit_callback_message(
-        callback, bot, text, reply_markup=_help_keyboard(origin)
+        callback, bot, text, reply_markup=keyboard
     )
 
 
@@ -336,39 +348,36 @@ async def handle_apple_garden(callback: CallbackQuery, bot: Bot):
     await _claim_panel(callback, "garden", prev_message_id)
 
 
-@router.callback_query(F.data.startswith("apple_cards"))
-async def handle_apple_cards(callback: CallbackQuery, bot: Bot):
+async def _cards_screen(
+    user_id: int, session, page: int = 0, origin: Optional[str] = None
+) -> tuple:
+    """(text, keyboard) of the «کارت‌های من» panel - ONE builder.
+
+    Shared by the profile/main-menu button (``apple_cards``), its
+    pagination and the «سیب کارت» text shortcut (Phase A4): the panel the
+    shortcut opens is byte-for-byte the panel the button opens.
+    """
+    from sqlalchemy import select
+
+    from sib.database.models import Character
+    from sib.services.player_cards import PlayerCardService
     from sib.services.wiki import CollectionService
 
-    user = callback.from_user
-    if not user:
-        return
-    _base, origin = parse_callback(callback.data)
-
-    # Optional page argument: apple_cards[:page[:origin]]
-    parts = _base.split(":")
-    page = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
-
-    prev_message_id = getattr(callback.message, "message_id", None)
-    async with get_session() as session:
-        from sqlalchemy import select
-
-        from sib.database.models import Character
-        from sib.services.player_cards import PlayerCardService
-
-        text, total_pages = await CollectionService.render_collection(session, user.id, page=page)
-        cards = await PlayerCardService.list_cards(session, user.id)
-        main_card = await PlayerCardService.get_main_card(session, user.id)
-        main_card_id = main_card.id if main_card is not None else None
-        character_ids = sorted({c.character_id for c in cards})
-        characters = {
-            ch.id: ch
-            for ch in (
-                await session.scalars(
-                    select(Character).where(Character.id.in_(character_ids))
-                )
-            ).all()
-        }
+    text, total_pages = await CollectionService.render_collection(
+        session, user_id, page=page
+    )
+    cards = await PlayerCardService.list_cards(session, user_id)
+    main_card = await PlayerCardService.get_main_card(session, user_id)
+    main_card_id = main_card.id if main_card is not None else None
+    character_ids = sorted({c.character_id for c in cards})
+    characters = {
+        ch.id: ch
+        for ch in (
+            await session.scalars(
+                select(Character).where(Character.id.in_(character_ids))
+            )
+        ).all()
+    }
 
     card_rows = []
     page_cards = cards[
@@ -383,6 +392,23 @@ async def handle_apple_cards(callback: CallbackQuery, bot: Bot):
     kb = get_cards_keyboard(
         origin=origin, card_rows=card_rows, page=page, total_pages=total_pages
     )
+    return text, kb
+
+
+@router.callback_query(F.data.startswith("apple_cards"))
+async def handle_apple_cards(callback: CallbackQuery, bot: Bot):
+    user = callback.from_user
+    if not user:
+        return
+    _base, origin = parse_callback(callback.data)
+
+    # Optional page argument: apple_cards[:page[:origin]]
+    parts = _base.split(":")
+    page = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+
+    prev_message_id = getattr(callback.message, "message_id", None)
+    async with get_session() as session:
+        text, kb = await _cards_screen(user.id, session, page=page, origin=origin)
 
     await callback.answer()
     if callback.message:
@@ -531,21 +557,20 @@ async def handle_apple_profile(callback: CallbackQuery, bot: Bot):
     await _claim_panel(callback, "profile", prev_message_id)
 
 
-@router.callback_query(F.data == "profile_skin")
-async def handle_profile_skin(callback: CallbackQuery, bot: Bot):
-    """Open the Change Skin choices for the profile owner."""
-    user = callback.from_user
-    if not user:
-        return
+async def _skin_screen(user_id: int, session, telegram_user=None) -> tuple:
+    """(text, keyboard) of the «تغییر پوسته» picker - ONE builder.
 
+    Shared by the profile button (``profile_skin``) and the «سیب اسکین»
+    text shortcut (Phase A4). ``telegram_user`` keeps the existing
+    account-repair behaviour of the callback entry: the selector can also
+    register an account first seen through a callback, while wake-word
+    entries pass the sender.
+    """
     from sib.services.profile_skin import ProfileSkinService, profile_skin_label
 
-    prev_message_id = getattr(callback.message, "message_id", None)
-    async with get_session() as session:
-        # The selector can also repair an account first seen through a
-        # profile callback, following the existing account-registration path.
-        await UserService.get_or_create_user(session, user)
-        selected_skin = await ProfileSkinService.get_selected_skin(session, user.id)
+    if telegram_user is not None:
+        await UserService.get_or_create_user(session, telegram_user)
+    selected_skin = await ProfileSkinService.get_selected_skin(session, user_id)
 
     text = (
         "🎨 **Change Skin / تغییر پوسته**\n\n"
@@ -553,7 +578,19 @@ async def handle_profile_skin(callback: CallbackQuery, bot: Bot):
         "یکی از چهار پوسته را انتخاب کن. این انتخاب فقط ظاهر پروفایل را عوض می‌کند "
         "و روی XP یا Level اثری ندارد."
     )
-    keyboard = get_profile_skin_keyboard(selected_skin)
+    return text, get_profile_skin_keyboard(selected_skin)
+
+
+@router.callback_query(F.data == "profile_skin")
+async def handle_profile_skin(callback: CallbackQuery, bot: Bot):
+    """Open the Change Skin choices for the profile owner."""
+    user = callback.from_user
+    if not user:
+        return
+
+    prev_message_id = getattr(callback.message, "message_id", None)
+    async with get_session() as session:
+        text, keyboard = await _skin_screen(user.id, session, telegram_user=user)
 
     await safe_answer_callback(callback)
     if callback.message:
@@ -886,6 +923,173 @@ async def handle_sib_garden_word(message: Message, bot: Bot):
 async def handle_my_garden_word(message: Message, bot: Bot):
     """'باغ من' behaves exactly like 'سیب باغ' (sender's own garden)."""
     await _open_sender_garden(message)
+
+
+# ---------------------------------------------------------------------------
+# Phase A4 — text shortcut aliases for existing menus
+# ---------------------------------------------------------------------------
+# Persian Yeh (U+06CC) / Arabic Yeh (U+064A) and Persian Keheh (U+06A9) /
+# Arabic Kaf (U+0643) are interchangeable in typed Persian - the same
+# convention the chest, marriage, hug and kiss wake words already use
+# (handlers/daily_chest.py, handlers/marriage.py).
+_YEH = r"[\u06cc\u064a]"
+_KEH = r"[\u06a9\u0643]"
+
+#: The accepted «سیب <target>» spellings, folded to their canonical target.
+#: «لیدربورد» is the common typed spelling of the leaderboard shortcut.
+SIB_SHORTCUT_TARGETS = {
+    "شاپ": "shop",
+    "کارت": "cards",
+    "اسکین": "skin",
+    "لیدربرد": "leaderboard",
+    "لیدربورد": "leaderboard",
+    "راهنما": "help",
+}
+
+#: ONE anchored pattern for all five aliases: the wake word «سیب» plus
+#: EXACTLY one known target word (surrounding whitespace ignored). It can
+#: never match a slash command, a sentence that merely contains «سیب شاپ»
+#: or an unfinished phrase - ordinary conversation stays untouched.
+SIB_SHORTCUT_PATTERN = (
+    r"^\s*س" + _YEH + r"ب\s+(?:"
+    r"شاپ"                                   # سیب شاپ     -> shop (/shop)
+    r"|" + _KEH + r"ارت"                     # سیب کارت    -> My Cards
+    r"|اس" + _KEH + _YEH + r"ن"              # سیب اسکین   -> Change Skin
+    r"|ل" + _YEH + r"در(?:برد|بورد)"          # سیب لیدربرد -> leaderboard
+    r"|راهنما"                               # سیب راهنما  -> Guide index
+    r")\s*$"
+)
+
+# Characters folded before the target lookup: Arabic Yeh/Kaf variants and
+# the invisible ZWNJ/bidi marks that keyboards insert inside Persian words.
+_SHORTCUT_FOLD = str.maketrans(
+    {"ي": "ی", "ك": "ک", "\u200c": "", "\u200e": "", "\u200f": ""}
+)
+
+
+def sib_shortcut_target(text: Optional[str]) -> Optional[str]:
+    """Canonical target of an EXACT «سیب <target>» shortcut, else ``None``.
+
+    The whole message must be the wake word plus ONE known target word:
+    «سلام سیب شاپ», «سیب شاپ کن», a slash command and any ordinary
+    sentence all return ``None`` and remain normal conversation.
+    """
+    normalized = (text or "").strip().translate(_SHORTCUT_FOLD)
+    if normalized.startswith("/"):
+        return None
+    parts = normalized.split()
+    if len(parts) != 2 or parts[0] != "سیب":
+        return None
+    return SIB_SHORTCUT_TARGETS.get(parts[1])
+
+
+async def _open_sender_cards(message: Message, bot: Bot) -> None:
+    """«سیب کارت» -> the SENDER's «کارت‌های من» panel (profile button).
+
+    The sender is always the subject and the replied panel is claimed to
+    them, so inside a group only they can press its card buttons - exactly
+    like the same button inside the profile.
+    """
+    user = message.from_user
+    if not user:
+        return
+
+    from sib.services.banner import send_screen_reply
+
+    async with get_session() as session:
+        await UserService.get_or_create_user(session, user)
+        text, kb = await _cards_screen(user.id, session)
+        sent = await send_screen_reply(message, "cards", text, kb)
+        if sent is not None and sent.message_id:
+            await PanelOwnershipService.claim(
+                session,
+                chat_id=sent.chat.id,
+                message_id=sent.message_id,
+                user_id=user.id,
+                panel_type="cards",
+            )
+
+
+async def _open_sender_skin(message: Message, bot: Bot) -> None:
+    """«سیب اسکین» -> the SENDER's «تغییر پوسته» picker (profile button).
+
+    Same screen and same owner lock as the profile entry: the picker is
+    claimed to the sender, so skin changes stay personal in groups.
+    """
+    user = message.from_user
+    if not user:
+        return
+
+    from sib.services.banner import send_screen_reply
+
+    async with get_session() as session:
+        text, kb = await _skin_screen(user.id, session, telegram_user=user)
+        sent = await send_screen_reply(message, "skin", text, kb)
+        if sent is not None and sent.message_id:
+            await PanelOwnershipService.claim(
+                session,
+                chat_id=sent.chat.id,
+                message_id=sent.message_id,
+                user_id=user.id,
+                panel_type="profile",
+            )
+
+
+async def _open_help_menu(message: Message, bot: Bot) -> None:
+    """«سیب راهنما» -> the same Guide index the «راهنما» button opens.
+
+    The guide is a public screen (no owner lock, no banner), so it renders
+    through the same builder and the same reply path as the wake words.
+    """
+    from sib.services.banner import send_screen_reply
+
+    text, kb = _help_menu_screen()
+    await send_screen_reply(message, "help", text, kb)
+
+
+async def _open_shop_entry(message: Message, bot: Bot) -> None:
+    """«سیب شاپ» -> the /shop command (same entry function, same claim)."""
+    from sib.handlers.shop import cmd_shop
+
+    await cmd_shop(message, bot)
+
+
+async def _open_leaderboard_entry(message: Message, bot: Bot) -> None:
+    """«سیب لیدربرد» -> the /leaderboard command (same entry function)."""
+    from sib.handlers.leaderboard import cmd_leaderboard
+
+    await cmd_leaderboard(message)
+
+
+#: Shortcut target -> the function that opens it. Every opener delegates to
+#: the SAME code path as the corresponding command/button; no screen is
+#: rebuilt here.
+_SIB_SHORTCUT_OPENERS = {
+    "shop": _open_shop_entry,
+    "cards": _open_sender_cards,
+    "skin": _open_sender_skin,
+    "leaderboard": _open_leaderboard_entry,
+    "help": _open_help_menu,
+}
+
+
+@router.message(F.text.regexp(SIB_SHORTCUT_PATTERN))
+async def handle_sib_shortcut_word(message: Message, bot: Bot):
+    """Phase A4 aliases: «سیب شاپ»، «سیب کارت»، «سیب اسکین»، «سیب لیدربرد»، «سیب راهنما».
+
+    ONE handler, ONE anchored pattern and ONE target map - the same
+    registration mechanism as the other wake words in this router, so all
+    five work identically in private chats and in groups: the sender is
+    the subject and personal screens keep their existing owner lock.
+    Slash commands and sentences never reach this handler.
+    """
+    target = sib_shortcut_target(message.text)
+    if target is None:
+        return
+    opener = _SIB_SHORTCUT_OPENERS.get(target)
+    if opener is None:  # pragma: no cover - map and pattern stay in sync
+        return
+    await opener(message, bot)
 
 
 @router.message(F.text.regexp(r"^\s*سیب\s*$"))
