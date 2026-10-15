@@ -3,7 +3,7 @@
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup
 from sqlalchemy import select, func
 from sib.admin.auth import IsAdminFilter
 from sib.core.logging import log_event, Events
@@ -209,7 +209,7 @@ async def handle_admin_matches(callback: CallbackQuery):
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(
+                primary_button(
                     text="🔄 بروزرسانی",
                     callback_data="admin_matches",
                 )

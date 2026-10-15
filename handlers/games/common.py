@@ -36,6 +36,7 @@ from sib.services.player_xp import PlayerXPService
 from sib.services.ad.service import AdService
 from sib.services.telegram_ui import (
     REFRESH_CALLBACK_PREFIX,
+    board_refresh_style,
     safe_answer_callback,
     safe_edit_callback_message,
     safe_edit_screen,
@@ -147,7 +148,7 @@ async def render_board_for(
     the rematch keyboard, otherwise with the live playable keyboard.
     """
     engine = get_game_engine(match.game.code)
-    refresh_style = "success" if engine.game_code == "battleship" else None
+    refresh_style = board_refresh_style(engine.game_code)
     message = callback.message
     chat = getattr(message, "chat", None) if message is not None else None
     chat_id = getattr(chat, "id", None) if chat is not None else None
@@ -471,9 +472,7 @@ async def process_game_action(
                     kb = with_refresh_button(
                         engine.get_keyboard(state, match_id, target_pid),
                         match_id,
-                        refresh_style=(
-                            "success" if engine.game_code == "battleship" else None
-                        ),
+                        refresh_style=board_refresh_style(engine.game_code),
                     )
                     new_msg_id = await safe_edit_screen(
                         bot, chat_id=group_id, message_id=msg_id, text=text, reply_markup=kb
@@ -495,9 +494,7 @@ async def process_game_action(
             kb = with_refresh_button(
                 engine.get_keyboard(state, match_id, target_pid),
                 match_id,
-                refresh_style=(
-                    "success" if engine.game_code == "battleship" else None
-                ),
+                refresh_style=board_refresh_style(engine.game_code),
             )
             if not await safe_edit_callback_message(callback, bot, text, reply_markup=kb):
                 logger.warning(
@@ -574,7 +571,7 @@ async def _present_friendly_board(
     state = payload["state"]
     finished = payload["finished"]
     engine = get_game_engine(payload["game_code"])
-    refresh_style = "success" if engine.game_code == "battleship" else None
+    refresh_style = board_refresh_style(engine.game_code)
     group_id = payload["group1_id"] or payload["group2_id"]
     viewer, audience = _friendly_board_target(
         state, payload["players"], actor_id, group_id
@@ -666,7 +663,7 @@ async def handle_game_refresh(callback: CallbackQuery, bot: Bot) -> None:
             return
 
         engine = get_game_engine(match.game.code)
-        refresh_style = "success" if engine.game_code == "battleship" else None
+        refresh_style = board_refresh_style(engine.game_code)
         state = json.loads(match.game_state) if match.game_state else None
         if state is None:
             await safe_answer_callback(

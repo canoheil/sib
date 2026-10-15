@@ -4,9 +4,9 @@ from dataclasses import dataclass, field
 from time import monotonic
 from aiogram import Router, F
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from sib.admin.auth import is_admin
 from sib.database.connection import get_session
+from sib.keyboards.common import keyboard_from_specs
 from sib.services.broadcast import broadcast
 
 router = Router(name="admin_broadcast")
@@ -31,11 +31,12 @@ def pending(uid):
     return _pending_broadcast.get(uid)
 
 def keyboard(preview=False):
-    rows = [[("✅ ارسال", "send"), ("✏️ ویرایش", "edit")]] if preview else [
-        [("🌍 همه گروه‌ها", "target:all"), ("📍 یک گروه خاص", "target:one")]]
-    rows.append([("❌ لغو", "cancel")])
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=t, callback_data="bcast:"+d) for t,d in row] for row in rows])
+    """Broadcast controls: send green, edit/targets blue, cancel red."""
+    rows = [[("✅ ارسال", "send", "success"), ("✏️ ویرایش", "edit", "primary")]] if preview else [
+        [("🌍 همه گروه‌ها", "target:all", "primary"), ("📍 یک گروه خاص", "target:one", "primary")]]
+    rows.append([("❌ لغو", "cancel", "danger")])
+    return keyboard_from_specs(
+        [[(t, "bcast:"+d, style) for t, d, style in row] for row in rows])
 
 async def authorized(event):
     if event.from_user and is_admin(event.from_user.id):

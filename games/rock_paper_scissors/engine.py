@@ -1,12 +1,13 @@
 """Rock Paper Scissors game engine implementation."""
 
 from typing import Any, Dict, List, Optional, Tuple
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardMarkup
 
 from sib.core.config import settings
 from sib.core.text import safe_name
 from sib.database.models import MatchPlayer
 from sib.games.base import BaseGameEngine, GameResult
+from sib.keyboards.common import primary_button
 
 
 class RockPaperScissorsEngine(BaseGameEngine):
@@ -303,7 +304,7 @@ class RockPaperScissorsEngine(BaseGameEngine):
             return InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
-                        InlineKeyboardButton(
+                        primary_button(
                             text=f"🔒 انتخاب شما: {chosen}",
                             callback_data="noop",
                         )
@@ -314,15 +315,15 @@ class RockPaperScissorsEngine(BaseGameEngine):
         return InlineKeyboardMarkup(
             inline_keyboard=[
                 [
-                    InlineKeyboardButton(
+                    primary_button(
                         text="🗿 سنگ",
                         callback_data=f"rps_action:{match_id}:rock",
                     ),
-                    InlineKeyboardButton(
+                    primary_button(
                         text="📄 کاغذ",
                         callback_data=f"rps_action:{match_id}:paper",
                     ),
-                    InlineKeyboardButton(
+                    primary_button(
                         text="✂️ قیچی",
                         callback_data=f"rps_action:{match_id}:scissors",
                     ),

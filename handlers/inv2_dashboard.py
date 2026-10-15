@@ -1,12 +1,13 @@
 """Owner-bound private inline dashboard for the Phase 6 control commands."""
 from aiogram import F, Router
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 from sqlalchemy import select
 
 from sib.admin.auth import IsAdminFilter, is_admin
 from sib.database.models import AdminLog, Inv2GroupState
 from sib.database.connection import get_session
+from sib.keyboards.common import styled_button
 from sib.services.invasion_v2 import admin_controls as ops
 from sib.services.invasion_v2.presentation import _telegram
 from sib.services.maintenance.service import invalidate_invasion_config_cache
@@ -17,9 +18,18 @@ router.message.filter(IsAdminFilter())
 router.callback_query.filter(IsAdminFilter())
 
 
+# Action colors: switching the invasion ON is green, OFF is red; every other
+# console entry is blue navigation.
+INVASION_ACTION_STYLES = {"on": "success", "off": "danger"}
+
+
 def keyboard(admin_id: int) -> InlineKeyboardMarkup:
     def b(text, action):
-        return InlineKeyboardButton(text=text, callback_data=f"inv2adm:{admin_id}:{action}")
+        return styled_button(
+            text=text,
+            callback_data=f"inv2adm:{admin_id}:{action}",
+            style=INVASION_ACTION_STYLES.get(action, "primary"),
+        )
     return InlineKeyboardMarkup(inline_keyboard=[
         [b("روشن‌کردن", "on"), b("خاموش‌کردن", "off"), b("تازه‌سازی", "refresh")],
         [b("نواحی", "regions"), b("گروه‌های خاموش", "muted"), b("یورش‌های فعال", "active")],

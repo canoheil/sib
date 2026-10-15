@@ -11,11 +11,12 @@ import json
 from typing import Any, Dict, Optional
 
 from aiogram import Bot
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardMarkup
 
 from sib.core.logging import logger
 from sib.database.models import Match, MatchState
 from sib.games.registry import get_game_engine
+from sib.keyboards.common import success_button
 from sib.keyboards.party import get_friendly_rematch_keyboard
 from sib.services.friendly import (
     is_friendly,
@@ -23,7 +24,7 @@ from sib.services.friendly import (
     state_viewer_id,
     viewer_audience,
 )
-from sib.services.telegram_ui import safe_edit_screen, with_refresh_button
+from sib.services.telegram_ui import board_refresh_style, safe_edit_screen, with_refresh_button
 
 
 def final_keyboard(match: Optional[Match] = None) -> InlineKeyboardMarkup:
@@ -33,7 +34,7 @@ def final_keyboard(match: Optional[Match] = None) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(
+                success_button(
                     text="➕ بازی جدید در گروه",
                     callback_data="group_games_panel",
                 )
@@ -69,7 +70,7 @@ async def sync_match_messages(
         logger.warning(f"Cannot sync messages for match {match.id}: {exc}")
         return
 
-    refresh_style = "success" if engine.game_code == "battleship" else None
+    refresh_style = board_refresh_style(engine.game_code)
     match_over = match.state != MatchState.ACTIVE
     players_by_group = {p.group_id: p.user_id for p in match.players}
 

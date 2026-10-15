@@ -145,7 +145,12 @@ class MaintenanceService:
         from sib.games.registry import get_game_engine
         from sib.services.game_sync import final_keyboard
         from sib.services.panel import PanelOwnershipService
-        from sib.services.telegram_ui import safe_edit_screen, safe_send_screen, with_refresh_button
+        from sib.services.telegram_ui import (
+            board_refresh_style,
+            safe_edit_screen,
+            safe_send_screen,
+            with_refresh_button,
+        )
 
         for fallback in fallbacks:
             async with get_session() as session:
@@ -161,7 +166,7 @@ class MaintenanceService:
                     continue
                 state = json.loads(match.game_state)
                 engine = get_game_engine(match.game.code)
-                refresh_style = "success" if engine.game_code == "battleship" else None
+                refresh_style = board_refresh_style(engine.game_code)
                 human = next((p for p in match.players if p.team == 1 and not p.user.is_bot), None)
                 viewer_id = human.user_id if human else 0
                 if match.mode == "solo":

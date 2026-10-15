@@ -5,11 +5,11 @@ from dataclasses import dataclass, field as dcfield
 from time import monotonic
 from aiogram import Router, F
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy import select
 from sib.admin.auth import is_admin
 from sib.database.connection import get_session
 from sib.database.models import Character
+from sib.keyboards.common import keyboard_from_specs
 from sib.services.admin_user_actions import FIELDS, snapshot, mutate
 from sib.services.sib_claim import fa_digits
 
@@ -29,8 +29,13 @@ class Edit:
     touched: float = dcfield(default_factory=monotonic)
 
 def kb(rows):
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=t, callback_data=d) for t,d in row] for row in rows])
+    """Build a panel keyboard from ``(text, callback_data[, style])`` specs.
+
+    Styles: success = confirm/add, danger = cancel/remove/back/reset,
+    primary = the rest of this dashboard's navigation. A spec without a style
+    gets blue (primary): this panel never renders a transparent button.
+    """
+    return keyboard_from_specs(rows, default_style="primary")
 
 def clear(uid):
     for key in list(_pending_amounts):
@@ -52,8 +57,9 @@ async def dashboard(session, uid):
     rows = [[("🍏 سیب‌ها", "apples"), ("🃏 کارت‌ها", "cards")],
             [("⭐ سطح و تجربه", "level"), ("🚫 مسدودیت", "ban")],
             [("⏱ ریست کول‌داون‌ها", "cooldowns"), ("🌱 نهال", "seedling")]]
-    buttons = [[(label, f"uadm:menu:{menu}:{uid}") for label,menu in row] for row in rows]
-    buttons.append([("🔄 بروزرسانی", f"uadm:refresh:{uid}"), ("❌ بستن", "uadm:close")])
+    buttons = [[(label, f"uadm:menu:{menu}:{uid}", "primary") for label,menu in row] for row in rows]
+    buttons.append([("🔄 بروزرسانی", f"uadm:refresh:{uid}", "primary"),
+                    ("❌ بستن", "uadm:close", "danger")])
     return fa_digits(text), kb(buttons)
 
 async def render(bot, chat_id, panel_id, uid):
@@ -130,7 +136,8 @@ async def control(callback, bot):
                 edit.step = 1
                 edit.touched = monotonic()
                 await callback.message.edit_text("⚠️ این حساب مدیر است. تأیید دوم لازم است؛ ادامه می‌دهید؟",
-                    reply_markup=kb([[("✅ تأیید دوم", callback.data)], [("❌ لغو", f"uadm:back:{uid}")]]))
+                    reply_markup=kb([[("✅ تأیید دوم", callback.data, "success")],
+                                     [("❌ لغو", f"uadm:back:{uid}", "danger")]]))
                 await callback.answer()
                 return
             _pending_amounts.pop(key, None)
@@ -156,8 +163,8 @@ async def control(callback, bot):
             if menu in ("apples", "level", "seedling"):
                 fields = ["apples", "apple_gold", "apple_diamond", "apple_obsidian", "magic_powder"] if menu == "apples" else ["level", "xp"] if menu == "level" else ["seedling"]
                 for field in fields:
-                    rows.append([(f"➕ {FIELDS[field]}", f"uadm:add:{field}:{uid}"),
-                                 (f"➖ {FIELDS[field]}", f"uadm:sub:{field}:{uid}")])
+                    rows.append([(f"➕ {FIELDS[field]}", f"uadm:add:{field}:{uid}", "success"),
+                                 (f"➖ {FIELDS[field]}", f"uadm:sub:{field}:{uid}", "danger")])
             elif menu == "cards":
                 async with get_session() as session:
                     _, _, cards = await snapshot(session, uid)
@@ -166,18 +173,22 @@ async def control(callback, bot):
                         character = await session.get(Character, card.character_id)
                         lines.append(f"{character.code if character else 'نامشخص'} {'⭐' if card.is_favorite else ''}")
                 text = "🃏 کارت‌ها:\n" + ("\n".join(lines) or "بدون کارت")
-                rows = [[("➕ افزودن", f"uadm:add:card:{uid}"), ("➖ حذف", f"uadm:sub:card:{uid}")],
-                        [("تنظیم کارت اصلی", f"uadm:set:card:{uid}")]]
+                rows = [[("➕ افزودن", f"uadm:add:card:{uid}", "success"),
+                         ("➖ حذف", f"uadm:sub:card:{uid}", "danger")],
+                        [("تنظیم کارت اصلی", f"uadm:set:card:{uid}", "primary")]]
             elif menu == "ban":
                 async with get_session() as session:
                     user, _, _ = await snapshot(session, uid)
-                rows = [[("رفع مسدودیت" if user.is_banned else "مسدودسازی", f"uadm:{'unban' if user.is_banned else 'ban'}:{uid}")]]
+                rows = [[("رفع مسدودیت" if user.is_banned else "مسدودسازی",
+                          f"uadm:{'unban' if user.is_banned else 'ban'}:{uid}",
+                          "success" if user.is_banned else "danger")]]
             elif menu == "cooldowns":
                 text = "کول‌داون‌ها از تاریخچه پاداش محاسبه می‌شوند؛ ریست ایمن فعلاً در دسترس نیست."
-                rows = [[("ریست معدن", f"uadm:reset:mine:{uid}"), ("ریست دریافت روزانه", f"uadm:reset:claim:{uid}")]]
+                rows = [[("ریست معدن", f"uadm:reset:mine:{uid}", "danger"),
+                         ("ریست دریافت روزانه", f"uadm:reset:claim:{uid}", "danger")]]
             else:
                 raise ValueError("گزینه نامعتبر است.")
-            rows.append([("🔙 بازگشت", f"uadm:back:{uid}")])
+            rows.append([("🔙 بازگشت", f"uadm:back:{uid}", "danger")])
             await callback.message.edit_text(fa_digits(text)[:4000], reply_markup=kb(rows), parse_mode=None)
         elif action in ("add", "sub", "set", "ban", "unban", "reset"):
             clear(aid)
@@ -206,8 +217,8 @@ async def confirmation(message, uid, field, edit):
     text = f"⚠️ تغییر {FIELDS.get(field, 'وضعیت کاربر')} برای کاربر {uid} به {display_value} را تأیید می‌کنید؟"
     if field == "ban":
         text = f"🚫 {'مسدودسازی' if edit.value else 'رفع مسدودیت'} کاربر {uid} را تأیید می‌کنید؟\nهیچ داده‌ای حذف نمی‌شود. بررسی پارتی به تعویق می‌افتد."
-    await message.answer(fa_digits(text), reply_markup=kb([[("✅ تأیید", f"uadm:confirm:{edit.token}")],
-                                                        [("❌ لغو", f"uadm:back:{uid}")]]), parse_mode=None)
+    await message.answer(fa_digits(text), reply_markup=kb([[("✅ تأیید", f"uadm:confirm:{edit.token}", "success")],
+                                                        [("❌ لغو", f"uadm:back:{uid}", "danger")]]), parse_mode=None)
 
 @router.message(lambda m: bool(m.from_user and not (m.text or "").startswith("/") and (m.from_user.id in _lookup or any(k[0] == m.from_user.id for k in _pending_amounts))))
 async def receive(message):

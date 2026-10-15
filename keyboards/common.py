@@ -3,8 +3,12 @@
 Semantic glass-button system (Bot API 10.3 styles):
 - success (green)  -> positive/confirm actions (buy, harvest, join, find)
 - danger (red)     -> back / cancel / destructive actions
-- primary (blue)   -> navigation / informational actions
-- unstyled         -> neutral actions without a dedicated style
+- primary (blue)   -> navigation / informational actions, playable cells
+
+Every user-facing button carries one of the three colors. ``style=None`` is
+NOT a design choice here: it is reserved for the legacy-client fallback path
+in ``services.telegram_ui`` (old aiogram/Bot API builds that reject the
+``style`` field), where the color is carried by the label instead.
 
 Game boards may define a separate style map for their structural controls and
 playable cells. Colors communicate meaning - never decoration.
@@ -198,6 +202,48 @@ def get_admin_main_keyboard() -> InlineKeyboardMarkup:
         ]
     )
     return keyboard
+
+
+def styled_button(
+    text: str,
+    callback_data: str,
+    style: Optional[str] = None,
+) -> InlineKeyboardButton:
+    """Inline button with an explicit glass style.
+
+    ``style`` is "primary" (blue), "success" (green) or "danger" (red).
+    ``None`` keeps Telegram's app-specific default rendering and is reserved
+    for the legacy-client fallback path in ``services.telegram_ui``.
+    """
+    return InlineKeyboardButton(
+        text=text,
+        callback_data=callback_data,
+        style=style,
+    )
+
+
+def keyboard_from_specs(
+    rows,
+    *,
+    default_style: Optional[str] = None,
+) -> InlineKeyboardMarkup:
+    """Build a keyboard from ``(text, callback_data[, style])`` row specs.
+
+    Tuple-based panels declare the color next to the label, so their buttons
+    keep exactly one style source (``keyboards.common``) instead of building
+    raw ``InlineKeyboardButton`` objects of their own. ``default_style`` is
+    the color of a spec that omits one (``None`` keeps Telegram's default
+    rendering and is reserved for the legacy-client fallback path).
+    """
+    keyboard_rows: list[list[InlineKeyboardButton]] = []
+    for row in rows:
+        buttons: list[InlineKeyboardButton] = []
+        for spec in row:
+            text, callback_data = spec[0], spec[1]
+            style = spec[2] if len(spec) > 2 else default_style
+            buttons.append(styled_button(text=text, callback_data=callback_data, style=style))
+        keyboard_rows.append(buttons)
+    return InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
 
 
 def primary_button(text: str, callback_data: str) -> InlineKeyboardButton:

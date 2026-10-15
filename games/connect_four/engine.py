@@ -1,12 +1,13 @@
 """Connect Four game engine."""
 
 from typing import Any, Dict, List, Optional, Tuple
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardMarkup
 
 from sib.core.config import settings
 from sib.core.text import safe_name
 from sib.database.models import MatchPlayer
 from sib.games.base import BaseGameEngine, GameResult
+from sib.keyboards.common import danger_button, primary_button
 
 
 class ConnectFourEngine(BaseGameEngine):
@@ -315,8 +316,13 @@ class ConnectFourEngine(BaseGameEngine):
         col_labels = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣"]
         for c in range(self.COLS):
             is_full = (board[0][c] is not None)
-            label = "🚫" if is_full else col_labels[c]
-            cb = f"c4_action:{match_id}:{c}" if (not is_full and is_my_turn) else "noop"
-            col_buttons.append(InlineKeyboardButton(text=label, callback_data=cb))
+            if is_full:
+                # A full column is no longer playable: red marks the dead
+                # cell (same convention as Battleship's non-playable corner).
+                col_buttons.append(danger_button(text="🚫", callback_data="noop"))
+                continue
+            # Playable columns stay blue; the callback only opens on your turn.
+            cb = f"c4_action:{match_id}:{c}" if is_my_turn else "noop"
+            col_buttons.append(primary_button(text=col_labels[c], callback_data=cb))
 
         return InlineKeyboardMarkup(inline_keyboard=[col_buttons])

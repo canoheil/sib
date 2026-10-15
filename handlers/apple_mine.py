@@ -7,7 +7,6 @@ from aiogram.filters import Command
 from aiogram.types import (
     CallbackQuery,
     FSInputFile,
-    InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
 )
@@ -16,6 +15,7 @@ from sqlalchemy import select
 from sib.core.logging import logger
 from sib.database.connection import get_session
 from sib.database.models import Character
+from sib.keyboards.common import primary_button
 from sib.services.apple_mine import (
     CooldownError,
     InvalidCardError,
@@ -136,9 +136,10 @@ async def _card_keyboard(session, cards) -> InlineKeyboardMarkup:
         if len(name) > 42:
             name = f"{name[:41]}…"
         label = f"🎴 {name} · سطح {fa_digits(card.level)}"
+        # Every card is a playable choice in this panel: blue glass.
         buttons.append(
             [
-                InlineKeyboardButton(
+                primary_button(
                     text=label,
                     callback_data=f"mine:card:{card.id}",
                 )
