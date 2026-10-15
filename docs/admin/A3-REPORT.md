@@ -60,3 +60,28 @@ Note: `get_private_welcome_keyboard` is ALSO the private **main menu** (`_main_m
 ### Baseline tests
 
 - `tests/test_handlers.py` pins the three old `/start` texts (`:46`, `:63`, `:85`) — updated alongside the rewrites. All other suites use `get_private_welcome_keyboard` / `get_group_welcome_keyboard` directly (both unchanged as functions).
+
+## Stale-text sweep (legacy mini-game / leaderboard references)
+
+Sweep terms: «کارت بالا»، «سنگ، کاغذ، قیچی»، «دوز»، «چهار در یک ردیف»، «کشتی جنگی»، «برترین گروه‌ها». Line numbers are post-A3 (current tree).
+
+| Location (file:line) | Content | Disposition |
+|---|---|---|
+| `handlers/start.py:49` | New private /start line «🎲 بازی‌های جانبی: کارت بالا، سنگ‌کاغذ‌قیچی، دوز، چهار در یک ردیف، کشتی جنگی.» | **REWRITE (done, MOVE-DOWN)** — replaces the old leading «بازی‌های فعال» bullet list (old `handlers/start.py:78-83`); mini-games are now mentioned once, as secondary content |
+| `handlers/start.py:145-146` | HELP_TOPICS «سنگ، کاغذ، قیچی» guide page | **KEEP** — guide page, accurate, reachable via «📖 راهنما» |
+| `handlers/start.py:152-153` | HELP_TOPICS «چهار در یک ردیف» guide page | **KEEP** |
+| `handlers/start.py:158-159` | HELP_TOPICS «دوز» guide page | **KEEP** |
+| `handlers/start.py:164-165` | HELP_TOPICS «کشتی جنگی» guide page | **KEEP** |
+| `handlers/start.py:171-173` | HELP_TOPICS «کارت بالا» guide page | **KEEP** |
+| `database/connection.py:79-80` | `seed_default_data` row: «کارت بالا (های کارت)» | **KEEP** — canonical games catalog; required for the mini-games to run |
+| `database/connection.py:86` | Seed row: «سنگ، کاغذ، قیچی» | **KEEP** |
+| `database/connection.py:93` | Seed row: «دوز (تیک‌تاک‌تو)» | **KEEP** |
+| `database/connection.py:100` | Seed row: «چهار در یک ردیف» | **KEEP** |
+| `database/connection.py:107` | Seed row: «کشتی جنگی (بتل‌شیپ)» | **KEEP** |
+| `games/high_card/engine.py:24,259,292` | Engine `name_fa` + match screens «کارت بالا» | **KEEP** — the game itself (removal forbidden) |
+| `games/rock_paper_scissors/engine.py:16,255,276` | Engine `name_fa` + match screens «سنگ، کاغذ، قیچی» | **KEEP** |
+| `games/tic_tac_toe/engine.py:14,17,209,218` | Engine `name_fa` + match screens «دوز» | **KEEP** |
+| `handlers/leaderboard.py:23,26` | Group leaderboard title «🏆 برترین گروه‌های سیب» | **KEEP** — live, accurate feature (group leaderboard exists) |
+| `keyboards/leaderboard.py:26,41` | Button «🏆 برترین گروه‌ها» → `show_leaderboard` | **KEEP** — entry point to that live feature |
+
+No handler was deleted or disabled in this sweep. The only rewrite was the private `/start` mini-game list (Task 2); everything else keeps its canonical home (guide pages, seed catalog, engines, leaderboard).
