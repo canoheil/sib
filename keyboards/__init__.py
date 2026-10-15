@@ -3,6 +3,7 @@
 from sib.keyboards.common import (
     get_membership_keyboard,
     get_private_welcome_keyboard,
+    get_private_start_keyboard,
     get_group_welcome_keyboard,
     get_admin_main_keyboard,
 )
@@ -32,6 +33,7 @@ from sib.keyboards.marriage import (
 __all__ = [
     "get_membership_keyboard",
     "get_private_welcome_keyboard",
+    "get_private_start_keyboard",
     "get_group_welcome_keyboard",
     "get_admin_main_keyboard",
     "get_game_selection_keyboard",

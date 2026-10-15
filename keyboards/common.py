@@ -99,6 +99,30 @@ def get_private_welcome_keyboard(bot_username: str) -> InlineKeyboardMarkup:
     return keyboard
 
 
+def get_private_start_keyboard(bot_username: str) -> InlineKeyboardMarkup:
+    """Private /start keyboard (Phase A3): exactly ONE action.
+
+    The /start funnel points new players at a group — that is where the game
+    lives. The full private menu (garden, cards, shop, wiki, trading, chest,
+    profile, guide) stays reachable via «سیب منو» / ``main_menu``
+    (``get_private_welcome_keyboard`` is unchanged and remains the private
+    main-menu keyboard).
+    """
+    add_group_url = f"https://t.me/{bot_username}?startgroup=true"
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="➕ افزودن سیب به گروه",
+                    url=add_group_url,
+                    style="primary",
+                )
+            ]
+        ]
+    )
+    return keyboard
+
+
 def get_group_welcome_keyboard() -> InlineKeyboardMarkup:
     """Main keyboard for group chat /start.
 

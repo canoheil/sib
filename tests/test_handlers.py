@@ -43,7 +43,11 @@ async def test_start_private_chat_already_member(db_session):
 
     mock_msg.answer.assert_called_once()
     args, kwargs = mock_msg.answer.call_args
-    assert "سارا عزیز! من سیب‌ام!" in args[0]
+    # Phase A3: Ovarya-first onboarding text with the support handle.
+    assert "سلام سارا عزیز!" in args[0]
+    assert "اواریا" in args[0]
+    assert "شیاسیب" in args[0]
+    assert "@sibgame_official" in args[0]
     assert kwargs.get("reply_markup") is not None
 
 
@@ -60,7 +64,11 @@ async def test_start_group_chat_registers_group_and_stats(db_session):
 
     mock_msg.reply.assert_called_once()
     args, kwargs = mock_msg.reply.call_args
-    assert "گروه شما ثبت شد" in args[0]
+    # Phase A3: Ovarya-first group welcome; keyboard unchanged.
+    assert "گروه بر و بچ سیب" in args[0]
+    assert "اواریا" in args[0]
+    assert "شیاسیب" in args[0]
+    assert "@sibgame_official" in args[0]
     assert "ریتینگ" not in args[0]
     assert kwargs.get("reply_markup") is not None
 
@@ -82,7 +90,10 @@ async def test_check_membership_callback(db_session):
     mock_cb.answer.assert_called_once()
     mock_cb.message.edit_text.assert_called_once()
     args, _ = mock_cb.message.edit_text.call_args
-    assert "عضویتت تأیید شد!" in args[0]
+    # Phase A3: the gate resolves into the SAME /start welcome (the alert
+    # above already confirmed the membership itself).
+    assert "سلام مهدی عزیز!" in args[0]
+    assert "اواریا" in args[0]
 
 
 @pytest.mark.asyncio

@@ -13,6 +13,7 @@ from sib.database.connection import get_session
 from sib.keyboards.common import (
     get_membership_keyboard,
     get_private_welcome_keyboard,
+    get_private_start_keyboard,
     get_group_welcome_keyboard,
     get_cards_keyboard,
     get_profile_keyboard,
@@ -27,6 +28,28 @@ from sib.services.user import UserService
 from sib.services.group import GroupService
 
 router = Router(name="start")
+
+# Official support handle — must appear in both /start messages (Phase A3).
+SUPPORT_HANDLE = "@sibgame_official"
+
+
+def _private_start_text(first_name: str) -> str:
+    """Private /start welcome (Phase A3): Ovarya-first onboarding copy.
+
+    One source of truth for both entry paths — the direct member welcome in
+    ``handle_start`` and the post-verification welcome in
+    ``handle_check_membership`` (the gate is only reachable from /start).
+    Legacy mini-games are mentioned once, as secondary content.
+    """
+    return (
+        f"🍏 سلام {first_name} عزیز!\n\n"
+        "سرزمین اواریا زیر یورش شیاسیب است. تو برای دفاع از آن فراخوانده شده‌ای.\n\n"
+        "با کارت‌هایت به نبردها بپیوند، در معدن سیب بکن، صندوق‌ها را بگشا، "
+        "گل‌هایت را پرورش بده و با هم‌گروهی‌هایت متحد شو.\n\n"
+        "🎲 بازی‌های جانبی: کارت بالا، سنگ‌کاغذ‌قیچی، دوز، چهار در یک ردیف، کشتی جنگی.\n\n"
+        "برای شروع، بات را به گروهت اضافه کن.\n\n"
+        f"🔧 پشتیبانی: {SUPPORT_HANDLE}"
+    )
 
 
 @router.message(CommandStart())
@@ -45,12 +68,17 @@ async def handle_start(message: Message, bot: Bot):
         # 1. Group / Supergroup chat
         if chat.type in ("group", "supergroup"):
             group = await GroupService.get_or_create_group(session, chat)
+            # Phase A3: Ovarya-first group welcome; keyboard unchanged.
+            # Plain text (no parse mode) so group titles can never break
+            # Markdown parsing.
             welcome_text = (
-                f"🍏 **سیب وارد شد! سلام به برو بچِ {chat.title}!**\n\n"
-                f"گروه شما ثبت شد و از این پس با هر برد، یک **برد** به افتخارات گروه‌تون اضافه می‌شه.\n\n"
-                f"برای ساخت پارتی بازی و مبارزه با گروه‌های دیگه، دکمه‌های زیر رو لمس کنید 👇"
+                f"🍏 سیب وارد شد! سلام به {chat.title}.\n\n"
+                "گروه شما به جمع مدافعان اواریا پیوست. از این پس با هر یورش شیاسیب، "
+                "در کنار هم می‌جنگید و با هر پیروزی، افتخاری به نام گروه‌تان ثبت می‌شود.\n\n"
+                "برای شروع، دکمه‌های زیر را لمس کنید 👇\n\n"
+                f"🔧 پشتیبانی: {SUPPORT_HANDLE}"
             )
-            await message.reply(welcome_text, reply_markup=get_group_welcome_keyboard(), parse_mode="Markdown")
+            await message.reply(welcome_text, reply_markup=get_group_welcome_keyboard(), parse_mode=None)
             return
 
         # 2. Private chat
@@ -71,23 +99,15 @@ async def handle_start(message: Message, bot: Bot):
             return
 
         # If already member
-        welcome_text = (
-            f"🍏 **سلام {user.first_name} عزیز! من سیب‌ام!**\n\n"
-            "من ربات بازی گروهی آنلاین تلگرام هستم.\n"
-            "من رو به گروه‌هات اضافه کن، تیم تشکیل بده و با گروه‌های دیگه در سراسر تلگرام مسابقه بده!\n\n"
-            "🎮 بازی‌های فعال:\n"
-            "• کارت بالا (High Card)\n"
-            "• سنگ، کاغذ، قیچی (Rock Paper Scissors)\n"
-            "• دوز (Tic-Tac-Toe)\n"
-            "• چهار در یک ردیف (Connect Four؛ ۱v۱، ۲v۲، ۴v۴)\n"
-            "• کشتی جنگی (Battleship؛ ۱v۱، ۲v۲، ۴v۴)\n\n"
-            "🏆 هر گروه تلگرام با تعداد برده‌هاش تو جدول برترین‌ها قرار می‌گیره!\n"
-            "برای شروع دکمه زیر رو لمس کن:"
-        )
+        # Phase A3: Ovarya-first onboarding with exactly ONE inline button
+        # (add to group). The full private menu stays available via
+        # «سیب منو» / main_menu. Plain text (no parse mode) so injected
+        # first names can never break Markdown parsing.
+        welcome_text = _private_start_text(user.first_name or "دوست")
         await message.answer(
             welcome_text,
-            reply_markup=get_private_welcome_keyboard(settings.BOT_USERNAME),
-            parse_mode="Markdown",
+            reply_markup=get_private_start_keyboard(settings.BOT_USERNAME),
+            parse_mode=None,
         )
 
 
@@ -106,19 +126,18 @@ async def handle_check_membership(callback: CallbackQuery, bot: Bot):
             return
 
         await callback.answer(MESSAGES["membership_check_success"], show_alert=True)
-        
-        # Replace gate message with welcome
-        welcome_text = (
-            f"🍏 **سلام {user.first_name}! عضویتت تأیید شد!**\n\n"
-            "به جمع سیب‌ای‌ها خوش اومدی!\n"
-            "سیب رو به گروه‌تون اضافه کن و چالش بازی‌های تیمی رو آغاز کنید 👇"
-        )
+
+        # Replace gate message with the SAME /start welcome new members see
+        # (Phase A3): one shared text + exactly ONE inline button. The
+        # verification itself is already confirmed by the alert above.
+        welcome_text = _private_start_text(user.first_name or "دوست")
         if callback.message:
             await safe_edit_callback_message(
                 callback,
                 bot,
                 welcome_text,
-                reply_markup=get_private_welcome_keyboard(settings.BOT_USERNAME),
+                reply_markup=get_private_start_keyboard(settings.BOT_USERNAME),
+                parse_mode=None,
             )
 
 
