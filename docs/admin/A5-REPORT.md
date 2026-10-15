@@ -172,5 +172,225 @@ copy (`scripts/persian_cleanup.py --edit` → no change;
 
 ---
 
-*(Sections 3-6 — the new tree, the before/after, the tests and the
-limitations — are added in the final A5 commit.)*
+## 3. The new section tree
+
+One place, one list: `sib/services/help_content.py` → `HELP_SECTIONS`.
+Adding a section later = adding one `HelpSection` to that tuple; the index
+text, the index keyboard and the navigation are all derived from it.
+
+| # | section_key | title_fa | body chars | page chars |
+|---|---|---|---|---|
+| 1 | `quick_start` | 🍏 شروع سریع | 515 | 528 |
+| 2 | `world` | 🌍 دنیای اواریا | 512 | 528 |
+| 3 | `cards` | 🃏 کارت‌ها | 605 | 616 |
+| 4 | `invasion` | ⚔️ تهاجم شیاسیب | 695 | 712 |
+| 5 | `mine` | ⛏️ معدن سیبی | 395 | 409 |
+| 6 | `apples` | 🎁 سیب‌ها و صندوق‌ها | 748 | 769 |
+| 7 | `social` | 🌱 باغ، ازدواج، پارتی و مبادله | 818 | 849 |
+| 8 | `games` | 🎮 بازی‌های جانبی | 558 | 576 |
+| 9 | `shortcuts` | ⌨️ میان‌برها | 691 | 705 |
+| 10 | `support` | 📞 پشتیبانی | 263 | 275 |
+
+* 10 top-level sections (the brief allows 8-10), the tree is **flat**: no
+  section needed a sub-page, so the maximum depth is 1 from the index. The
+  data structure still carries `children`, and the handler already renders a
+  child page (`help:section:<key>:<child>`), so a future split is a data
+  change only.
+* Every body is under 900 characters; every page (title + body) is under
+  900 too, i.e. far below the 1024-character limit.
+* The index itself is **287** characters.
+
+### 3.1 The rendered index (Persian)
+
+```
+📖 راهنمای بازی سیب 🍏
+
+این راهنما کوتاه و کامل است؛ هر بخش را جدا باز کن. اگر تازه‌ای، از «شروع سریع» شروع کن.
+
+• 🍏 شروع سریع
+• 🌍 دنیای اواریا
+• 🃏 کارت‌ها
+• ⚔️ تهاجم شیاسیب
+• ⛏️ معدن سیبی
+• 🎁 سیب‌ها و صندوق‌ها
+• 🌱 باغ، ازدواج، پارتی و مبادله
+• 🎮 بازی‌های جانبی
+• ⌨️ میان‌برها
+• 📞 پشتیبانی
+```
+
+Index keyboard: one button per section (`help:section:<key>`), two per row,
+plus a «🏠 منوی اصلی» row. A section page carries exactly one button:
+«🔙 بازگشت به راهنما» (`help:index`).
+
+### 3.2 One sample page (Persian) — «⚔️ تهاجم شیاسیب»
+
+```
+⚔️ تهاجم شیاسیب
+
+شیاسیب هر چند ساعت به یکی از منطقه‌های اواریا یورش می‌آورد. رباتم یورش را در گروه اعلام می‌کند و دکمهٔ «⚔️ پیوستن به یورش» را زیر همان پیام می‌گذارد.
+
+**چطور بجنگم؟** روی همان دکمه بزن؛ کارت اصلی‌ات یک ضربه می‌زند و جان شیاسیب کم می‌شود. هر نفر در هر یورش فقط یک ضربه می‌زند.
+
+**قدرت ضربه:** نیروی کارت اصلی با ضریبی میان ۰٫۸۵ تا ۱٫۱۵ ضرب می‌شود و ۱۰٪ شانس ضربهٔ بحرانی داری؛ آن ضربه آسیب را دو برابر می‌کند. جان شیاسیب از میانگین قدرت کارت‌های گروه، ضربدر ضریب نوع دشمن و سختی یورش به دست می‌آید.
+
+**پاداش:** اگر یورش را ببری، هر مدافع ۳ سیب طلایی می‌گیرد؛ با ۱۰٪ شانس یک سیب الماسی و با ۲٪ شانس یک سیب ابسیدینی هم اضافه می‌شود.
+
+بدون کارت اصلی وارد یورش نمی‌شوی، پس اول کارت اصلی را انتخاب کن.
+```
+
+---
+
+## 4. Before / after
+
+**The old index** (one line, no structure):
+
+```
+🎮 **راهنمای بازی‌های سیب** 🍏
+
+بخش مورد نظرت را انتخاب کن تا کوتاه و ساده توضیحش را ببینی:
+```
+
+with 8 topic buttons: 🎯 سنگ، کاغذ، قیچی · 🔴 چهار در یک ردیف · ❌ دوز ·
+🚢 کشتی جنگی · 🃏 کارت بالا · ⚔️ نبرد سیبی · 🃏 کارت‌ها · 🌳 باغ.
+
+**The new index**: a short introduction plus the ten section titles (see
+§3.1) — the world, the cards, the invasion, the mine, the apples and the
+chests, the social systems, the mini-games, the shortcuts and the support.
+
+| | Old | New |
+|---|---|---|
+| Sections | 8 flat topics (mini-games only) | 10 sections covering every active feature |
+| Ovarya / شیاسیب | ✗ | ✓ (a whole section) |
+| Invasion v2 (join, HP, rewards) | ✗ | ✓ |
+| Apple Mine (cooldown, reward table) | ✗ | ✓ |
+| Chests (5) + the 4 apple types | ✗ | ✓ |
+| Text shortcuts | ✗ | ✓ (every wake word) |
+| Garden / Marriage / Party / Trade | one short line | one paragraph each |
+| Support handle | ✗ | ✓ (@sibgame_official) |
+| Callback scheme | `help_menu`, `help_page:<topic>` | `help:index`, `help:section:<key>` (legacy kept as an alias) |
+| Section page buttons | 2 (back + home) | 1 («🔙 بازگشت به راهنما») |
+| Copy style | mixed colloquial, one line per game, no ZWNJ discipline | ZWNJ, «هٔ», «گیومه», Persian digits, no bureaucratic/AI tells |
+
+---
+
+## 5. Tests
+
+`tests/help/test_help_sections.py` — **13 tests, all passing**:
+
+| Required test | Result |
+|---|---|
+| `test_help_index_renders_all_expected_sections` | PASS |
+| `test_every_section_body_is_non_empty` | PASS |
+| `test_every_section_body_is_persian_only` | PASS |
+| `test_every_section_body_under_1024_chars` | PASS |
+| `test_help_section_callback_edits_message` | PASS |
+| `test_help_back_button_returns_to_index` | PASS |
+| `test_sib_raahnamaa_opens_help_index` | PASS |
+| `test_help_mentions_all_text_shortcuts` | PASS |
+| `test_help_mentions_invasion` | PASS |
+| `test_help_mentions_apple_mine` | PASS |
+| `test_help_mentions_chests` | PASS |
+| `test_help_mentions_support_handle` | PASS |
+| `test_help_menu_button_opens_the_same_index` (extra) | PASS |
+
+The Persian-only test masks the injected values (`INJECTED_VALUES` = the
+support handle) and then asserts: no Latin letter, no ASCII digit, no
+Arabic ي/ك, no Arabic-Indic digit, no em dash, no ASCII quote, and balanced
+«گیومه» in every body.
+
+### 5.1 Full suite (SQLite test database, no MariaDB / Telegram needed)
+
+| Tree | Result |
+|---|---|
+| baseline `728f498` (untouched, same environment) | the same 7 failures (MariaDB-only tests, missing image assets, the alembic head check) |
+| A5 tree | **7 failed, 2485 passed, 25 skipped** (255 s) |
+
+The 7 failures are the pre-existing environment ones and are NOT related to
+A5 (they also fail on the untouched baseline, verified in a separate
+`git worktree` of `728f498`):
+
+* `tests/invasion_v2/test_phase8c.py::test_migration_chain_head` (the
+  alembic head is `045_group_welcomed_at`, the test still expects `043`);
+* `tests/test_character_art.py` × 4 (missing image assets);
+* `tests/test_navigation.py::test_shop_and_battle_and_garden_and_trade_have_back_to_main`
+  (needs MariaDB);
+* `tests/test_transaction_regressions.py::test_E_daily_chest_retry_keeps_the_callers_user_row`
+  (needs MariaDB row locks).
+
+Targeted re-runs of everything the rewrite touches:
+
+```
+tests/help  tests/shortcuts  tests/test_nav_root_fixes.py
+tests/test_group_menu_games_guide.py  tests/test_apple_battle.py
+tests/test_handlers.py  tests/test_a3_start_texts.py  tests/test_main_menu_layout.py
+tests/test_main_menu_style.py  tests/test_screen_transitions.py
+→ 119 passed
+```
+
+### 5.2 The Persian copy was checked with the skill's own scripts
+
+```
+python3 .agents/skills/persian-writing/scripts/persian_cleanup.py --edit --in copy.md --out copy.out.md
+  → no change (the copy is already normalized)
+python3 .agents/skills/persian-writing/scripts/fa_lint.py --check copy.md
+  → 0 issues
+```
+
+---
+
+## 6. Guardrails and limitations
+
+**Guardrails respected**
+
+* `invasion_enabled` is **untouched**: still seeded `'false'` in
+  `database/migrations/versions/036_invasion_v2.py:131` and written only by
+  `services/invasion_v2/admin_controls.py:65`. No file under
+  `services/invasion_v2/` and no migration was modified.
+* No invasion v2 logic, no business rule, no feature behaviour was changed:
+  the diff is help text + help navigation only.
+* No handler was deleted: `handle_help_menu` was rewritten, and
+  `handle_help_page` still answers the old `help_page:<topic>` callbacks
+  (mapped to the sections that replaced them).
+* No `_archive_inv1_*` table was touched.
+* Every user-facing string of the new guide is Persian; the only Latin
+  string is the injected support handle.
+* The commit messages all start with `[a5]`.
+
+**Limitations**
+
+* **The chest prices are a snapshot of the seed data**
+  (`data/shop_chests/*.json`). They are the prices the shipped chests are
+  applied with, but an administrator can change a price in the database;
+  the guide text then drifts until it is edited. Making the guide read the
+  live chest rows would mean a DB query on every page render, so the
+  prices are kept as data in `help_content.py` (one place to edit).
+* **The invasion numbers are the shipped rules** (10٪ crit, ×0.85-1.15,
+  3 golden apples, 10٪ / 2٪ bonus). They come from
+  `services/invasion_v2/damage.py` and `rewards.py`; a balance change
+  would need the same edit. The guide deliberately does NOT mention the
+  occurrence interval or the wave length, because those are runtime
+  configuration keys (`invasion_occurrence_interval_seconds`,
+  `invasion_wave_count`, `invasion_wave_duration_seconds`).
+* **The section page has no «🏠 منوی اصلی» button** (the brief asks for a
+  single «🔙 بازگشت به راهنما» button). The way home is one more press
+  away, on the index, which keeps the «🏠 منوی اصلی» row.
+* **The legacy `help_page:` callbacks are kept as an alias**, so old pinned
+  messages keep working, but they are not shown anywhere any more.
+* The `tests/help/` folder has no `__init__.py`, like every other test
+  folder of the repository.
+* The guide is **text only**: there is no banner art for the `help` key
+  (`services/banner.py` ships `main_menu`, `games`, `garden`, `shop`,
+  `leaderboard`), so the pages render as plain text screens, exactly like
+  before.
+
+---
+
+## 7. Commits
+
+```
+[a5] recon for help rewrite            — the recon + the Persian rules
+[a5] structured help data               — sib/services/help_content.py
+[a5] rewrite help handler and navigation — handlers/start.py + the legacy tests
+[a5] tests and report                  — tests/help/ + this report
+```
