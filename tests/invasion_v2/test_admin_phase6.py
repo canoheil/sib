@@ -205,6 +205,12 @@ async def test_simulation_is_readonly_except_required_audit(db):
     async with factory.begin() as s:
         s.add(PlayerCard(id=102, user_id=3, character_id=10, level=2, is_favorite=True))
         s.add(Inv2GroupMember(user_id=3, group_id=-100, last_seen_at=NOW))
+        # A6: group power is known only from at least
+        # invasion_min_players_with_card (3) members with a Main Card.
+        for extra in (4, 5):
+            s.add(User(id=extra, first_name="بازیکن"))
+            s.add(PlayerCard(id=100 + extra, user_id=extra, character_id=10, level=2, is_favorite=True))
+            s.add(Inv2GroupMember(user_id=extra, group_id=-100, last_seen_at=NOW))
     async with factory() as s:
         before = {table: await s.scalar(select(func.count()).select_from(table)) for table in
                   (Inv2Invasion, Inv2Attack, Inv2Reward, Inv2GroupState, UserItem)}
