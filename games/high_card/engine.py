@@ -2,12 +2,13 @@
 
 import random
 from typing import Any, Dict, List, Optional, Tuple
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardMarkup
 
 from sib.core.config import settings
 from sib.core.text import safe_name
 from sib.database.models import MatchPlayer
 from sib.games.base import BaseGameEngine, GameResult
+from sib.keyboards.common import primary_button, success_button
 
 
 class HighCardEngine(BaseGameEngine):
@@ -312,11 +313,11 @@ class HighCardEngine(BaseGameEngine):
         if not player_data:
             return InlineKeyboardMarkup(inline_keyboard=[])
 
-        # Phase 1: Card not drawn yet
+        # Phase 1: Card not drawn yet (blue: the playable action of this phase)
         if player_data["card_rank"] is None:
             return InlineKeyboardMarkup(
                 inline_keyboard=[
-                    [InlineKeyboardButton(
+                    [primary_button(
                         text="🃏 کشیدن کارت",
                         callback_data=f"hc_action:{match_id}:draw"
                     )]
@@ -324,22 +325,24 @@ class HighCardEngine(BaseGameEngine):
             )
 
         # Phase 2: Card drawn, waiting for keep/swap
+        # Keep = green confirm, swap = blue alternative, the card itself is a
+        # blue informational button (never transparent).
         if not player_data["locked"]:
             card_display = self._card_str(player_data)
             return InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
-                        InlineKeyboardButton(
+                        success_button(
                             text=f"✅ نگه داشتن",
                             callback_data=f"hc_action:{match_id}:keep"
                         ),
-                        InlineKeyboardButton(
+                        primary_button(
                             text="🔄 تعویض",
                             callback_data=f"hc_action:{match_id}:swap"
                         ),
                     ],
                     [
-                        InlineKeyboardButton(
+                        primary_button(
                             text=f"🃏 {card_display}",
                             callback_data="noop"
                         ),
@@ -347,12 +350,12 @@ class HighCardEngine(BaseGameEngine):
                 ]
             )
 
-        # Locked - waiting for opponent
+        # Locked - waiting for opponent (blue informational button).
         card_display = self._card_str(player_data)
         swap_note = " 🔄" if player_data["swapped"] else ""
         return InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(
+                [primary_button(
                     text=f"🔒 {card_display}{swap_note}",
                     callback_data="noop"
                 )]

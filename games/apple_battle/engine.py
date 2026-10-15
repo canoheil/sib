@@ -25,10 +25,11 @@ The win formula is EXACTLY the audited Phase 14 formula (never changed):
 import asyncio
 from typing import Any, Dict, List, Optional, Tuple
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardMarkup
 
 from sib.database.models import MatchPlayer
 from sib.games.base import BaseGameEngine, GameResult
+from sib.keyboards.common import primary_button
 
 # Seconds between narrative beats ("~۳ ثانیه" per spec).
 BEAT_DELAY_SECONDS = 3.0
@@ -174,7 +175,7 @@ class AppleBattleEngine(BaseGameEngine):
         return InlineKeyboardMarkup(
             inline_keyboard=[
                 [
-                    InlineKeyboardButton(
+                    primary_button(
                         text="🔄 بروزرسانی",
                         callback_data=f"game_refresh:{match_id}",
                     )

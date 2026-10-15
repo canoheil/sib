@@ -44,6 +44,7 @@ from sib.services.friendly import (
 from sib.services.group import GroupService
 from sib.services.party import PartyService
 from sib.services.telegram_ui import (
+    board_refresh_style,
     safe_edit_callback_message,
     with_refresh_button,
 )
@@ -80,7 +81,7 @@ async def render_friendly_board(
         return False
 
     engine = get_game_engine(match.game.code)
-    refresh_style = "success" if engine.game_code == "battleship" else None
+    refresh_style = board_refresh_style(engine.game_code)
     try:
         # The board is shared by both teams: render it from the perspective of
         # whoever is on turn (the presser when the game has no current player).

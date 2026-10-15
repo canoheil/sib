@@ -18,7 +18,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup, default_state
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from sib.keyboards.common import danger_button, primary_button
+from sib.keyboards.common import danger_button, primary_button, success_button
 from sib.admin.auth import IsAdminFilter
 from sib.core.logging import Events, log_event
 from sib.database.connection import get_session
@@ -77,27 +77,27 @@ async def _user_panel(session, user_id: int) -> tuple:
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(
+                success_button(
                     text="🍎 + افزودن سیب",
                     callback_data=f"admin_user_op:{user.id}:apples:add",
                 ),
-                InlineKeyboardButton(
+                danger_button(
                     text="🍎 − کاهش سیب",
                     callback_data=f"admin_user_op:{user.id}:apples:sub",
                 ),
             ],
             [
-                InlineKeyboardButton(
+                success_button(
                     text="🌱 + افزودن نهال",
                     callback_data=f"admin_user_op:{user.id}:saplings:add",
                 ),
-                InlineKeyboardButton(
+                danger_button(
                     text="🌱 − کاهش نهال",
                     callback_data=f"admin_user_op:{user.id}:saplings:sub",
                 ),
             ],
             [
-                InlineKeyboardButton(
+                primary_button(
                     text="🔄 بروزرسانی",
                     callback_data=f"admin_user:{user.id}",
                 )
@@ -392,7 +392,7 @@ async def handle_admin_channel_type_picker(callback: CallbackQuery):
     ch_id = callback.data.split(":", 1)[1]
     buttons = [
         [
-            InlineKeyboardButton(
+            primary_button(
                 text=ChannelType.label(t),
                 callback_data=f"admin_ch_set_type:{ch_id}:{t}",
             )
@@ -530,7 +530,7 @@ async def handle_admin_channel_add_input(message: Message, state: FSMContext, bo
     )
     buttons = [
         [
-            InlineKeyboardButton(
+            primary_button(
                 text=ChannelType.label(t),
                 callback_data=f"admin_ch_add_type:{t}",
             )

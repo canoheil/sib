@@ -2,12 +2,13 @@
 
 import random
 from typing import Any, Dict, List, Optional, Tuple
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardMarkup
 
 from sib.core.config import settings
 from sib.core.text import safe_name
 from sib.database.models import MatchPlayer
 from sib.games.base import BaseGameEngine, GameResult
+from sib.keyboards.common import danger_button, primary_button, success_button
 
 
 class TicTacToeEngine(BaseGameEngine):
@@ -243,7 +244,15 @@ class TicTacToeEngine(BaseGameEngine):
                 symbol = board[idx]
                 label = icons[symbol]
                 cb = f"ttt_action:{match_id}:{idx}" if (symbol is None and is_my_turn) else "noop"
-                row.append(InlineKeyboardButton(text=label, callback_data=cb))
+                if symbol == "X":
+                    # 🍎 owner: red, matching the apple emoji on the button.
+                    row.append(danger_button(text=label, callback_data="noop"))
+                elif symbol == "O":
+                    # 🍏 owner: green.
+                    row.append(success_button(text=label, callback_data="noop"))
+                else:
+                    # Empty cells stay blue and are only actionable on your turn.
+                    row.append(primary_button(text=label, callback_data=cb))
             buttons.append(row)
 
         return InlineKeyboardMarkup(inline_keyboard=buttons)

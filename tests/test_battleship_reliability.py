@@ -282,4 +282,6 @@ def test_with_refresh_button_is_idempotent():
     kb3 = with_refresh_button(kb2, 7)
     assert len(kb3.inline_keyboard) == 2
     assert kb3.inline_keyboard[-1][0].callback_data == "game_refresh:7"
-    assert kb3.inline_keyboard[-1][0].style is None
+    # The recovery row is blue by default - no game renders a transparent
+    # refresh button (Battleship passes its own green style explicitly).
+    assert kb3.inline_keyboard[-1][0].style == "primary"

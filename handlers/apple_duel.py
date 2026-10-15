@@ -6,13 +6,13 @@ from aiogram import Bot, F, Router
 from aiogram.filters import Filter
 from aiogram.types import (
     CallbackQuery,
-    InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
 )
 from sib.core.logging import logger
 from sib.database.connection import get_session
 from sib.database.models import AppleDuel
+from sib.keyboards.common import danger_button, primary_button, success_button
 from sib.services.apple_duel import AppleDuelService, DuelError
 from sib.services.telegram_ui import safe_answer_callback
 from sib.services.user import UserService
@@ -34,13 +34,14 @@ class DuelCommand(Filter):
 
 
 def invitation_keyboard(duel_id):
+    """Invitation buttons: accept green, reject red, card swap blue."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=text, callback_data=f"ad:{action}:{duel_id}")]
-            for action, text in (
-                ("accept", "✅ قبول"),
-                ("reject", "❌ رد"),
-                ("change", "🔄 تعویض کارت"),
+            [button(text=text, callback_data=f"ad:{action}:{duel_id}")]
+            for button, (action, text) in (
+                (success_button, ("accept", "✅ قبول")),
+                (danger_button, ("reject", "❌ رد")),
+                (primary_button, ("change", "🔄 تعویض کارت")),
             )
         ]
     )

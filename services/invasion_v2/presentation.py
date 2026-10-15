@@ -5,12 +5,13 @@ import random
 from datetime import datetime, timedelta, timezone
 
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
-from aiogram.types import FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import FSInputFile, InlineKeyboardMarkup
 from sqlalchemy import func, select
 
 from sib.core.logging import logger
 from sib.database.connection import get_session
 from sib.database.models import Character, Inv2Attack, Inv2Invasion, Inv2Region, Inv2Reward, PlayerCard, User
+from sib.keyboards.common import success_button
 from sib.services.character_art import artwork_path
 from sib.services.config_store import ConfigService
 from sib.services.sib_claim import fa_digits
@@ -168,7 +169,7 @@ def join_keyboard(invasion_id: int) -> InlineKeyboardMarkup:
     Telegram clears an inline keyboard whenever an edit omits reply_markup, so
     every caption edit of a still-joinable announcement must re-send it.
     """
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+    return InlineKeyboardMarkup(inline_keyboard=[[success_button(
         text="⚔️ پیوستن به یورش", callback_data=f"inv2:join:{invasion_id}")]])
 
 
