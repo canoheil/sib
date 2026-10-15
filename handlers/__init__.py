@@ -2,6 +2,7 @@
 
 from aiogram import Dispatcher
 from sib.handlers.start import router as start_router
+from sib.handlers.group_lifecycle import router as group_lifecycle_router
 from sib.handlers.admin import router as admin_router
 from sib.handlers.errors import router as errors_router
 from sib.handlers.party import party_router
@@ -76,12 +77,14 @@ def register_all_handlers(dp: Dispatcher) -> None:
     dp.include_router(inv2_dashboard_router)
     dp.include_router(inv2_admin_router)
     dp.include_router(inv2_join_router)
+    dp.include_router(group_lifecycle_router)
     dp.include_router(start_router)
 
 
 __all__ = [
     "register_all_handlers",
     "start_router",
+    "group_lifecycle_router",
     "admin_router",
     "errors_router",
     "party_router",
