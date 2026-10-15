@@ -144,7 +144,7 @@ def _fit_caption(narrative_text: str, suffix: str, limit: int = 1024) -> str:
 
 def announcement_hp_line(current_hp: int, total_hp: int) -> str:
     """Live enemy HP block appended after the announcement narrative."""
-    return f"\n\n⚔️ سلامتی شیاسیب: {fa_digits(max(0, current_hp))} / {fa_digits(total_hp)}"
+    return f"\n\n⚔️ جان شیاسیب: {fa_digits(max(0, current_hp))} / {fa_digits(total_hp)}"
 
 
 def build_announcement_caption(narrative_text: str, current_hp: int, total_hp: int) -> str:
@@ -159,7 +159,7 @@ def build_join_caption(narrative_text: str, damage: int, *, is_crit: bool, is_ki
     (the kill marker wins when a critical lands the finishing hit).
     """
     emoji = "🏆" if is_kill else "💥" if is_crit else "🔥"
-    return _fit_caption(narrative_text, f"\n\n{emoji} اسیب وارده به دشمن: {fa_digits(damage)}")
+    return _fit_caption(narrative_text, f"\n\n{emoji} آسیب وارده به دشمن: {fa_digits(damage)}")
 
 
 def join_keyboard(invasion_id: int) -> InlineKeyboardMarkup:
@@ -169,7 +169,7 @@ def join_keyboard(invasion_id: int) -> InlineKeyboardMarkup:
     every caption edit of a still-joinable announcement must re-send it.
     """
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
-        text="⚔️ پیوستن به نبرد", callback_data=f"inv2:join:{invasion_id}")]])
+        text="⚔️ پیوستن به یورش", callback_data=f"inv2:join:{invasion_id}")]])
 
 
 async def _edit_announcement_caption(
@@ -402,14 +402,14 @@ class InvasionPresentation:
                     # Count stored defenders once; rewards can contain multiple rows per user.
                     narrative_context["participant_count"] = await session.scalar(
                         select(func.count(Inv2Attack.id)).where(Inv2Attack.invasion_id == inv.id))
-                final = _caption(render(username="نگهبانان", card_name="کارت‌های اصلی",
+                narrative_text = _caption(render(username="نگهبانان", card_name="کارت‌های نگهبانان",
                     region_name=region.name_fa, enemy_name=inv.enemy_name_fa, rng=random.Random(inv.id),
                     **narrative_context))
                 # Telegram caption edit and photo send are separate metered calls.
                 await _telegram(inv.group_id, bot.edit_message_caption,
                     chat_id=inv.message_chat_id or inv.group_id, message_id=inv.message_id,
-                    caption=final, reply_markup=None, parse_mode=None)
-                caption = final
+                    caption=narrative_text, reply_markup=None, parse_mode=None)
+                caption = narrative_text
                 reward_lines = ()
                 if inv.status == InvasionStatus.VICTORY.value:
                     rewards = (await session.execute(select(Inv2Reward.reward_type, Inv2Reward.reward_amount)
@@ -422,9 +422,14 @@ class InvasionPresentation:
                         labels = (("golden_apple", "سیب طلایی"),
                                   ("diamond_apple", "سیب الماسی"),
                                   ("obsidian_apple", "سیب ابسیدینی"))
-                        reward_lines = tuple(f"{name} ×{totals[key]}" for key, name in labels if totals[key])
+                        reward_lines = tuple(f"{name} ×{fa_digits(totals[key])}"
+                                             for key, name in labels if totals[key])
                         summary = "، ".join(reward_lines)
-                        caption += "\n🎁 پاداش مدافعان: " + summary
+                        # Blank line before the reward block, matching the HP and
+                        # damage lines. Fitting the narrative instead of appending
+                        # keeps the reward line itself from being cut by Telegram.
+                        caption = _fit_caption(narrative_text,
+                                               "\n\n🎁 پاداش مدافعان: " + summary, limit=1020)
                 image_args = (inv.status.lower(), region.name_fa, inv.enemy_type, reward_lines)
                 path = await asyncio.to_thread(cached_image,
                     ("compose-v4", "result", inv.id, *image_args),

@@ -73,7 +73,7 @@ async def inv2_command(message: Message) -> None:
     response = await _run(message.from_user.id, command, parts[1:])
     # Config commit must precede invalidation; a failed/invalid write cannot
     # claim to change the value. Other admin operations do not change the flag.
-    if command in ("inv2_toggle", "inv2_set") and response.startswith(("⚔️ تهاجم", "⚙️ inv2_")):
+    if command in ("inv2_toggle", "inv2_set") and response.startswith(("⚔️ یورش", "⚙️ inv2_")):
         from sib.services.maintenance.service import invalidate_invasion_config_cache
         invalidate_invasion_config_cache()
     await _telegram(None, message.answer, text=response[:4000], parse_mode=None)

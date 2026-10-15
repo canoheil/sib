@@ -81,7 +81,7 @@ async def test_disabled_inv2_join_callback_does_not_read_invasion(monkeypatch):
     answer = AsyncMock()
     callback = SimpleNamespace(data="inv2:join:123", message=None, from_user=None, answer=answer)
     await inv2_join.handle_inv2_join(callback, bot=None)
-    answer.assert_awaited_once_with(text="⚔️ سیستم تهاجم موقتاً غیرفعال است.", show_alert=True)
+    answer.assert_awaited_once_with(text="⚔️ سامانهٔ یورش موقتاً غیرفعال است.", show_alert=True)
 
 
 @pytest.mark.asyncio

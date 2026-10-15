@@ -36,11 +36,11 @@ async def _answer(callback, text, *, alert=False):
 async def handle_inv2_join(callback: CallbackQuery, bot) -> None:
     try:
         if not await MaintenanceService._invasion_enabled():
-            await _answer(callback, "⚔️ سیستم تهاجم موقتاً غیرفعال است.", alert=True)
+            await _answer(callback, "⚔️ سامانهٔ یورش موقتاً غیرفعال است.", alert=True)
             return
         suffix = (callback.data or "").removeprefix("inv2:join:")
         if not suffix.isdecimal() or not callback.from_user or not callback.message:
-            await _answer(callback, "این نبرد به پایان رسیده است.", alert=True)
+            await _answer(callback, "این یورش به پایان رسیده است.", alert=True)
             return
         invasion_id = int(suffix)
         user_id = callback.from_user.id
@@ -55,21 +55,21 @@ async def handle_inv2_join(callback: CallbackQuery, bot) -> None:
                 or inv.message_id != getattr(callback.message, "message_id", None)
                 or inv.ends_at is None
                 or (inv.ends_at.replace(tzinfo=timezone.utc) if inv.ends_at.tzinfo is None else inv.ends_at) <= now):
-                await _answer(callback, "این نبرد به پایان رسیده است.", alert=True)
+                await _answer(callback, "این یورش به پایان رسیده است.", alert=True)
                 return
             previous = await session.scalar(select(Inv2Attack.id).where(
                 Inv2Attack.invasion_id == inv.id, Inv2Attack.user_id == user_id))
             if previous is not None:
-                await _answer(callback, "قبلاً در این نبرد شرکت کرده‌اید.", alert=True)
+                await _answer(callback, "قبلاً در این یورش شرکت کرده‌اید.", alert=True)
                 return
             card = await PlayerCardService.get_main_card(session, user_id)
             if card is None:
-                await _answer(callback, "برای شرکت در نبرد، ابتدا کارت اصلی پروفایل خود را تنظیم کنید.", alert=True)
+                await _answer(callback, "برای شرکت در یورش، ابتدا کارت اصلی پروفایل خود را تنظیم کنید.", alert=True)
                 return
             character = await session.get(Character, card.character_id)
             if (character is None or type(card.level) is not int or not 1 <= card.level <= MAX_CARD_LEVEL
                 or type(character.power) is not int or character.power < 0):
-                await _answer(callback, "نیروی کارت اصلی مشخص نیست؛ نبرد ثبت نشد.", alert=True)
+                await _answer(callback, "نیروی کارت اصلی مشخص نیست؛ یورش ثبت نشد.", alert=True)
                 return
             power = card_attributes(card, character).power
             damage, crit = compute_damage(power, random.Random())
@@ -88,7 +88,7 @@ async def handle_inv2_join(callback: CallbackQuery, bot) -> None:
                 status=InvasionStatus.VICTORY.value if terminal else InvasionStatus.ACTIVE.value,
                 finalized_at=now if terminal else None))
             if result.rowcount != 1:
-                await _answer(callback, "نبرد تازه تغییر کرد؛ دوباره تلاش کنید.", alert=True)
+                await _answer(callback, "وضعیت یورش تازه تغییر کرد؛ دوباره تلاش کنید.", alert=True)
                 return
             attack = Inv2Attack(invasion_id=inv.id, user_id=user_id, card_id=card.id,
                 card_power=power, damage=damage, is_crit=crit, narrative=story, joined_at=now)

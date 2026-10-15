@@ -18,6 +18,7 @@ from sib.database.models import (AdminLog, Base, Character, Group, Inv2Attack,
     PlayerCard, SystemConfig, User, UserItem)
 from sib.handlers import inv2_controls as handler, inv2_dashboard as dashboard
 from sib.services.invasion_v2 import admin_controls as ops, admin_runtime, circuit_breaker
+from sib.services.invasion_v2.farsi import fa_number
 from sib.services.invasion_v2.power_resolver import set_power_resolver
 from sib.services.maintenance import service as maintenance
 from sib.services.maintenance.service import MaintenanceService
@@ -143,7 +144,7 @@ async def test_spawn_respects_limit_mute_group_and_flag(db, monkeypatch):
     assert "غیرفعال" in await handler._run(1, "inv2_force_spawn", ["-100", "moon", "soldier"])
     circuit_breaker._enabled.return_value = True
     first = await handler._run(1, "inv2_force_spawn", ["-100", "moon", "soldier"])
-    assert "نبرد شمارهٔ" in first
+    assert "یورش شمارهٔ" in first
     assert "سقف" in await handler._run(1, "inv2_force_spawn", ["-100"])
     async with factory.begin() as s:
         s.add(Inv2GroupState(group_id=-100, muted_until=NOW + timedelta(hours=2)))
@@ -210,7 +211,7 @@ async def test_simulation_is_readonly_except_required_audit(db):
     msg = event("/inv2_simulate -100 soldier")
     await handler.simulate_command(msg)
     text = msg.answer.await_args.kwargs["text"]
-    assert all(f"{n} نگهبان" in text for n in (1, 3, 5, 10))
+    assert all(f"{fa_number(n)} نگهبان" in text for n in (1, 3, 5, 10))
     assert "بخت پیروزی" in text and "جان دشمن" in text
     async with factory() as s:
         assert before == {table: await s.scalar(select(func.count()).select_from(table)) for table in before}
@@ -253,8 +254,8 @@ async def test_read_commands_mute_unmute_reset_and_bad_inputs_audited(db):
     assert "خاموشی بیرون" in await handler._run(1, "inv2_unmute", ["-100"])
     assert "آزاد شد" in await handler._run(1, "inv2_reset_region", ["moon"])
     assert "تنظیمات" in await handler._run(1, "inv2_config", [])
-    assert "نبردهای اخیر" in await handler._run(1, "inv2_invasions", [])
-    assert "وضعیت تهاجم" in await handler._run(1, "inv2_status", [])
+    assert "یورش‌های اخیر" in await handler._run(1, "inv2_invasions", [])
+    assert "وضعیت یورش" in await handler._run(1, "inv2_status", [])
     assert "ورودی" in await handler._run(1, "inv2_toggle", [])
     assert "نامعتبر" in await handler._run(1, "inv2_mute", ["n/a", "a"])
     async with factory() as s:

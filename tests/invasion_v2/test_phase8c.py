@@ -276,7 +276,11 @@ async def test_join_passes_invasion_id_without_changing_damage_flow(db, monkeypa
 
 
 # Phase 8B pool fingerprints: existing prose must remain byte-for-byte intact.
-ORIGINAL_POOLS = {'ANNOUNCEMENT': (12, '9be6a22689cdc77d07abf5badd34ef761452580cc1169b0188a91a8f5ac96896'), 'JOIN_NORMAL': (22, '1ff97177b187cdbe5923cec9b73b4fdc9d966f3826cdc0dcb8b9aafe7dded901'), 'JOIN_CRIT': (16, '8c14dda3f60db2c2ae35c1755232964bb201e5cd12b6401f54c0d77d72608464'), 'JOIN_KILL': (10, '3fa197a29837874239167f254cd3ff37f024d5306c628005c1ea2e976d1ee653'), 'VICTORY': (12, '41cb3d57b7d062e8dca38436fcb95d86e6793c561d67dd3272bbf6719d07484a'), 'DEFEAT': (12, '709e4316427f80041f1a5e3d09287a5879cb915ae306ced6614b6e4f6d5d521b'), 'EXPIRED': (8, 'df0a55a077d09f23b0a083e29fcfbd98e186549a6f2d3355f9b5dab4073456f6')}
+# Refreshed twice by the Persian copy audit: phase 1 (ANNOUNCEMENT, «چشم‌به‌راه»)
+# and phases 4-5 (every pool: grammar of the plural defender subjects,
+# «سردار شیاسیب», «۱۲۳ ضربه», the «می‌گردد» register, and the «هٔ» style) —
+# the wording changed on purpose; these hashes are the new contract.
+ORIGINAL_POOLS = {'ANNOUNCEMENT': (12, '42ba587da7f3252bbdd20f875a3a224795c41a536bded3ca7ba4c39e249208e1'), 'JOIN_NORMAL': (22, 'd8d7c6cb9bc7f5fe4ad3ab22086e06d96a821a01bc6a0702d4fbf437967e87d8'), 'JOIN_CRIT': (16, '7ab7da9057315614756cf145469722bdc1e56570eba9620097609a2bd2da63d7'), 'JOIN_KILL': (10, '58eeb44fb1a36cb1b77ef5f02bfbb9b4bb8c55963ef1f990df6535f6ff693e13'), 'VICTORY': (12, '4be138d58cf41098afd69248b4d7aaca26991306aa0f9a751648767034bb1055'), 'DEFEAT': (12, 'ff92a50dadd7f9e0ed5047de2e26f608ce8175f39024fc4bad970da34b2ad6e3'), 'EXPIRED': (8, '7a4dd2cc053d1d28dcf69b906da2b2b7da7313d3088b3303c66708ddf3913185')}
 
 @pytest.mark.parametrize("name", ORIGINAL_POOLS)
 def test_existing_narrative_variants_unchanged(name):

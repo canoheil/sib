@@ -290,7 +290,7 @@ async def test_on_join_renders_new_photo_and_meters_success(db):
     kwargs = bot.send_photo.await_args.kwargs
     assert kwargs["reply_to_message_id"] == 123
     # Phase 8D: the crit marker moved to the explicit damage line.
-    assert kwargs["caption"] == "ضربهٔ سنگین بر زره\n\n💥 اسیب وارده به دشمن: ۴۱"
+    assert kwargs["caption"] == "ضربهٔ سنگین بر زره\n\n💥 آسیب وارده به دشمن: ۴۱"
     presentation.record_send_success.assert_awaited_once_with(-100)
     await presentation.InvasionPresentation().on_join(bot, inv_id, 2, 31)  # mismatched identity
     bot.send_photo.assert_awaited_once()
@@ -463,7 +463,7 @@ async def test_phase8a_join_delivers_card_hp_and_critical_style(rendered_deliver
     spy = delivery.spies[presentation.__name__, "compose_join_image"]
     spy.assert_called_once_with("soldier", ART.read_bytes(), "داریوش", 41, critical, 159)
     kwargs = bot.send_photo.await_args.kwargs
-    marker = "💥 اسیب وارده به دشمن: ۴۱" if critical else "🔥 اسیب وارده به دشمن: ۴۱"
+    marker = "💥 آسیب وارده به دشمن: ۴۱" if critical else "🔥 آسیب وارده به دشمن: ۴۱"
     assert kwargs["caption"] == "ضربهٔ سنگین بر زره\n\n" + marker
     assert kwargs["reply_to_message_id"] == 123
     assert Path(kwargs["photo"].path).read_bytes() == compose.compose_join_image(*spy.call_args.args)
@@ -487,14 +487,16 @@ async def test_phase8a_result_uses_aggregated_rewards_only_for_victory(rendered_
     bot = SimpleNamespace(edit_message_caption=AsyncMock(return_value=True),
                           send_photo=AsyncMock(return_value=True))
     assert await presentation.InvasionPresentation().finalize(bot, inv_id) is True
-    lines = ("سیب طلایی ×5", "سیب الماسی ×1", "سیب ابسیدینی ×2") if status == "VICTORY" else ()
+    lines = ("سیب طلایی ×۵", "سیب الماسی ×۱", "سیب ابسیدینی ×۲") if status == "VICTORY" else ()
     spy = delivery.spies[presentation.__name__, "compose_result_image"]
     spy.assert_called_once_with(status.lower(), "درّه ماه", "soldier", lines)
     kwargs = bot.send_photo.await_args.kwargs
     assert Path(kwargs["photo"].path).read_bytes() == compose.compose_result_image(*spy.call_args.args)
     original_caption = bot.edit_message_caption.await_args.kwargs["caption"]
-    suffix = "\n🎁 پاداش مدافعان: " + "، ".join(lines) if lines else ""
-    assert kwargs["caption"] == presentation._caption(original_caption + suffix)
+    # Phase 2: the reward block keeps a blank line and is fitted, not appended,
+    # so the reward line itself survives a long narrative.
+    suffix = "\n\n🎁 پاداش مدافعان: " + "، ".join(lines) if lines else ""
+    assert kwargs["caption"] == presentation._fit_caption(original_caption, suffix, limit=1020)
     async with delivery.factory() as session:
         assert await session.scalar(select(func.count()).select_from(Inv2Reward)) == 4
         assert await session.scalar(select(func.count()).select_from(UserItem)) == 0
