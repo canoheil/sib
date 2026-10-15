@@ -16,6 +16,7 @@ router = Router(name="group_lifecycle")
 
 _WELCOME_FROM = {"left", "kicked", "restricted"}
 _WELCOME_TO = {"member", "administrator"}
+_REMOVED_TO = {"left", "kicked"}
 _WELCOME_TEXT = "🍏 سلام! من سیب‌ام. چند پیام در گروه رد و بدل کنید تا آماده شوم."
 
 
@@ -106,6 +107,27 @@ async def _auto_register(update_event: ChatMemberUpdated, bot: Bot) -> None:
             logger.exception("Group welcome message failed: %s", group_id)
 
 
+async def _auto_deactivate(update_event: ChatMemberUpdated) -> None:
+    group_id = update_event.chat.id
+    try:
+        async with get_session() as session:
+            await session.execute(
+                update(Group)
+                .where(Group.id == group_id)
+                .values(is_active=False)
+            )
+            session.add(AdminLog(
+                admin_id=_actor_id(update_event),
+                action="group_deactivated",
+                details=json.dumps({"group_id": group_id}, ensure_ascii=False),
+            ))
+    except Exception:
+        logger.exception("Group auto-deactivation failed: %s", group_id)
+        return
+
+    logger.info("Group auto-deactivated: %s", group_id)
+
+
 @router.my_chat_member()
 async def handle_my_chat_member(update: ChatMemberUpdated, bot: Bot) -> None:
     """Process bot membership changes without letting failures escape dispatch."""
@@ -132,6 +154,8 @@ async def handle_my_chat_member(update: ChatMemberUpdated, bot: Bot) -> None:
 
         if old_status in _WELCOME_FROM and new_status in _WELCOME_TO:
             await _auto_register(update, bot)
+        elif new_status in _REMOVED_TO:
+            await _auto_deactivate(update)
     except Exception:
         group_id = getattr(getattr(update, "chat", None), "id", "unknown")
         logger.exception("Group lifecycle update failed: %s", group_id)
