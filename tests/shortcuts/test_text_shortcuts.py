@@ -267,11 +267,11 @@ async def test_shortcut_sib_raahnamaa_opens_help(db_session):
     await handle_sib_shortcut_word(msg, MagicMock())
 
     text, kb = _shown(msg)
-    assert "راهنمای بازی‌های سیب" in text
-    topics = _callbacks(kb, "help_page:")
-    assert topics, "the Guide index must carry its topic buttons"
+    assert "راهنمای بازی سیب" in text
+    topics = _callbacks(kb, "help:section:")
+    assert topics, "the Guide index must carry its section buttons"
     # The same buttons the «📖 راهنما» button renders.
-    expected = _callbacks(start_module._help_menu_screen()[1], "help_page:")
+    expected = _callbacks(start_module._help_menu_screen()[1], "help:section:")
     assert topics == expected
     # The guide is public: exactly one way home, no owner lock.
     assert "main_menu" in _callbacks(kb, "main_menu")

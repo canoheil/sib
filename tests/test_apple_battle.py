@@ -1404,7 +1404,7 @@ async def test_winner_photo_resolves_by_match_id_when_battle_id_differs(db_sessi
 @pytest.mark.asyncio
 async def test_different_card_levels_display_accurately_and_help_copy_is_truthful(db_session):
     """Presentation test: different card levels render accurately for both players."""
-    from sib.handlers.start import HELP_TOPICS
+    from sib.services.help_content import get_section
 
     match, state, u1, u2, _c1, _c2 = await _setup_active_apple_battle(
         db_session, "diff_levels", cursor=1, level1=4, level2=2
@@ -1419,7 +1419,8 @@ async def test_different_card_levels_display_accurately_and_help_copy_is_truthfu
     assert "(سطح 2)" in rendered
 
     # Help copy must not promise guaranteed same-level opponents.
-    _title, apple_help_body = HELP_TOPICS["apple_battle"]
+    apple_help_body = get_section("games").body_fa
+    assert "نبرد سیبی" in apple_help_body
     assert "هم‌سطح" not in apple_help_body
     assert "هم سطح" not in apple_help_body
 
