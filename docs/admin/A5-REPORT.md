@@ -223,6 +223,14 @@ Index keyboard: one button per section (`help:section:<key>`), two per row,
 plus a «🏠 منوی اصلی» row. A section page carries exactly one button:
 «🔙 بازگشت به راهنما» (`help:index`).
 
+> **One Telegram detail:** the support handle contains an underscore, and
+> Telegram's legacy Markdown parser treats an unpaired `_` as a reserved
+> character (the whole page would fail with «can't parse entities»). The
+> copy keeps the raw handle (that is the value a player copies) and the
+> RENDERED page escapes it through the project's own
+> `sib.core.text.escape_markdown` — `@sibgame\_official` renders as
+> `@sibgame_official`.
+
 ### 3.2 One sample page (Persian) — «⚔️ تهاجم شیاسیب»
 
 ```

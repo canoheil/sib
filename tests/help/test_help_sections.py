@@ -317,9 +317,15 @@ def test_help_mentions_chests():
 
 def test_help_mentions_support_handle():
     """The official support handle appears in the support section."""
+    from sib.core.text import escape_markdown
+
     body = get_section("support").body_fa
     assert SUPPORT_HANDLE in body
     assert "@sibgame_official" in body
     # ... and the whole guide mentions it exactly once.
     whole = "\n".join(s.body_fa for s in HELP_SECTIONS)
     assert whole.count(SUPPORT_HANDLE) == 1
+    # The RENDERED page escapes the underscore: Telegram's legacy Markdown
+    # rejects an unpaired '_' («can't parse entities»).
+    page = render_section_text(get_section("support"))
+    assert escape_markdown(SUPPORT_HANDLE) in page

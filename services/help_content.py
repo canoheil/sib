@@ -31,6 +31,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Tuple
 
+from sib.core.text import escape_markdown
 from sib.services.sib_claim import fa_digits
 
 #: The official support handle. It is the ONLY Latin string in the help
@@ -378,9 +379,24 @@ def render_index_text() -> str:
     return "\n".join(lines)
 
 
+def markdown_safe(text: str) -> str:
+    """Escape the INJECTED values for Telegram's legacy Markdown.
+
+    The support handle contains an underscore, and Telegram's legacy
+    Markdown parser treats an unpaired ``_`` as a reserved character: the
+    whole page would fail with «can't parse entities». The copy itself
+    keeps the raw handle (it is the value a player copies); only the
+    rendered page escapes it.
+    """
+    for value in INJECTED_VALUES:
+        if value in text:
+            text = text.replace(value, escape_markdown(value))
+    return text
+
+
 def render_section_text(section: HelpSection) -> str:
     """One section page: the heading and the body."""
-    return f"{section.title_fa}\n\n{section.body_fa}"
+    return f"{section.title_fa}\n\n{markdown_safe(section.body_fa)}"
 
 
 def section_callback_data(section_key: str, origin: Optional[str] = None) -> str:
