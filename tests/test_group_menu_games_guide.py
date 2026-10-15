@@ -16,7 +16,12 @@ from sib.handlers.party.handlers import (
     build_active_games_menu,
     build_games_menu,
 )
-from sib.handlers.start import handle_help_menu, handle_help_page, handle_main_menu
+from sib.handlers.start import (
+    handle_help_menu,
+    handle_help_navigation,
+    handle_help_page,
+    handle_main_menu,
+)
 from sib.keyboards.common import get_group_welcome_keyboard
 from sib.keyboards.party import (
     get_active_parties_keyboard,
@@ -129,18 +134,18 @@ async def test_guide_page_keeps_its_origin(db_session):
     user = await create_test_user(db_session, "راهنمای صفحه")
     bot = _bot()
 
-    cb = _callback(user, "help_page:garden:group_games_panel")
-    await handle_help_page(cb, bot)
+    cb = _callback(user, "help:section:social:group_games_panel")
+    await handle_help_navigation(cb, bot)
     kb = _edit_kb(cb, bot)
-    index_buttons = [b for b in _buttons(kb) if b.callback_data.startswith("help_menu")]
+    index_buttons = [b for b in _buttons(kb) if b.callback_data.startswith("help:index")]
     assert index_buttons
-    assert index_buttons[0].callback_data == "help_menu:group_games_panel"
+    assert index_buttons[0].callback_data == "help:index:group_games_panel"
 
     # ... and the index itself carries the origin to the pages again.
     cb2 = _callback(user, "help_menu:group_games_panel")
     await handle_help_menu(cb2, bot)
     kb2 = _edit_kb(cb2, bot)
-    page_callbacks = [b.callback_data for b in _buttons(kb2) if b.callback_data.startswith("help_page:")]
+    page_callbacks = [b.callback_data for b in _buttons(kb2) if b.callback_data.startswith("help:section:")]
     assert page_callbacks and all(c.endswith(":group_games_panel") for c in page_callbacks)
 
 

@@ -21,6 +21,19 @@ from sib.keyboards.common import (
     nav_back_row,
 )
 from sib.services.nav import back_label_for, back_target, parse_callback, with_origin
+from sib.services.help_content import (
+    HELP_BACK_LABEL,
+    HELP_SECTIONS,
+    LEGACY_TOPIC_SECTIONS,
+    SUPPORT_HANDLE,
+    get_child,
+    get_section,
+    index_callback_data,
+    parse_help_callback,
+    render_index_text,
+    render_section_text,
+    section_callback_data,
+)
 from sib.services.panel import PanelOwnershipService
 from sib.services.telegram_ui import safe_answer_callback, safe_edit_callback_message
 from sib.services.membership.checker import MembershipService
@@ -29,8 +42,9 @@ from sib.services.group import GroupService
 
 router = Router(name="start")
 
-# Official support handle — must appear in both /start messages (Phase A3).
-SUPPORT_HANDLE = "@sibgame_official"
+# NOTE: SUPPORT_HANDLE (imported above from sib.services.help_content) is
+# the official handle — it must appear in both /start messages (Phase A3)
+# and in the guide's support section. One source of truth for both.
 
 
 def _private_start_text(first_name: str) -> str:
@@ -141,74 +155,26 @@ async def handle_check_membership(callback: CallbackQuery, bot: Bot):
             )
 
 
-HELP_TOPICS = {
-    "rps": (
-        "🎯 سنگ، کاغذ، قیچی",
-        "🎯 **سنگ، کاغذ، قیچی**\n\n"
-        "یکی از بازی‌های سریع سیب! دو گروه روبه‌روی هم می‌ایستند؛ "
-        "هر بازیکن مخفیانه انتخابش رو می‌زنه و نتیجه همون لحظه اعلام می‌شه. "
-        "هر کی بیشترین دور رو ببره، قهرمان مسابقه‌ست.",
-    ),
-    "c4": (
-        "🔴 چهار در یک ردیف",
-        "🔴 **چهار در یک ردیف (Connect Four)**\n\n"
-        "مهره‌ات رو تو یه ستون بنداز و قبل از حریف، چهار تا مهره رو در یک ردیف "
-        "(افقی، عمودی یا مورب) جور کن. حالت‌های انفرادی، ۲ به ۲ و ۴ به ۴ هم داره.",
-    ),
-    "ttt": (
-        "❌ دوز",
-        "❌ **دوز (Tic-Tac-Toe)**\n\n"
-        "کلاسیک و سریع! تو یه جدول ۳ در ۳، سه تا نشانه رو در یک ردیف جور کن. "
-        "فقط حالت انفرادی (۱ به ۱) داره.",
-    ),
-    "battleship": (
-        "🚢 کشتی جنگی",
-        "🚢 **کشتی جنگی (Battleship)**\n\n"
-        "ناوگان دشمن رو تو مه دریا پیدا کن! به مختصات روی رادار شلیک کن؛ "
-        "آبی یعنی شلیک به آب، 💥 یعنی اصابت و 🔥 یعنی کشتی غرق شده. "
-        "حالت انفرادی و تیمی داره.",
-    ),
-    "high_card": (
-        "🃏 کارت بالا",
-        "🃏 **کارت بالا (High Card)**\n\n"
-        "سریع‌ترین بازی سیب! هر بازیکن یه کارت می‌کشه و کارت بالاتر می‌بره. "
-        "برای گرم‌کردن عالیه.",
-    ),
-    "apple_battle": (
-        "⚔️ نبرد سیبی",
-        "⚔️ **نبرد سیبی**\n\n"
-        "با یکی از کارت‌هات وارد صف نبرد شو؛ سیب یه حریف برات پیدا می‌کنه و "
-        "نبرد خودکار انجام و روایت می‌شه. برنده نهال جایزه می‌گیره! "
-        "لیدربورد نبرد هم همون‌جاست.",
-    ),
-    "cards": (
-        "🃏 کارت‌ها",
-        "🃏 **کارت‌های من**\n\n"
-        "کارت‌های شخصیتت رو جمع کن، ارتقاشون بده و کارت اصلی‌ت رو انتخاب کن. "
-        "از فروشگاه کارت جدید بخر یا با دوستات مبادله کن.",
-    ),
-    "garden": (
-        "🌳 باغ",
-        "🌳 **باغ سیب**\n\n"
-        "تو قطعه‌های باغت نهال بکار، صبر کن تا درخت بشه و میوه‌ش رو برداشت کن. "
-        "موقع برداشت شانس افتادن سیب‌های کمیاب رو هم داری: "
-        "🍎 معمولی، 🌕 طلایی و 🌑 ابسیدینی! "
-        "باغت رو همه می‌بینن ولی فقط خودت کنترلش می‌کنی.",
-    ),
-}
+# ---------------------------------------------------------------------------
+# Phase A5 — the structured guide
+# ---------------------------------------------------------------------------
+# The guide is a TREE of sections (sib/services/help_content.py is the single
+# source of truth): an index with one button per section, and every section
+# is its own page with a single «🔙 بازگشت به راهنما» button. The pages are
+# edited in place, never re-sent.
 
 
 def _help_keyboard(origin: Optional[str] = None) -> InlineKeyboardMarkup:
+    """The index keyboard: one button per section, then the way home."""
     from sib.keyboards.common import danger_button, primary_button
-    from sib.services.nav import with_origin
 
-    buttons = []
+    buttons: list = []
     row: list = []
-    for topic, (label, _text) in HELP_TOPICS.items():
+    for section in HELP_SECTIONS:
         row.append(
             primary_button(
-                text=label,
-                callback_data=with_origin(f"help_page:{topic}", origin),
+                text=section.title_fa,
+                callback_data=section_callback_data(section.section_key, origin),
             )
         )
         if len(row) == 2:
@@ -220,6 +186,22 @@ def _help_keyboard(origin: Optional[str] = None) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def _help_section_keyboard(origin: Optional[str] = None) -> InlineKeyboardMarkup:
+    """A section page: exactly one button, back to the index."""
+    from sib.keyboards.common import danger_button
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                danger_button(
+                    text=HELP_BACK_LABEL,
+                    callback_data=index_callback_data(origin),
+                )
+            ]
+        ]
+    )
+
+
 def _help_menu_screen(origin: Optional[str] = None) -> tuple:
     """(text, keyboard) of the Guide index - ONE builder for every entry.
 
@@ -228,18 +210,15 @@ def _help_menu_screen(origin: Optional[str] = None) -> tuple:
     drift between entry points. ``origin`` only carries the contextual Back
     target; the shortcut opens it as a top-level screen (Back -> main menu).
     """
-    text = (
-        "🎮 **راهنمای بازی‌های سیب** 🍏\n\n"
-        "بخش مورد نظرت را انتخاب کن تا کوتاه و ساده توضیحش را ببینی:"
-    )
-    return text, _help_keyboard(origin)
+    return render_index_text(), _help_keyboard(origin)
 
 
 @router.callback_query(F.data.startswith("help_menu"))
 async def handle_help_menu(callback: CallbackQuery, bot: Bot):
-    """Paged help index (spec #13): short pages, button navigation.
+    """The Guide index (spec #13 / Phase A5): the root of the section tree.
 
-    The Guide is reachable from the group menu and the private menu; the
+    The Guide is reachable from the group menu, the private menu and the
+    «سیب راهنما» text shortcut; all of them render THIS index. The
     contextual origin is carried through the pages so Back returns to the
     screen that opened it. Back only navigates - it never touches an
     active match or party.
@@ -254,9 +233,51 @@ async def handle_help_menu(callback: CallbackQuery, bot: Bot):
     )
 
 
+@router.callback_query(F.data.startswith("help:"))
+async def handle_help_navigation(callback: CallbackQuery, bot: Bot):
+    """The Phase A5 tree: ``help:index`` and ``help:section:<key>``.
+
+    Every page is edited IN PLACE (no new message, no spam) and the only
+    button of a section page returns to the index.
+    """
+    target, origin = parse_help_callback(callback.data)
+
+    if target == "index":
+        text = render_index_text()
+        keyboard = _help_keyboard(origin)
+    elif target.startswith("section:"):
+        parts = target.split(":")
+        section = get_section(parts[1])
+        if section is None:
+            await safe_answer_callback(callback, "این بخش پیدا نشد 🍏", show_alert=True)
+            return
+        if len(parts) == 3:
+            # A sub-page (depth 2 from the index).
+            child = get_child(section, parts[2])
+            if child is None:
+                await safe_answer_callback(callback, "این بخش پیدا نشد 🍏", show_alert=True)
+                return
+            text = render_section_text(child)
+        else:
+            text = render_section_text(section)
+        keyboard = _help_section_keyboard(origin)
+    else:
+        await safe_answer_callback(callback, "این بخش پیدا نشد 🍏", show_alert=True)
+        return
+
+    await safe_answer_callback(callback)
+    await safe_edit_callback_message(callback, bot, text, reply_markup=keyboard)
+
+
 @router.callback_query(F.data.startswith("help_page:"))
 async def handle_help_page(callback: CallbackQuery, bot: Bot):
-    from sib.services.nav import parse_callback, with_origin
+    """LEGACY «help_page:<topic>» callbacks of the old guide.
+
+    The old flat guide is gone, but its buttons may still live in old
+    pinned messages; every legacy topic now opens the section that
+    replaced it (LEGACY_TOPIC_SECTIONS).
+    """
+    from sib.services.nav import parse_callback
 
     # ``help_page:<topic>[:origin]`` — the topic is a HANDLER argument and
     # must never be eaten as the navigation origin (topics like
@@ -264,26 +285,17 @@ async def handle_help_page(callback: CallbackQuery, bot: Bot):
     base, origin = parse_callback(callback.data, arg_segments=1)
     parts = base.split(":")
     topic = parts[1] if len(parts) > 1 else None
-    entry = HELP_TOPICS.get(topic)
-    if not entry:
+    section = get_section(LEGACY_TOPIC_SECTIONS.get(topic or ""))
+    if section is None:
         await safe_answer_callback(callback, "این بخش پیدا نشد 🍏", show_alert=True)
         return
-    _label, text = entry
-    from sib.keyboards.common import danger_button
-
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                danger_button(
-                    text="📚 بازگشت به راهنما",
-                    callback_data=with_origin("help_menu", origin),
-                )
-            ],
-            [danger_button(text="🏠 منوی اصلی", callback_data="main_menu")],
-        ]
-    )
     await safe_answer_callback(callback)
-    await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
+    await safe_edit_callback_message(
+        callback,
+        bot,
+        render_section_text(section),
+        reply_markup=_help_section_keyboard(origin),
+    )
 
 
 async def _claim_panel(

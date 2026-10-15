@@ -364,31 +364,33 @@ async def test_garden_render_has_inventory_line(db_session):
 
 @pytest.mark.asyncio
 async def test_help_is_paged_not_one_long_text():
-    topics = ("rps", "c4", "ttt", "battleship", "high_card", "apple_battle", "cards", "garden")
+    """Phase A5: the guide is a TREE - an index plus one page per section."""
+    from sib.services.help_content import HELP_SECTIONS
+
     kb = _help_keyboard()
     labels = [b.text for b in _all_buttons(kb)]
-    assert "🎯 سنگ، کاغذ، قیچی" in labels
-    assert "⚔️ نبرد سیبی" in labels
-    assert "🌳 باغ" in labels
     assert "🏠 منوی اصلی" in labels
-    for topic in topics:
-        assert f"help_page:{topic}" in [b.callback_data for b in _all_buttons(kb)]
+    for section in HELP_SECTIONS:
+        assert section.title_fa in labels
+        assert f"help:section:{section.section_key}" in [
+            b.callback_data for b in _all_buttons(kb)
+        ]
 
     bot = MagicMock()
     cb = _callback(5, "help_menu")
     await handle_help_menu(cb, bot)
     text, _kb = _edit_call(cb, bot)
-    assert len(text) < 300  # index page is short
+    assert len(text) < 400  # the index page stays short
 
-    from sib.handlers.start import handle_help_page
+    from sib.handlers.start import handle_help_navigation
 
     bot = MagicMock()
-    cb = _callback(5, "help_page:garden")
-    await handle_help_page(cb, bot)
+    cb = _callback(5, "help:section:social")
+    await handle_help_navigation(cb, bot)
     text, kb = _edit_call(cb, bot)
     assert "باغ سیب" in text
-    assert "بسیدینی" in text  # introduces the new drop feature
-    backs = [b for b in _all_buttons(kb) if b.callback_data == "help_menu"]
+    assert "پودر جادویی" in text  # the magic-tree progression
+    backs = [b for b in _all_buttons(kb) if b.callback_data == "help:index"]
     assert backs  # every page returns to the help index
 
 
@@ -402,17 +404,18 @@ async def test_help_is_paged_not_one_long_text():
 @pytest.mark.asyncio
 async def test_guide_every_topic_opens_without_origin(db_session):
     """Every Guide page opens when the Guide was reached WITHOUT an origin
-    (main menu -> راهنما -> topic) — including 'apple_battle'."""
-    from sib.handlers.start import HELP_TOPICS, handle_help_page
+    (main menu -> راهنما -> section) — including 'cards'."""
+    from sib.handlers.start import handle_help_navigation
+    from sib.services.help_content import HELP_SECTIONS
 
-    for topic in HELP_TOPICS:
+    for section in HELP_SECTIONS:
         bot = MagicMock()
-        cb = _callback(5, f"help_page:{topic}")
-        await handle_help_page(cb, bot)  # must NOT raise
+        cb = _callback(5, f"help:section:{section.section_key}")
+        await handle_help_navigation(cb, bot)  # must NOT raise
         text, kb = _edit_call(cb, bot)
-        assert text.strip(), topic
-        backs = [b for b in _all_buttons(kb) if b.callback_data == "help_menu"]
-        assert backs, topic  # back to the guide index
+        assert text.strip(), section.section_key
+        backs = [b for b in _all_buttons(kb) if b.callback_data == "help:index"]
+        assert backs, section.section_key  # back to the guide index
 
 
 @pytest.mark.asyncio
@@ -439,8 +442,8 @@ async def test_guide_apple_battle_page_keeps_origin(db_session):
     await handle_help_page(cb, bot)
     text, kb = _edit_call(cb, bot)
     assert "نبرد سیبی" in text
-    backs = [b for b in _all_buttons(kb) if b.callback_data.startswith("help_menu")]
-    assert backs[0].callback_data == "help_menu:group_games_panel"
+    backs = [b for b in _all_buttons(kb) if b.callback_data.startswith("help:index")]
+    assert backs[0].callback_data == "help:index:group_games_panel"
 
 
 def test_parse_callback_keeps_topic_arguments():
