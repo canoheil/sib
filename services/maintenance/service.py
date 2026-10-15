@@ -36,7 +36,7 @@ def invalidate_invasion_config_cache() -> None:
 class MaintenanceService:
     """Runs existing periodic database maintenance and timeout recovery."""
 
-    INTERVAL_SECONDS = 5
+    INTERVAL_SECONDS = 30
     _bot = None
 
     @classmethod
