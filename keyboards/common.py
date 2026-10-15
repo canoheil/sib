@@ -169,6 +169,7 @@ def get_admin_main_keyboard() -> InlineKeyboardMarkup:
             ],
             [
                 primary_button("👤 مدیریت کاربران", "admin_users"),
+                primary_button("📢 پیام همگانی", "admin_broadcast"),
             ],
         ]
     )
