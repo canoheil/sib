@@ -1,7 +1,7 @@
 """Transactional admin mutations against the canonical inventories."""
 import json
 from datetime import datetime, timezone
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from sib.admin.auth import is_admin
 from sib.database.models import User, AdminLog, AppleWallet, SeedlingInventory, PlayerCard, Character
 from sib.database.models.player_xp import PlayerProgression
@@ -12,7 +12,7 @@ from sib.services.player_cards import PlayerCardService
 from sib.services.player_xp import PlayerXPService
 
 FIELDS = {"apples": "🍏 سیب معمولی", "apple_gold": "🥇 طلایی", "apple_diamond": "💎 الماسی",
-          "apple_obsidian": "🖤 ابسیدینی", "seedling": "🌱 نهال", "level": "⭐ سطح", "xp": "✨ تجربه"}
+          "apple_obsidian": "🖤 ابسیدینی", "magic_powder": "✨ پودر جادویی", "seedling": "🌱 نهال", "level": "⭐ سطح", "xp": "✨ تجربه"}
 
 async def snapshot(session, uid):
     user = await session.get(User, uid)
@@ -26,7 +26,7 @@ async def snapshot(session, uid):
     cards = list((await session.scalars(select(PlayerCard).where(PlayerCard.user_id == uid))).all())
     values = {"apples": wallet.balance if wallet else 0, "seedling": seed.total if seed else 0,
               "xp": xp, "level": PlayerXPService.get_level_progress(xp).level}
-    values.update({k: items.get(k, 0) for k in ("apple_gold", "apple_diamond", "apple_obsidian")})
+    values.update({k: items.get(k, 0) for k in ("apple_gold", "apple_diamond", "apple_obsidian", "magic_powder")})
     return user, values, cards
 
 async def mutate(session, admin_id, uid, field, mode, value=None, *, confirmed=False, admin_confirmed=False):
@@ -53,7 +53,7 @@ async def mutate(session, admin_id, uid, field, mode, value=None, *, confirmed=F
             await fn(session, uid, value, "admin_adjust")
         elif field == "seedling":
             await SeedlingService.admin_adjust(session, uid, new-old)
-        elif field.startswith("apple_"):
+        elif field.startswith("apple_") or field == "magic_powder":
             fn = ItemService.grant if mode == "add" else ItemService.consume
             await fn(session, uid, field, value)
         else:
@@ -76,22 +76,42 @@ async def mutate(session, admin_id, uid, field, mode, value=None, *, confirmed=F
         elif mode == "set" and card:
             await PlayerCardService.set_favorite(session, uid, card.id)
         elif mode == "sub" and card:
-            # Trading/party references need a dedicated removal policy: fail closed.
-            raise ValueError("حذف کارت تا بررسی ارجاع‌های بازی و معامله غیرفعال است.")
+            # Preserve every historical reference. No game/trade rows are changed.
+            from sib.database.models.trade import Trade
+            from sib.database.models.apple_battle import AppleBattle, AppleBattleQueueEntry
+            from sib.database.models.apple_mine import AppleMineShift
+            from sib.database.models.invasion_v2 import Inv2Attack
+            locked = await session.scalar(select(PlayerCard).where(PlayerCard.id == card.id,
+                PlayerCard.user_id == uid).with_for_update().execution_options(populate_existing=True))
+            if locked is None:
+                raise ValueError("کارت متعلق به کاربر نیست.")
+            checks = [
+                (Trade, or_(Trade.proposer_card_id == card.id, Trade.recipient_card_id == card.id)),
+                (AppleBattle, or_(AppleBattle.player1_card_id == card.id, AppleBattle.player2_card_id == card.id)),
+                (AppleBattleQueueEntry, AppleBattleQueueEntry.card_id == card.id),
+                (AppleMineShift, AppleMineShift.card_id == card.id),
+                (Inv2Attack, Inv2Attack.card_id == card.id),
+            ]
+            for model, predicate in checks:
+                if await session.scalar(select(model.id).where(predicate).limit(1)) is not None:
+                    raise ValueError("کارت در تاریخچه بازی یا معامله ارجاع دارد؛ حذف ایمن نیست.")
+            await session.delete(locked)
         else:
             raise ValueError("کارت متعلق به کاربر نیست.")
         await session.flush()
         new = [{"code_id": c.character_id, "main": c.is_favorite} for c in
                (await session.scalars(select(PlayerCard).where(PlayerCard.user_id == uid))).all()]
     elif field == "ban":
-        old = {"is_banned": user.is_banned, "reason": user.ban_reason}
+        old = {"is_banned": user.is_banned, "banned_at": str(user.banned_at) if user.banned_at else None,
+               "banned_by": user.banned_by, "ban_reason": user.ban_reason}
         user.is_banned = bool(value)
         user.banned_at = datetime.now(timezone.utc).replace(tzinfo=None) if value else None
         user.banned_by = admin_id if value else None
         user.ban_reason = "مسدودسازی توسط مدیر" if value else None
-        new = {"is_banned": user.is_banned, "reason": user.ban_reason}
+        new = {"is_banned": user.is_banned, "banned_at": str(user.banned_at) if user.banned_at else None,
+               "banned_by": user.banned_by, "ban_reason": user.ban_reason}
         if value:
-            note = "بررسی عضویت و حذف از پارتی به تعویق افتاد؛ مسدودیت فعلاً فقط در پنل ثبت می‌شود."
+            note = "حذف از پارتی به تعویق افتاد؛ درخواست‌های جدید کاربر مسدود می‌شوند."
     elif field in ("mine", "claim"):
         raise ValueError("کول‌داون از تاریخچه پاداش محاسبه می‌شود؛ ریست بدون تغییر تاریخچه فعلاً پشتیبانی نمی‌شود.")
     else:

@@ -67,6 +67,8 @@ async def command(message):
     if not await authorized(message):
         return
     clear(message.from_user.id)
+    from sib.handlers.admin_broadcast import _pending_broadcast
+    _pending_broadcast.pop(message.from_user.id, None)
     reply = message.reply_to_message
     if reply and reply.from_user and not reply.from_user.is_bot:
         try:
@@ -84,10 +86,20 @@ async def entry(callback, state):
     if not await authorized(callback):
         return
     await state.clear()
+    from sib.handlers.admin_broadcast import _pending_broadcast
+    _pending_broadcast.pop(callback.from_user.id, None)
     clear(callback.from_user.id)
     _lookup[callback.from_user.id] = (callback.message.chat.id, monotonic())
     await callback.answer()
     await callback.message.answer("شناسه عددی کاربر را بفرستید یا روی پیام او پاسخ دهید.")
+
+
+@router.callback_query(F.data.startswith("admin_user_op:") | F.data.startswith("admin_user:"))
+async def legacy(callback, state):
+    if not await authorized(callback):
+        return
+    await state.clear()
+    await callback.answer("پنل قدیمی منقضی شده است؛ مدیریت کاربران را دوباره باز کنید.", show_alert=True)
 
 @router.callback_query(F.data.startswith("uadm:"))
 async def control(callback, bot):
@@ -142,7 +154,7 @@ async def control(callback, bot):
             rows = []
             text = "گزینه موردنظر را انتخاب کنید:"
             if menu in ("apples", "level", "seedling"):
-                fields = ["apples", "apple_gold", "apple_diamond", "apple_obsidian"] if menu == "apples" else ["level", "xp"] if menu == "level" else ["seedling"]
+                fields = ["apples", "apple_gold", "apple_diamond", "apple_obsidian", "magic_powder"] if menu == "apples" else ["level", "xp"] if menu == "level" else ["seedling"]
                 for field in fields:
                     rows.append([(f"➕ {FIELDS[field]}", f"uadm:add:{field}:{uid}"),
                                  (f"➖ {FIELDS[field]}", f"uadm:sub:{field}:{uid}")])
@@ -190,13 +202,14 @@ async def control(callback, bot):
         await callback.answer("خطایی رخ داد؛ پنل را دوباره باز کنید.", show_alert=True)
 
 async def confirmation(message, uid, field, edit):
-    text = f"⚠️ تغییر {FIELDS.get(field, 'وضعیت کاربر')} برای کاربر {uid} به {edit.value} را تأیید می‌کنید؟"
+    display_value = ("بله" if edit.value else "خیر") if isinstance(edit.value, bool) else edit.value
+    text = f"⚠️ تغییر {FIELDS.get(field, 'وضعیت کاربر')} برای کاربر {uid} به {display_value} را تأیید می‌کنید؟"
     if field == "ban":
         text = f"🚫 {'مسدودسازی' if edit.value else 'رفع مسدودیت'} کاربر {uid} را تأیید می‌کنید؟\nهیچ داده‌ای حذف نمی‌شود. بررسی پارتی به تعویق می‌افتد."
     await message.answer(fa_digits(text), reply_markup=kb([[("✅ تأیید", f"uadm:confirm:{edit.token}")],
                                                         [("❌ لغو", f"uadm:back:{uid}")]]), parse_mode=None)
 
-@router.message(lambda m: bool(m.from_user and (m.from_user.id in _lookup or any(k[0] == m.from_user.id for k in _pending_amounts))))
+@router.message(lambda m: bool(m.from_user and not (m.text or "").startswith("/") and (m.from_user.id in _lookup or any(k[0] == m.from_user.id for k in _pending_amounts))))
 async def receive(message):
     if not await authorized(message):
         return

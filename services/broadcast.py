@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError, TelegramBadRequest
 from sqlalchemy import select
 from sib.database.models import Group, AdminLog
+from sib.admin.auth import is_admin
 from sib.services.sib_claim import fa_digits
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,8 @@ class BroadcastResult:
 
 async def broadcast(bot, session, admin_id, source_chat_id, message_id,
                     target_chat_id=None, media_type="text"):
+    if not is_admin(admin_id):
+        raise ValueError("فقط مدیران اجازه دسترسی دارند.")
     query = select(Group).where(Group.is_active.is_(True))
     if target_chat_id is not None:
         query = query.where(Group.id == target_chat_id)
@@ -36,16 +39,19 @@ async def broadcast(bot, session, admin_id, source_chat_id, message_id,
         try:
             # All broadcasts share the lock, including flood-wait retries.
             async with _send_lock:
-                for attempt in range(2):
-                    try:
-                        await bot.copy_message(chat_id=group.id, from_chat_id=source_chat_id,
-                                               message_id=message_id)
-                        break
-                    except TelegramRetryAfter as exc:
-                        if attempt:
-                            raise
-                        await asyncio.sleep(exc.retry_after)
-                await asyncio.sleep(0.05)
+                try:
+                    for attempt in range(2):
+                        try:
+                            await bot.copy_message(chat_id=group.id, from_chat_id=source_chat_id,
+                                                   message_id=message_id)
+                            break
+                        except TelegramRetryAfter as exc:
+                            if attempt:
+                                raise
+                            await asyncio.sleep(max(0.05, exc.retry_after))
+                finally:
+                    # Failed requests count toward Telegram's rate budget too.
+                    await asyncio.sleep(0.05)
             result.success += 1
         except (TelegramForbiddenError, TelegramBadRequest) as exc:
             logger.warning("Broadcast skipped group %s: %s", group.id, exc)

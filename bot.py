@@ -9,6 +9,7 @@ from sib.core.config import settings
 from sib.core.logging import logger, log_event, Events
 from sib.database.connection import init_db
 from sib.handlers import register_all_handlers
+from sib.middleware.user_ban import UserBanMiddleware
 from sib.middleware.rate_limit import RateLimitMiddleware
 from sib.middleware.panel_guard import PanelGuardMiddleware
 from sib.middleware.group_membership import GroupMembershipMiddleware
@@ -28,6 +29,8 @@ async def create_bot_and_dispatcher() -> tuple[Bot, Dispatcher]:
 
     # Observe group activity before rate limiting, including dropped updates.
     # Both observers share one throttle; writes run in detached bounded tasks.
+    dp.message.outer_middleware(UserBanMiddleware())
+    dp.callback_query.outer_middleware(UserBanMiddleware())
     membership = GroupMembershipMiddleware()
     dp.message.outer_middleware(membership)
     dp.callback_query.outer_middleware(membership)

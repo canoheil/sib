@@ -44,16 +44,26 @@ async def authorized(event):
     return False
 
 @router.message(Command("broadcast"))
-async def start(message):
+async def start(message, state=None):
     if not await authorized(message):
         return
+    from sib.handlers.admin_users import clear, _lookup
+    clear(message.from_user.id)
+    _lookup.pop(message.from_user.id, None)
+    if state is not None:
+        await state.clear()
     _pending_broadcast[message.from_user.id] = PendingBroadcast(message.chat.id)
     await message.answer("📢 پیام همگانی\nمقصد را انتخاب کنید:", reply_markup=keyboard())
 
 @router.callback_query(F.data == "admin_broadcast")
-async def entry(callback):
+async def entry(callback, state=None):
     if not await authorized(callback):
         return
+    from sib.handlers.admin_users import clear, _lookup
+    clear(callback.from_user.id)
+    _lookup.pop(callback.from_user.id, None)
+    if state is not None:
+        await state.clear()
     _pending_broadcast[callback.from_user.id] = PendingBroadcast(callback.message.chat.id)
     await callback.answer()
     await callback.message.answer("📢 پیام همگانی\nمقصد را انتخاب کنید:", reply_markup=keyboard())
@@ -97,7 +107,7 @@ async def control(callback, bot):
         logger.exception("Broadcast control failed")
         await callback.message.answer("خطایی رخ داد؛ دوباره شروع کنید.")
 
-@router.message(lambda m: bool(m.from_user and pending(m.from_user.id)))
+@router.message(lambda m: bool(m.from_user and not (m.text or "").startswith("/") and pending(m.from_user.id)))
 async def receive(message, bot):
     if not await authorized(message):
         return
