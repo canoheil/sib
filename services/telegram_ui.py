@@ -29,8 +29,10 @@ helpers instead of calling ``bot.edit_message_text`` directly.
 """
 
 import asyncio
+import re
 from typing import Any, Awaitable, Callable, Optional, Tuple
 
+import aiogram
 from aiogram import Bot
 from aiogram.exceptions import (
     TelegramBadRequest,
@@ -98,6 +100,70 @@ def photo_caption(text: str) -> str:
         + _CAPTION_SHORTENED
         + _caption_slice(text, available - head_units, from_end=True)
     )
+
+
+def _version_parts(value: object) -> tuple[int, ...]:
+    """Parse numeric version components without adding a packaging dependency."""
+    parts = re.findall(r"\d+", str(value))
+    return tuple(int(part) for part in parts) if parts else (0,)
+
+
+def _inline_button_has_style_field() -> bool:
+    fields = getattr(InlineKeyboardButton, "model_fields", None)
+    if fields is None:  # Pydantic v1 compatibility for older aiogram installs.
+        fields = getattr(InlineKeyboardButton, "__fields__", {})
+    return "style" in fields
+
+
+AIROGRAM_VERSION = getattr(aiogram, "__version__", "0")
+BOT_API_VERSION = getattr(aiogram, "__api_version__", "0")
+APPLE_MINE_WORK_BUTTON_SUPPORTS_STYLE = (
+    _version_parts(AIROGRAM_VERSION) >= (3, 30, 0)
+    and _version_parts(BOT_API_VERSION) >= (9, 0)
+    and _inline_button_has_style_field()
+)
+_WORK_BUTTON_PATH_LOGGED = False
+
+
+def _log_work_button_path(*, uses_style: bool) -> None:
+    global _WORK_BUTTON_PATH_LOGGED
+    if _WORK_BUTTON_PATH_LOGGED:
+        return
+    path = "Bot API success style" if uses_style else "Persian green-circle label fallback"
+    logger.info(
+        "Apple Mine work button uses %s (aiogram=%s, Bot API schema=%s)",
+        path,
+        AIROGRAM_VERSION,
+        BOT_API_VERSION,
+    )
+    _WORK_BUTTON_PATH_LOGGED = True
+
+
+def work_button_kb(*, supports_style: bool) -> InlineKeyboardMarkup:
+    """Build the work button using the green style when the client supports it."""
+    label = "⛏ کار کردن در معدن"
+    if supports_style:
+        try:
+            button = InlineKeyboardButton(
+                text=label,
+                callback_data="mine:work",
+                style="success",
+            )
+        except TypeError:
+            _log_work_button_path(uses_style=False)
+            button = InlineKeyboardButton(
+                text=f"🟢 {label}",
+                callback_data="mine:work",
+            )
+        else:
+            _log_work_button_path(uses_style=True)
+    else:
+        _log_work_button_path(uses_style=False)
+        button = InlineKeyboardButton(
+            text=f"🟢 {label}",
+            callback_data="mine:work",
+        )
+    return InlineKeyboardMarkup(inline_keyboard=[[button]])
 
 
 def with_refresh_button(
