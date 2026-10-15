@@ -134,3 +134,6 @@ __all__ += ["Inv2GroupMember"]
 
 from sib.database.models.admin_log import AdminLog
 __all__ += ["AdminLog"]
+
+from sib.database.models.apple_mine import AppleMineShift
+__all__ += ["AppleMineShift"]

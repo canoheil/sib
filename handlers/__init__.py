@@ -35,6 +35,7 @@ from sib.handlers.inv2_dashboard import router as inv2_dashboard_router
 from sib.handlers.sib_hug import router as sib_hug_router
 from sib.handlers.sib_kiss import router as sib_kiss_router
 from sib.handlers.daily_chest import router as daily_chest_router
+from sib.handlers.apple_mine import router as apple_mine_router
 
 
 def register_all_handlers(dp: Dispatcher) -> None:
@@ -66,6 +67,7 @@ def register_all_handlers(dp: Dispatcher) -> None:
     dp.include_router(sib_hug_router)
     dp.include_router(sib_kiss_router)
     dp.include_router(daily_chest_router)
+    dp.include_router(apple_mine_router)
     dp.include_router(inv2_controls_router)
     dp.include_router(inv2_dashboard_router)
     dp.include_router(inv2_admin_router)
@@ -89,4 +91,5 @@ __all__ = [
     "battleship_router",
     "ads_router",
     "leaderboard_router",
+    "apple_mine_router",
 ]
