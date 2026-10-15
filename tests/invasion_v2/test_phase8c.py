@@ -116,10 +116,13 @@ def test_migration_chain_head():
     cfg = Config()
     cfg.set_main_option("script_location", str(ROOT / "database/migrations"))
     scripts = ScriptDirectory.from_config(cfg)
-    assert scripts.get_current_head() == "042_inv2_pinned_announcement"
+    assert scripts.get_current_head() == "043_apple_mine_shift"
     assert _migration().down_revision == "039_archive_inv1_tables"
-    chain = {"041_inv2_announcement_narrative": "040_inv2_difficulty_default",
-             "042_inv2_pinned_announcement": "041_inv2_announcement_narrative"}
+    chain = {
+        "041_inv2_announcement_narrative": "040_inv2_difficulty_default",
+        "042_inv2_pinned_announcement": "041_inv2_announcement_narrative",
+        "043_apple_mine_shift": "042_inv2_pinned_announcement",
+    }
     for revision, parent in chain.items():
         path = ROOT / f"database/migrations/versions/{revision}.py"
         spec = importlib.util.spec_from_file_location(f"migration_{revision}", path)

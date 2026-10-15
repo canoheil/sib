@@ -218,22 +218,26 @@ async def handle_mine_work(callback: CallbackQuery, bot: Bot) -> None:
         await safe_answer_callback(callback, MINE_FAILURE_TEXT, show_alert=True)
         return
 
-    if cooldown > 0:
-        await safe_answer_callback(
-            callback,
-            cooldown_message(cooldown, user.id),
-            show_alert=True,
-        )
-        return
+    try:
+        if cooldown > 0:
+            await safe_answer_callback(
+                callback,
+                cooldown_message(cooldown, user.id),
+                show_alert=True,
+            )
+            return
 
-    if not cards:
+        if not cards:
+            await safe_answer_callback(callback)
+            await _send_callback_message(callback, bot, NO_CARDS_TEXT)
+            return
+
         await safe_answer_callback(callback)
-        await _send_callback_message(callback, bot, NO_CARDS_TEXT)
-        return
-
-    await safe_answer_callback(callback)
-    if not await _edit_panel(callback, bot, CARD_PICK_CAPTION, keyboard):
-        await _send_callback_message(callback, bot, CARD_LIST_FAILURE_TEXT)
+        if not await _edit_panel(callback, bot, CARD_PICK_CAPTION, keyboard):
+            await _send_callback_message(callback, bot, CARD_LIST_FAILURE_TEXT)
+    except Exception:
+        logger.exception("Apple Mine work callback failed for user=%s", user.id)
+        await safe_answer_callback(callback, MINE_FAILURE_TEXT, show_alert=True)
 
 
 def _result_caption(result) -> str:
@@ -265,12 +269,14 @@ async def handle_mine_card(callback: CallbackQuery, bot: Bot) -> None:
         return
 
     try:
+        # The opening command registered the user and group. Do not perform a
+        # normal database read before perform_shift's user-row lock: under
+        # MariaDB REPEATABLE READ that could pin a pre-lock snapshot and let a
+        # second concurrent tap miss the first committed shift.
+        group_id = _group_id_for_chat(
+            getattr(callback.message, "chat", None)
+        )
         async with get_session() as session:
-            group_id = await _register_user_and_group(
-                session,
-                user,
-                getattr(callback.message, "chat", None),
-            )
             result = await perform_shift(
                 session,
                 user_id=user.id,
@@ -292,7 +298,11 @@ async def handle_mine_card(callback: CallbackQuery, bot: Bot) -> None:
         await safe_answer_callback(callback, MINE_FAILURE_TEXT, show_alert=True)
         return
 
-    caption = _result_caption(result)
-    await safe_answer_callback(callback)
-    if not await _edit_panel(callback, bot, caption, _EMPTY_KEYBOARD):
-        await _send_callback_message(callback, bot, caption)
+    try:
+        caption = _result_caption(result)
+        await safe_answer_callback(callback)
+        if not await _edit_panel(callback, bot, caption, _EMPTY_KEYBOARD):
+            await _send_callback_message(callback, bot, caption)
+    except Exception:
+        logger.exception("Apple Mine result rendering failed for user=%s", user.id)
+        await safe_answer_callback(callback, MINE_FAILURE_TEXT, show_alert=True)
