@@ -37,6 +37,11 @@ async def handle_admin_main_menu(callback: CallbackQuery, state: FSMContext = No
     """Return to admin main menu. Always EXITS any admin FSM flow."""
     if state is not None:
         await state.clear()
+    from sib.handlers.admin_users import clear, _lookup
+    from sib.handlers.admin_broadcast import _pending_broadcast
+    clear(callback.from_user.id)
+    _lookup.pop(callback.from_user.id, None)
+    _pending_broadcast.pop(callback.from_user.id, None)
     admin_text = (
         "🍏 **پنل مدیریت ربات سیب (Admin Panel)**\n\n"
         "به بخش مدیریت خوش آمدید. لطفاً گزینه مورد نظر خود را انتخاب نمایید:"

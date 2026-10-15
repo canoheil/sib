@@ -41,6 +41,10 @@ from sib.handlers.apple_mine import router as apple_mine_router
 def register_all_handlers(dp: Dispatcher) -> None:
     """Register all modular routers to the main dispatcher."""
     dp.include_router(errors_router)
+    from sib.handlers.admin_broadcast import router as broadcast_router
+    from sib.handlers.admin_users import router as users_admin_router
+    dp.include_router(users_admin_router)
+    dp.include_router(broadcast_router)
     dp.include_router(admin_router)
     dp.include_router(leaderboard_router)
     dp.include_router(matchmaking_router)

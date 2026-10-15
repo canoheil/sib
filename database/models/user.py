@@ -1,7 +1,8 @@
 """User model."""
 
 from typing import Optional
-from sqlalchemy import BigInteger, Boolean, String
+from datetime import datetime
+from sqlalchemy import BigInteger, Boolean, String, DateTime, ForeignKey, false
 from sqlalchemy.orm import Mapped, mapped_column
 from sib.database.base import Base, TimestampMixin
 
@@ -25,6 +26,11 @@ class User(Base, TimestampMixin):
         server_default="green_apple",
         nullable=False,
     )
+
+    is_banned: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), nullable=False)
+    banned_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    banned_by: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True)
+    ban_reason: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
     @property
     def display_name(self) -> str:
