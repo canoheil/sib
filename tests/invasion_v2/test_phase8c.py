@@ -116,12 +116,15 @@ def test_migration_chain_head():
     cfg = Config()
     cfg.set_main_option("script_location", str(ROOT / "database/migrations"))
     scripts = ScriptDirectory.from_config(cfg)
-    assert scripts.get_current_head() == "043_apple_mine_shift"
+    assert scripts.get_current_head() == "046_inv2_min_players_with_card"
     assert _migration().down_revision == "039_archive_inv1_tables"
     chain = {
         "041_inv2_announcement_narrative": "040_inv2_difficulty_default",
         "042_inv2_pinned_announcement": "041_inv2_announcement_narrative",
         "043_apple_mine_shift": "042_inv2_pinned_announcement",
+        "044_user_is_banned": "043_apple_mine_shift",
+        "045_group_welcomed_at": "044_user_is_banned",
+        "046_inv2_min_players_with_card": "045_group_welcomed_at",
     }
     for revision, parent in chain.items():
         path = ROOT / f"database/migrations/versions/{revision}.py"
