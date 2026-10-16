@@ -799,3 +799,51 @@ async def safe_edit_screen(
     if not ok:
         return None
     return getattr(replacement, "message_id", None) or message_id
+
+
+async def safe_edit_board(
+    callback: CallbackQuery,
+    text: str,
+    *,
+    reply_markup: InlineKeyboardMarkup | None = None,
+    parse_mode: str | None = None,
+    max_retries: int = 3,
+    base_delay: float = 0.5,
+) -> bool:
+    """Edit a board with exponential backoff; flood waits consume no retries.
+
+    ``max_retries`` counts retries after the initial attempt. Transport failures
+    never escape into the committed game transaction. This primitive only edits;
+    game presenters own fresh-message fallback and persistence of replacement ids.
+    """
+    message = callback.message
+    message_id = getattr(message, "message_id", None)
+    last_error = None
+    attempt = 0
+    while True:
+        try:
+            if message is None:
+                raise ValueError("Callback has no board message")
+            await callback.bot.edit_message_text(
+                text,
+                chat_id=message.chat.id,
+                message_id=message_id,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+            )
+            return True
+        except TelegramRetryAfter as exc:
+            await asyncio.sleep(float(exc.retry_after))
+            continue
+        except TelegramBadRequest as exc:
+            if "message is not modified" in str(exc).lower():
+                return True
+            last_error = exc
+        except Exception as exc:
+            # Includes forbidden/network errors; cancellation still propagates.
+            last_error = exc
+        if attempt >= max(0, max_retries):
+            logger.warning("Board edit failed message_id=%s: %s", message_id, last_error)
+            return False
+        await asyncio.sleep(max(0.0, base_delay) * (2 ** attempt))
+        attempt += 1
