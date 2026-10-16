@@ -27,9 +27,11 @@ from sib.tests.test_parties import create_test_user
 
 MAHMUD_CODE = "mahmud"
 MAHMUD_NAME = "محمود"
-# Supplied verbatim: the spacing around the emoji and the ZWNJ in «تیغ‌های»
-# are the author's, and are never normalized to another card's string.
-MAHMUD_AFFILIATIONS = "امپراتوری 👑 - تیغ‌های تاج 🗡"
+# Supplied affiliations. The half-space (ZWNJ) that used to sit inside
+# «تیغ‌های» was replaced by ONE normal space so the line renders
+# like the other empire cards; the author's spacing around the emoji is
+# kept exactly as delivered. Nothing else of the string was touched.
+MAHMUD_AFFILIATIONS = "امپراتوری 👑 - تیغ های تاج 🗡"
 MAHMUD_STORY = "محمود را بسیاری به‌خاطر ظاهر عجیب و نگاه اخموش دست‌کم می‌گیرند؛ غافل از اینکه پشت آن چهرهٔ بامزه، ذهنی تیز و اراده‌ای سرسخت پنهان شده است. او ثابت کرده که حتی غیرمنتظره‌ترین جنگجویان هم می‌توانند در میان نخبگان امپراتوری جای بگیرند."
 MAHMUD_WIKI = (
     f"*{MAHMUD_NAME}*\n\n*وابستگی‌ها*:{MAHMUD_AFFILIATIONS}\n\n"
@@ -54,12 +56,13 @@ def test_mahmud_seed_preserves_every_supplied_character_exactly():
     assert "غیرمنتظره‌ترین جنگجویان" in entry["lore_fa"]
     assert "چهرهٔ بامزه" in entry["lore_fa"]  # hamza above (U+0654), as supplied
     assert "\u200c" in entry["lore_fa"] and "\u0654" in entry["lore_fa"]
-    # The «Crown Blades» subgroup is stored as affiliation text: the two
-    # spacing variants («تیغ‌های» with ZWNJ, spaces around the emoji) are
-    # intentional, not typos, and no faction keyword is invented from them.
+    # The «Crown Blades» subgroup stays affiliation TEXT (never a faction
+    # keyword). The half-space inside its name became one normal space -
+    # that single code point is the whole visual fix.
+    assert entry["affiliations_fa"] == MAHMUD_AFFILIATIONS
     assert entry["affiliations_fa"].endswith("🗡")
-    assert "امپراتوری" in entry["affiliations_fa"]
-    assert "تیغ‌های تاج" in entry["affiliations_fa"]
+    assert "\u200c" not in entry["affiliations_fa"]  # no half-space left in this line
+    assert "تیغ های تاج" in entry["affiliations_fa"]
     for field in ("faction_role_fa", "passive_key", "passive_data", "hidden_modifiers",
                   "strengths", "weaknesses"):
         assert field not in entry, f"no gameplay or role must be invented for {field}"
