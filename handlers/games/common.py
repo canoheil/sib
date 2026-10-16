@@ -11,6 +11,7 @@ Design contract (Battleship reliability fix):
 """
 
 import json
+from types import SimpleNamespace
 from typing import Any, Dict, Optional, Tuple
 from aiogram import Bot, Router, F
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
@@ -39,9 +40,48 @@ from sib.services.telegram_ui import (
     board_refresh_style,
     safe_answer_callback,
     safe_edit_callback_message,
+    safe_edit_board,
     safe_edit_screen,
     with_refresh_button,
 )
+
+
+async def _edit_game_screen(
+    bot: Bot, chat_id: int, message_id: int, text: str,
+    reply_markup: Optional[InlineKeyboardMarkup] = None,
+) -> Optional[int]:
+    """Board transport with fresh-message recovery; caller persists a new id."""
+    target = SimpleNamespace(
+        bot=bot, message=SimpleNamespace(
+            chat=SimpleNamespace(id=chat_id), message_id=message_id
+        )
+    )
+    if await safe_edit_board(target, text, reply_markup=reply_markup, parse_mode="Markdown"):
+        return message_id
+    try:
+        sent = await bot.send_message(
+            chat_id=chat_id, text=text, reply_markup=reply_markup, parse_mode="Markdown"
+        )
+        return sent.message_id
+    except Exception as exc:
+        logger.warning("Board replacement failed message_id=%s: %s", message_id, exc)
+        return None
+
+
+async def _edit_game_callback(callback: CallbackQuery, bot: Bot, text: str, *, reply_markup=None) -> bool:
+    message = callback.message
+    if message is None:
+        return False
+    new_id = await _edit_game_screen(
+        bot, message.chat.id, message.message_id, text, reply_markup
+    )
+    if new_id is None:
+        return False
+    if new_id != message.message_id:
+        # Preserve the callback's message type and all other metadata.
+        replacement = message.model_copy(update={"message_id": new_id})
+        object.__setattr__(callback, "message", replacement)
+    return True
 
 
 async def _persist_board_message_id(match_id: int, group_id: int, message_id: int) -> None:
@@ -172,11 +212,12 @@ async def render_board_for(
                 refresh_style=refresh_style,
             )
         before_id = getattr(message, "message_id", None)
-        await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
+        await _edit_game_callback(callback, bot, text, reply_markup=kb)
         after_id = getattr(callback.message, "message_id", None)
         if before_id and after_id and after_id != before_id and match.group1_message_id == before_id:
             match.group1_message_id = after_id
             match.group2_message_id = after_id
+            await _persist_board_message_id(match.id, group_id, after_id)
         return
 
     text = engine.render_for_group(state, group_id, for_player_id)
@@ -199,13 +240,30 @@ async def render_board_for(
             refresh_style=refresh_style,
         )
     before_id = getattr(message, "message_id", None)
-    await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
+    await _edit_game_callback(callback, bot, text, reply_markup=kb)
     after_id = getattr(callback.message, "message_id", None)
     if before_id and after_id and after_id != before_id:
         if group_id == match.group1_id and match.group1_message_id == before_id:
             match.group1_message_id = after_id
         elif group_id == match.group2_id and match.group2_message_id == before_id:
             match.group2_message_id = after_id
+        await _persist_board_message_id(match.id, group_id, after_id)
+
+DUPLICATE_MOVE_MESSAGE = "صفحه‌ی بازی تازه شد؛ حرکت شما قبلاً ثبت شده بود."
+STALE_TURN_MESSAGE = "صفحه‌ی بازی تازه شد؛ اکنون نوبت بازیکن دیگری است."
+
+
+def _duplicate_feedback(reason: Optional[str], participant: bool) -> Optional[str]:
+    if not participant:
+        return None
+    if reason and "قبلاً" in reason:
+        return DUPLICATE_MOVE_MESSAGE
+    # Sequential engines check turn ownership before repeated-cell checks.
+    # Without action ids we cannot prove a duplicate: use neutral stale-turn text.
+    if reason == "هنوز نوبت شما نشده است.":
+        return STALE_TURN_MESSAGE
+    return None
+
 
 async def process_game_action(
     callback: CallbackQuery,
@@ -278,9 +336,19 @@ async def process_game_action(
                 # LATEST authoritative board - manual refresh is never
                 # required. The render runs below, after the row lock is
                 # released.
+                feedback = _duplicate_feedback(
+                    reason, any(p.user_id == user.id for p in match.players)
+                )
+                # A repeated High Card draw has no lock yet, but its card is
+                # already stored. Validation calls it an invalid choice.
+                if (match.game.code == "high_card" and action.get("draw")
+                        and (state.get("players", {}).get(str(user.id), {})
+                             .get("card_rank") is not None)):
+                    feedback = DUPLICATE_MOVE_MESSAGE
                 early_exit = {
                     "kind": "invalid",
                     "reason": reason,
+                    "feedback": feedback,
                     "match": match,
                     "state": state,
                 }
@@ -382,24 +450,25 @@ async def process_game_action(
             await safe_answer_callback(callback, "مسابقه پیدا نشد 🍏", show_alert=True)
             return
         if early_exit["kind"] == "invalid":
-            await safe_answer_callback(
-                callback,
-                (early_exit["reason"] or "حرکت نامعتبر است 🍏")
-                + "\nآخرین وضعیت بازی بارگذاری شد.",
-                show_alert=True,
-            )
             try:
                 await render_board_for(
                     callback, bot, early_exit["match"], early_exit["state"], user.id
                 )
             except Exception as render_err:
                 logger.warning(f"Rejected-action recovery render failed: {render_err}")
+            feedback = early_exit.get("feedback")
+            await safe_answer_callback(
+                callback,
+                feedback or ((early_exit["reason"] or "حرکت نامعتبر است 🍏")
+                             + "\nآخرین وضعیت بازی بارگذاری شد."),
+                show_alert=not bool(feedback),
+            )
             return
         # Inactive/stale board: answer, then render the true final board.
         await safe_answer_callback(
             callback,
             "این مسابقه دیگر در جریان نیست؛ آخرین وضعیت بازی بارگذاری شد. 🍏",
-            show_alert=True,
+            show_alert=not any(p.user_id == user.id for p in early_exit["match"].players),
         )
         if early_exit["state"] is not None:
             try:
@@ -474,7 +543,7 @@ async def process_game_action(
                         match_id,
                         refresh_style=board_refresh_style(engine.game_code),
                     )
-                    new_msg_id = await safe_edit_screen(
+                    new_msg_id = await _edit_game_screen(
                         bot, chat_id=group_id, message_id=msg_id, text=text, reply_markup=kb
                     )
                     if new_msg_id is None:
@@ -496,7 +565,7 @@ async def process_game_action(
                 match_id,
                 refresh_style=board_refresh_style(engine.game_code),
             )
-            if not await safe_edit_callback_message(callback, bot, text, reply_markup=kb):
+            if not await _edit_game_callback(callback, bot, text, reply_markup=kb):
                 logger.warning(
                     f"Game board refresh failed for match {match_id} "
                     f"in private flow; refresh button remains available."
@@ -542,7 +611,7 @@ async def process_game_action(
         ):
             if group_id and msg_id:
                 text = build_post_match_text(group_id)
-                new_msg_id = await safe_edit_screen(
+                new_msg_id = await _edit_game_screen(
                     bot,
                     chat_id=group_id,
                     message_id=msg_id,
@@ -556,7 +625,7 @@ async def process_game_action(
         chat = getattr(message, "chat", None) if message is not None else None
         chat_id = getattr(chat, "id", None)
         final_text = build_post_match_text(chat_id)
-        await safe_edit_callback_message(callback, bot, final_text, reply_markup=rematch_kb)
+        await _edit_game_callback(callback, bot, final_text, reply_markup=rematch_kb)
 
     await PlayerXPService.deliver_pending_notifications(bot)
 
@@ -597,7 +666,7 @@ async def _present_friendly_board(
 
     message_id = payload["group1_message_id"] or payload["group2_message_id"]
     if message_id and group_id:
-        new_msg_id = await safe_edit_screen(
+        new_msg_id = await _edit_game_screen(
             bot, chat_id=group_id, message_id=message_id, text=text, reply_markup=kb
         )
         if new_msg_id and new_msg_id != message_id:
@@ -609,7 +678,7 @@ async def _present_friendly_board(
             )
         return
 
-    if not await safe_edit_callback_message(callback, bot, text, reply_markup=kb):
+    if not await _edit_game_callback(callback, bot, text, reply_markup=kb):
         logger.warning(
             f"Friendly board refresh failed for match {payload['match_id']} "
             f"in private flow; refresh button remains available."
