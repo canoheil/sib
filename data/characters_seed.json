@@ -247,5 +247,35 @@
     "sync_faction": true,
     "release_status": "RELEASED",
     "shop_enabled": true
+  },
+  {
+    "code": "mahmud",
+    "name_fa": "محمود",
+    "name_en": "Mahmoud",
+    "affiliations_fa": "امپراتوری 👑 - تیغ های تاج 🗡",
+    "lore_fa": "محمود را بسیاری به‌خاطر ظاهر عجیب و نگاه اخموش دست‌کم می‌گیرند؛ غافل از اینکه پشت آن چهرهٔ بامزه، ذهنی تیز و اراده‌ای سرسخت پنهان شده است. او ثابت کرده که حتی غیرمنتظره‌ترین جنگجویان هم می‌توانند در میان نخبگان امپراتوری جای بگیرند.",
+    "artwork": null,
+    "power": 18,
+    "speed": 17,
+    "intelligence": 25,
+    "faction": "empire",
+    "sync_faction": true,
+    "release_status": "RELEASED",
+    "shop_enabled": true
+  },
+  {
+    "code": "tifun",
+    "name_fa": "طیفان",
+    "name_en": "Tifun",
+    "affiliations_fa": "فرزانگان🔮",
+    "lore_fa": "نگهبان فانوس دریایی و فرمانروای طوفان‌ها؛ پیرمردی که باد و رعد را به فرمان خود درمی‌آورد. می‌گویند نور فانوسش رازی باستانی را پنهان کرده که با خاموشی آن، خشم دریا آزاد خواهد شد.",
+    "artwork": null,
+    "power": 15,
+    "speed": 15,
+    "intelligence": 30,
+    "faction": "sages",
+    "sync_faction": true,
+    "release_status": "RELEASED",
+    "shop_enabled": true
   }
 ]
