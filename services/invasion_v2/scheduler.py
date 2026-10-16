@@ -184,9 +184,13 @@ class InvasionScheduler:
             average = await resolver.average_main_card_power(group_id=group.id, session=session)
             if average is None:
                 logger.debug("inv2 spawn skipped: group %s has no authoritative power", group.id)
+                if stats is not None:
+                    stats["skipped_insufficient_players"] = stats.get("skipped_insufficient_players", 0) + 1
                 continue
             if not math.isfinite(average) or average <= 0:
                 logger.debug("inv2 spawn skipped: group %s has no positive card power", group.id)
+                if stats is not None:
+                    stats["skipped_insufficient_players"] = stats.get("skipped_insufficient_players", 0) + 1
                 continue
 
             previous_region = await session.scalar(
@@ -219,6 +223,10 @@ class InvasionScheduler:
             region.last_invasion_id = invasion.id
             if stats is not None:
                 stats["spawned"] += 1
+            logger.info(
+                "inv2 spawned: group=%s enemy=%s hp=%s region=%s",
+                group.id, enemy_type.value, hp, region.code,
+            )
             # No return here: the next eligible group in this same tick
             # is entitled to its own invasion for this interval.
 
@@ -232,7 +240,7 @@ class InvasionScheduler:
         start = time.monotonic()
         stats = {"spawned": 0, "finalized": 0, "expired": 0,
                  "skipped_muted": 0, "skipped_active": 0,
-                 "skipped_no_resolver": 0}
+                 "skipped_no_resolver": 0, "skipped_insufficient_players": 0}
         try:
             if not await _enabled():
                 return
