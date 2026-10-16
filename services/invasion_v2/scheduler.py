@@ -6,7 +6,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Sequence
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sib.core.logging import logger
@@ -127,10 +127,19 @@ class InvasionScheduler:
         if not math.isfinite(difficulty) or difficulty <= 0:
             logger.error("inv2 spawn skipped: invasion_difficulty_multiplier must be positive and finite")
             return
+        raw_max_active = await ConfigService.get(session, "invasion_max_active_per_group")
+        try:
+            max_active_per_group = int(1 if raw_max_active is None else raw_max_active)
+        except (TypeError, ValueError):
+            logger.error("inv2 spawn skipped: invasion_max_active_per_group must be a positive integer")
+            return
+        if max_active_per_group <= 0:
+            logger.error("inv2 spawn skipped: invasion_max_active_per_group must be a positive integer")
+            return
 
         # Lock all active Group rows in a fixed order. On MariaDB this makes
-        # overlapping maintenance workers serialize their global round-robin
-        # decision. Query the last occurrence AFTER locking (current read).
+        # overlapping maintenance workers serialize their spawn decision.
+        # Query the last occurrence AFTER locking (current read).
         groups = list((await session.scalars(
             select(Group).where(Group.is_active.is_(True)).order_by(Group.id).with_for_update()
         )).all())
@@ -148,22 +157,21 @@ class InvasionScheduler:
             logger.warning("inv2 spawn skipped: no regions seeded")
             return
 
-        next_id = last.group_id if last is not None else None
-        ordered = [g for g in groups if next_id is None or g.id > next_id]
-        if next_id is not None:
-            ordered += [g for g in groups if g.id <= next_id]
-        for group in ordered:
+        # Stable order: groups were already locked and sorted by id above.
+        # Every eligible group may spawn in this tick; the global interval
+        # gate above only stops a second tick inside the same interval.
+        for group in groups:
             if not await is_group_available(group.id, session=session, now=now):
                 if stats is not None:
                     stats["skipped_muted"] += 1
                 continue
-            live = await session.scalar(
-                select(Inv2Invasion.id).where(
+            live_count = await session.scalar(
+                select(func.count()).select_from(Inv2Invasion).where(
                     Inv2Invasion.group_id == group.id,
                     Inv2Invasion.status.in_((InvasionStatus.PENDING.value, InvasionStatus.ACTIVE.value)),
-                ).limit(1)
+                )
             )
-            if live is not None:
+            if (live_count or 0) >= max_active_per_group:
                 if stats is not None:
                     stats["skipped_active"] += 1
                 continue
@@ -172,13 +180,17 @@ class InvasionScheduler:
                 cls._log_missing_resolver_once()
                 if stats is not None:
                     stats["skipped_no_resolver"] += 1
-                return
+                continue
             average = await resolver.average_main_card_power(group_id=group.id, session=session)
             if average is None:
                 logger.debug("inv2 spawn skipped: group %s has no authoritative power", group.id)
+                if stats is not None:
+                    stats["skipped_insufficient_players"] = stats.get("skipped_insufficient_players", 0) + 1
                 continue
             if not math.isfinite(average) or average <= 0:
                 logger.debug("inv2 spawn skipped: group %s has no positive card power", group.id)
+                if stats is not None:
+                    stats["skipped_insufficient_players"] = stats.get("skipped_insufficient_players", 0) + 1
                 continue
 
             previous_region = await session.scalar(
@@ -211,11 +223,16 @@ class InvasionScheduler:
             region.last_invasion_id = invasion.id
             if stats is not None:
                 stats["spawned"] += 1
-            return  # at most one new invasion per global interval
+            logger.info(
+                "inv2 spawned: group=%s enemy=%s hp=%s region=%s",
+                group.id, enemy_type.value, hp, region.code,
+            )
+            # No return here: the next eligible group in this same tick
+            # is entitled to its own invasion for this interval.
 
     @classmethod
     async def tick(cls, *, now: datetime | None = None, rng: random.Random | None = None) -> list[tuple[int, str]] | None:
-        """Finalize due rows, then schedule at most one eligible group.
+        """Finalize due rows, then schedule every eligible group once.
 
         False/missing flag means *no session and no writes*, even when this
         method is called directly instead of via MaintenanceService.
@@ -223,7 +240,7 @@ class InvasionScheduler:
         start = time.monotonic()
         stats = {"spawned": 0, "finalized": 0, "expired": 0,
                  "skipped_muted": 0, "skipped_active": 0,
-                 "skipped_no_resolver": 0}
+                 "skipped_no_resolver": 0, "skipped_insufficient_players": 0}
         try:
             if not await _enabled():
                 return
