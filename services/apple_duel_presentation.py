@@ -358,6 +358,25 @@ class AppleDuelPresentation:
             )
         for duel_id in ids:
             try:
-                await cls.tick(bot, duel_id)
+                schedule_play(bot, duel_id)
             except Exception:
-                logger.exception("Apple Duel recovery failed %s", duel_id)
+                logger.exception("Could not schedule Apple Duel recovery %s", duel_id)
+
+
+_play_tasks: dict[int, asyncio.Task] = {}
+
+
+def schedule_play(bot, duel_id: int) -> asyncio.Task:
+    """Schedule a retained, deduplicated background player for one duel."""
+    existing = _play_tasks.get(duel_id)
+    if existing is not None and not existing.done():
+        return existing
+    task = asyncio.create_task(AppleDuelPresentation.play(bot, duel_id))
+    _play_tasks[duel_id] = task
+
+    def _cleanup(done_task: asyncio.Task) -> None:
+        if _play_tasks.get(duel_id) is done_task:
+            _play_tasks.pop(duel_id, None)
+
+    task.add_done_callback(_cleanup)
+    return task

@@ -133,9 +133,9 @@ async def callback_duel(callback: CallbackQuery, bot: Bot):
                 "EXPIRED": "دعوت منقضی شده است.",
             }.get(duel.status, "دعوت در انتظار پاسخ است."),
         )
-        from sib.services.apple_duel_presentation import AppleDuelPresentation
+        from sib.services.apple_duel_presentation import schedule_play
 
-        await AppleDuelPresentation.tick(bot, duel_id)
+        schedule_play(bot, duel_id)
     except DuelError as exc:
         await safe_answer_callback(callback, str(exc), show_alert=True)
     except Exception:
