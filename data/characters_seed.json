@@ -262,5 +262,20 @@
     "sync_faction": true,
     "release_status": "RELEASED",
     "shop_enabled": true
+  },
+  {
+    "code": "tifun",
+    "name_fa": "طیفان",
+    "name_en": "Tifun",
+    "affiliations_fa": "فرزانگان🔮",
+    "lore_fa": "نگهبان فانوس دریایی و فرمانروای طوفان‌ها؛ پیرمردی که باد و رعد را به فرمان خود درمی‌آورد. می‌گویند نور فانوسش رازی باستانی را پنهان کرده که با خاموشی آن، خشم دریا آزاد خواهد شد.",
+    "artwork": null,
+    "power": 15,
+    "speed": 15,
+    "intelligence": 30,
+    "faction": "sages",
+    "sync_faction": true,
+    "release_status": "RELEASED",
+    "shop_enabled": true
   }
 ]

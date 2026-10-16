@@ -1,8 +1,10 @@
-"""The delivered new cards («Filo» … «Zarush», plus «Mahmoud») — roster, art, stats, budget, shop.
+"""The delivered new cards («Filo» … «Zarush», plus «Mahmoud» and «Tifun») — roster, art,
+stats, budget, shop.
 
 The suite began as the 11-card delivery and is append-only like the roster
-it pins: the sixteenth card («محمود» / `mahmud`) joined the same tables, so
-counts and pagination below cover 16 characters (4 audited + 12 supplied).
+it pins: the later cards («محمود» / `mahmud`, «طیفان» / `tifun`) joined the
+same tables, so counts and pagination below cover 17 characters
+(4 audited + 13 supplied).
 
 Covers the whole delivery end to end:
 
@@ -53,6 +55,7 @@ from sib.tests.test_card_lore_mmung import MMUNG_AFFILIATIONS, MMUNG_STORY
 from sib.tests.test_card_lore_moon_knight import MOON_KNIGHT_AFFILIATIONS, MOON_KNIGHT_STORY
 from sib.tests.test_card_lore_moon_lily import MOON_LILY_AFFILIATIONS, MOON_LILY_STORY
 from sib.tests.test_card_lore_sage_king import SAGE_KING_AFFILIATIONS, SAGE_KING_STORY
+from sib.tests.test_card_lore_tifun import TIFUN_AFFILIATIONS, TIFUN_STORY
 from sib.tests.test_card_lore_treyni import TREYNI_AFFILIATIONS, TREYNI_STORY
 from sib.tests.test_card_lore_wizard import WIZARD_AFFILIATIONS, WIZARD_STORY
 from sib.tests.test_card_lore_zarush import ZARUSH_AFFILIATIONS, ZARUSH_STORY
@@ -75,6 +78,7 @@ NEW_CARDS: dict[str, dict] = {
     "moon_knight": {"name_en": "Moon Knight", "power": 30, "speed": 20, "intelligence": 10},
     "moon_lily": {"name_en": "Moon Lily", "power": 8, "speed": 12, "intelligence": 40},
     "sage_king": {"name_en": "Sage King", "power": 20, "speed": 12, "intelligence": 28},
+    "tifun": {"name_en": "Tifun", "power": 15, "speed": 15, "intelligence": 30},
     "treyni": {"name_en": "Treyni", "power": 12, "speed": 24, "intelligence": 24},
     "wizard": {"name_en": "Wizard", "power": 24, "speed": 10, "intelligence": 26},
     "zarush": {"name_en": "Zarush", "power": 22, "speed": 21, "intelligence": 17},
@@ -93,6 +97,7 @@ OFFICIAL_NEW_TEXT = {
     "moon_knight": (MOON_KNIGHT_AFFILIATIONS, MOON_KNIGHT_STORY, "moon_descendants"),
     "moon_lily": (MOON_LILY_AFFILIATIONS, MOON_LILY_STORY, "moon_descendants"),
     "sage_king": (SAGE_KING_AFFILIATIONS, SAGE_KING_STORY, "sages"),
+    "tifun": (TIFUN_AFFILIATIONS, TIFUN_STORY, "sages"),
     "treyni": (TREYNI_AFFILIATIONS, TREYNI_STORY, "sages"),
     "wizard": (WIZARD_AFFILIATIONS, WIZARD_STORY, "moon_descendants"),
     "zarush": (ZARUSH_AFFILIATIONS, ZARUSH_STORY, "empire"),
@@ -175,7 +180,7 @@ def test_seed_entries_carry_exactly_the_delivered_stats_and_no_invented_metadata
 @pytest.mark.asyncio
 async def test_seed_registers_all_new_characters_with_unique_ids(db_session):
     characters = await _seeded(db_session)
-    assert len(characters) == 16
+    assert len(characters) == 17
     ids = [character.id for character in characters.values()]
     assert len(ids) == len(set(ids))
 
@@ -419,7 +424,7 @@ async def test_shop_card_list_shows_every_new_card_for_300_apples(db_session):
     entries = await ShopService.list_entries(db_session, user_id=user_id)
     total_pages = (len(entries) + SHOP_CARDS_PAGE_SIZE - 1) // SHOP_CARDS_PAGE_SIZE
     await db_session.commit()  # _cards_view reads through the handler's own session
-    assert len(entries) == 16 and total_pages == 4
+    assert len(entries) == 17 and total_pages == 4
 
     all_text = []
     all_labels = []
@@ -577,7 +582,7 @@ async def test_wiki_lists_and_renders_every_new_card(db_session):
         assert character.name_fa in page
         assert str(character.power) in page
 
-    # The index paginates the (now 16-card) roster: every character is
+    # The index paginates the (now 17-card) roster: every character is
     # reachable through some page's buttons, and none is dropped.
     from sib.handlers.wiki import WIKI_PAGE_SIZE, _wiki_index_lines, _wiki_keyboard
 
