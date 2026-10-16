@@ -234,6 +234,21 @@ class AppleDuelPresentation:
                             logger.info(f"Apple Duel player exited {duel_id}: missing")
                             return
                         before_cursor = before.cursor
+                        before_status = before.status
+                        before_terminal_presented = before.terminal_presented
+
+                    if before_status in ("COMPLETED", "REJECTED", "EXPIRED"):
+                        if before_terminal_presented:
+                            logger.info(
+                                f"Apple Duel player exited {duel_id}: terminal presented"
+                            )
+                            return
+                        # A terminal board may have failed transport previously;
+                        # tick retries that durable presentation without claiming
+                        # another scene.
+                    elif before_status != "ACCEPTED" or before_cursor >= 6:
+                        logger.info(f"Apple Duel player exited {duel_id}: no scenes")
+                        return
 
                     await cls.tick(bot, duel_id)
 
