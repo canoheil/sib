@@ -137,7 +137,6 @@ async def _select_view(user_id: int, origin: str | None = None) -> tuple[str, In
                 )
             ]
         )
-    buttons.append([primary_button(text="🏆 لیدربورد نبرد", callback_data="ab_board")])
     buttons.append(
         [primary_button(text="🔄 بروزرسانی", callback_data=with_origin("ab_refresh", origin))]
     )

@@ -144,6 +144,51 @@ async def test_cmd_leaderboard_handler(db_session):
 
 
 @pytest.mark.asyncio
+async def test_main_leaderboard_button_still_exists(db_session):
+    """AB1 preserves /leaderboard routing, rendering and the main-menu path."""
+    from sib.handlers.leaderboard import router
+    from sib.keyboards.common import get_group_welcome_keyboard
+    from sib.keyboards.leaderboard import get_group_stats_keyboard
+
+    main_buttons = {
+        button.callback_data: button.text
+        for row in get_group_welcome_keyboard().inline_keyboard for button in row
+    }
+    assert main_buttons["group_rating_stats"] == "🏆 رتبه و آمار گروه"
+    stats_buttons = {
+        button.callback_data: button.text
+        for row in get_group_stats_keyboard().inline_keyboard for button in row
+    }
+    assert stats_buttons["show_leaderboard"] == "🏆 برترین گروه‌ها"
+
+    message = Message(
+        message_id=1,
+        date=0,
+        chat=TelegramChat(id=-123, type="supergroup", title="گروه تست"),
+        from_user=TelegramUser(id=123, is_bot=False, first_name="بازیکن"),
+        text="/leaderboard",
+    )
+    entry = next(h for h in router.message.handlers if h.callback is cmd_leaderboard)
+    matched, _ = await entry.check(message, bot=MagicMock())
+    assert matched, "/leaderboard must still route to the main leaderboard handler"
+
+    mock_msg = MagicMock(spec=Message)
+    mock_msg.chat = message.chat
+    mock_msg.reply = AsyncMock()
+    await entry.call(mock_msg)
+
+    mock_msg.reply.assert_called_once()
+    args, kwargs = mock_msg.reply.call_args
+    assert "برترین گروه‌های سیب" in args[0]
+    callbacks = {
+        button.callback_data
+        for row in kwargs["reply_markup"].inline_keyboard for button in row
+    }
+    assert "show_leaderboard" in callbacks
+    assert "ab_board" not in callbacks
+
+
+@pytest.mark.asyncio
 async def test_cmd_stats_in_private_chat(db_session):
     """Calling /stats in private chat shows player's personal participation record."""
     user = await create_test_user(db_session, "فرد در پیوی")
