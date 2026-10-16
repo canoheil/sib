@@ -107,7 +107,9 @@ async def test_unknown_power_skips_spawn(db):
 
 
 @pytest.mark.asyncio
-async def test_resolved_power_spawns_with_formula_and_round_robin(db, monkeypatch):
+async def test_resolved_power_spawns_for_each_eligible_group_with_formula(db, monkeypatch):
+    # IV-1: one tick spawns for every eligible group (previously round-robin
+    # spawned for group 1 only and group 2 waited for a later interval).
     resolver = SimpleNamespace(average_main_card_power=AsyncMock(return_value=500.0))
     set_power_resolver(resolver)
     monkeypatch.setattr(scheduler, "choose_enemy_type", lambda rng: EnemyType.SHADOW)
@@ -115,15 +117,17 @@ async def test_resolved_power_spawns_with_formula_and_round_robin(db, monkeypatc
     await InvasionScheduler.tick(now=NOW + timedelta(seconds=5), rng=Random(4))
     async with db() as session:
         rows = list((await session.scalars(select(Inv2Invasion).order_by(Inv2Invasion.id))).all())
-        assert len(rows) == 1
+        assert len(rows) == 2
+        assert [row.group_id for row in rows] == [1, 2]
         first = rows[0]
-        assert first.group_id == 1
         assert first.enemy_hp == first.enemy_hp_remaining == round(500 * 1.6 * 2.5)
         assert first.difficulty_multiplier == 2.5
         assert first.status == InvasionStatus.PENDING.value
         assert first.ends_at is None and first.started_at is None  # Phase 5 sends first
         assert first.occurrence_key.startswith("inv2:v1:group:1:region:")
         assert (await session.get(Inv2Region, first.region_code)).last_invasion_id == first.id
+    # Later intervals spawn nothing new: both groups still hold a live
+    # PENDING invasion, so they are skipped as already active.
     await InvasionScheduler.tick(now=NOW + timedelta(hours=1, seconds=1), rng=Random(6))
     await InvasionScheduler.tick(now=NOW + timedelta(hours=2, seconds=2), rng=Random(6))
     async with db() as session:

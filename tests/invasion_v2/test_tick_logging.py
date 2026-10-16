@@ -19,7 +19,8 @@ async def test_disabled_tick_logs_once_without_database(monkeypatch, caplog):
     assert len(records) == 1
     record = records[0]
     for name in ("spawned", "finalized", "expired", "skipped_muted",
-                 "skipped_active", "skipped_no_resolver"):
+                 "skipped_active", "skipped_no_resolver",
+                 "skipped_insufficient_players"):
         assert getattr(record, name) == 0
     assert record.duration_ms >= 0
     assert admin_runtime.last_tick_at is not None
