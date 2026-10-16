@@ -1,72 +1,340 @@
-# سیب (sib) — ربات بازی گروهی پروداکشن تلگرام 🍏
+# sib (سیب) — Telegram Group Game Bot
 
-ربات تلگرامی پیشرفته برای بازی‌های گروهی آنلاین بین گروه‌های مختلف تلگرام با سیستم ریتینگ گروهی سراسری (Elo Rating)، احراز هویت ادمین، و سیستم تبلیغات غیرمتمرکز.
+A Persian-language, apple-themed multiplayer game bot for Telegram groups, set in the fantasy world of Ovarya (اواریا).
 
----
+![Python](https://img.shields.io/badge/Python-3.12-blue)
+![aiogram](https://img.shields.io/badge/aiogram-%3E%3D3.30%2C%20%3C4.0-blue)
+![MariaDB](https://img.shields.io/badge/MariaDB-10.11-blue)
+![Tests](https://img.shields.io/badge/tests-1932-brightgreen)
 
-## 🏗️ ساختار ماژولار پروژه
+## About
 
+«sib» (سیب, "apple") is a long-running game played inside Telegram
+groups. Players collect character cards, grow a garden, work shifts in
+the Apple Mine, trade with each other, marry, and — when the shadow
+falls — defend the regions of Ovarya (اواریا) together against
+«شیاسیب». The bot's interface, narrative text, and error messages are
+in Persian; this README is in English for maintainers and reviewers.
+
+What makes the project unusual is the combination of a persistent
+group-level game (cards, wallets, gardens, and invasions all survive
+restarts and are stored in MariaDB) with group-vs-enemy battles in
+which every defender in a chat contributes through their own main
+card. Invasion v2 is guarded by the `invasion_enabled` flag in the
+`system_config` table, which defaults to `false` (migration
+`036_invasion_v2`); scheduled invasions only run when an operator
+turns that flag on.
+
+The codebase is a single aiogram 3 application with a strict split
+between Telegram handlers (`handlers/`), domain services
+(`services/`), game engines (`games/`), and SQLAlchemy models and
+Alembic migrations (`database/`).
+
+## Features
+
+### Invasion v2 (group battles vs «شیاسیب»)
+
+- Scheduled, per-group battles against «شیاسیب» in the regions of
+  Ovarya, with five enemy types of increasing strength (see
+  `services/invasion_v2/enemy.py`).
+- Each defender joins once with their main card; group power is the
+  average main-card power resolved from observed group members
+  (`services/invasion_v2/power_resolver_impl.py`).
+- The resolver fails closed: if an active member's main card is
+  unknown, no invasion spawns for that group instead of guessing.
+- Composed battle images (announcement, join, victory, defeat) are
+  rendered locally with Pillow under `services/invasion_v2/imaging/`.
+- Admin controls, a dashboard, and audited private commands live in
+  `handlers/inv2_controls.py`, `handlers/inv2_dashboard.py`, and
+  `handlers/inv2_admin.py`. Sample output:
+  `docs/invasion-rework/samples/phase-8a/victory.jpg`.
+
+### Apple Mine
+
+- Group members take timed mining shifts (`/mine`, or the exact text
+  «معدن سیبی») and earn normal, golden, diamond, and obsidian apples.
+- Outcomes and narrative lines are data-driven
+  (`services/apple_mine.py`, `services/apple_mine_narrative.py`).
+- Shift state is persisted (migration `043_apple_mine_shift`), so a
+  restart does not lose an in-progress shift.
+
+### Cards
+
+- Collectible character cards (`/cards`, «سیب کارت») seeded from
+  `data/characters_seed.json`, with a chosen main card used in
+  battles and invasions.
+- Power is derived, not stored per card: each card has a level from
+  1 to 10, and its 💪 power, ⚡ speed, and 🧠 intelligence are the
+  character base plus +10 per attribute per level above 1
+  (`services/card_progression.py`).
+- Upgrades cost normal apples plus one special apple — golden for
+  low levels, diamond for mid levels, obsidian for high levels —
+  charged atomically with row locks (`services/card_upgrade.py`,
+  migration `022_card_upgrade_levels`).
+- Characters belong to data-driven factions seeded from
+  `data/factions_seed.json` (`services/factions.py`, migration
+  `034_card_affiliations`); adding a faction needs no code change.
+- Profile skins change a card/profile's appearance only, never its
+  stats (`services/profile_skin.py`, migration `029_profile_skins`).
+
+### Chests and shop
+
+- `/shop` sells cards and shop chests; chest contents (apples,
+  items, cards) are defined in `data/shop_chests/` and
+  `services/shop_chests.py` (migration `032_shop_chests`).
+- The daily chest (`/chest`, «سیب صندوق») grants one random reward
+  per day — normal/golden/diamond/obsidian apples, seedlings, or
+  other items (`services/daily_chest.py`, migration
+  `030_daily_chest`).
+
+### Daily apple claim
+
+- Typing exactly «سیب» in a group claims apples on a per-user
+  cooldown (default amount 5, default cooldown 300 seconds, both
+  configurable in `services/config_store.py`).
+- The award is written to the wallet ledger with an idempotency key,
+  and concurrent claims are serialised by a per-user row lock
+  (`services/sib_claim.py`).
+
+### Garden
+
+- `/garden` (or «سیب باغ» / «باغ من») opens the sender's garden:
+  plots, seedlings, planting, and harvests that can drop special
+  apples (`services/garden.py`, `services/seedling.py`, migrations
+  `010_seedlings`, `011_garden_wallet`, `019_magic_trees`).
+
+### Marriage
+
+- In-group proposals («ازدواج سیبی», or replying «با من ازدواج
+  می‌کنی»), divorce («طلاق سیبی»), and flower gifts («گل سیبی»)
+  handled by `handlers/marriage.py` and `services/marriage.py`
+  (migration `024_marriage_and_love`).
+- Marriage and shared love are shown on the profile.
+- Two lightweight social reply actions also exist: «بغل سیبی» (hug)
+  and «بوس سیبی» (kiss), in `handlers/sib_hug.py` and
+  `handlers/sib_kiss.py`.
+
+### Party and matchmaking
+
+- Players form parties (solo, 2v2, 4v4) from the games menu
+  (`/games`), with one active session per user enforced server-side
+  and `with_for_update()` row locks on the last free seat
+  (`services/party/service.py`, `services/session.py`).
+- Cross-group matchmaking never pairs two parties from the same
+  Telegram group; bot opponents fill in automatically when a queue
+  deadline passes (`matchmaking/`, `services/bot_match.py`).
+- Friendly matches pit members of the same group against each other
+  and pay seedlings instead of affecting competitive results
+  (`handlers/friendly.py`, `services/friendly.py`).
+
+### Trading
+
+- `/trade` exchanges cards between two players; both cards must be
+  the same level, and each user can trade at most once per day
+  (`services/trading.py`, migration `015_trades`).
+
+### XP and level progression
+
+- Account XP and levels are tracked separately from card levels
+  (`services/player_xp.py`, migration `025_player_xp_progression`)
+  and shown on the profile with level artwork from
+  `assets/player_levels/`.
+
+### Apple wallets
+
+- One normal-apple wallet per user with a full transaction ledger:
+  every change is row-locked, auditable, optionally idempotent, and
+  can never drive the balance below zero
+  (`services/apple_wallet.py`).
+- Special apples are inventory items, not separate wallets:
+  `apple_gold` (🌕 golden), `apple_diamond` (💎 diamond), and
+  `apple_obsidian` (🖤 obsidian), alongside seedlings and magic
+  powder (`services/items.py`).
+
+### Mini-games and duels
+
+Only the games still registered in `games/registry.py` and
+`handlers/__init__.py` are listed:
+
+- ⚔️ Apple Battle (`/battle`): your main card fights another
+  player's card through matchmaking; the winner earns seedlings.
+- «دوئل سیبی» (Apple Duel): reply to a player's message with this
+  exact phrase to challenge them; the invited player accepts,
+  rejects, or swaps card (`handlers/apple_duel.py`).
+- Five classic party games, each an independent engine under
+  `games/`: High Card, Rock-Paper-Scissors, Tic-Tac-Toe, Connect
+  Four (solo/2v2/4v4), and Battleship (solo/2v2/4v4).
+
+### Admin panel
+
+- `/admin` opens the admin centre (`handlers/admin_center.py`,
+  `handlers/admin_meta.py`): user lookup and management (adjust
+  apples, special apples, seedlings, XP/level; ban/unban via
+  migration `044_user_is_banned`), sponsor/official channel
+  management, and system statistics.
+- `/broadcast` sends a message to users/groups
+  (`handlers/admin_broadcast.py`, `services/broadcast.py`); `/users`
+  is the user-admin entry point (`handlers/admin_users.py`).
+- `/setasset` (admins only) replaces named artwork assets at runtime
+  (`handlers/assets.py`, `services/assets.py`).
+- Invasion v2 is operated only from private admin chat:
+  `/inv2_status`, `/inv2_toggle`, `/inv2_force_spawn`,
+  `/inv2_force_end`, `/inv2_regions`, `/inv2_reset_region`,
+  `/inv2_mute`, `/inv2_unmute`, `/inv2_group_info`, `/inv2_invasions`,
+  `/inv2_config`, `/inv2_set`, `/inv2_health`, plus `/inv2_dashboard`,
+  `/inv2_preview`, and `/inv2_simulate`. Every command writes an
+  admin audit log row.
+- Admin identity comes only from `TELEGRAM_ADMIN_IDS` in the
+  environment; no admin ID is hard-coded (`admin/auth.py`).
+
+### Text shortcuts
+
+Exact whole-message phrases (surrounding whitespace ignored;
+Persian/Arabic ی and ک variants accepted). A sentence that merely
+contains one of these phrases does not trigger it:
+
+- «سیب» (groups only) — daily apple claim
+- «سیب منو» — main menu; «سیب بازی» — games menu
+- «سیبام» — your apple balance
+- «سیب پروفایل» / «سیب من» — your profile
+- «سیب باغ» / «باغ من» — your garden
+- «سیب کارت» — your cards; «سیب اسکین» — profile skin picker
+- «سیب شاپ» — shop; «سیب لیدربرد» / «سیب لیدربورد» — leaderboard
+- «سیب راهنما» — help index; «سیب صندوق» — daily chest
+- «معدن سیبی» — Apple Mine; «دوئل سیبی» (as a reply) — Apple Duel
+- «ازدواج سیبی», «طلاق سیبی», «گل سیبی», «بغل سیبی», «بوس سیبی» —
+  marriage and social actions (groups only)
+
+### Structured help
+
+- The in-bot guide is a tree of sections (quick start, the world of
+  Ovarya, cards, invasion, mine, apples and chests, garden/
+  marriage/party/trading, side games, shortcuts, support) defined
+  once in `services/help_content.py` and rendered by the «راهنما»
+  button and the «سیب راهنما» shortcut.
+
+### Groups
+
+- When the bot is added to a group it registers the group, and when
+  it is removed it deactivates it (`handlers/group_lifecycle.py`,
+  `router.my_chat_member`).
+- Group membership in game groups is observed from activity and
+  used by the Invasion v2 power resolver (migration
+  `037_inv2_group_members`); `scripts/backfill_inv2_group_members.py`
+  backfills historical membership.
+
+## Architecture
+
+### Tech stack
+
+| Layer | Technology |
+| --- | --- |
+| Language | Python 3.12 (Docker image `python:3.12-slim`) |
+| Bot framework | aiogram >=3.30, <4.0 (long polling) |
+| Database | MariaDB 10.11 (`docker-compose.yml`), `utf8mb4` |
+| ORM / drivers | SQLAlchemy 2.0 async (`asyncmy`), `pymysql` for Alembic |
+| Migrations | Alembic, 46 revisions (`database/migrations/versions/`) |
+| Config | pydantic-settings, `.env` at the repo root |
+| Images | Pillow, arabic-reshaper, python-bidi, numpy |
+| Tests | pytest, pytest-asyncio (auto mode, `pytest.ini`) |
+| Deployment | Docker Compose, systemd unit (`deploy/sib.service`), or `bot.py` directly |
+
+### Project tree (top two levels)
+
+```text
+.
+├── bot.py                  # entry point: polling, middleware, startup recovery
+├── core/                   # config.py, logging.py, errors.py, text.py
+├── handlers/               # aiogram routers (see handlers/__init__.py)
+├── services/               # domain services (invasion_v2/, party/, ad/, ...)
+├── games/                  # game engines: base.py, registry.py, five classic games, apple_battle/
+├── database/               # connection.py, models/, migrations/ (Alembic)
+├── matchmaking/            # matcher.py, acceptance.py
+├── keyboards/              # inline keyboard builders
+├── middleware/             # ban, rate limit, panel guard, group membership
+├── admin/                  # auth.py — admin filter/decorators
+├── assets/                 # artwork (characters, invasion_v2, items, ...)
+├── data/                   # characters_seed.json, factions_seed.json, shop_chests/
+├── scripts/                # backfill and invasion_v2 imaging benchmark
+├── deploy/                 # deploy.sh, backup_db.sh, check_health.sh, sib.service
+├── docs/                   # phase reports and design documents
+├── tests/                  # pytest suite (see Testing)
+├── sib/bots/               # in-game bot opponents (registry, runner, strategies)
+├── Dockerfile
+├── docker-compose.yml
+├── requirements.txt
+├── alembic.ini
+└── pytest.ini
 ```
-sib/
-├── core/                   # تنظیمات مرکزی، مدیریت خطاها و لاگ‌های ساختاریافته
-│   ├── config.py           # اعتبارسنجی با Pydantic Settings
-│   ├── logging.py          # رویدادهای استاندارد (Events) و فرمت لاگ
-│   └── errors.py           # خطاها و پیام‌های فارسی کاربر نهایی
-├── database/               # اتصال، مدل‌ها و مایگریشن‌های دیتابیس
-│   ├── base.py             # کلاس پایه DeclarativeBase و TimestampMixin
-│   ├── connection.py       # موتور ناهمگام (Async Engine) و راه‌اندازی اولیه
-│   ├── models/             # مدل‌های SQLAlchemy 2.0 (User, Group, Match, Game, AdCampaign, ...)
-│   └── migrations/         # مایگریشن‌های امن Alembic (پنج مایگریشن ایمن)
-├── admin/                  # پایه سیستم دسترسی و احراز هویت ادمین‌ها
-│   └── auth.py             # فیلترها و دکوراتورهای سمت سرور
-├── services/               # سرویس‌های کاربر، گروه، ریتینگ، تبلیغات، ریکاوری و تایم‌اوت
-│   ├── membership/         # بررسی واقعی عضویت کانال رسمی با Bot API
-│   ├── user.py             # ثبت و بروزرسانی کاربران
-│   ├── group.py            # ثبت و مقداردهی ریتینگ اولیه گروه‌ها (1500)
-│   ├── rating/             # سرویس ریتینگ الو و ثبت آمار
-│   ├── leaderboard/        # سرویس رتبه‌بندی سراسری و شناسنامه گروه
-│   ├── ad/                 # سرویس مانیتایزیشن، پیسینگ و آنالیتیکس تبلیغات
-│   ├── sponsor/            # سرویس مدیریت کانال‌های اسپانسر و دروازه عضویت
-│   ├── recovery/           # سرویس ریکاوری و پاکسازی استیت در استارت‌آپ
-│   └── timeout/            # سرویس مدیریت ددلاین تایید و نوبت مسابقات
-├── matchmaking/            # صف مسابقات، تطابق و سرویس تایید
-├── games/                  # موتورهای مستقل ۵ بازی
-│   ├── base.py             # کلاس پایه BaseGameEngine
-│   ├── registry.py         # رجیستری موتور بازی‌ها
-│   ├── rock_paper_scissors/# سنگ، کاغذ، قیچی
-│   ├── high_card/          # کارت بالا (High Card)
-│   ├── tic_tac_toe/        # دوز (Tic-Tac-Toe)
-│   ├── connect_four/       # چهار در یک خط (Connect Four)
-│   └── battleship/         # جنگ کشتی‌ها (Battleship)
-├── handlers/               # هندلرهای مستقل و ماژولار تلگرام (aiogram 3)
-│   ├── start.py            # دستور /start (شخصی و گروهی) و بررسی عضویت
-│   ├── admin.py            # دستور /admin، داشبورد مانیتایزیشن و اسپانسرها
-│   ├── leaderboard.py      # لیدربورد و آمار (/leaderboard, /stats)
-│   ├── party/              # پنل بازی‌ها و مدیریت پارتی‌ها
-│   ├── matchmaking/        # جریان تایید و شروع مسابقه
-│   ├── games/              # اکشن‌های اینلاین تمام ۵ بازی و کلیک‌های تبلیغات
-│   └── errors.py           # هندلر خطاهای سرتاسری به زبان فارسی
-├── keyboards/              # کیبوردهای شیشه‌ای (Inline Keyboards)
-├── tests/                  # سوئیت آزمون‌های جامع با pytest (۹۷ آزمون پاس‌شده)
-├── TODO/
-│   └── DECISIONS.md        # مستندات تصمیمات معماری
-├── .env.example            # نمونه متغیرهای محیطی
-├── requirements.txt        # وابستگی‌های پایتون
-├── pytest.ini              # تنظیمات اجرای آزمون‌ها
-└── bot.py                  # نقطه ورود اصلی ربات
-```
 
----
+Note: modules import via the `sib.` package prefix (for example
+`sib.handlers`), so the checkout directory itself is the `sib`
+package and its parent must be on `PYTHONPATH` — the deploy scripts
+do this (`deploy/deploy.sh` exports `$(pwd)/..`).
 
-## 🚀 نصب و راه‌اندازی
+### Design principles
 
-### ۱. نصب وابستگی‌های سیستمی و دیتابیس
+- **Domain vs infrastructure:** handlers only translate Telegram
+  updates; business rules live in `services/`; game rules live in
+  engine classes under `games/` that know nothing about Telegram.
+- **Idempotency:** wallet changes, the daily claim, card upgrades,
+  match results, and invasion contributions carry idempotency keys
+  or applied-flags so retries and double taps cannot double-pay.
+- **Fail-closed:** unknown group power blocks an invasion spawn;
+  a failed `invasion_enabled` read is treated as disabled
+  (`services/maintenance/service.py`); admin commands reject
+  non-admins and group chats.
+- **Feature flags in the database:** runtime switches such as
+  `invasion_enabled` live in `system_config` and are changeable
+  from admin commands without a redeploy (`services/config_store.py`).
+- **Reversible migrations:** schema changes ship as Alembic
+  revisions with downgrades; destructive history is archived, not
+  dropped (migration `039_archive_inv1_tables` renames the v1
+  invasion tables to `_archive_inv1_*`).
+
+## Testing
+
 ```bash
-sudo apt-get update && sudo apt-get install -y mariadb-server
-sudo service mariadb start
+python -m pytest            # full suite
+python -m pytest tests/invasion_v2 tests/shortcuts   # one area
 ```
 
-ایجاد دیتابیس و کاربر در MariaDB:
+The suite currently contains **1,932 test functions in 165
+`test_*.py` files** (counted with `grep -rE "^\s*(async )?def test_"
+tests/ | wc -l`). Tests use in-memory SQLite where MariaDB is not
+required. Structure:
+
+- `tests/` (root) — the bulk of the suite: games, cards, shop,
+  garden, marriage, trading, admin, assets, and migrations.
+- `tests/invasion_v2/` — Invasion v2 rules, imaging, scheduler,
+  recovery, admin, and end-to-end tests (201 tests).
+- `tests/apple_mine/`, `tests/apple_duel/`, `tests/admin/`,
+  `tests/groups/`, `tests/help/`, `tests/shortcuts/` — focused
+  suites for those features.
+
+## Installation
+
+### Prerequisites
+
+- Python 3.12 (the version used by the `Dockerfile`).
+- MariaDB 10.11 (the version pinned in `docker-compose.yml`), or
+  Docker with Compose.
+- A Telegram bot token from BotFather, its username, and the
+  numeric Telegram IDs of the bot's admins.
+
+### Setup
+
+```bash
+git clone <this-private-repo> sib
+cd sib
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env   # then edit .env (see below)
+```
+
+Create the database (or use `docker compose up -d mariadb`):
+
 ```sql
 CREATE DATABASE IF NOT EXISTS sib CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE USER IF NOT EXISTS 'sib'@'localhost' IDENTIFIED BY 'sib_password';
@@ -74,140 +342,106 @@ GRANT ALL PRIVILEGES ON sib.* TO 'sib'@'localhost';
 FLUSH PRIVILEGES;
 ```
 
-### ۲. نصب بسته‌های پایتون
-```bash
-pip install -r requirements.txt
-```
+Apply migrations and run:
 
-### ۳. تنظیم متغیرهای محیطی
-یک کپی از `.env.example` بسازید و توکن ربات تلگرام و آیدی ادمین‌ها را تنظیم کنید:
 ```bash
-cp .env.example .env
-nano .env
-```
-
-### ۴. اجرای مایگریشن‌های امن دیتابیس
-```bash
-cd sib
 alembic upgrade head
+PYTHONPATH=.. python bot.py   # imports use the `sib.` package prefix
 ```
 
-### ۵. اجرای آزمون‌های خودکار
+Or, with Docker (migrations run automatically before polling):
+
 ```bash
-python3 -m pytest -v
+docker compose up -d --build
 ```
 
-### ۶. اجرای ربات
-```bash
-python3 bot.py
-```
+The environment file is `.env` at the repo root (see
+`.env.example`). Required keys: `TELEGRAM_BOT_TOKEN`,
+`TELEGRAM_BOT_USERNAME`, `TELEGRAM_ADMIN_IDS`, `DATABASE_URL`
+(async, `mysql+asyncmy://...`), and `DATABASE_SYNC_URL` (sync,
+`mysql+pymysql://...`, used by Alembic). Optional keys with defaults
+in `core/config.py` include `OFFICIAL_CHANNEL_ID`,
+`OFFICIAL_CHANNEL_LINK`, `MEMBERSHIP_CHECK_ENABLED`, matchmaking and
+game timeouts, rate-limit settings, and `LOG_LEVEL`.
 
----
+## BotFather setup
 
-## 🛡️ ویژگی‌های پیاده‌سازی شده
+- **Group Privacy → OFF**: the bot must see ordinary group messages,
+  because exact text shortcuts («سیب», «سیب کارت», ...) are plain
+  messages, not commands.
+- **Allow Groups → ON**: the game is played in groups.
+- **Commands menu**: no command list is registered from code
+  (`set_my_commands` is never called), so set the menu manually in
+  BotFather to match the user-facing commands actually registered
+  in `handlers/`: `/start`, `/games`, `/battle`, `/profile`,
+  `/cards`, `/garden`, `/shop`, `/trade`, `/wiki`, `/mine`,
+  `/chest`, `/leaderboard` (`/top`), `/stats`. Admin-only commands
+  (`/admin`, `/users`, `/broadcast`, `/setasset`, `/inv2_*`) do not
+  belong in the public menu.
 
-### فاز ۱ — زیرساخت پایه (Foundation)
-1. **طرحواره کامل دیتابیس اولیه:** جداول `users`, `groups`, `games`, `matches`, `match_players`, `ratings`, `sponsor_channels`.
-2. **مایگریشن‌های برگشت‌پذیر و ایمن:** با استفاده از ابزار Alembic روی MariaDB با کاراکترست `utf8mb4`.
-3. **دروازه عضویت کانال رسمی (Official Channel Gate):** استعلام مستقیم وضعیت عضویت از تلگرام (`get_chat_member`).
-4. **سیستم احراز هویت ادمین:** بررسی سمت سرور براساس شناسه‌های عددی تلگرام بدون هیچ هاردکد کردن در سورس کد.
-5. **رابط کاربری فارسی:** لحن طبیعی، خودمانی، همراه با شوخ‌طبعی کاراکتر سیب و خطاهای دوستانه.
-6. **لاگ‌های ساختاریافته رویدادها (Structured Events):** مطابق استانداردهای تعریف شده در مستند مشخصات.
+## Performance
 
-### فاز ۲ — گروه‌ها و پارتی‌ها (Groups & Parties)
-1. **طرحواره پارتی‌ها و اعضا:** جداول `parties` و `party_members` به همراه کلیدهای خارجی، شاخص‌ها و محدودیت یکتایی (`uq_party_member`) از طریق مایگریشن امن `002_parties`.
-2. **قانون نشست یکتا (One-Active-Session Rule):** اعتبارسنجی در سطح سرور از طریق `SessionService` که مانع حضور همزمان یک کاربر در چند پارتی یا مسابقه می‌شود.
-3. **تشکیل پارتی تیمی و انفرادی:** پشتیبانی از حالت‌های Solo (۱ نفره)، تیمی 2v2 (۲ نفره) و تیمی 4v4 (۴ نفره) بر اساس قابلیت‌های هر بازی.
-4. **ایمنی در برابر همروندی (Concurrency-Safe Row Locking):** استفاده از `with_for_update()` برای جلوگیری از پر شدن همزمان آخرین ظرفیت توسط دو کاربر به صورت همزمان.
-5. **رابط کاربری و کارت پارتی فارسی:** نمایش زنده اعضای ملحق شده، تعداد جای خالی، دکمه‌های پیوستن، خروج و لغو پارتی.
-6. **فهرست پارتی‌های فعال گروه:** امکان مشاهده و پیوستن به پارتی‌های باز هر گروه با دستور `/games` یا دکمه شیشه‌ای.
+Invasion v2 image composition is the only benchmarked component.
+`docs/invasion-rework/PHASE-8A-REPORT.md` reports 20 warm
+compositions per output (Python 3.11.2, Pillow 12.3.0, Linux x86_64):
+announcement 10.85 ms mean, join-normal 104.20 ms, join-crit
+117.02 ms, victory 24.77 ms, defeat 21.87 ms, all under the report's
+300 ms target. Reproduce with
+`python scripts/invasion_v2/benchmark_imaging.py`. Nothing else is
+benchmarked in this repository.
 
-7. **بازی رفیقانه با اعضای گروه (Friendly Match Type):** در هر حالت (Solo / 2v2 / 4v4) علاوه بر «پیدا کردن حریف»، گزینه‌ی «بازی با اعضای گروه» وجود دارد؛ پارتی رفیقانه هر دو تیم را در همان گروه می‌سازد (2v2 تا ۴ نفر و 4v4 تا ۸ نفر)، جای خالی را می‌توان با بات‌های بازی‌محور پر کرد، نتیجه روی رتبه/آمار گروه اثری ندارد، به‌جای نهال سیب جایزه می‌دهد (روزانه محدود و قابل تنظیم) و پس از پایان، «بازی مجدد رفیقانه» دارد.
+## Roadmap
 
-### فاز ۳ — صف مسابقات و تطابق (Matchmaking & Acceptance)
-1. **طرحواره صف مسابقات و نگهداری پیام‌ها:** جدول `matchmaking_queue` و ستون‌های شناسه‌های پیام گروه‌ها در `matches` از طریق مایگریشن امن `003_matchmaking`.
-2. **انطباق‌پذیری قطعی (Hard Compatibility):** تضمین تطابق ۱۰۰٪ روی شناسه بازی، حالت بازی و سایز تیم‌ها.
-3. **ممنوعیت مسابقه درون‌گروهی (Cross-Group Enforcement):** عدم امکان رقابت دو تیم از یک گروه تلگرام تحت هر شرایطی.
-4. **الگوریتم قطعی و تست‌پذیر گسترش ریتینگ:** شروع از بازه ۱۰۰ الو و گسترش ۶۰ الو بر دقیقه تا بازه نامحدود بعد از ۵ دقیقه.
-5. **تراکنش اتمیک ایجاد مسابقه:** قفل همزمان ردیف‌های صف و پارتی برای جلوگیری از تطابق تکراری یک پارتی در چند مسابقه.
-6. **جریان تایید و رد مسابقه (Acceptance Flow):** تایید یک‌باره از هر طرف، تایم‌اوت ۱۲۰ ثانیه، لغو امن بدون تغییر ریتینگ در صورت رد، و شروع شمارش معکوس پس از تایید هر دو سمت.
-7. **رعایت کامل حریم خصوصی در حالت انفرادی (Solo Privacy):** نمایش صرف نام نمایشی تلگرام حریف بدون افشای آیدی عددی، نام کاربری یا گروه حریف.
+Done:
 
-### فاز ۴ — اولین بازی کامل مرجع: سنگ، کاغذ، قیچی (First Complete Game)
-1. **انتزاع مستقل موتور بازی‌ها (`BaseGameEngine`):** جداسازی کامل منطق بازی، اعتبارسنجی حرکات، ماشین حالت راندها و رندرینگ از تلگرام و صف حریف‌یابی.
-2. **پیاده‌سازی بازی مرجع سنگ، کاغذ، قیچی (`RockPaperScissorsEngine`):**
-   - انتخاب‌های سنگ، کاغذ، قیچی.
-   - قفل انتخاب بلافاصله پس از لمس دکمه.
-   - محرمانگی انتخاب‌ها تا زمان ثبت انتخاب هر دو طرف.
-   - آشکارسازی حماسی نتیجه نهایی و تعیین برد/باخت/مساوی.
-3. **سرویس ریتینگ و نتایج (`RatingService`):**
-   - فرمول استاندارد Elo با ضریب K=32.
-   - به‌روزرسانی ۱۰۰٪ اتمیک و تضمین تکرارناپذیری (Idempotent) با فلگ `rating_applied`.
-   - ذخیره تغییر ریتینگ گروه ۱ و ۲ در جدول `matches`.
-4. **ثبت آمار مجزای بازیکنان (`PlayerStats`):** ثبت تعداد بازی، برد، باخت و مساوی هر بازیکن از طریق مایگریشن `004_gameplay_and_ratings`.
-5. **تجربه کاربری پس از بازی (Post-Match UX):** نمایش جزئیات انتخاب‌ها، برنده، تغییرات ریتینگ هر گروه و دکمه شروع بازی جدید.
+- [x] Foundation: MariaDB schema, Alembic migrations, admin auth,
+  official-channel membership gate.
+- [x] Parties, cross-group matchmaking, and the five classic games.
+- [x] Cards with levels/factions/skins, shop and chests, garden,
+  trading, marriage, XP progression.
+- [x] Invasion v2 (46 migrations; v1 tables archived, not dropped),
+  Apple Mine, Apple Duel, daily chest, text shortcuts, structured
+  help, admin centre with broadcast and ban.
 
-### فاز ۵ — ریتینگ و جدول رده‌بندی (Rating & Leaderboard)
-1. **جدول رده‌بندی سراسری گروه‌ها (`/leaderboard` یا `/top`):** رتبه‌بندی برترین گروه‌های تلگرام با نمایش مدال‌ها، ریتینگ جهانی و آمار برد/باخت.
-2. **سرویس محاسبات رتبه و آمار گروه (`LeaderboardService`):** محاسبه لحظه‌ای رتبه در جدول کل، تعداد بازی‌ها و درصد پیروزی (Win Rate) برای گروه‌ها.
-3. **کارنامه مشارکت فردی بازیکنان (`/stats` در چت خصوصی):** نمایش تعداد مسابقات، بردها، باخت‌ها و درصد موفقیت بازیکن به همراه یادآوری سیاست ریتینگ تیمی.
-4. **کیبوردهای شیشه‌ای ناوبری لیدربورد و آمار:** دکمه‌های بروزرسانی، مشاهده رتبه گروه و دسترسی آسان از طریق پنل اصلی ربات.
+Open (from `docs/`, not invented):
 
-### فاز ۶ — بازی‌های باقیمانده (Remaining Games)
-1. **کارت بالا (High Card):**
-   - حالت انفرادی (Solo)، مقایسه رتبه کارت‌های استاندارد ۵۲ تایی از ۲ تا ۱۴ (آس بالاترین).
-   - کشیدن کارت تصادفی، قفل کارت تا اقدام هر دو بازیکن و فاش‌سازی همزمان، رتبه بالاتر برنده، رتبه‌های برابر مساوی.
-2. **دوز (Tic-Tac-Toe):**
-   - حالت انفرادی (Solo)، صفحه ۳ در ۳.
-   - تصادفی‌سازی بازیکن شروع‌کننده / علامت X برای تضمین عدالت، نوبت‌های متناوب، برد با خط ۳ تایی و مساوی با پر شدن صفحه.
-3. **چهار در یک خط (Connect Four):**
-   - پشتیبانی از حالت‌های Solo (1v1)، تیمی 2v2 و 4v4.
-   - صفحه ۶ سطر در ۷ ستون، سقوط فیزیکی مهره به پایین‌ترین ردیف خالی ستون انتخابی.
-   - چرخش دقیق نوبت تیمی (`A1 -> B1 -> A2 -> B2 -> ...`) و تشخیص خطوط ۴ تایی افقی، عمودی و قطری.
-4. **جنگ کشتی‌ها (Battleship):**
-   - پشتیبانی از حالت‌های Solo (1v1)، 2v2 و 4v4 روی صفحه ۸ در ۸.
-   - ۵ کشتی به ازای هر تیم (اندازه‌های ۴، ۳، ۳، ۲، ۲ = ۱۴ خانه کل ناوگان) با چیدمان خودکار تصادفی بدون تداخل.
-   - بازخورد شلیک (💥 اصابت، 🌊 خطا، اعلام غرق شدن کشتی) و رادار تعاملی شلیک‌ها.
-5. **معماری مشترک اکشن‌ها (`process_game_action`):**
-   - هماهنگ‌سازی و بروزرسانی بلادرنگ پیام‌های تلگرامی هر دو گروه و مدیریت دکمه‌های اینلاین فعال و غیرفعال.
-   - ثبت رویدادهای ساختاریافته `MOVE_PLAYED` و اتصال یکپارچه با سرویس ریتینگ Elo.
+- [ ] Invasion v2 live rollout: per `docs/invasion-rework/
+  PHASE-7-ROLLOUT.md`, enable `invasion_enabled` for one approved
+  test group for 24 hours before wider rollout; the flag ships off.
+- [ ] Shop-chest product decisions listed in `docs/shop-chests.md`:
+  repeat-purchase limits, card-pool source, and re-buying a
+  traded-away card (currently unlimited purchases, full-price re-buy).
 
-### فاز ۷ — مانیتایزیشن و مدیریت اسپانسرها (Monetization & Ads)
-1. **جداسازی کامل هسته از مانیتایزیشن (Decoupled Core & Ads):**
-   - تبلیغات **صرفاً پس از اتمام مسابقه (Post-match)** نمایش داده می‌شوند.
-   - **اصل تاب‌آوری:** شکست در تحویل یا پردازش تبلیغات هرگز مانع از ذخیره مسابقه، به‌روزرسانی ریتینگ یا ثبت نتایج نمی‌شود.
-2. **سرویس هوشمند تبلیغات (`AdService`):**
-   - ثبت کمپین‌ها با فیلدهای نام اسپانسر، متن فارسی، تصویر، برچسب CTA، لینک مقصد و اولویت.
-   - الگوریتم تناوب و پیسینگ هوشمند (`smart`, `every_match`, `every_2_matches`, `every_3_matches`) برای جلوگیری از تکرار آزاردهنده.
-   - کنترل سقف ایمپرشن (`max_impressions`) و زمان‌بندی تاریخ شروع/پایان.
-3. **تحلیل‌ها و سنجه‌های مانیتایزیشن (Analytics):**
-   - شمارش بلادرنگ ایمپرشن‌ها (`impressions_count`)، کلیک‌ها (`clicks_count`) و محاسبه خودکار نرخ کلیک (`CTR`).
-   - ثبت رویدادهای استاندارد لاگ: `AD_DISPLAYED` و `AD_CLICKED`.
-4. **سرویس مدیریت کانال‌های اسپانسر و دروازه عضویت (`SponsorService`):**
-   - امکان افزودن/حذف کانال‌های رسمی و اسپانسر، تنظیم اولویت و تعیین اجباری/اختیاری بودن در دروازه عضویت.
-5. **داشبورد مدیریت ادمین تلگرام (`/admin`):**
-   - مشاهده آمار جامع سیستم، مدیریت مستقیم کمپین‌های تبلیغاتی (فعال/غیرفعال‌سازی با دکمه شیشه‌ای) و نظارت بر کانال‌های اسپانسر.
+There are no `TODO`/`FIXME` markers in the Python source; longer
+design history is in `TODO/DECISIONS.md`.
 
-### فاز ۸ — مقاوم‌سازی، امنیت، همروندی و ریکاوری (Hardening & Reliability)
-1. **سرویس بازیابی خودکار در استارت‌آپ (`RecoveryService`):**
-   - پاک‌سازی و ابطال ایمن مسابقات منقضی شده در مرحله تایید (`acceptance_timeout`) و بازگرداندن پارتی‌ها به حالت `FULL`.
-   - پاک‌سازی صف‌های معلق مسابقه‌یابی (`cleared_queue_entries`).
-   - ابطال مسابقات فعال با ددلاین سپری‌شده نوبت در زمان خاموشی سرور (`recovery_turn_timeout`).
-   - انتشار لاگ استاندارد ساختاریافته `SYSTEM_RESTART_RECOVERY`.
-2. **سرویس مدیریت تایم‌اوت‌ها (`TimeoutService`):**
-   - فرآیند بررسی پس‌زمینه ددلاین تایید ۱۲۰ ثانیه‌ای.
-   - فرآیند اتمام مهلت نوبت بازیکن و اعلام باخت با سلب صلاحیت (Forfeit) به همراه به‌روزرسانی ریتینگ الو.
-3. **حفاظت در برابر همروندی شدید (High Concurrency Protection):**
-   - آزمون استرس رقابت ۱۰ درخواست همزمان برای آخرین ظرفیت پارتی با قفل سطر (`with_for_update`) و تضمین موفقیت دقیقاً ۱ نفر و رد تمیز بقیه با `PartyFullException`.
-4. **دفاع در برابر دکمه‌های باطله و کلیک‌های تکراری (Stale & Duplicate Callbacks):**
-   - پاسخ دوستانه و ایمن به کلیک روی مسابقات ناموجود، پایان‌یافته یا لغو شده بدون خطا.
-   - جلوگیری اتمیک از ثبت تکراری حرکات با دابل‌کلیک سریع (Double Action Protection).
-   - هندلینگ سایلنت کلیک روی دکمه‌های غیرفعال (`noop`) برای حذف اسپینر لودینگ تلگرام.
+## Documentation index
 
-### ارتقای کارت (Card Upgrade)
-1. **سطح‌ها:** هر کارت از سطح ۱ تا ۱۰ ارتقا پیدا می‌کند و هر بار دقیقاً یک سطح بالا می‌رود.
-2. **قانون پیشرفت:** هر ارتقا به هر سه ویژگی (💪 قدرت، ⚡ سرعت، 🧠 هوش) دقیقاً `+10` اضافه می‌کند. ویژگی‌ها ذخیره نمی‌شوند و از فرمول `پایه شخصیت + ۱۰ × (سطح − ۱)` محاسبه می‌شوند؛ در دیتابیس فقط `player_cards.level` نگه‌داری می‌شود.
-3. **هزینه:** سیب معمولی (کیف‌پول) به‌علاوهٔ یک سیب ویژه: 🌕 طلایی برای سطح‌های ۱ تا ۴، 💎 الماسی برای ۴ تا ۷ و 🌑 سیاه برای ۷ تا ۱۰. جدول هزینه یک‌جا در `CONFIG_DEFAULTS["card_upgrade_costs"]` (`services/config_store.py`) است و بدون تغییر کد از طریق تنظیمات قابل بازتوازن است.
-4. **اتمیک بودن:** `CardUpgradeService.upgrade` کارت، آیتم و کیف‌پول را قفل می‌کند، منابع را کامل بررسی می‌کند و سطح، سیب‌ها و آیتم را در یک تراکنش تغییر می‌دهد. دکمهٔ ارتقا سطحی را که کاربر دیده همراه خودش دارد، پس دابل‌کلیک هرگز دو سطح نمی‌خرد.
-5. **مایگریشن `022_card_upgrade_levels`:** داده‌های قدیمی (ویژگی‌ها و `boosted_*`) در `player_card_legacy_stats` آرشیو می‌شوند، همهٔ کارت‌ها سطح ۱ می‌شوند و سپس ستون‌های قدیمی حذف می‌شوند. دانگریدِ مایگریشن آرشیو را برمی‌گرداند.
-6. **تصویر صفحه:** `assets/items/card_upgrade.jpg` (۱:۱) که با `/setasset card_upgrade` قابل جایگزینی است.
+- `docs/admin/` — A1–A5 reports: admin centre, user management,
+  broadcast, and related admin phases.
+- `docs/apple-duel/` and `docs/apple-duel.md` — Apple Duel design
+  and the D1 report.
+- `docs/apple-mine/` — Apple Mine M1 report.
+- `docs/invasion-rework/` — Invasion v2 design, narrative, phase
+  reports (0–8H), rollout plan, Persian text audit, archived v1
+  balance material (`archive/`), and composed sample images
+  (`samples/`).
+- `docs/card-lore.md` — card character lore.
+- `docs/invasion-four-wave-battles.md` — the earlier four-wave
+  invasion design (superseded by Invasion v2).
+- `docs/invasion-telegram.md` — invasion Telegram presentation notes.
+- `docs/lock-order.md` — database row-lock ordering rules.
+- `docs/shop-chests.md` — shop chest design, operations, known limits.
+- `RUNBOOK.md` (repo root) — production operations and deployment.
+
+## Support
+
+Support handle: **@sibgame_official** (the `SUPPORT_HANDLE` constant
+in `services/help_content.py`, also shown by `/start`). The official
+channel configured by default is `@sib_official`
+(`OFFICIAL_CHANNEL_ID` in `core/config.py`).
+
+## License
+
+This project is proprietary and confidential.  
+All rights reserved.
