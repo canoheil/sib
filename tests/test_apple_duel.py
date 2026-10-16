@@ -500,17 +500,16 @@ async def test_total_transport_failure_then_recover_final(db_session, monkeypatc
         send_message=AsyncMock(side_effect=RuntimeError("offline")),
         edit_message_text=AsyncMock(side_effect=RuntimeError("offline")),
     )
+    from sib.services import apple_duel_presentation as presentation
+
+    monkeypatch.setattr(presentation, "DUEL_SCENE_DELAY_SECONDS", 0)
     monkeypatch.setattr(
         Presentation, "_photo", AsyncMock(side_effect=RuntimeError("offline"))
     )
-    for _ in range(6):
-        await db_session.execute(
-            update(AppleDuel)
-            .where(AppleDuel.id == duel.id)
-            .values(next_scene_at=now_utc() - timedelta(seconds=1))
-        )
-        await db_session.commit()
-        await Presentation.recover_and_publish(bot)
+    await Presentation.recover_and_publish(bot)
+    task = presentation._play_tasks.get(duel.id)
+    if task:
+        await task
     await db_session.rollback()
     await db_session.refresh(duel)
     # Failed deliveries return their scene: nothing is skipped while the
@@ -522,18 +521,18 @@ async def test_total_transport_failure_then_recover_final(db_session, monkeypatc
     assert await SeedlingService.get_total(db_session, battle.winner_id) == 1
     bot.send_photo.side_effect = None
     bot.send_message.side_effect = None
-    for _ in range(7):
-        await db_session.execute(
-            update(AppleDuel)
-            .where(AppleDuel.id == duel.id)
-            .values(next_scene_at=now_utc() - timedelta(seconds=1))
-        )
-        await db_session.commit()
-        await Presentation.recover_and_publish(bot)
-        await db_session.rollback()
-        await db_session.refresh(duel)
-        if duel.terminal_presented:
-            break
+    await db_session.execute(
+        update(AppleDuel)
+        .where(AppleDuel.id == duel.id)
+        .values(next_scene_at=now_utc() - timedelta(seconds=1))
+    )
+    await db_session.commit()
+    await Presentation.recover_and_publish(bot)
+    task = presentation._play_tasks.get(duel.id)
+    if task:
+        await task
+    await db_session.rollback()
+    await db_session.refresh(duel)
     assert duel.cursor == 6 and duel.status == "COMPLETED"
     assert duel.terminal_presented
     assert await SeedlingService.get_total(db_session, battle.winner_id) == 1
