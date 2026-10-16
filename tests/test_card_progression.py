@@ -79,8 +79,8 @@ def test_every_real_card_keeps_its_level_one_base_and_gains_10_each(entry):
 
 # The four cards this suite audited first - pinned so a rebalance of an
 # existing card can never slip in unnoticed. The roster is append-only, so
-# the assertion below is a SUBSET check (11 more cards were added later and
-# are covered by the parametrized progression test above).
+# the assertion below is a SUBSET check (later deliveries added more cards,
+# each covered by the parametrized progression test above).
 AUDITED_LEVEL_ONE = {
     "sib_sorkh": (22, 20, 18),
     "sib_sabz": (16, 18, 26),
