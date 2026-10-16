@@ -16,7 +16,7 @@ from sib.services.apple_duel import AppleDuelService, now_utc
 from sib.services.character_art import resolve_character_photo
 from sqlalchemy import select, update
 
-DUEL_SCENE_DELAY_SECONDS = 1.5
+DUEL_SCENE_DELAY_SECONDS = 3.0
 _play_locks: dict[int, asyncio.Lock] = {}
 
 # Pre-generated cast-free arena plates (see assets/apple_duel/manifest.json
