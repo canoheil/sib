@@ -14,7 +14,10 @@ from sib.database.connection import get_session
 from sib.database.models import AppleBattle, AppleDuel
 from sib.services.apple_duel import AppleDuelService, now_utc
 from sib.services.character_art import resolve_character_photo
-from sqlalchemy import select
+from sqlalchemy import select, update
+
+DUEL_SCENE_DELAY_SECONDS = 1.5
+_play_locks: dict[int, asyncio.Lock] = {}
 
 # Pre-generated cast-free arena plates (see assets/apple_duel/manifest.json
 # and .agents/tasks/apple-duel-cinematic-presentation/ART_DIRECTION.md).
@@ -215,6 +218,70 @@ class AppleDuelPresentation:
             and not duel.terminal_presented
         ):
             await cls.publish_terminal(bot, duel, battle)
+
+    @classmethod
+    async def play(cls, bot, duel_id: int) -> None:
+        """Play the durable scene queue, one scene at a time, for this duel."""
+        lock = _play_locks.setdefault(duel_id, asyncio.Lock())
+        async with lock:
+            try:
+                while True:
+                    # Remember the cursor so a transport failure (which tick
+                    # releases back to the same cursor) stops this worker.
+                    async with get_session() as session:
+                        before = await session.get(AppleDuel, duel_id)
+                        if before is None:
+                            logger.info(f"Apple Duel player exited {duel_id}: missing")
+                            return
+                        before_cursor = before.cursor
+
+                    await cls.tick(bot, duel_id)
+
+                    async with get_session() as session:
+                        duel = await session.get(AppleDuel, duel_id)
+                        if duel is None:
+                            logger.info(f"Apple Duel player exited {duel_id}: missing")
+                            return
+                        status = duel.status
+                        cursor = duel.cursor
+                        terminal_presented = duel.terminal_presented
+
+                    if status in ("COMPLETED", "REJECTED", "EXPIRED"):
+                        logger.info(
+                            f"Apple Duel player exited {duel_id}: terminal "
+                            f"(presented={terminal_presented})"
+                        )
+                        return
+                    if status != "ACCEPTED" or cursor >= 6:
+                        logger.info(f"Apple Duel player exited {duel_id}: no scenes")
+                        return
+                    if cursor <= before_cursor:
+                        # tick releases failed scenes durably; maintenance will
+                        # retry them on a later recovery sweep.
+                        logger.info(f"Apple Duel player exited {duel_id}: no progress")
+                        return
+
+                    # claim_scene retains its durable retry deadline (normally
+                    # four seconds). Once delivery advanced the cursor, make
+                    # the next scene immediately claimable; this task's 1.5s
+                    # sleep is the presentation pacing, and recovery can still
+                    # resume immediately after a process restart.
+                    async with get_session() as session:
+                        await session.execute(
+                            update(AppleDuel)
+                            .where(
+                                AppleDuel.id == duel_id,
+                                AppleDuel.status == "ACCEPTED",
+                                AppleDuel.cursor == cursor,
+                            )
+                            .values(next_scene_at=now_utc())
+                        )
+
+                    await asyncio.sleep(DUEL_SCENE_DELAY_SECONDS)
+            except Exception:
+                logger.warning(
+                    f"Apple Duel player failed {duel_id}", exc_info=True
+                )
 
     @staticmethod
     async def publish_terminal(bot, duel, battle):
