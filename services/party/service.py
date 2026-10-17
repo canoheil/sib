@@ -11,7 +11,7 @@ Bot filling therefore lives here (party/team logic) and never inside a game.
 """
 
 from typing import List, Optional, Tuple
-from sqlalchemy import func, select, and_
+from sqlalchemy import func, select, and_, update
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from sib.core.errors import (
@@ -66,6 +66,40 @@ class PartyService:
         return game
 
     @classmethod
+    async def _remove_other_memberships(cls, session: AsyncSession, user_id: int, keep_party_id=None) -> None:
+        """Remove a user's memberships in other parties under their user lock."""
+        from sib.database.models import MatchmakingQueue
+
+        stmt = select(PartyMember, Party).join(Party, Party.id == PartyMember.party_id).where(
+            PartyMember.user_id == user_id
+        ).with_for_update()
+        if keep_party_id is not None:
+            stmt = stmt.where(PartyMember.party_id != keep_party_id)
+        rows = (await session.execute(stmt)).all()
+        for member, party in rows:
+            # A live match owns its participants until settlement; never detach
+            # a player from a game already in progress.
+            from sib.database.models import Match, MatchState
+            active_match = await session.scalar(
+                select(Match.id).where(
+                    Match.state == MatchState.ACTIVE,
+                    ((Match.party1_id == party.id) | (Match.party2_id == party.id)),
+                ).limit(1)
+            )
+            if active_match:
+                continue
+            await session.delete(member)
+            party.current_players_count = max(0, party.current_players_count - 1)
+            if party.current_players_count == 0:
+                party.status = PartyStatus.CANCELLED
+            elif party.status in (PartyStatus.OPEN, PartyStatus.FULL):
+                party.status = PartyStatus.OPEN
+            await session.execute(
+                update(MatchmakingQueue).where(MatchmakingQueue.party_id == party.id)
+                .values(is_active=False)
+            )
+
+    @classmethod
     async def create_party(
         cls,
         session: AsyncSession,
@@ -85,6 +119,7 @@ class PartyService:
         # concurrent creations by the same user (double tap / retry), so
         # only one can observe "no active session".
         await SessionService.lock_user(session, creator_user_id)
+        await cls._remove_other_memberships(session, creator_user_id)
         if await SessionService.has_active_session(session, creator_user_id):
             raise ActiveSessionExistsException()
 
@@ -196,6 +231,7 @@ class PartyService:
         # 1. Check one-active-session rule (per-user lock: same user can
         #    never pass this check twice concurrently).
         await SessionService.lock_user(session, user_id)
+        await cls._remove_other_memberships(session, user_id, keep_party_id=party_id)
         if await SessionService.has_active_session(session, user_id):
             raise ActiveSessionExistsException()
 
@@ -252,6 +288,9 @@ class PartyService:
                 raise PartyFullException()
         else:
             team = 1
+
+        # User lock serializes membership transitions across all parties.
+        await cls._remove_other_memberships(session, user_id, keep_party_id=party.id)
 
         # Add member
         member = PartyMember(party_id=party.id, user_id=user_id, team=team)
