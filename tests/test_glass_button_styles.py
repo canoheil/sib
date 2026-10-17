@@ -128,7 +128,7 @@ def test_connect_four_full_column_is_red_and_playable_columns_blue(solo_players)
     assert kb.inline_keyboard[0][0].callback_data == "c4_action:1:0"
 
 
-def test_high_card_keep_is_green_swap_and_cards_are_blue(solo_players):
+def test_high_card_keep_is_green_swap_is_blue_and_card_value_is_hidden(solo_players):
     engine = HighCardEngine()
     state = engine.create_initial_state(list(solo_players), mode="solo")
 
@@ -136,23 +136,22 @@ def test_high_card_keep_is_green_swap_and_cards_are_blue(solo_players):
     kb = engine.get_keyboard(state, 1, 901)
     assert kb.inline_keyboard[0][0].style == "primary"
 
-    # Phase 2: keep (green confirm) + swap (blue) + the card itself (blue).
+    # Phase 2: the private card value stays out of the group keyboard.
     player = state["players"]["901"]
-    player["card_rank"] = "A"
-    player["card_suit"] = "♠"
+    player["card_rank"] = 14
+    player["card_suit"] = "♠️"
     kb = engine.get_keyboard(state, 1, 901)
     by_text = _by_text(kb)
     assert by_text["✅ نگه داشتن"].style == "success"
     assert by_text["🔄 تعویض"].style == "primary"
-    # The card label mirrors ``_card_str`` (suit + Persian rank name).
-    card_button = [b for b in _buttons(kb) if (b.text or "").startswith("🃏 ")][0]
-    assert card_button.callback_data == "noop"
-    assert card_button.style == "primary"
+    labels = " ".join(button.text for button in _buttons(kb))
+    assert "تک / آس (A)" not in labels and "♠️" not in labels
 
-    # Locked, waiting for the opponent: blue informational card.
+    # Locked, waiting for the opponent: neutral informational button.
     player["locked"] = True
     kb = engine.get_keyboard(state, 1, 901)
     assert [b.style for b in _buttons(kb)] == ["primary"]
+    assert "🔒 تصمیم ثبت شد" == _buttons(kb)[0].text
 
 
 def test_rock_paper_scissors_choices_and_lock_are_blue(solo_players):

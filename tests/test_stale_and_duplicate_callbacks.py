@@ -132,6 +132,7 @@ async def test_duplicate_action_click_rejected_idempotently(db_session):
     mock_cb1.from_user = TelegramUser(id=u1.id, is_bot=False, first_name=u1.first_name)
     mock_cb1.message = MagicMock(spec=Message)
     mock_cb1.message.chat = TelegramChat(id=g1.id, type="supergroup", title=g1.title)
+    mock_cb1.message.message_id = 111
     mock_cb1.message.edit_text = AsyncMock()
     mock_cb1.answer = AsyncMock()
     await handle_rps_action(mock_cb1, mock_bot)
@@ -143,10 +144,12 @@ async def test_duplicate_action_click_rejected_idempotently(db_session):
     mock_cb2.from_user = TelegramUser(id=u1.id, is_bot=False, first_name=u1.first_name)
     mock_cb2.message = MagicMock(spec=Message)
     mock_cb2.message.chat = TelegramChat(id=g1.id, type="supergroup", title=g1.title)
+    mock_cb2.message.message_id = 111
     mock_cb2.message.edit_text = AsyncMock()
     mock_cb2.answer = AsyncMock()
     await handle_rps_action(mock_cb2, mock_bot)
-    assert "قفل کرده‌اید" in mock_cb2.answer.call_args[0][0]
+    assert "قبلاً ثبت شده بود" in mock_cb2.answer.call_args[0][0]
+    assert mock_cb2.answer.call_args.kwargs["show_alert"] is False
 
 
 @pytest.mark.asyncio

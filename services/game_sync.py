@@ -75,6 +75,19 @@ async def sync_match_messages(
     players_by_group = {p.group_id: p.user_id for p in match.players}
 
     if is_friendly(match):
+        # A first RPS choice is a hidden commit. Leave the shared public board
+        # untouched until the other player commits (unless a timeout has
+        # already ended the match, in which case the terminal board must sync).
+        rps_players = list((state.get("players") or {}).values())
+        if (
+            not match_over
+            and engine.game_code == "rock_paper_scissors"
+            and rps_players
+            and not state.get("reveal_pending")
+            and any(player.get("locked") for player in rps_players)
+        ):
+            return
+
         # Friendly matches hold BOTH teams in ONE group and share ONE board
         # message (group1 == group2): sync it exactly once, from the current
         # player's team perspective, with the neutral team-named finale.
