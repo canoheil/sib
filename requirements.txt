@@ -1,4 +1,4 @@
-aiogram>=3.30.0,<4.0.0
+aiogram>=3.31.0,<4.0.0
 SQLAlchemy[asyncio]>=2.0.30,<3.0.0
 asyncmy>=0.2.14
 pymysql>=1.2.3

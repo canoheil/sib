@@ -3,7 +3,7 @@
 A Persian-language, apple-themed multiplayer game bot for Telegram groups, set in the fantasy world of Ovarya (اواریا).
 
 ![Python](https://img.shields.io/badge/Python-3.12-blue)
-![aiogram](https://img.shields.io/badge/aiogram-%3E%3D3.30%2C%20%3C4.0-blue)
+![aiogram](https://img.shields.io/badge/aiogram-%3E%3D3.31%2C%20%3C4.0-blue)
 ![MariaDB](https://img.shields.io/badge/MariaDB-10.11-blue)
 ![Tests](https://img.shields.io/badge/tests-1932-brightgreen)
 
@@ -230,7 +230,7 @@ contains one of these phrases does not trigger it:
 | Layer | Technology |
 | --- | --- |
 | Language | Python 3.12 (Docker image `python:3.12-slim`) |
-| Bot framework | aiogram >=3.30, <4.0 (long polling) |
+| Bot framework | aiogram >=3.31, <4.0 (long polling; ephemeral messages) |
 | Database | MariaDB 10.11 (`docker-compose.yml`), `utf8mb4` |
 | ORM / drivers | SQLAlchemy 2.0 async (`asyncmy`), `pymysql` for Alembic |
 | Migrations | Alembic, 46 revisions (`database/migrations/versions/`) |

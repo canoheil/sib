@@ -15,11 +15,16 @@ async def handle_high_card_action(callback: CallbackQuery, bot: Bot):
     action_type = parts[2]
 
     if action_type == "draw":
-        # Initial card draw - just triggers validate_action which draws the card
-        await process_game_action(callback, bot, match_id, {"draw": True})
+        # The common transaction draws and commits the card, then sends it
+        # privately to this player before refreshing the neutral group board.
+        await process_game_action(
+            callback, bot, match_id, {"draw": True}, ephemeral_card=True
+        )
     elif action_type == "keep":
         # Player keeps their current card
         await process_game_action(callback, bot, match_id, {"choice": "keep"})
     elif action_type == "swap":
-        # Player swaps for a new card
-        await process_game_action(callback, bot, match_id, {"choice": "swap"})
+        # A swap also draws a new card, which must be delivered privately.
+        await process_game_action(
+            callback, bot, match_id, {"choice": "swap"}, ephemeral_card=True
+        )

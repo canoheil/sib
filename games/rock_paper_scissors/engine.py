@@ -59,6 +59,10 @@ class RockPaperScissorsEngine(BaseGameEngine):
             "players": player_map,
             "round": 1,
             "total_rounds": self.TOTAL_ROUNDS,
+            "last_round_number": None,
+            "last_round_choices": None,
+            "last_round_result": None,
+            "reveal_pending": False,
             "finished": False,
         }
 
@@ -100,15 +104,26 @@ class RockPaperScissorsEngine(BaseGameEngine):
         p1, p2 = players[0], players[1]
         c1, c2 = p1["choice"], p2["choice"]
 
+        # Persist the revealed choices before the next-round reset. The group
+        # board may reveal them only after both players have locked in.
+        game_state["last_round_number"] = game_state.get("round", 1)
+        game_state["last_round_choices"] = [
+            {"name": p1["name"], "choice": c1},
+            {"name": p2["name"], "choice": c2},
+        ]
+        game_state["reveal_pending"] = True
+
         # Draw: no score change.
         if c1 == c2:
-            pass
+            game_state["last_round_result"] = "draw"
 
         elif self.BEATS[c1] == c2:
             p1["score"] += 1
+            game_state["last_round_result"] = "p1"
 
         else:
             p2["score"] += 1
+            game_state["last_round_result"] = "p2"
 
         # Someone has already won 2 rounds.
         if (
@@ -140,6 +155,10 @@ class RockPaperScissorsEngine(BaseGameEngine):
         pid_str = str(player_id)
         choice = action["choice"]
 
+        # The previous reveal remains on screen until the next round starts.
+        # The first committed choice of that round clears this marker; the
+        # following commit sets it again inside _resolve_round.
+        game_state["reveal_pending"] = False
         game_state["players"][pid_str]["choice"] = choice
         game_state["players"][pid_str]["locked"] = True
 
@@ -251,14 +270,63 @@ class RockPaperScissorsEngine(BaseGameEngine):
 
             my_choice = self.CHOICES.get(my_p["choice"], "—")
             opp_choice = self.CHOICES.get(opp_p["choice"], "—")
+            last_result = game_state.get("last_round_result")
+            if last_result == "draw":
+                round_outcome = "🤝 راند پایانی مساوی شد."
+            elif last_result == "p1":
+                round_outcome = f"🏆 {players[0]['name']} راند پایانی را برد."
+            else:
+                round_outcome = f"🏆 {players[1]['name']} راند پایانی را برد."
 
             return (
                 "✂️ **نتیجه نهایی سنگ، کاغذ، قیچی!**\n\n"
                 f"🏁 **امتیاز نهایی:** {p1_score} - {p2_score}\n\n"
                 f"👤 **{my_p['name']}:** {my_choice}\n"
-                f"👤 **{opp_p['name']}:** {opp_choice}\n\n"
+                f"👤 **{opp_p['name']}:** {opp_choice}\n"
+                f"{round_outcome}\n\n"
                 f"{outcome_text}\n"
                 f"📝 {result.summary}"
+            )
+
+        if game_state.get("friendly"):
+            p1, p2 = players[0], players[1]
+            last_round_text = ""
+            last_choices = game_state.get("last_round_choices") or []
+            if len(last_choices) == 2:
+                p1_choice = self.CHOICES.get(last_choices[0].get("choice"), "—")
+                p2_choice = self.CHOICES.get(last_choices[1].get("choice"), "—")
+                last_result = game_state.get("last_round_result")
+                if last_result == "draw":
+                    round_outcome = "🤝 این راند مساوی شد."
+                elif last_result == "p1":
+                    round_outcome = f"🏆 {last_choices[0].get('name', p1['name'])} این راند را برد."
+                else:
+                    round_outcome = f"🏆 {last_choices[1].get('name', p2['name'])} این راند را برد."
+                last_round_text = (
+                    f"🎴 **نتیجه راند {game_state.get('last_round_number', round_no - 1)}:**\n"
+                    f"👤 **{last_choices[0].get('name', p1['name'])}:** {p1_choice}\n"
+                    f"👤 **{last_choices[1].get('name', p2['name'])}:** {p2_choice}\n"
+                    f"{round_outcome}\n\n"
+                )
+
+            p1_status = (
+                "✅ انتخاب ثبت شد"
+                if p1.get("locked")
+                else "⏳ در انتظار انتخاب"
+            )
+            p2_status = (
+                "✅ انتخاب ثبت شد"
+                if p2.get("locked")
+                else "⏳ در انتظار انتخاب"
+            )
+            return (
+                "✂️ **بازی سنگ، کاغذ، قیچی!** 🍏\n\n"
+                f"🎯 **راند {round_no} از {self.TOTAL_ROUNDS}**\n"
+                f"🏆 **امتیاز تیم ۱ - تیم ۲:** {p1['score']} - {p2['score']}\n\n"
+                f"{last_round_text}"
+                f"👤 **{p1['name']}:** {p1_status}\n"
+                f"👤 **{p2['name']}:** {p2_status}\n\n"
+                "🔒 انتخاب‌ها تا پایان راند پنهان می‌مانند."
             )
 
         my_status = (
@@ -289,18 +357,13 @@ class RockPaperScissorsEngine(BaseGameEngine):
         for_player_id: int,
     ) -> InlineKeyboardMarkup:
         """Generate choice buttons for player."""
-        pid_str = str(for_player_id)
-        player_data = game_state.get("players", {}).get(pid_str)
-
         if self.is_finished(game_state):
             return InlineKeyboardMarkup(inline_keyboard=[])
 
-        if player_data and player_data.get("locked"):
-            chosen = self.CHOICES.get(
-                player_data.get("choice"),
-                "",
-            )
-
+        pid_str = str(for_player_id)
+        player_data = game_state.get("players", {}).get(pid_str)
+        if not game_state.get("friendly") and player_data and player_data.get("locked"):
+            chosen = self.CHOICES.get(player_data.get("choice"), "")
             return InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
@@ -312,6 +375,10 @@ class RockPaperScissorsEngine(BaseGameEngine):
                 ]
             )
 
+        # Friendly RPS uses one shared keyboard. Keep the same generic
+        # controls after the first submission; the selected value is never
+        # printed in the shared inline keyboard. A duplicate click is rejected
+        # by validate_action using the authoritative locked state.
         return InlineKeyboardMarkup(
             inline_keyboard=[
                 [

@@ -270,6 +270,9 @@ async def process_game_action(
     bot: Bot,
     match_id: int,
     action: Dict[str, Any],
+    *,
+    ephemeral_card: bool = False,
+    blind_commit: bool = False,
 ) -> None:
     """Generic atomic handler for any game action."""
     user = callback.from_user
@@ -289,6 +292,8 @@ async def process_game_action(
     selected_ad: Optional[AdCampaign] = None
     render_payload: Optional[Dict[str, Any]] = None
     early_exit: Optional[Dict[str, Any]] = None
+    private_card_text: Optional[str] = None
+    private_card_group_id: Optional[int] = None
 
     async with get_session() as session:
         # Fetch match with lock
@@ -331,22 +336,33 @@ async def process_game_action(
             # Validate action
             is_valid, reason = engine.validate_action(state, user.id, action)
             if not is_valid:
-                # Self-heal: whatever the rejection (stale keyboard, wrong
-                # player, repeated cell), the viewer immediately receives the
-                # LATEST authoritative board - manual refresh is never
-                # required. The render runs below, after the row lock is
-                # released.
-                feedback = _duplicate_feedback(
-                    reason, any(p.user_id == user.id for p in match.players)
+                participant = any(p.user_id == user.id for p in match.players)
+                feedback = _duplicate_feedback(reason, participant)
+                player_state = (state.get("players") or {}).get(str(user.id), {})
+                repeated_high_card_draw = (
+                    match.game.code == "high_card"
+                    and action.get("draw")
+                    and player_state.get("card_rank") is not None
                 )
-                # A repeated High Card draw has no lock yet, but its card is
-                # already stored. Validation calls it an invalid choice.
-                if (match.game.code == "high_card" and action.get("draw")
-                        and (state.get("players", {}).get(str(user.id), {})
-                             .get("card_rank") is not None)):
+                if repeated_high_card_draw:
                     feedback = DUPLICATE_MOVE_MESSAGE
+
+                # A double-click on one of these friendly simultaneous games
+                # must not re-render the shared board or expose any staged
+                # private card/choice. The match row is still locked above, so
+                # the duplicate is rejected against committed state.
+                silent_duplicate = bool(
+                    is_friendly(match)
+                    and participant
+                    and (
+                        (match.game.code == "rock_paper_scissors"
+                         and player_state.get("locked"))
+                        or (match.game.code == "high_card"
+                            and ("قبلاً" in (reason or "") or repeated_high_card_draw))
+                    )
+                )
                 early_exit = {
-                    "kind": "invalid",
+                    "kind": "silent_duplicate" if silent_duplicate else "invalid",
                     "reason": reason,
                     "feedback": feedback,
                     "match": match,
@@ -355,6 +371,18 @@ async def process_game_action(
             else:
                 # Apply action
                 state = engine.apply_action(state, user.id, action)
+
+                if ephemeral_card and match.game.code == "high_card":
+                    player_state = (state.get("players") or {}).get(str(user.id), {})
+                    if player_state.get("card_rank") is not None:
+                        private_card_text = f"🃏 کارت شما: {engine._card_str(player_state)}"
+                        private_card_group_id = next(
+                            (p.group_id for p in match.players
+                             if p.user_id == user.id and p.group_id is not None),
+                            None,
+                        )
+                        if private_card_group_id is None and callback.message:
+                            private_card_group_id = callback.message.chat.id
 
                 match.game_state = json.dumps(state, ensure_ascii=False)
 
@@ -435,6 +463,9 @@ async def process_game_action(
                     "game_id": match.game_id,
                     "game_code": match.game.code,
                     "players": [(p.user_id, p.group_id) for p in match.players],
+                    "private_card_text": private_card_text,
+                    "private_card_group_id": private_card_group_id,
+                    "blind_commit": blind_commit,
                 }
 
         if early_exit is not None:
@@ -446,6 +477,10 @@ async def process_game_action(
             await session.commit()
 
     if early_exit is not None:
+        if early_exit["kind"] == "silent_duplicate":
+            # Clear the callback spinner without a toast/alert or a board edit.
+            await safe_answer_callback(callback)
+            return
         if early_exit["kind"] == "not_found":
             await safe_answer_callback(callback, "مسابقه پیدا نشد 🍏", show_alert=True)
             return
@@ -490,6 +525,38 @@ async def process_game_action(
     assert render_payload is not None
     state = render_payload["state"]
     finished = render_payload["finished"]
+    callback_answered = False
+    private_card_delivered = False
+
+    if render_payload.get("private_card_text"):
+        target_group_id = render_payload.get("private_card_group_id")
+        try:
+            if target_group_id is None:
+                raise ValueError("No group chat is available for the private card")
+            await bot.send_message(
+                chat_id=target_group_id,
+                text=render_payload["private_card_text"],
+                receiver_user_id=user.id,
+                parse_mode=None,
+            )
+            private_card_delivered = True
+        except Exception as exc:
+            # Ephemeral delivery is explicitly best-effort. A callback alert
+            # is the private fallback; the committed move and group render
+            # continue regardless of the Bot API send failure.
+            logger.warning(
+                "Ephemeral High Card delivery failed for match %s/user %s: %s",
+                match_id,
+                user.id,
+                exc,
+            )
+            await safe_answer_callback(
+                callback,
+                render_payload["private_card_text"],
+                show_alert=True,
+            )
+            callback_answered = True
+
     has_message_ids = bool(
         render_payload["group1_message_id"] or render_payload["group2_message_id"]
     )
@@ -501,11 +568,39 @@ async def process_game_action(
     if render_payload["is_bot_match"] and not finished:
         schedule_bot_turn(render_payload["match_id"], bot=bot)
 
+    # RPS is simultaneous: in a friendly match, leave the public board and
+    # its generic choice keyboard untouched until the second player commits.
+    if (
+        render_payload.get("is_friendly")
+        and render_payload.get("blind_commit")
+        and render_payload["game_code"] == "rock_paper_scissors"
+        and not finished
+    ):
+        rps_players = list((state.get("players") or {}).values())
+        if (
+            rps_players
+            and not state.get("reveal_pending")
+            and any(player.get("locked") for player in rps_players)
+        ):
+            await safe_answer_callback(
+                callback,
+                "✅ انتخاب شما ثبت شد. منتظر حریف...",
+                show_alert=False,
+            )
+            return
+
     # Friendly matches share ONE board message between both teams (group1 and
     # group2 are the same group): render exactly one board, from the team of
     # the player who is (or should be) on turn.
     if render_payload.get("is_friendly"):
-        await _present_friendly_board(callback, bot, render_payload, user.id)
+        await _present_friendly_board(
+            callback,
+            bot,
+            render_payload,
+            user.id,
+            callback_answered=callback_answered,
+            private_card_delivered=private_card_delivered,
+        )
         if finished:
             await PlayerXPService.deliver_pending_notifications(
                 bot,
@@ -527,7 +622,13 @@ async def process_game_action(
         return group_pids[0] if group_pids else user.id
 
     if not finished:
-        await safe_answer_callback(callback, "حرکت شما ثبت شد! 🍏")
+        if not callback_answered:
+            acknowledgement = (
+                "✅ کارت به‌صورت خصوصی برای شما ارسال شد."
+                if private_card_delivered
+                else "حرکت شما ثبت شد! 🍏"
+            )
+            await safe_answer_callback(callback, acknowledgement, show_alert=False)
 
         if has_message_ids:
             for group_id, msg_id in (
@@ -573,7 +674,8 @@ async def process_game_action(
         return
 
     # Match IS finished!
-    await safe_answer_callback(callback, "بازی به پایان رسید! 🍏✨")
+    if not callback_answered:
+        await safe_answer_callback(callback, "بازی به پایان رسید! 🍏✨")
 
     # (Friendly finals returned earlier through _present_friendly_board.)
     rematch_kb = get_rematch_keyboard(selected_ad)
@@ -635,6 +737,9 @@ async def _present_friendly_board(
     bot: Bot,
     payload: Dict[str, Any],
     actor_id: int,
+    *,
+    callback_answered: bool = False,
+    private_card_delivered: bool = False,
 ) -> None:
     """Present the single shared board of a friendly match (best effort)."""
     state = payload["state"]
@@ -650,13 +755,20 @@ async def _present_friendly_board(
     )
 
     if finished:
-        await safe_answer_callback(callback, "بازی رفیقانه به پایان رسید! 🍏✨")
+        if not callback_answered:
+            await safe_answer_callback(callback, "بازی رفیقانه به پایان رسید! 🍏✨")
         text = shape_friendly_final_text(
             engine.render_for_group(state, audience, viewer), outcome_view, state
         )
         kb = get_friendly_rematch_keyboard(payload["match_id"])
     else:
-        await safe_answer_callback(callback, "حرکت شما ثبت شد! 🍏")
+        if not callback_answered:
+            acknowledgement = (
+                "✅ کارت به‌صورت خصوصی برای شما ارسال شد."
+                if private_card_delivered
+                else "حرکت شما ثبت شد! 🍏"
+            )
+            await safe_answer_callback(callback, acknowledgement, show_alert=False)
         text = engine.render_for_group(state, audience, viewer)
         kb = with_refresh_button(
             engine.get_keyboard(state, payload["match_id"], viewer),

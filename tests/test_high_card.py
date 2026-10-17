@@ -352,15 +352,17 @@ def test_rendering_before_draw(players):
     assert "کارت بکشید" in text
 
 
-def test_rendering_after_draw_before_decision(players):
+def test_rendering_after_draw_before_decision_hides_card_in_group(players):
     engine = HighCardEngine()
     state = engine.create_initial_state(players, mode="solo")
 
     engine.apply_action(state, 101, {"draw": True, "rank": 14, "suit": "♠️"})
 
     text = engine.render_for_group(state, -1001, 101)
-    assert "تک / آس (A)" in text
+    assert "کارت شما کشیده شد" in text
     assert "نگه می‌دارید یا تعویض" in text
+    assert "تک / آس (A)" not in text
+    assert "♠️" not in text
 
 
 def test_rendering_after_lock(players):
@@ -371,7 +373,8 @@ def test_rendering_after_lock(players):
     engine.apply_action(state, 101, {"choice": "keep"})
 
     text = engine.render_for_group(state, -1001, 101)
-    assert "تصمیم ثبت شد" in text
+    assert "تصمیم شما ثبت شد" in text
+    assert "♠️" not in text
 
 
 def test_rendering_match_end(players):
@@ -403,9 +406,10 @@ def test_keyboard_decision_phase(players):
     engine.apply_action(state, 101, {"draw": True, "rank": 10, "suit": "♠️"})
 
     kb = engine.get_keyboard(state, 1, 101)
-    assert len(kb.inline_keyboard) == 2  # Decision row + card display row
+    assert len(kb.inline_keyboard) == 1
     assert kb.inline_keyboard[0][0].callback_data == "hc_action:1:keep"
     assert kb.inline_keyboard[0][1].callback_data == "hc_action:1:swap"
+    assert "10" not in " ".join(button.text for row in kb.inline_keyboard for button in row)
 
 
 def test_keyboard_locked_phase(players):

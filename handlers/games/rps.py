@@ -14,4 +14,6 @@ async def handle_rps_action(callback: CallbackQuery, bot: Bot):
     match_id = int(parts[1])
     choice = parts[2]
 
-    await process_game_action(callback, bot, match_id, {"choice": choice})
+    await process_game_action(
+        callback, bot, match_id, {"choice": choice}, blind_commit=True
+    )

@@ -66,6 +66,8 @@ class HighCardEngine(BaseGameEngine):
             "round": 1,
             "total_rounds": self.TOTAL_ROUNDS,
             "last_round_result": None,
+            "last_round_cards": None,
+            "last_round_number": None,
             "finished": False,
         }
 
@@ -110,6 +112,20 @@ class HighCardEngine(BaseGameEngine):
 
         p1, p2 = players[0], players[1]
         r1, r2 = p1["card_rank"], p2["card_rank"]
+
+        # Preserve the revealed cards before the next-round reset. These
+        # fields are populated only after both players have locked in.
+        game_state["last_round_number"] = game_state.get("round", 1)
+        game_state["last_round_cards"] = [
+            {
+                "name": player["name"],
+                "team": player["team"],
+                "card_rank": player["card_rank"],
+                "card_suit": player["card_suit"],
+                "swapped": player["swapped"],
+            }
+            for player in (p1, p2)
+        ]
 
         # Determine round winner and store result for UX
         if r1 == r2:
@@ -246,6 +262,16 @@ class HighCardEngine(BaseGameEngine):
 
         if self.is_finished(game_state):
             result = self.get_result(game_state)
+            if game_state.get("friendly"):
+                p1, p2 = players[0], players[1]
+                return (
+                    "🃏 **نتیجه نهایی کارت بالا**\n\n"
+                    f"🏁 **امتیاز تیم ۱ - تیم ۲:** {p1['score']} - {p2['score']}\n\n"
+                    f"👤 **{p1['name']}:** {self._card_str(p1)}\n"
+                    f"👤 **{p2['name']}:** {self._card_str(p2)}\n\n"
+                    f"📝 {result.summary}"
+                )
+
             my_card = self._card_str(my_p)
             opp_card = self._card_str(opp_p)
 
@@ -265,16 +291,54 @@ class HighCardEngine(BaseGameEngine):
                 f"📝 {result.summary}"
             )
 
+        if game_state.get("friendly"):
+            p1, p2 = players[0], players[1]
+            last_result_line = ""
+            last_cards = game_state.get("last_round_cards") or []
+            if len(last_cards) == 2:
+                previous_round = game_state.get("last_round_number", round_no - 1)
+                card1 = self._card_str(last_cards[0])
+                card2 = self._card_str(last_cards[1])
+                swap1 = " 🔄" if last_cards[0].get("swapped") else ""
+                swap2 = " 🔄" if last_cards[1].get("swapped") else ""
+                last_result = game_state.get("last_round_result")
+                if last_result == "draw":
+                    round_outcome = "🤝 راند مساوی شد."
+                elif last_result == "p1":
+                    round_outcome = f"🏆 {last_cards[0].get('name', p1['name'])} برنده این راند شد."
+                else:
+                    round_outcome = f"🏆 {last_cards[1].get('name', p2['name'])} برنده این راند شد."
+                last_result_line = (
+                    f"🎴 **نتیجه راند {previous_round}:**\n"
+                    f"👤 **{last_cards[0].get('name', p1['name'])}:** {card1}{swap1}\n"
+                    f"👤 **{last_cards[1].get('name', p2['name'])}:** {card2}{swap2}\n"
+                    f"{round_outcome}\n\n"
+                )
+
+            def friendly_progress(player: Dict[str, Any]) -> str:
+                if player.get("locked"):
+                    return f"✅ {player['name']} تصمیم خود را ثبت کرد."
+                if player.get("card_rank") is not None:
+                    return f"🃏 {player['name']} کارت خود را کشید؛ منتظر تصمیم است."
+                return f"⏳ {player['name']} هنوز کارت نکشیده است."
+
+            return (
+                "🃏 **کارت بالا** 🍏\n\n"
+                f"🎯 **راند {round_no} از {self.TOTAL_ROUNDS}**\n"
+                f"🏆 **امتیاز تیم ۱ - تیم ۲:** {p1['score']} - {p2['score']}\n\n"
+                f"{last_result_line}"
+                f"👤 {friendly_progress(p1)}\n"
+                f"👤 {friendly_progress(p2)}\n\n"
+                "🔒 کارت‌ها تا ثبت تصمیم هر دو بازیکن پنهان می‌مانند."
+            )
+
         # Round in progress
         if my_p["card_rank"] is None:
             my_status = "⏳ کارت بکشید و تصمیم بگیرید:"
         elif not my_p["locked"]:
-            my_card = self._card_str(my_p)
-            my_status = f"🃏 **کارت شما:** {my_card}\nنگه می‌دارید یا تعویض می‌کنید؟"
+            my_status = "🃏 کارت شما کشیده شد. نگه می‌دارید یا تعویض می‌کنید؟"
         else:
-            my_card = self._card_str(my_p)
-            swap_note = " 🔄" if my_p["swapped"] else ""
-            my_status = f"✅ {my_card}{swap_note} — تصمیم ثبت شد"
+            my_status = "✅ تصمیم شما ثبت شد؛ منتظر حریف..."
 
         opp_status = "✅ تصمیم گرفت" if opp_p["locked"] else "⏳ در انتظار..."
 
@@ -313,7 +377,34 @@ class HighCardEngine(BaseGameEngine):
         if not player_data:
             return InlineKeyboardMarkup(inline_keyboard=[])
 
-        # Phase 1: Card not drawn yet (blue: the playable action of this phase)
+        if game_state.get("friendly"):
+            # Friendly matches share one group keyboard. Offer every action
+            # that is currently valid for at least one player; validation is
+            # still performed against the clicking player's own state.
+            players = list((game_state.get("players") or {}).values())
+            rows = []
+            if any(p.get("card_rank") is None and not p.get("locked") for p in players):
+                rows.append([
+                    primary_button(
+                        text="🃏 کشیدن کارت",
+                        callback_data=f"hc_action:{match_id}:draw",
+                    )
+                ])
+            if any(p.get("card_rank") is not None and not p.get("locked") for p in players):
+                rows.append([
+                    success_button(
+                        text="✅ نگه داشتن",
+                        callback_data=f"hc_action:{match_id}:keep",
+                    ),
+                    primary_button(
+                        text="🔄 تعویض",
+                        callback_data=f"hc_action:{match_id}:swap",
+                    ),
+                ])
+            return InlineKeyboardMarkup(inline_keyboard=rows)
+
+        # Separate competitive boards are still phase-specific, but never
+        # print a hand value on a group-visible keyboard.
         if player_data["card_rank"] is None:
             return InlineKeyboardMarkup(
                 inline_keyboard=[
@@ -324,16 +415,12 @@ class HighCardEngine(BaseGameEngine):
                 ]
             )
 
-        # Phase 2: Card drawn, waiting for keep/swap
-        # Keep = green confirm, swap = blue alternative, the card itself is a
-        # blue informational button (never transparent).
         if not player_data["locked"]:
-            card_display = self._card_str(player_data)
             return InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
                         success_button(
-                            text=f"✅ نگه داشتن",
+                            text="✅ نگه داشتن",
                             callback_data=f"hc_action:{match_id}:keep"
                         ),
                         primary_button(
@@ -341,22 +428,13 @@ class HighCardEngine(BaseGameEngine):
                             callback_data=f"hc_action:{match_id}:swap"
                         ),
                     ],
-                    [
-                        primary_button(
-                            text=f"🃏 {card_display}",
-                            callback_data="noop"
-                        ),
-                    ],
                 ]
             )
 
-        # Locked - waiting for opponent (blue informational button).
-        card_display = self._card_str(player_data)
-        swap_note = " 🔄" if player_data["swapped"] else ""
         return InlineKeyboardMarkup(
             inline_keyboard=[
                 [primary_button(
-                    text=f"🔒 {card_display}{swap_note}",
+                    text="🔒 تصمیم ثبت شد",
                     callback_data="noop"
                 )]
             ]

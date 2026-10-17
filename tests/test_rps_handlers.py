@@ -42,6 +42,7 @@ async def test_rps_action_callback(db_session):
     mock_cb1.from_user = TelegramUser(id=u1.id, is_bot=False, first_name=u1.first_name)
     mock_cb1.message = MagicMock(spec=Message)
     mock_cb1.message.chat = TelegramChat(id=g1.id, type="supergroup", title=g1.title)
+    mock_cb1.message.message_id = 111
     mock_cb1.message.edit_text = AsyncMock()
     mock_cb1.answer = AsyncMock()
 
@@ -49,8 +50,8 @@ async def test_rps_action_callback(db_session):
     await handle_rps_action(mock_cb1, mock_bot)
 
     mock_cb1.answer.assert_called_once()
-    mock_cb1.message.edit_text.assert_called_once()
-    args1, _ = mock_cb1.message.edit_text.call_args
+    mock_bot.edit_message_text.assert_awaited_once()
+    args1, _ = mock_bot.edit_message_text.call_args
     assert "انتخاب شما ثبت و قفل شد" in args1[0]
 
     # User 2 clicks Scissors: round 1 ends, match continues.
@@ -59,6 +60,7 @@ async def test_rps_action_callback(db_session):
     mock_cb2.from_user = TelegramUser(id=u2.id, is_bot=False, first_name=u2.first_name)
     mock_cb2.message = MagicMock(spec=Message)
     mock_cb2.message.chat = TelegramChat(id=g2.id, type="supergroup", title=g2.title)
+    mock_cb2.message.message_id = 222
     mock_cb2.message.edit_text = AsyncMock()
     mock_cb2.answer = AsyncMock()
 
@@ -74,6 +76,7 @@ async def test_rps_action_callback(db_session):
     mock_cb3.from_user = TelegramUser(id=u1.id, is_bot=False, first_name=u1.first_name)
     mock_cb3.message = MagicMock(spec=Message)
     mock_cb3.message.chat = TelegramChat(id=g1.id, type="supergroup", title=g1.title)
+    mock_cb3.message.message_id = 111
     mock_cb3.message.edit_text = AsyncMock()
     mock_cb3.answer = AsyncMock()
 
@@ -84,6 +87,7 @@ async def test_rps_action_callback(db_session):
     mock_cb4.from_user = TelegramUser(id=u2.id, is_bot=False, first_name=u2.first_name)
     mock_cb4.message = MagicMock(spec=Message)
     mock_cb4.message.chat = TelegramChat(id=g2.id, type="supergroup", title=g2.title)
+    mock_cb4.message.message_id = 222
     mock_cb4.message.edit_text = AsyncMock()
     mock_cb4.answer = AsyncMock()
 
