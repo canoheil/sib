@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from aiogram.types import CallbackQuery, Chat, FSInputFile, Message, User as TelegramUser
 
+from sib.core.text import escape_markdown
 from sib.services import player_level_art
 from sib.services.player_level_art import (
     LEVEL_ART_DIR,
@@ -362,7 +363,7 @@ async def test_missing_level_artwork_still_renders_the_profile(db_session, monke
     # The fallback photo is the Favorite Card art, not a Level artwork.
     assert _photo_path(msg.reply_photo.await_args.args[0]).endswith(f"{character.code}.jpg")
     caption = msg.reply_photo.await_args.kwargs["caption"]
-    assert "سطح حساب" in caption and character.name_fa in caption
+    assert "سطح حساب" in caption and escape_markdown(character.name_fa) in caption
 
 
 @pytest.mark.asyncio
@@ -404,7 +405,7 @@ async def test_level_artwork_does_not_change_the_profile_text(db_session):
     assert "🍎 سیب:" in caption             # apple balance
     assert "🌱 نهال:" in caption            # seedlings
     assert "تعداد کارت‌ها" in caption       # card count
-    assert character.name_fa in caption     # favorite character
+    assert escape_markdown(character.name_fa) in caption  # favorite (Markdown-escaped)
     assert "نبردهای سیبی" in caption        # battle statistics
 
 

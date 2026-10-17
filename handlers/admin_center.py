@@ -21,6 +21,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from sib.keyboards.common import danger_button, primary_button, success_button
 from sib.admin.auth import IsAdminFilter
 from sib.core.logging import Events, log_event
+from sib.core.text import escape_markdown, safe_name
 from sib.database.connection import get_session
 from sib.database.models import ChannelType, User
 from sib.services.apple_wallet import AppleWalletService, InsufficientFundsException
@@ -66,8 +67,8 @@ async def _user_panel(session, user_id: int) -> tuple:
     user = await session.get(User, user_id)
     if user is None:
         return None, None
-    name = user.first_name or "بدون‌نام"
-    uname = f" (@{user.username})" if user.username else ""
+    name = safe_name(user.first_name, "بدون‌نام")
+    uname = f" (@{escape_markdown(user.username)})" if user.username else ""
     text = (
         "👤 **مدیریت منابع کاربر** 🍏\n\n"
         f"کاربر: {name}{uname} — `{user.id}`\n"

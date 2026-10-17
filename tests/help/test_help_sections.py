@@ -58,6 +58,7 @@ EXPECTED_SHORTCUTS = (
     "سیب راهنما",
     "سیب صندوق",
     "معدن سیبی",
+    "پروفایلش",
 )
 
 #: The five shop chests (data/shop_chests/*.json).
@@ -281,6 +282,14 @@ def test_help_mentions_all_text_shortcuts():
         assert phrase in body, phrase
     # The bare «سیب» claim is a group action, and it is documented as one.
     assert "سیب" in body
+
+
+def test_help_contains_profile_reply_shortcut():
+    """P3: «پروفایلش» is documented as a reply-to-view shortcut."""
+    body = get_section("shortcuts").body_fa
+    assert "«پروفایلش»" in body
+    assert "با ریپلای روی پیام یک بازیکن" in body
+    assert "برای دیدن پروفایل آن بازیکن" in body
 
 
 def test_help_mentions_invasion():

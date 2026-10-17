@@ -111,9 +111,10 @@ def test_at_least_ten_distinct_kiss_variants():
 
 
 def test_pick_kiss_message_mentions_both_users_and_amount():
-    text = pick_kiss_message("[آلیس](tg://user?id=1)", "[باب](tg://user?id=2)", 10)
-    assert "[آلیس](tg://user?id=1)" in text
-    assert "[باب](tg://user?id=2)" in text
+    text = pick_kiss_message("آلیس", "باب", 10)
+    assert "آلیس" in text
+    assert "باب" in text
+    assert "tg://" not in text
     assert "۱۰" in text
     assert "10" not in text
 
@@ -513,8 +514,8 @@ async def test_handler_success_mentions_both_and_uses_text_fallback(db_session, 
     assert not msg.reply_photo.called
     assert msg.reply.called
     text = msg.reply.call_args[0][0]
-    assert "tg://user?id=910001" in text
-    assert "tg://user?id=910002" in text
+    assert "tg://" not in text  # privacy: names are plain text
+    assert "باب" in text
     assert "آلیس\\*\\_\\[" in text  # Markdown-escaped display name
     assert "۱۰" in text
     assert msg.reply.call_args.kwargs.get("parse_mode") == "Markdown"
@@ -522,6 +523,35 @@ async def test_handler_success_mentions_both_and_uses_text_fallback(db_session, 
     async with get_session() as session:
         assert await _balance(session, 910001) == KISS_AMOUNT
         assert await _balance(session, 910002) == KISS_AMOUNT
+
+
+@pytest.mark.asyncio
+async def test_kiss_does_not_expose_tg_user_link(db_session, monkeypatch, tmp_path):
+    """Privacy (P3): a kiss names both players in PLAIN text - no tg://user link.
+
+    A clickable mention would open the other player's private chat from a
+    group message. The hostile target name tries to smuggle a link in; it is
+    stripped, and the Telegram IDs never appear in the message.
+    """
+    import re
+
+    from sib.handlers.sib_kiss import handle_sib_kiss
+
+    monkeypatch.setattr(marriage_art, "_ASSETS_DIR", tmp_path)  # no kiss art yet
+    sender = _tg_user(911001, "علی_رضا*")
+    target = _tg_user(911002, "tg://user?id=5 باب")
+
+    msg = _group_kiss_message(sender, "بوس سیبی", target=target)
+    await handle_sib_kiss(msg)
+
+    text = msg.reply.call_args[0][0]
+    assert not re.search(r"tg://user", text)
+    assert "tg://" not in text
+    assert "](" not in text  # no Markdown link syntax either
+    assert "911001" not in text and "911002" not in text  # no Telegram IDs
+    assert "علی\\_رضا\\*" in text  # plain name, Markdown-escaped
+    assert "باب" in text
+    assert msg.reply.call_args.kwargs.get("parse_mode") == "Markdown"
 
 
 @pytest.mark.asyncio
@@ -596,7 +626,7 @@ async def test_handler_refusals_create_no_rewards_and_no_cooldown(db_session, mo
     # Refusals consumed no cooldown: a valid kiss right after succeeds.
     msg = _group_kiss_message(sender, "بوس سیبی", target=human_target, message_id=99)
     await handle_sib_kiss(msg)
-    assert "tg://user?id=930003" in msg.reply.call_args[0][0]
+    assert "tg://" not in msg.reply.call_args[0][0]
     async with get_session() as session:
         assert await _balance(session, 930001) == KISS_AMOUNT
 

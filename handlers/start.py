@@ -9,7 +9,7 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKe
 from sib.core.config import settings
 from sib.core.errors import MESSAGES
 from sib.core.logging import logger, log_event, Events
-from sib.core.text import escape_markdown, plain_display_name
+from sib.core.text import escape_markdown, plain_display_name, safe_name
 from sib.database.connection import get_session
 from sib.keyboards.common import (
     get_membership_keyboard,
@@ -537,14 +537,14 @@ async def handle_apple_profile(callback: CallbackQuery, bot: Bot):
         selected_skin = await ProfileSkinService.get_selected_skin(session, user.id)
 
     lines = [
-        f"👤 **پروفایل سیبی {user.first_name or 'شما'}** 🍏",
+        f"👤 **پروفایل سیبی {safe_name(user.first_name, 'شما')}** 🍏",
         PlayerXPService.format_profile_progress(account_progress),
         f"🎨 **Change Skin / تغییر پوسته**: {profile_skin_label(selected_skin)}",
         "",
         f"🍎 سیب: `{apples}`",
         f"🌱 نهال: `{seedlings}`",
         f"🎴 تعداد کارت‌ها: `{len(cards)}`",
-        fav_text.strip() if fav_text else "⭐ کارت اصلی: انتخاب نشده",
+        escape_markdown(fav_text.strip()) if fav_text else "⭐ کارت اصلی: انتخاب نشده",
         f"⚔️ نبردهای سیبی: `{battles or 0}` | برد: `{wins or 0}`",
     ]
     lines.extend(marriage_lines)
@@ -679,7 +679,7 @@ def _main_menu_text_and_kb(user, chat) -> tuple:
         text = "🍏 **منوی اصلی سیب**\nاز منوی زیر بخش مورد نظرت رو انتخاب کن 👇"
         kb = get_group_welcome_keyboard()
     else:
-        name = user.first_name if user else "دوست"
+        name = safe_name(user.first_name, "دوست") if user else "دوست"
         text = (
             f"🍏 **منوی اصلی سیب**\n\n"
             f"سلام {name}! از منوی زیر بخش مورد نظرت رو انتخاب کن 👇"
@@ -844,14 +844,14 @@ async def _open_sender_profile(message: Message) -> None:
         selected_skin = await ProfileSkinService.get_selected_skin(session, user.id)
 
     lines = [
-        f"👤 **پروفایل سیبی {user.first_name or 'شما'}** 🍏",
+        f"👤 **پروفایل سیبی {safe_name(user.first_name, 'شما')}** 🍏",
         PlayerXPService.format_profile_progress(account_progress),
         f"🎨 **Change Skin / تغییر پوسته**: {profile_skin_label(selected_skin)}",
         "",
         f"🍎 سیب: `{apples}`",
         f"🌱 نهال: `{seedlings}`",
         f"🎴 تعداد کارت‌ها: `{len(cards)}`",
-        fav_text.strip() if fav_text else "⭐ کارت اصلی: انتخاب نشده",
+        escape_markdown(fav_text.strip()) if fav_text else "⭐ کارت اصلی: انتخاب نشده",
         f"⚔️ نبردهای سیبی: `{battles or 0}` | برد: `{wins or 0}`",
     ]
     lines.extend(marriage_lines)
