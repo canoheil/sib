@@ -49,7 +49,7 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sib.core.logging import Events, log_event, logger
-from sib.core.text import safe_name
+from sib.core.text import plain_display_name, safe_name
 from sib.database.connection import get_session
 from sib.database.models import FlowerGift
 from sib.keyboards.marriage import (
@@ -803,17 +803,16 @@ def _love_percentage(score: object, minimum: int, maximum: int) -> Optional[int]
     return int(round((clamped - minimum) * 100 / (maximum - minimum)))
 
 
-def spouse_handle(user) -> str:
-    """«@username», or the project's display-name fallback when there is none.
+def spouse_display_name(user) -> str:
+    """The spouse's PLAIN first name for the profile - never a handle or link.
 
-    Follows the existing ``(@{username})`` convention (admin_center) for the
-    handle and ``User.display_name`` + :func:`safe_name` for the fallback,
-    so a name can never break the profile's Markdown.
+    Privacy rule: a spouse's ``@username``, Telegram ID or ``tg://`` link must
+    never reach another player's screen (it would let anyone DM them). Only
+    the sanitized first name is shown, as plain text: no ``@``, no HTML, no
+    link. A user without a usable first name gets the neutral fallback - the
+    username is deliberately NOT used, not even as plain text.
     """
-    username = getattr(user, "username", None)
-    if username:
-        return f"@{safe_name(username)}"
-    return safe_name(getattr(user, "display_name", None), "یک سیبی")
+    return plain_display_name(getattr(user, "first_name", None), "یک سیبی")
 
 
 def _spouse_of(marriage, user_id: int):
@@ -859,7 +858,7 @@ async def profile_marriage_lines(
         # Stale/inconsistent record: omit the block rather than guess.
         return []
 
-    lines = [f"💍 همسر: {spouse_handle(spouse)}"]
+    lines = [f"💍 همسر: {spouse_display_name(spouse)}"]
 
     minimum = await ConfigService.get(session, "love_min")
     maximum = await ConfigService.get(session, "love_max")

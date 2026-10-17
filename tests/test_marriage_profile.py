@@ -39,7 +39,7 @@ from sib.handlers.marriage import (
     LOVE_BAR_CELLS,
     love_progress_bar,
     profile_marriage_lines,
-    spouse_handle,
+    spouse_display_name,
 )
 from sib.handlers.start import handle_apple_profile, handle_sib_profile_word
 from sib.services.marriage import MarriageService
@@ -50,6 +50,9 @@ GROUP_TITLE = "گروه پروفایل سیب"
 OWNER_ID = 7950
 SPOUSE_ID = 7951
 OTHER_ID = 7952
+
+# The spouse is shown by this PLAIN first name only - never a handle or link.
+SPOUSE_FIRST_NAME = "نیلوفر"
 
 
 # ---------------------------------------------------------------------------
@@ -207,21 +210,31 @@ def test_love_bar_clamps_out_of_range_values():
 # ---------------------------------------------------------------------------
 
 
-def test_spouse_handle_prefers_the_telegram_username():
-    user = User(id=1, first_name="سارا", username="player_one")
-    assert spouse_handle(user) == "@player\\_one"  # Markdown-escaped
+def test_spouse_display_name_is_the_plain_first_name_only():
+    """Only the first name: no last name, no @username."""
+    user = User(id=1, first_name="سارا", last_name="احمدی", username="player_one")
+    assert spouse_display_name(user) == "سارا"
 
 
-def test_spouse_handle_falls_back_to_the_display_name():
-    user = User(id=1, first_name="سارا", last_name="احمدی", username=None)
-    assert spouse_handle(user) == "سارا احمدی"
+def test_spouse_display_name_never_falls_back_to_the_username():
+    """A username must not leak as plain text when the first name is missing."""
+    user = User(id=1, first_name=None, username="player_one")
+    assert spouse_display_name(user) == "یک سیبی"
 
 
-def test_spouse_handle_falls_back_further_when_everything_is_missing():
-    user = User(id=1, username=None)
-    user.first_name = None
-    # User.display_name already applies the project's «بازیکن بی‌نام» fallback.
-    assert spouse_handle(user) == "بازیکن بی‌نام"
+def test_spouse_display_name_strips_at_signs_html_and_links():
+    user = User(id=1, first_name="@sara <b>x</b> tg://user?id=7951 t.me/sara")
+    name = spouse_display_name(user)
+    assert "@" not in name
+    assert "<" not in name and ">" not in name
+    assert "tg://" not in name and "t.me/" not in name
+    assert "7951" not in name
+    assert "sara" in name
+
+
+def test_spouse_display_name_is_markdown_safe():
+    user = User(id=1, first_name="سارا_احمدی")
+    assert spouse_display_name(user) == "سارا\\_احمدی"
 
 
 def test_love_percentage_rejects_unusable_values():
@@ -255,12 +268,13 @@ async def test_married_user_shows_the_spouse_and_love(db_session):
     await _marry(db_session, OWNER_ID, SPOUSE_ID, love_score=60)
     spouse = await db_session.get(User, SPOUSE_ID)
     spouse.username = "sib_spouse"
+    spouse.first_name = SPOUSE_FIRST_NAME
     await db_session.commit()
 
     lines = await profile_marriage_lines(db_session, OWNER_ID)
 
     assert len(lines) == 2
-    assert lines[0] == "💍 همسر: @sib\\_spouse"
+    assert lines[0] == "💍 همسر: " + SPOUSE_FIRST_NAME
     assert lines[1] == "❤️ عشق سیبی: ██████░░░░ 60%"
 
 
@@ -269,15 +283,17 @@ async def test_correct_spouse_is_displayed_from_either_side(db_session):
     await _marry(db_session, OWNER_ID, SPOUSE_ID, love_score=10)
     owner = await db_session.get(User, OWNER_ID)
     owner.username = "owner_handle"
+    owner.first_name = "سارا"
     spouse = await db_session.get(User, SPOUSE_ID)
     spouse.username = "spouse_handle"
+    spouse.first_name = SPOUSE_FIRST_NAME
     await db_session.commit()
 
     assert (await profile_marriage_lines(db_session, OWNER_ID))[0] == (
-        "💍 همسر: @spouse\\_handle"
+        "💍 همسر: " + SPOUSE_FIRST_NAME
     )
     assert (await profile_marriage_lines(db_session, SPOUSE_ID))[0] == (
-        "💍 همسر: @owner\\_handle"
+        "💍 همسر: سارا"
     )
 
 
@@ -318,13 +334,16 @@ async def test_marriage_history_is_never_exposed(db_session):
     await _marry(db_session, OWNER_ID, OTHER_ID, love_score=5)
     other = await db_session.get(User, OTHER_ID)
     other.username = "new_spouse"
+    other.first_name = "مریم"
     old = await db_session.get(User, SPOUSE_ID)
     old.username = "ex_spouse"
+    old.first_name = "ناهید"
     await db_session.commit()
 
     lines = await profile_marriage_lines(db_session, OWNER_ID)
-    assert any("@new\\_spouse" in line for line in lines)
-    assert not any("ex_spouse" in line for line in lines)
+    assert any("مریم" in line for line in lines)
+    assert not any("ناهید" in line or "ex_spouse" in line for line in lines)
+    assert not any("new_spouse" in line for line in lines)
     assert len(lines) == 1 + 1  # spouse + love, nothing else
 
 
@@ -336,6 +355,7 @@ async def test_unusable_love_score_omits_only_the_gauge(db_session, monkeypatch)
     await _marry(db_session, OWNER_ID, SPOUSE_ID, love_score=60)
     spouse = await db_session.get(User, SPOUSE_ID)
     spouse.username = "sib_spouse"
+    spouse.first_name = SPOUSE_FIRST_NAME
     await db_session.commit()
 
     async def inverted_range(session, key):
@@ -346,7 +366,7 @@ async def test_unusable_love_score_omits_only_the_gauge(db_session, monkeypatch)
 
     lines = await profile_marriage_lines(db_session, OWNER_ID)
     assert len(lines) == 1
-    assert lines[0] == "💍 همسر: @sib\\_spouse"
+    assert lines[0] == "💍 همسر: " + SPOUSE_FIRST_NAME
     assert "عشق سیبی" not in " ".join(lines)
 
 
@@ -389,11 +409,12 @@ async def test_married_user_profile_via_the_wake_word(db_session):
     await _marry(db_session, OWNER_ID, SPOUSE_ID, love_score=60)
     spouse = await db_session.get(User, SPOUSE_ID)
     spouse.username = "sib_spouse"
+    spouse.first_name = SPOUSE_FIRST_NAME
     await db_session.commit()
 
     text = await _wake_word_profile(db_session, _tg(OWNER_ID, "سارا"))
 
-    assert "💍 همسر: @sib\\_spouse" in text
+    assert "💍 همسر: " + SPOUSE_FIRST_NAME in text
     assert "❤️ عشق سیبی: ██████░░░░ 60%" in text
     # Existing content is still there.
     assert "👤 **پروفایل سیبی سارا**" in text
@@ -405,11 +426,12 @@ async def test_married_user_profile_via_the_profile_panel(db_session):
     await _marry(db_session, OWNER_ID, SPOUSE_ID, love_score=100)
     spouse = await db_session.get(User, SPOUSE_ID)
     spouse.username = "sib_spouse"
+    spouse.first_name = SPOUSE_FIRST_NAME
     await db_session.commit()
 
     text = await _panel_profile(db_session, _tg(OWNER_ID, "سارا"))
 
-    assert "💍 همسر: @sib\\_spouse" in text
+    assert "💍 همسر: " + SPOUSE_FIRST_NAME in text
     assert "❤️ عشق سیبی: " + "█" * LOVE_BAR_CELLS + " 100%" in text
 
 
@@ -418,13 +440,14 @@ async def test_married_user_profile_via_the_profile_command(db_session):
     await _marry(db_session, OWNER_ID, SPOUSE_ID, love_score=0)
     spouse = await db_session.get(User, SPOUSE_ID)
     spouse.username = "sib_spouse"
+    spouse.first_name = SPOUSE_FIRST_NAME
     await db_session.commit()
 
     msg = _profile_message(_tg(OWNER_ID, "سارا"), text="/profile")
     await cmd_profile(msg, MagicMock())
 
     text = _profile_text(msg)
-    assert "💍 همسر: @sib\\_spouse" in text
+    assert "💍 همسر: " + SPOUSE_FIRST_NAME in text
     assert "❤️ عشق سیبی: " + "░" * LOVE_BAR_CELLS + " 0%" in text
 
 
@@ -475,3 +498,56 @@ def _fresh_session():
     from sib.database.connection import get_session
 
     return get_session()
+
+
+# ---------------------------------------------------------------------------
+# 6. Spouse privacy in the profile (P2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_profile_shows_spouse_first_name_not_username(db_session):
+    """The profile line is «💍 همسر: {first name}», never the @username."""
+    await _marry(db_session, OWNER_ID, SPOUSE_ID, love_score=60)
+    spouse = await db_session.get(User, SPOUSE_ID)
+    spouse.username = "sib_spouse"
+    spouse.first_name = SPOUSE_FIRST_NAME
+    await db_session.commit()
+
+    text = await _wake_word_profile(db_session, _tg(OWNER_ID, "سارا"))
+
+    assert f"💍 همسر: {SPOUSE_FIRST_NAME}\n" in text
+    assert "sib" not in text  # the username never appears, escaped or not
+    assert "@" not in text
+
+
+@pytest.mark.asyncio
+async def test_profile_does_not_expose_spouse_telegram_link(db_session):
+    """CRITICAL: no tg:// link, no @handle, no spouse ID in ANY profile view.
+
+    Covers all three profile renderers and a hostile first name that tries
+    to smuggle a handle or a link into the display name.
+    """
+    await _marry(db_session, OWNER_ID, SPOUSE_ID, love_score=60)
+    spouse = await db_session.get(User, SPOUSE_ID)
+    spouse.username = "sib_spouse"
+    spouse.first_name = "@sib tg://user?id=7951 <a href='x'>نیلوفر</a>"
+    await db_session.commit()
+
+    texts = [
+        await _wake_word_profile(db_session, _tg(OWNER_ID, "سارا")),
+        await _panel_profile(db_session, _tg(OWNER_ID, "سارا")),
+    ]
+    msg = _profile_message(_tg(OWNER_ID, "سارا"), text="/profile")
+    await cmd_profile(msg, MagicMock())
+    texts.append(_profile_text(msg))
+
+    for text in texts:
+        assert "💍 همسر:" in text  # the line is still there ...
+        assert "tg://" not in text
+        assert "@" not in text
+        assert "<a" not in text
+        assert "sib_spouse" not in text
+        assert f"id={SPOUSE_ID}" not in text
+        assert str(SPOUSE_ID) not in text
+        assert "](" not in text  # no Markdown link syntax either
