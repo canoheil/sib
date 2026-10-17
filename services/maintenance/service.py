@@ -350,6 +350,39 @@ class MaintenanceService:
         return stats
 
     @classmethod
+    async def cleanup_zombie_parties(cls, session=None) -> int:
+        """Delete memberships for stale parties, preserving queued/live matches."""
+        from datetime import timedelta
+        from sqlalchemy import delete, exists, select
+        from sib.database.models import Party, PartyMember, Match, MatchState, MatchmakingQueue
+
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
+        active_match = exists(select(Match.id).where(
+            Match.state == MatchState.ACTIVE,
+            ((Match.party1_id == Party.id) | (Match.party2_id == Party.id)),
+        ))
+        active_queue = exists(select(MatchmakingQueue.id).where(
+            MatchmakingQueue.party_id == Party.id, MatchmakingQueue.is_active == True
+        ))
+        condition = (Party.created_at < cutoff) | (~active_queue & ~active_match)
+        stmt = delete(PartyMember).where(
+            PartyMember.party_id == Party.id, condition, ~active_match
+        )
+        if session is not None:
+            result = await session.execute(stmt)
+            count = max(0, result.rowcount or 0)
+            if count:
+                await session.commit()
+        else:
+            async with get_session() as own_session:
+                result = await own_session.execute(stmt)
+                count = max(0, result.rowcount or 0)
+                await own_session.commit()
+        if count:
+            logger.info("Cleaned %s zombie party membership row(s)", count)
+        return count
+
+    @classmethod
     async def run_once(cls) -> None:
         """Run one maintenance cycle, then publish any committed fallbacks.
 
@@ -361,6 +394,10 @@ class MaintenanceService:
         """
         resolved_ids: list = []
         fallbacks: list[dict] = []
+        try:
+            await cls.cleanup_zombie_parties()
+        except Exception:
+            logger.exception("Zombie party cleanup failed")
         async with get_session() as session:
             try:
                 from sib.services.session import SessionService
