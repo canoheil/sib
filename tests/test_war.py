@@ -445,8 +445,60 @@ async def test_attack_sends_two_different_narratives(war_session, monkeypatch):
     assert -1001 in chat_ids
     assert -1002 in chat_ids
 
-    captions = [call.kwargs.get("caption") for call in call_args_list]
-    assert captions[0] != captions[1]  # Attacker and defender see different perspectives
+    captions = {call.kwargs.get("chat_id"): call.kwargs.get("caption") for call in call_args_list}
+    assert captions[-1001] != captions[-1002]  # Attacker and defender see different perspectives
+    assert "tg://user?id=1" in captions[-1001]  # Attacker team sees teammate link
+    assert "tg://user" not in captions[-1002]  # Defender team sees plain text with NO link or ID
+
+
+def test_defender_narrative_has_no_tg_user_link():
+    from sib.handlers.war import _mention
+    from sib.services.war.narrative import (
+        WAR_ATTACK_DEFENDER,
+        render_defender_narrative,
+    )
+
+    # 1. Plain name test
+    for _ in range(len(WAR_ATTACK_DEFENDER) * 2):
+        text = render_defender_narrative(
+            player="رستم",
+            card="سایه ایگریس",
+            source_group="شیرها",
+            damage=1200,
+            is_buff=True,
+        )
+        assert "tg://user" not in text
+        assert "رستم" in text
+
+    # 2. Even if passed a _mention with tg://user link, it must be stripped
+    mention_str = _mention(88888, "سهراب پهلوان")
+    assert "tg://user?id=88888" in mention_str
+
+    for _ in range(len(WAR_ATTACK_DEFENDER) * 2):
+        text = render_defender_narrative(
+            player=mention_str,
+            card="شوالیه سیب",
+            source_group="شاهین‌ها",
+            damage=950,
+            is_buff=False,
+        )
+        assert "tg://user" not in text
+        assert "88888" not in text
+        assert "سهراب پهلوان" in text
+
+    # 3. Hostile scheme / HTML link injection
+    hostile_player = "@attacker <a href='tg://user?id=99999'>دشمن</a> tg://user?id=77777"
+    for _ in range(len(WAR_ATTACK_DEFENDER) * 2):
+        text = render_defender_narrative(
+            player=hostile_player,
+            card="کارت تاریک",
+            source_group="گرگ‌ها",
+            damage=600,
+        )
+        assert "tg://user" not in text
+        assert "99999" not in text
+        assert "77777" not in text
+        assert "@attacker" not in text
 
 
 def test_war_attack_image_perspective(monkeypatch):

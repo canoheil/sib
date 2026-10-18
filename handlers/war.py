@@ -17,6 +17,7 @@ from aiogram.types import (
 from sqlalchemy import select
 
 from sib.core.logging import logger
+from sib.core.text import plain_display_name, safe_name
 from sib.database.connection import get_session
 from sib.database.models import Character, Group, GroupWar, User
 from sib.keyboards.common import danger_button, primary_button, success_button
@@ -163,6 +164,11 @@ async def get_player_card_bytes(session, user_id: int) -> bytes:
     return out.getvalue()
 
 
+def _mention(user_id: int, first_name: Optional[str]) -> str:
+    """Format a clickable mention link for teammates."""
+    return f"[{safe_name(first_name, 'یک سیبی')}](tg://user?id={int(user_id)})"
+
+
 async def _send_dispatch(bot, chat_id: int, photo_bytes: bytes, caption: str):
     """Deliver battle dispatch photo + caption, with graceful fallback to text."""
     try:
@@ -173,9 +179,17 @@ async def _send_dispatch(bot, chat_id: int, photo_bytes: bytes, caption: str):
         )
     except Exception:
         try:
-            await bot.send_message(chat_id=chat_id, text=caption)
+            await bot.send_photo(
+                chat_id=chat_id,
+                photo=BufferedInputFile(photo_bytes, filename="attack.jpg"),
+                caption=caption,
+                parse_mode=None,
+            )
         except Exception:
-            logger.exception("Failed to deliver war dispatch to chat %s", chat_id)
+            try:
+                await bot.send_message(chat_id=chat_id, text=caption)
+            except Exception:
+                logger.exception("Failed to deliver war dispatch to chat %s", chat_id)
 
 
 @router.message(F.chat.type.in_(GROUPS), F.text == "وضعیت جنگ")
@@ -264,25 +278,35 @@ async def war_attack_callback(callback: CallbackQuery):
             perspective=perspective,
         )
 
-        player_name = callback.from_user.first_name
+        # Attacker group gets clickable teammate mention
+        # Defender group gets plain sanitized name (no links, no IDs)
+        attacker_mention = _mention(user_id, callback.from_user.first_name)
+        defender_plain_player = plain_display_name(
+            callback.from_user.first_name, fallback="مهاجم"
+        )
+
         text_attacker = render_attacker_narrative(
-            player=player_name,
+            player=attacker_mention,
             card=card_name,
             target_group=target_title,
             damage=damage,
             is_buff=(mode == "buff"),
         )
         text_defender = render_defender_narrative(
-            player=player_name,
+            player=defender_plain_player,
             card=card_name,
             source_group=source_title,
             damage=damage,
             is_buff=(mode == "buff"),
         )
 
-        # Send battle dispatches to BOTH groups
-        await _send_dispatch(callback.bot, attacker_id, img_bytes, text_attacker)
-        await _send_dispatch(callback.bot, defender_id, img_bytes, text_defender)
+        # Send battle dispatches to BOTH groups:
+        # The actor's group gets attacker perspective with teammate link,
+        # The enemy group gets defender perspective without links/IDs.
+        actor_chat_id = group_id
+        enemy_chat_id = defender_id if is_actor_attacker else attacker_id
+        await _send_dispatch(callback.bot, actor_chat_id, img_bytes, text_attacker)
+        await _send_dispatch(callback.bot, enemy_chat_id, img_bytes, text_defender)
 
     except WarError as exc:
         await safe_answer_callback(callback, str(exc), show_alert=True)

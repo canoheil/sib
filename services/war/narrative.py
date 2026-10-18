@@ -1,8 +1,13 @@
 """Persian narrative pools and rendering engine for Apple Clash battle dispatches."""
 
 import random
+import re
 from typing import List, Optional
+
+from sib.core.text import plain_display_name
 from sib.services.sib_claim import fa_digits
+
+_MD_LINK = re.compile(r"\[([^\]]+)\]\([^\)]+\)")
 
 WAR_ATTACK_ATTACKER: List[str] = [
     "⚔️ {player} با تکیه بر نیروی افسانه‌ای کارت «{card}» به دیوارهای {target_group} یورش برد و {damage} آسیب سهمگین وارد کرد!{buff_label}",
@@ -55,13 +60,22 @@ def render_defender_narrative(
     is_buff: bool = False,
     rng: Optional[random.Random] = None,
 ) -> str:
-    """Render a dynamic narrative dispatch for the defending clan chat."""
+    """Render a dynamic narrative dispatch for the defending clan chat.
+
+    The attacker's name is sanitized to plain text without any clickable
+    mentions or tg://user IDs to protect attacker privacy in enemy groups.
+    """
     chosen_rng = rng or random.Random()
     template = chosen_rng.choice(WAR_ATTACK_DEFENDER)
     formatted_damage = fa_digits(damage) if isinstance(damage, int) else damage
     buff_label = " 💥 [با قدرت سیب باف]" if is_buff else ""
+
+    # Sanitize attacker display name to plain text (strip markdown links/tg scheme)
+    clean_player = _MD_LINK.sub(r"\1", str(player or ""))
+    sanitized_player = plain_display_name(clean_player, fallback="مهاجم")
+
     return template.format(
-        player=player,
+        player=sanitized_player,
         card=card,
         source_group=source_group,
         damage=formatted_damage,
