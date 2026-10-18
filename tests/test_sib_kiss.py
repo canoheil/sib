@@ -525,6 +525,32 @@ async def test_handler_success_mentions_both_and_uses_text_fallback(db_session, 
 
 
 @pytest.mark.asyncio
+async def test_kiss_mentions_are_clickable_and_markdown_escaped(db_session, monkeypatch, tmp_path):
+    """P4: kiss mentions are clickable tg://user links whose names are escaped.
+
+    Group context: everyone in the group already sees each other's profiles,
+    so the clickable name links are kept. The display names still go through
+    ``safe_name`` so Markdown characters cannot break the message.
+    """
+    from sib.handlers.sib_kiss import handle_sib_kiss
+
+    monkeypatch.setattr(marriage_art, "_ASSETS_DIR", tmp_path)  # no kiss art yet
+    sender = _tg_user(911001, "علی_رضا*")
+    target = _tg_user(911002, "باب")
+
+    msg = _group_kiss_message(sender, "بوس سیبی", target=target)
+    await handle_sib_kiss(msg)
+
+    text = msg.reply.call_args[0][0]
+    assert "[" in text
+    assert "](tg://user?id=911001)" in text
+    assert "](tg://user?id=911002)" in text
+    assert "علی\\_رضا\\*" in text  # name is Markdown-escaped
+    assert "باب" in text
+    assert msg.reply.call_args.kwargs.get("parse_mode") == "Markdown"
+
+
+@pytest.mark.asyncio
 async def test_handler_second_kiss_within_cooldown_replies_exact_wait(db_session, monkeypatch, tmp_path):
     from sib.handlers.sib_kiss import handle_sib_kiss
 

@@ -3,12 +3,13 @@
 from typing import Optional
 
 from aiogram import Router, F, Bot
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Filter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from sib.core.config import settings
 from sib.core.errors import MESSAGES
 from sib.core.logging import logger, log_event, Events
+from sib.core.text import escape_markdown, plain_display_name, safe_name
 from sib.database.connection import get_session
 from sib.keyboards.common import (
     get_membership_keyboard,
@@ -536,14 +537,14 @@ async def handle_apple_profile(callback: CallbackQuery, bot: Bot):
         selected_skin = await ProfileSkinService.get_selected_skin(session, user.id)
 
     lines = [
-        f"👤 **پروفایل سیبی {user.first_name or 'شما'}** 🍏",
+        f"👤 **پروفایل سیبی {safe_name(user.first_name, 'شما')}** 🍏",
         PlayerXPService.format_profile_progress(account_progress),
         f"🎨 **Change Skin / تغییر پوسته**: {profile_skin_label(selected_skin)}",
         "",
         f"🍎 سیب: `{apples}`",
         f"🌱 نهال: `{seedlings}`",
         f"🎴 تعداد کارت‌ها: `{len(cards)}`",
-        fav_text.strip() if fav_text else "⭐ کارت اصلی: انتخاب نشده",
+        escape_markdown(fav_text.strip()) if fav_text else "⭐ کارت اصلی: انتخاب نشده",
         f"⚔️ نبردهای سیبی: `{battles or 0}` | برد: `{wins or 0}`",
     ]
     lines.extend(marriage_lines)
@@ -678,7 +679,7 @@ def _main_menu_text_and_kb(user, chat) -> tuple:
         text = "🍏 **منوی اصلی سیب**\nاز منوی زیر بخش مورد نظرت رو انتخاب کن 👇"
         kb = get_group_welcome_keyboard()
     else:
-        name = user.first_name if user else "دوست"
+        name = safe_name(user.first_name, "دوست") if user else "دوست"
         text = (
             f"🍏 **منوی اصلی سیب**\n\n"
             f"سلام {name}! از منوی زیر بخش مورد نظرت رو انتخاب کن 👇"
@@ -843,14 +844,14 @@ async def _open_sender_profile(message: Message) -> None:
         selected_skin = await ProfileSkinService.get_selected_skin(session, user.id)
 
     lines = [
-        f"👤 **پروفایل سیبی {user.first_name or 'شما'}** 🍏",
+        f"👤 **پروفایل سیبی {safe_name(user.first_name, 'شما')}** 🍏",
         PlayerXPService.format_profile_progress(account_progress),
         f"🎨 **Change Skin / تغییر پوسته**: {profile_skin_label(selected_skin)}",
         "",
         f"🍎 سیب: `{apples}`",
         f"🌱 نهال: `{seedlings}`",
         f"🎴 تعداد کارت‌ها: `{len(cards)}`",
-        fav_text.strip() if fav_text else "⭐ کارت اصلی: انتخاب نشده",
+        escape_markdown(fav_text.strip()) if fav_text else "⭐ کارت اصلی: انتخاب نشده",
         f"⚔️ نبردهای سیبی: `{battles or 0}` | برد: `{wins or 0}`",
     ]
     lines.extend(marriage_lines)
@@ -895,6 +896,163 @@ async def handle_sib_profile_word(message: Message, bot: Bot):
     alias - 'سیبام' shows the apple balance.
     """
     await _open_sender_profile(message)
+
+
+# ---------------------------------------------------------------------------
+# «پروفایلش» — view ANOTHER player's profile by replying to their message
+# ---------------------------------------------------------------------------
+
+PROFILE_VIEW_REPLY_REQUIRED_TEXT = (
+    "برای دیدن پروفایل یک نفر، روی پیامش ریپلای کن و بنویس «پروفایلش»."
+)
+PROFILE_VIEW_TARGET_IS_BOT_TEXT = "ربات‌ها که پروفایل ندارن! 😄"
+PROFILE_VIEW_NOT_REGISTERED_TEXT = "این کاربر هنوز توی بازی ثبت‌نام نکرده."
+PROFILE_VIEW_NOT_A_USER_TEXT = (
+    "این پیام مال یه بازیکن واقعی نیست؛ روی پیام یه بازیکن ریپلای کن."
+)
+
+PROFILE_VIEW_COMMAND = "پروفایلش"
+
+# Typed-Persian folding: Arabic Yeh/Kaf -> Persian, and the invisible
+# ZWNJ/bidi marks keyboards put inside Persian words.
+_PROFILE_VIEW_FOLD = str.maketrans(
+    {"ي": "ی", "ك": "ک", "\u200c": "", "\u200e": "", "\u200f": ""}
+)
+
+
+def is_profile_view_command(text: Optional[str]) -> bool:
+    """True only for the exact word «پروفایلش» (case and spacing ignored).
+
+    Anchored to the whole message, so «سیب پروفایل» and sentences that
+    merely contain the word never trigger it.
+    """
+    normalized = " ".join((text or "").translate(_PROFILE_VIEW_FOLD).split())
+    return normalized.casefold() == PROFILE_VIEW_COMMAND
+
+
+class ProfileViewCommand(Filter):
+    async def __call__(self, message: Message) -> bool:
+        return is_profile_view_command(message.text)
+
+
+async def _public_profile(session, target) -> tuple:
+    """(text, photo) for ANOTHER player's profile - the privacy-safe view.
+
+    Shows only in-game stats and the sanitized first name. It never reads
+    or prints the Telegram ID, username or any ``tg://`` link, and it omits
+    the private wallet (apples, seedlings) and the skin-change control,
+    which belong to the owner. The spouse appears as a first name only,
+    via ``profile_marriage_lines``.
+    """
+    from sqlalchemy import func, select as sa_select
+
+    from sib.database.models import AppleBattle, AppleBattleStatus, Character
+    from sib.handlers.marriage import profile_marriage_lines
+    from sib.services.character_art import photo_arg, resolve_character_photo
+    from sib.services.player_cards import PlayerCardService
+    from sib.services.player_xp import PlayerXPService
+    from sib.services.profile_artwork import ProfileArtworkResolver
+    from sib.services.profile_skin import ProfileSkinService
+
+    user_id = int(target.id)
+    cards = await PlayerCardService.list_cards(session, user_id)
+    main_card = await PlayerCardService.get_main_card(session, user_id)
+    wins = await session.scalar(
+        sa_select(func.count(AppleBattle.id))
+        .where(AppleBattle.winner_id == user_id)
+        .where(AppleBattle.status == AppleBattleStatus.COMPLETED)
+    )
+    battles = await session.scalar(
+        sa_select(func.count(AppleBattle.id)).where(
+            ((AppleBattle.player1_id == user_id) | (AppleBattle.player2_id == user_id))
+            & (AppleBattle.status == AppleBattleStatus.COMPLETED)
+        )
+    )
+
+    fav_text = None
+    fav_photo = None
+    if main_card is not None:
+        character = await session.get(Character, main_card.character_id)
+        if character:
+            fav_text = character.name_fa
+            file_id, fs_path = await resolve_character_photo(session, character)
+            fav_photo = photo_arg(file_id, fs_path)
+
+    marriage_lines = await profile_marriage_lines(session, user_id)
+    progress = await PlayerXPService.get_progress(session, user_id)
+    skin = await ProfileSkinService.get_selected_skin(session, user_id)
+
+    name = plain_display_name(target.first_name, "بازیکن")
+    fav_line = (
+        f"⭐ کارت اصلی: {escape_markdown(fav_text.strip())}"
+        if fav_text
+        else "⭐ کارت اصلی: انتخاب نشده"
+    )
+    lines = [
+        f"👤 **پروفایل سیبی {name}** 🍏",
+        PlayerXPService.format_profile_progress(progress),
+        "",
+        f"🎴 تعداد کارت‌ها: `{len(cards)}`",
+        fav_line,
+        f"⚔️ نبردهای سیبی: `{battles or 0}` | برد: `{wins or 0}`",
+    ]
+    lines.extend(marriage_lines)
+    photo = ProfileArtworkResolver.profile_photo(
+        progress, skin=skin, fallback_photo=fav_photo
+    )
+    return "\n".join(lines), photo
+
+
+@router.message(ProfileViewCommand())
+async def handle_reply_profile_view(message: Message, bot: Bot):
+    """«پروفایلش» as a REPLY -> send the replied-to player's profile.
+
+    Validation runs before any write. Only an already-registered player has
+    a profile; the target is never auto-registered. The result is a NEW
+    message with no panel keyboard, because the owner-only controls
+    (skin change, cards, etc.) do not apply to someone else's profile.
+    """
+    viewer = message.from_user
+    if viewer is None:
+        return
+
+    reply = message.reply_to_message
+    if reply is None:
+        await message.reply(PROFILE_VIEW_REPLY_REQUIRED_TEXT)
+        return
+
+    target = getattr(reply, "from_user", None)
+    if target is None:
+        # Channel posts and anonymous admins have no player identity.
+        await message.reply(PROFILE_VIEW_NOT_A_USER_TEXT)
+        return
+    if getattr(target, "is_bot", False):
+        await message.reply(PROFILE_VIEW_TARGET_IS_BOT_TEXT)
+        return
+
+    async with get_session() as session:
+        await UserService.get_or_create_user(session, viewer)
+        from sib.database.models import User
+
+        registered = await session.get(User, int(target.id))
+        if registered is None or registered.is_bot:
+            rendered = None
+        else:
+            rendered = await _public_profile(session, registered)
+
+    if rendered is None:
+        await message.reply(PROFILE_VIEW_NOT_REGISTERED_TEXT)
+        return
+
+    text, photo = rendered
+    sent = None
+    if photo is not None:
+        try:
+            sent = await message.reply_photo(photo, caption=text, parse_mode="Markdown")
+        except Exception:
+            sent = None
+    if sent is None:
+        await message.reply(text, parse_mode="Markdown")
 
 
 async def _open_sender_garden(message: Message) -> None:

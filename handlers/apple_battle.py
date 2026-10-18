@@ -22,6 +22,7 @@ from sib.core.errors import (
     PartyNotFoundException,
 )
 from sib.core.logging import logger
+from sib.core.text import escape_markdown, safe_name
 from sib.database.connection import get_session
 from sib.database.models import AppleBattle, AppleBattleStatus, Character, PartyStatus, PlayerCard
 from sib.services.apple_battle import AppleBattleService, BattleError
@@ -555,7 +556,7 @@ async def cmd_profile(message: Message, bot: Bot):
         if main_card is not None:
             character = await session.get(Character, main_card.character_id)
             name = character.name_fa if character else "?"
-            fav_text = f"⭐ کارت اصلی: **{name}** (سطح {main_card.level})\n"
+            fav_text = f"⭐ کارت اصلی: **{escape_markdown(name)}** (سطح {main_card.level})\n"
 
         # The ACTIVE spouse + shared Love, straight from the marriage domain.
         from sib.handlers.marriage import profile_marriage_lines
@@ -565,7 +566,7 @@ async def cmd_profile(message: Message, bot: Bot):
         selected_skin = await ProfileSkinService.get_selected_skin(session, user.id)
 
     lines = [
-        f"👤 **پروفایل {user.full_name}**",
+        f"👤 **پروفایل {safe_name(user.full_name, 'بازیکن')}**",
         PlayerXPService.format_profile_progress(account_progress),
         f"🎨 **Change Skin / تغییر پوسته**: {profile_skin_label(selected_skin)}",
         "",

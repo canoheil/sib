@@ -580,6 +580,32 @@ async def test_handler_success_mentions_both_and_uses_text_fallback(db_session, 
 
 
 @pytest.mark.asyncio
+async def test_hug_mentions_are_clickable_and_markdown_escaped(db_session, monkeypatch, tmp_path):
+    """P4: hug mentions are clickable tg://user links whose names are escaped.
+
+    Group context: everyone in the group already sees each other's profiles,
+    so the clickable name links are kept. The display names still go through
+    ``safe_name`` so Markdown characters cannot break the message.
+    """
+    from sib.handlers.sib_hug import handle_sib_hug
+
+    monkeypatch.setattr(marriage_art, "_ASSETS_DIR", tmp_path)
+    sender = _tg_user(811001, "علی_رضا*")
+    target = _tg_user(811002, "باب")
+
+    msg = _group_hug_message(sender, "بغل سیبی", target=target)
+    await handle_sib_hug(msg)
+
+    text = msg.reply.call_args[0][0]
+    assert "[" in text
+    assert "](tg://user?id=811001)" in text
+    assert "](tg://user?id=811002)" in text
+    assert "علی\\_رضا\\*" in text  # name is Markdown-escaped
+    assert "باب" in text
+    assert msg.reply.call_args.kwargs.get("parse_mode") == "Markdown"
+
+
+@pytest.mark.asyncio
 async def test_handler_second_hug_within_cooldown_replies_wait_without_reward(db_session, monkeypatch, tmp_path):
     from sib.handlers.sib_hug import handle_sib_hug
 
