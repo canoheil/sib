@@ -10,6 +10,7 @@ from sqlalchemy import select, update
 from sib.core.logging import logger
 from sib.database.connection import get_session
 from sib.database.models import Character, Inv2Attack, Inv2Invasion, PlayerCard, User
+from sib.services.castle_service import CastleService, apply_castle_buff
 from sib.services.card_progression import MAX_CARD_LEVEL, card_attributes
 from sib.services.invasion_v2.damage import compute_damage
 from sib.services.invasion_v2.enums import InvasionStatus
@@ -89,6 +90,8 @@ async def handle_inv2_join(callback: CallbackQuery, bot) -> None:
                 return
             power = card_attributes(card, character).power
             damage, crit = compute_damage(power, random.Random())
+            castle_buff = await CastleService.get_invasion_buff(session, inv.group_id)
+            damage = apply_castle_buff(damage, castle_buff)
             # Apply to the rounded normal hit, independently of the unchanged
             # 10% critical roll (a critical hit can also receive the buff).
             if use_buff:

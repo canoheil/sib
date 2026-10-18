@@ -96,3 +96,21 @@ there).
   `requires_row_locks` and are reported as SKIPPED on SQLite. A SKIPPED test is
   not a pass, and SQLite results do not show MariaDB locking or concurrency
   safety.
+
+## Apple Castle (C1)
+
+Castle mutations lock **User → group_castles → donation/claim gate → wallet**.
+Donation cap reads use current locking reads under the User mutex, globally
+across groups; a wallet lock may be taken before inserting a new donation ID.
+Claim inserts and wallet credit share the caller's transaction. No XP/items or
+other users are acquired by castle operations.
+
+Castle creation uses a dialect upsert on the unique castle group ID. Do not
+explicitly lock the parent Group: invasion spawning locks Group then invasion,
+while invasion joins can lock invasion then User. Adding User → Group here
+would introduce a cross-feature cycle. The Group active flag is read without a
+lock. Parent foreign-key checks on first creation may still contend with group
+administration; deadlocks/errors must roll back the entire caller transaction.
+A racing group deactivation may let an already-started transaction finish.
+Menu-only transactions take the castle lock but never subsequently acquire a
+User. Invasion reads the castle bonus without a castle row lock.
