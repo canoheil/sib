@@ -16,6 +16,8 @@ from sib.services.invasion_v2.enums import InvasionStatus
 from sib.services.invasion_v2.narrative import render_join
 from sib.services.invasion_v2.presentation import InvasionPresentation, _telegram
 from sib.services.maintenance.service import MaintenanceService
+from sib.services.items import ItemService
+from sib.services.lock_order import lock_user_rows_in_order
 from sib.services.player_cards import PlayerCardService
 
 router = Router(name="inv2_join")
@@ -33,12 +35,15 @@ async def _answer(callback, text, *, alert=False):
 
 
 @router.callback_query(F.data.startswith("inv2:join:"))
+@router.callback_query(F.data.startswith("inv2:joinbuff:"))
 async def handle_inv2_join(callback: CallbackQuery, bot) -> None:
     try:
         if not await MaintenanceService._invasion_enabled():
             await _answer(callback, "⚔️ سامانهٔ یورش موقتاً غیرفعال است.", alert=True)
             return
-        suffix = (callback.data or "").removeprefix("inv2:join:")
+        data = callback.data or ""
+        use_buff = data.startswith("inv2:joinbuff:")
+        suffix = data.removeprefix("inv2:joinbuff:" if use_buff else "inv2:join:")
         if not suffix.isdecimal() or not callback.from_user or not callback.message:
             await _answer(callback, "این یورش به پایان رسیده است.", alert=True)
             return
@@ -62,6 +67,17 @@ async def handle_inv2_join(callback: CallbackQuery, bot) -> None:
             if previous is not None:
                 await _answer(callback, "قبلاً در این یورش شرکت کرده‌اید.", alert=True)
                 return
+            if use_buff:
+                # A killing blow settles every attacker's rewards. Take ALL
+                # potential recipient user mutexes in ascending order before
+                # inventory locks, not just the buff user's mutex: otherwise
+                # simultaneous battles in different groups could invert them.
+                participants = list((await session.scalars(select(Inv2Attack.user_id).where(
+                    Inv2Attack.invasion_id == inv.id))).all())
+                await lock_user_rows_in_order(session, [*participants, user_id])
+                if await ItemService.get_total(session, user_id, "sib_buff", for_update=True) < 1:
+                    await _answer(callback, "شما سیب باف ندارید! از فروشگاه تهیه کنید.", alert=True)
+                    return
             card = await PlayerCardService.get_main_card(session, user_id)
             if card is None:
                 await _answer(callback, "برای شرکت در یورش، ابتدا کارت اصلی پروفایل خود را تنظیم کنید.", alert=True)
@@ -73,11 +89,16 @@ async def handle_inv2_join(callback: CallbackQuery, bot) -> None:
                 return
             power = card_attributes(card, character).power
             damage, crit = compute_damage(power, random.Random())
+            # Apply to the rounded normal hit, independently of the unchanged
+            # 10% critical roll (a critical hit can also receive the buff).
+            if use_buff:
+                damage *= 2
             remaining = max(0, inv.enemy_hp_remaining - damage)
             user = await session.get(User, user_id)
             name = user.display_name if user else callback.from_user.first_name
             story = render_join(username=name, card_name=character.name_fa,
-                damage=damage, is_crit=crit, enemy_hp_remaining=remaining, rng=random.Random(), invasion_id=inv.id)
+                damage=damage, is_crit=crit, enemy_hp_remaining=remaining, rng=random.Random(),
+                invasion_id=inv.id, is_buffed=use_buff)
             terminal = remaining <= 0
             # Compare-and-swap guards the old HP, active state and deadline.
             result = await session.execute(update(Inv2Invasion).where(
@@ -90,6 +111,11 @@ async def handle_inv2_join(callback: CallbackQuery, bot) -> None:
             if result.rowcount != 1:
                 await _answer(callback, "وضعیت یورش تازه تغییر کرد؛ دوباره تلاش کنید.", alert=True)
                 return
+            # Only consume after the HP CAS succeeds. Consumption, attack,
+            # HP and any victory rewards share this transaction; an exception
+            # (including a duplicate insert) rolls all of them back together.
+            if use_buff:
+                await ItemService.consume(session, user_id, "sib_buff", 1)
             attack = Inv2Attack(invasion_id=inv.id, user_id=user_id, card_id=card.id,
                 card_power=power, damage=damage, is_crit=crit, narrative=story, joined_at=now)
             session.add(attack)
@@ -99,7 +125,8 @@ async def handle_inv2_join(callback: CallbackQuery, bot) -> None:
                 from sib.services.invasion_v2.rewards_service import settle_outcome
                 await settle_outcome(session, inv.id, InvasionStatus.VICTORY.value)
         # The transaction is committed before acknowledgement or any image work.
-        await _answer(callback, "⚔️ ضربه‌ات ثبت شد!")
+        await _answer(callback, "💥 سیب باف مصرف شد؛ ضربه‌ات با آسیب ۲ برابر ثبت شد!"
+                      if use_buff else "⚔️ ضربه‌ات ثبت شد!")
         presenter = InvasionPresentation()
 
         async def deliver():

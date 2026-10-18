@@ -105,26 +105,32 @@ def test_enemy_weights_over_ten_thousand_draws():
         assert abs(draws.count(kind) - 10_000 * enemy_spec(kind).spawn_weight) <= 10_000 * enemy_spec(kind).spawn_weight * .20
 
 
-def test_reward_values_and_both_independent_rolls():
-    assert roll_rewards(FixedRNG(.05, .01)) == [
-        (RewardType.GOLDEN_APPLE, 3),
+def test_reward_values_and_all_independent_rolls():
+    assert roll_rewards(FixedRNG(.14, .04, .09)) == [
+        (RewardType.GOLDEN_APPLE, 5),
         (RewardType.DIAMOND_APPLE, 1),
         (RewardType.OBSIDIAN_APPLE, 1),
+        (RewardType.SEEDLING, 1),
     ]
-    assert roll_rewards(FixedRNG(.1, .02)) == [(RewardType.GOLDEN_APPLE, 3)]
-    assert roll_rewards(FixedRNG(.9, .01)) == [
-        (RewardType.GOLDEN_APPLE, 3), (RewardType.OBSIDIAN_APPLE, 1)
+    assert roll_rewards(FixedRNG(.15, .05, .10)) == [(RewardType.GOLDEN_APPLE, 5)]
+    assert roll_rewards(FixedRNG(.9, .04, .9)) == [
+        (RewardType.GOLDEN_APPLE, 5), (RewardType.OBSIDIAN_APPLE, 1)
     ]
-    assert roll_rewards(FixedRNG(.01, .9)) == [
-        (RewardType.GOLDEN_APPLE, 3), (RewardType.DIAMOND_APPLE, 1)
+    assert roll_rewards(FixedRNG(.14, .9, .9)) == [
+        (RewardType.GOLDEN_APPLE, 5), (RewardType.DIAMOND_APPLE, 1)
+    ]
+    assert roll_rewards(FixedRNG(.9, .9, .09)) == [
+        (RewardType.GOLDEN_APPLE, 5), (RewardType.SEEDLING, 1)
     ]
 
 
 def test_reward_distribution_ten_thousand_rolls_within_twenty_percent():
     rng = Random(314159)
     rewards = [roll_rewards(rng) for _ in range(10_000)]
-    assert all((RewardType.GOLDEN_APPLE, 3) in row for row in rewards)
-    for reward, expected in [(RewardType.DIAMOND_APPLE, 1000), (RewardType.OBSIDIAN_APPLE, 200)]:
+    assert all((RewardType.GOLDEN_APPLE, 5) in row for row in rewards)
+    for reward, expected in [(RewardType.DIAMOND_APPLE, 1500),
+                             (RewardType.OBSIDIAN_APPLE, 500),
+                             (RewardType.SEEDLING, 1000)]:
         actual = sum(any(kind == reward for kind, _ in row) for row in rewards)
         assert abs(actual - expected) <= expected * .20
     replay = Random(314159)
@@ -173,5 +179,5 @@ def test_wire_enum_values_match_schema():
         "PENDING", "ACTIVE", "VICTORY", "DEFEAT", "EXPIRED"
     ]
     assert [reward.value for reward in RewardType] == [
-        "golden_apple", "diamond_apple", "obsidian_apple"
+        "golden_apple", "diamond_apple", "obsidian_apple", "seedling"
     ]

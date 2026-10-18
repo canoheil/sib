@@ -116,6 +116,47 @@ class SeedlingService:
         return inv.total
 
     @classmethod
+    async def award_invasion_victory(
+        cls,
+        session: AsyncSession,
+        user_id: int,
+        amount: int,
+        *,
+        invasion_id: int,
+    ) -> int:
+        """Credit the real seedling inventory once per v2 invasion and user.
+
+        The invasion reward service owns the transaction and takes the user
+        mutex first. Its completion marker, this source-keyed ledger and the
+        inventory update all commit or roll back together.
+        """
+        if amount < 1:
+            raise ValueError("seedling amount must be positive")
+        existing = await session.scalar(
+            select(SeedlingAward.id).where(
+                SeedlingAward.source == "invasion_v2",
+                SeedlingAward.source_ref_id == invasion_id,
+                SeedlingAward.user_id == user_id,
+            )
+        )
+        if existing is not None:
+            return await cls.get_total(session, user_id)
+
+        inv = await cls._get_or_create_inventory(session, user_id)
+        inv.total += amount
+        session.add(SeedlingAward(
+            match_id=None, user_id=user_id, amount=amount,
+            reason="invasion_v2_victory", source="invasion_v2",
+            source_ref_id=invasion_id,
+        ))
+        await session.flush()
+        log_event(
+            Events.SEEDLING_AWARDED,
+            {"invasion_id": invasion_id, "user_id": user_id, "amount": amount},
+        )
+        return inv.total
+
+    @classmethod
     async def award_daily_chest(
         cls,
         session: AsyncSession,

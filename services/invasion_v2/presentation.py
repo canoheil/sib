@@ -13,7 +13,7 @@ from sib.database.connection import get_session
 from sib.database.models import Character, Inv2Attack, Inv2Invasion, Inv2Region, Inv2Reward, PlayerCard, User
 from sib.keyboards.common import success_button
 from sib.services.character_art import artwork_path
-from sib.services.config_store import ConfigService
+from sib.services.config_store import ConfigService, DEFAULT_INVASION_JOIN_WINDOW_SECONDS
 from sib.services.sib_claim import fa_digits
 from . import narrative
 from .circuit_breaker import is_group_available, record_send_failure, record_send_success
@@ -164,13 +164,15 @@ def build_join_caption(narrative_text: str, damage: int, *, is_crit: bool, is_ki
 
 
 def join_keyboard(invasion_id: int) -> InlineKeyboardMarkup:
-    """The single join button; the one source of truth for its label/callback.
+    """Both join modes; the one source of truth for their labels/callbacks.
 
     Telegram clears an inline keyboard whenever an edit omits reply_markup, so
     every caption edit of a still-joinable announcement must re-send it.
     """
-    return InlineKeyboardMarkup(inline_keyboard=[[success_button(
-        text="⚔️ پیوستن به یورش", callback_data=f"inv2:join:{invasion_id}")]])
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [success_button(text="⚔️ پیوستن (عادی)", callback_data=f"inv2:join:{invasion_id}")],
+        [success_button(text="💥 پیوستن با سیب باف", callback_data=f"inv2:joinbuff:{invasion_id}")],
+    ])
 
 
 async def _edit_announcement_caption(
@@ -313,7 +315,7 @@ class InvasionPresentation:
                 caption = build_announcement_caption(narrative_text, inv.enemy_hp_remaining, inv.enemy_hp)
                 kb = join_keyboard(inv.id)
                 raw_window = await ConfigService.get(session, "invasion_join_window_seconds")
-                window = int(300 if raw_window is None else raw_window)
+                window = int(DEFAULT_INVASION_JOIN_WINDOW_SECONDS if raw_window is None else raw_window)
                 if window <= 0:
                     raise ValueError("Invalid join window")
                 message = await _telegram(group_id, bot.send_photo, chat_id=group_id,
@@ -422,7 +424,8 @@ class InvasionPresentation:
                             totals[kind] += amount
                         labels = (("golden_apple", "سیب طلایی"),
                                   ("diamond_apple", "سیب الماسی"),
-                                  ("obsidian_apple", "سیب ابسیدینی"))
+                                  ("obsidian_apple", "سیب ابسیدینی"),
+                                  ("seedling", "نهال"))
                         reward_lines = tuple(f"{name} ×{fa_digits(totals[key])}"
                                              for key, name in labels if totals[key])
                         summary = "، ".join(reward_lines)

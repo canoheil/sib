@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from sib.database.models import Inv2Attack, Inv2GroupState, Inv2Invasion, Inv2Region, Inv2Reward
 from sib.services.items import ItemService
 from sib.services.lock_order import lock_user_rows_in_order
+from sib.services.seedling import SeedlingService
 from .enums import InvasionStatus, RewardType
 from .rewards import roll_rewards
 
@@ -36,7 +37,11 @@ async def grant_victory_rewards(session, invasion_id: int) -> None:
         if recorded is not None:
             continue
         for kind, amount in roll_rewards(random.Random()):
-            await ItemService.grant(session, user_id, ITEM_KEYS[kind], amount)
+            if kind == RewardType.SEEDLING:
+                await SeedlingService.award_invasion_victory(
+                    session, user_id, amount, invasion_id=invasion_id)
+            else:
+                await ItemService.grant(session, user_id, ITEM_KEYS[kind], amount)
             session.add(Inv2Reward(invasion_id=invasion_id, user_id=user_id,
                 reward_type=kind.value, reward_amount=amount, granted_at=datetime.now(timezone.utc)))
         await session.flush()

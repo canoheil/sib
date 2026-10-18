@@ -109,8 +109,8 @@ async def _add_live_invasion(sessions, group_id: int, key: str, *,
             group_id=group_id, region_code="region_0", enemy_type="soldier",
             enemy_name_fa="شیاسیب پیاده", enemy_hp=100, enemy_hp_remaining=100,
             difficulty_multiplier=2.5, status=status,
-            scheduled_at=scheduled_at or (NOW - timedelta(hours=2)),
-            started_at=NOW - timedelta(hours=2) if status == "ACTIVE" else None,
+            scheduled_at=scheduled_at or (NOW - timedelta(hours=5)),
+            started_at=NOW - timedelta(hours=5) if status == "ACTIVE" else None,
             ends_at=NOW + timedelta(minutes=30) if status == "ACTIVE" else None,
             occurrence_key=key))
 
@@ -172,7 +172,7 @@ async def test_skip_groups_with_active_invasion(db, caplog):
 @pytest.mark.asyncio
 async def test_no_spawn_before_interval_elapsed(db, caplog):
     # Most recent invasion anywhere was 10 minutes ago; the default global
-    # interval is 3600s, so this tick must not spawn for any group.
+    # interval is 14400s, so this tick must not spawn for any group.
     await _add_live_invasion(db, 1, "recent", status="PENDING",
                              scheduled_at=NOW - timedelta(minutes=10))
     set_power_resolver(FakeResolver({1: 500.0, 2: 500.0, 3: 500.0}))
@@ -226,5 +226,5 @@ async def test_per_group_spawn_log_line(db, caplog, monkeypatch):
         expected = (f"inv2 spawned: group={row.group_id} enemy={row.enemy_type} "
                     f"hp={row.enemy_hp} region={row.region_code}")
         assert expected in caplog.text
-    # SOLDIER x1.0 at the default difficulty 2.5 over average power 500.
-    assert "inv2 spawned: group=1 enemy=soldier hp=1250 region=" in caplog.text
+    # SOLDIER x1.0 at the default difficulty 2.0 over average power 500.
+    assert "inv2 spawned: group=1 enemy=soldier hp=1000 region=" in caplog.text

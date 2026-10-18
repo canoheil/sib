@@ -52,15 +52,21 @@ def _render(templates: list[str], *, key: str, rng: random.Random, **values: obj
 def render_join(
     *, username: str, card_name: str, damage: int, is_crit: bool,
     enemy_hp_remaining: int, rng: random.Random, invasion_id: int | None = None,
+    is_buffed: bool = False,
 ) -> str:
-    """Finishing hit wins over critical; describe stored outcomes, never decide them."""
-    if enemy_hp_remaining <= 0:
-        templates = _pool.JOIN_KILL
+    """Describe stored damage, never decide it; buff prose is a separate pool.
+
+    Unbuffed finishing hits still win over critical narration. Buffed hits
+    always name the consumable; presentation retains the kill/crit markers.
+    """
+    if is_buffed:
+        templates, event = _pool.JOIN_BUFF, "join_buff"
+    elif enemy_hp_remaining <= 0:
+        templates, event = _pool.JOIN_KILL, "join_kill"
     elif is_crit:
-        templates = _pool.JOIN_CRIT
+        templates, event = _pool.JOIN_CRIT, "join_crit"
     else:
-        templates = _pool.JOIN_NORMAL
-    event = "join_kill" if templates is _pool.JOIN_KILL else "join_crit" if templates is _pool.JOIN_CRIT else "join_normal"
+        templates, event = _pool.JOIN_NORMAL, "join_normal"
     return _render(templates, key=_key(event, username, card_name,
                    invasion_id=invasion_id, fallback_event="join"), rng=rng,
                    user=username, card=card_name, damage=_fa(damage),

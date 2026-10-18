@@ -23,3 +23,4 @@ class RewardType(str, Enum):
     GOLDEN_APPLE = "golden_apple"
     DIAMOND_APPLE = "diamond_apple"
     OBSIDIAN_APPLE = "obsidian_apple"
+    SEEDLING = "seedling"

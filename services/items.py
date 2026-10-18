@@ -39,6 +39,11 @@ ITEM_CATALOG: Dict[str, Dict[str, str]] = {
         "label": "پودر جادویی",
         "description": "پودری جادویی که درخت‌های باغ رو بلندتر و جادویی‌تر می‌کنه و شانس سیب‌های ویژه رو بالا می‌بره.",
     },
+    "sib_buff": {
+        "emoji": "💥",
+        "label": "سیب باف",
+        "description": "با خوردن این سیب، ضربه‌ی بعدی تو در تهاجم ۲ برابر آسیب می‌زند.",
+    },
     "wedding_ring": {
         "emoji": "💍",
         "label": "حلقه ازدواج",
@@ -253,8 +258,8 @@ class ItemService:
 
         Reuses the single item -> image mapping the garden celebration
         already uses (``garden_drop_entries[key]["asset"]``); the item key
-        itself is the fallback so bundled ``assets/items/<key>.jpg`` art
-        keeps working for items without a drop entry.
+        itself is the fallback so bundled ``assets/items/<key>.jpg`` or
+        ``.png`` art keeps working for items without a drop entry.
         """
         entries = await ConfigService.get(session, "garden_drop_entries") or {}
         entry = entries.get(item_key) or {}

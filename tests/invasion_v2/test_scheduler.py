@@ -120,16 +120,16 @@ async def test_resolved_power_spawns_for_each_eligible_group_with_formula(db, mo
         assert len(rows) == 2
         assert [row.group_id for row in rows] == [1, 2]
         first = rows[0]
-        assert first.enemy_hp == first.enemy_hp_remaining == round(500 * 1.6 * 2.5)
-        assert first.difficulty_multiplier == 2.5
+        assert first.enemy_hp == first.enemy_hp_remaining == round(500 * 1.6 * 2.0)
+        assert first.difficulty_multiplier == 2.0
         assert first.status == InvasionStatus.PENDING.value
         assert first.ends_at is None and first.started_at is None  # Phase 5 sends first
         assert first.occurrence_key.startswith("inv2:v1:group:1:region:")
         assert (await session.get(Inv2Region, first.region_code)).last_invasion_id == first.id
     # Later intervals spawn nothing new: both groups still hold a live
     # PENDING invasion, so they are skipped as already active.
-    await InvasionScheduler.tick(now=NOW + timedelta(hours=1, seconds=1), rng=Random(6))
-    await InvasionScheduler.tick(now=NOW + timedelta(hours=2, seconds=2), rng=Random(6))
+    await InvasionScheduler.tick(now=NOW + timedelta(hours=4, seconds=1), rng=Random(6))
+    await InvasionScheduler.tick(now=NOW + timedelta(hours=8, seconds=2), rng=Random(6))
     async with db() as session:
         rows = list((await session.scalars(select(Inv2Invasion).order_by(Inv2Invasion.id))).all())
         assert [row.group_id for row in rows] == [1, 2]  # no overlapping PENDING
@@ -247,3 +247,18 @@ async def test_recovery_expires_only_overdue_active_with_warning(db, caplog):
         assert (await session.scalar(select(Inv2Invasion).where(Inv2Invasion.occurrence_key == "future"))).status == "ACTIVE"
         assert not (await session.get(Inv2Region, "region_0")).is_lost_to_enemy
         assert await session.scalar(select(func.count()).select_from(Inv2Reward)) == 0
+
+
+@pytest.mark.asyncio
+async def test_default_interval_waits_four_hours(db):
+    set_power_resolver(SimpleNamespace(average_main_card_power=AsyncMock(return_value=500.0)))
+    await InvasionScheduler.tick(now=NOW, rng=Random(4))
+    async with db.begin() as session:
+        for invasion in (await session.scalars(select(Inv2Invasion))).all():
+            invasion.status = InvasionStatus.DEFEAT.value
+    await InvasionScheduler.tick(now=NOW + timedelta(seconds=14399), rng=Random(4))
+    async with db() as session:
+        assert await session.scalar(select(func.count()).select_from(Inv2Invasion)) == 2
+    await InvasionScheduler.tick(now=NOW + timedelta(seconds=14400), rng=Random(4))
+    async with db() as session:
+        assert await session.scalar(select(func.count()).select_from(Inv2Invasion)) == 4

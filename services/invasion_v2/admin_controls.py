@@ -7,7 +7,10 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import func, or_, select
 
 from sib.database.models import Group, Inv2GroupState, Inv2Invasion, Inv2Region, SystemConfig
-from sib.services.config_store import CONFIG_DEFAULTS, ConfigService
+from sib.services.config_store import (
+    CONFIG_DEFAULTS, ConfigService, DEFAULT_INVASION_DIFFICULTY_MULTIPLIER,
+    DEFAULT_INVASION_JOIN_WINDOW_SECONDS, DEFAULT_INVASION_INTERVAL_SECONDS,
+)
 from . import admin_runtime
 from .circuit_breaker import is_group_available
 from .enemy import choose_enemy_type, compute_enemy_hp, enemy_spec
@@ -51,8 +54,8 @@ async def status(session) -> str:
     lost = await session.scalar(select(func.count()).select_from(Inv2Region).where(Inv2Region.is_lost_to_enemy.is_(True)))
     return ("⚔️ وضعیت یورش\n"
             f"فعال: {'بله' if flag is True or str(flag).lower() == 'true' else 'خیر'}"
-            f" · پنجرهٔ پیوستن: {fa_number(join if join is not None else 300)} ثانیه\n"
-            f"فاصله: {fa_number(interval if interval is not None else 3600)} ثانیه"
+            f" · پنجرهٔ پیوستن: {fa_number(join if join is not None else DEFAULT_INVASION_JOIN_WINDOW_SECONDS)} ثانیه\n"
+            f"فاصله: {fa_number(interval if interval is not None else DEFAULT_INVASION_INTERVAL_SECONDS)} ثانیه"
             f" · سختی: {fa_number(difficulty if difficulty is not None else DEFAULT_INVASION_DIFFICULTY_MULTIPLIER)}\n"
             f"یورش فعال: {fa_number(active)} · گروه خاموش: {fa_number(muted)}"
             f" · ناحیهٔ از‌دست‌رفته: {fa_number(lost)}\n"

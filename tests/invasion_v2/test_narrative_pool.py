@@ -240,9 +240,14 @@ def test_public_signatures_backwards_compatible():
     for name, names in expected.items():
         sig = inspect.signature(getattr(narrative, name))
         optional = ("invasion_id", "participant_count") if name == "render_victory" else ("invasion_id",)
+        if name == "render_join":
+            optional += ("is_buffed",)
         assert tuple(sig.parameters) == names + optional and sig.return_annotation is str
         for parameter in sig.parameters.values():
             assert parameter.kind == inspect.Parameter.KEYWORD_ONLY
+            if parameter.name == "is_buffed":
+                assert parameter.default is False and parameter.annotation is bool
+                continue
             if parameter.name in optional:
                 assert parameter.default is None and parameter.annotation == (int | None)
                 continue

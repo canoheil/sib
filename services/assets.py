@@ -6,7 +6,7 @@ file_id - replacing the artwork is a single row update.
 
 Resolution order for media keys:
 1. ``bot_assets`` row (runtime replacement via /setasset),
-2. bundled file ``assets/items/<key>.jpg`` (versioned in the repo),
+2. bundled file ``assets/items/<key>.jpg`` or ``.png`` (versioned in the repo),
 3. None -> callers fall back to text-only rendering.
 
 Adding a new asset (admin):
@@ -29,8 +29,11 @@ def bundled_item_path(key: str) -> Optional[Path]:
     """Bundled artwork file for an item key, if present."""
     if not key or "/" in key or ".." in key:
         return None
-    path = _BUNDLED_ITEM_DIR / f"{key}.jpg"
-    return path if path.is_file() else None
+    for suffix in (".jpg", ".png"):
+        path = _BUNDLED_ITEM_DIR / f"{key}{suffix}"
+        if path.is_file():
+            return path
+    return None
 
 
 class AssetService:
@@ -50,7 +53,7 @@ class AssetService:
         """(file_id, fs_path) for a media key - exactly one is set, or none.
 
         DB registration wins (runtime override); otherwise the bundled
-        ``assets/items/<key>.jpg`` file is used.
+        ``assets/items/<key>.jpg`` or ``.png`` file is used.
         """
         file_id = await cls.file_id(session, key)
         if file_id:
