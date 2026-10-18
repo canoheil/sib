@@ -96,6 +96,7 @@ async def db_session():
         await session.execute(text("DELETE FROM player_xp_grants"))
         await session.execute(text("DELETE FROM player_progressions"))
         await session.execute(text("DELETE FROM flower_gifts"))
+        await session.execute(text("DELETE FROM apple_friendships"))
         await session.execute(text("DELETE FROM marriages"))
         await session.execute(text("DELETE FROM marriage_proposals"))
         await session.execute(text("DELETE FROM apple_duel_slots"))

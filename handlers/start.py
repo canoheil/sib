@@ -533,6 +533,9 @@ async def handle_apple_profile(callback: CallbackQuery, bot: Bot):
         from sib.handlers.marriage import profile_marriage_lines
 
         marriage_lines = await profile_marriage_lines(session, user.id)
+        from sib.services.friendship import FriendshipService
+
+        friend_count = await FriendshipService.count_friends(session, user.id)
         account_progress = await PlayerXPService.get_progress(session, user.id)
         selected_skin = await ProfileSkinService.get_selected_skin(session, user.id)
 
@@ -548,6 +551,9 @@ async def handle_apple_profile(callback: CallbackQuery, bot: Bot):
         f"⚔️ نبردهای سیبی: `{battles or 0}` | برد: `{wins or 0}`",
     ]
     lines.extend(marriage_lines)
+    from sib.services.friendship import profile_friend_count_line
+
+    lines.append(profile_friend_count_line(friend_count))
 
     kb = get_profile_keyboard()
 
