@@ -155,7 +155,7 @@ async def test_shop_lists_both_marriage_items_in_catalog_order(db_session):
     buy_prices = await ConfigService.get(db_session, "item_buy_prices")
     keys = _buyable_keys(buy_prices)
 
-    assert keys == ["magic_powder", "wedding_ring", "flower"]
+    assert keys == ["magic_powder", "sib_buff", "wedding_ring", "flower"]
     assert "wedding_ring" in keys and "flower" in keys
 
 

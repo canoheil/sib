@@ -45,14 +45,14 @@ def reset_history():
         pool._history.clear()
 
 
-def test_difficulty_default_is_2_5():
-    assert DEFAULT_INVASION_DIFFICULTY_MULTIPLIER == 2.5
-    assert CONFIG_DEFAULTS["invasion_difficulty_multiplier"] == 2.5
-    assert ConfigService.default("invasion_difficulty_multiplier") == 2.5
+def test_difficulty_default_is_2_0():
+    assert DEFAULT_INVASION_DIFFICULTY_MULTIPLIER == 2.0
+    assert CONFIG_DEFAULTS["invasion_difficulty_multiplier"] == 2.0
+    assert ConfigService.default("invasion_difficulty_multiplier") == 2.0
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stored,expected", [(None, 2.5), (3.0, 3.0), (4.0, 4.0), (2.5, 2.5)])
+@pytest.mark.parametrize("stored,expected", [(None, 2.0), (3.0, 3.0), (4.0, 4.0), (2.5, 2.5)])
 async def test_config_default_never_overwrites_stored_admin_value(db, stored, expected):
     factory, _ = db
     if stored is not None:
@@ -116,7 +116,7 @@ def test_migration_chain_head():
     cfg = Config()
     cfg.set_main_option("script_location", str(ROOT / "database/migrations"))
     scripts = ScriptDirectory.from_config(cfg)
-    assert scripts.get_current_head() == "046_inv2_min_players_with_card"
+    assert scripts.get_current_head() == "047_inv2_rebalance_sib_buff"
     assert _migration().down_revision == "039_archive_inv1_tables"
     chain = {
         "041_inv2_announcement_narrative": "040_inv2_difficulty_default",
@@ -125,6 +125,7 @@ def test_migration_chain_head():
         "044_user_is_banned": "043_apple_mine_shift",
         "045_group_welcomed_at": "044_user_is_banned",
         "046_inv2_min_players_with_card": "045_group_welcomed_at",
+        "047_inv2_rebalance_sib_buff": "046_inv2_min_players_with_card",
     }
     for revision, parent in chain.items():
         path = ROOT / f"database/migrations/versions/{revision}.py"

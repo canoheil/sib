@@ -34,6 +34,7 @@ class SeedlingAward(Base, TimestampMixin):
 
     source='match'  -> group-game win (match_id set, unique per match+user).
     source='battle' -> apple battle win (source_ref_id = battle id).
+    source='invasion_v2' -> invasion victory drop (source_ref_id = invasion id).
     """
 
     __tablename__ = "seedling_awards"

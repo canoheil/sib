@@ -12,7 +12,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sib.core.logging import logger
 from sib.database.connection import get_session
 from sib.database.models import Group, Inv2GroupState, Inv2Invasion, Inv2Region
-from sib.services.config_store import ConfigService, DEFAULT_INVASION_DIFFICULTY_MULTIPLIER
+from sib.services.config_store import (
+    ConfigService, DEFAULT_INVASION_DIFFICULTY_MULTIPLIER, DEFAULT_INVASION_INTERVAL_SECONDS,
+)
 
 from . import admin_runtime
 from .circuit_breaker import is_group_available, maybe_permanently_disable
@@ -118,7 +120,7 @@ class InvasionScheduler:
             return
         cls._missing_resolver_logged = False
         raw_interval = await ConfigService.get(session, "invasion_interval_seconds")
-        interval = int(3600 if raw_interval is None else raw_interval)
+        interval = int(DEFAULT_INVASION_INTERVAL_SECONDS if raw_interval is None else raw_interval)
         if interval <= 0:
             logger.error("inv2 spawn skipped: invasion_interval_seconds must be positive")
             return

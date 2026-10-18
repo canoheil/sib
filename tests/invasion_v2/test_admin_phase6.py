@@ -15,7 +15,7 @@ from alembic.operations import Operations
 
 from sib.database.models import (AdminLog, Base, Character, Group, Inv2Attack,
     Inv2GroupMember, Inv2GroupState, Inv2Invasion, Inv2Region, Inv2Reward,
-    PlayerCard, SystemConfig, User, UserItem)
+    PlayerCard, SeedlingAward, SeedlingInventory, SystemConfig, User, UserItem)
 from sib.handlers import inv2_controls as handler, inv2_dashboard as dashboard
 from sib.services.invasion_v2 import admin_controls as ops, admin_runtime, circuit_breaker
 from sib.services.invasion_v2.farsi import fa_number
@@ -32,10 +32,12 @@ async def db(monkeypatch):
     tables = [User.__table__, Group.__table__, Character.__table__, PlayerCard.__table__,
               Inv2Region.__table__, Inv2Invasion.__table__, Inv2Attack.__table__, Inv2Reward.__table__,
               Inv2GroupState.__table__, Inv2GroupMember.__table__, AdminLog.__table__,
-              SystemConfig.__table__, UserItem.__table__]
-    item_id = UserItem.__table__.c.id
-    old_type = item_id.type
-    item_id.type = Integer()  # SQLite needs INTEGER for automatic PKs
+              SystemConfig.__table__, UserItem.__table__,
+              SeedlingInventory.__table__, SeedlingAward.__table__]
+    columns = [UserItem.__table__.c.id, SeedlingAward.__table__.c.id]
+    original_types = [column.type for column in columns]
+    for column in columns:
+        column.type = Integer()  # SQLite needs INTEGER for automatic PKs
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all, tables=tables)
@@ -71,7 +73,8 @@ async def db(monkeypatch):
         maintenance.invalidate_invasion_config_cache()
         yield factory, session
     finally:
-        item_id.type = old_type
+        for column, original_type in zip(columns, original_types):
+            column.type = original_type
         set_power_resolver(None)
         maintenance.invalidate_invasion_config_cache()
         await engine.dispose()
@@ -168,7 +171,7 @@ async def test_force_end_victory_rewards_once_and_defeat_region(db):
     async with factory() as s:
         before = [(r.reward_type, r.reward_amount) for r in (await s.scalars(select(Inv2Reward))).all()]
         items = [(r.item_key, r.quantity) for r in (await s.scalars(select(UserItem))).all()]
-    assert before and ("golden_apple", 3) in before
+    assert before and ("golden_apple", 5) in before
     assert "پیش‌تر" in await handler._run(1, "inv2_force_end", [str(win_id), "victory"])
     assert "فعال" in await handler._run(1, "inv2_force_end", [str(win_id), "defeat"])
     loss_id = await inv(factory, hp=99)

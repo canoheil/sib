@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from sib.database.models import (Base, Character, Group, Inv2Attack, Inv2GroupState,
-    Inv2Invasion, Inv2Region, Inv2Reward, PlayerCard, SystemConfig, User, UserItem)
+    Inv2Invasion, Inv2Region, Inv2Reward, PlayerCard, SeedlingAward, SeedlingInventory, SystemConfig, User, UserItem)
 from sib.handlers import inv2_admin, inv2_join
 from sib.services.invasion_v2 import presentation
 from sib.services.invasion_v2.imaging import cache, compose, backgrounds, templates
@@ -33,11 +33,13 @@ async def db(monkeypatch):
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", poolclass=StaticPool)
     tables = [User.__table__, Group.__table__, Character.__table__, PlayerCard.__table__,
               Inv2Region.__table__, Inv2Invasion.__table__, Inv2Attack.__table__,
-              Inv2Reward.__table__, Inv2GroupState.__table__, UserItem.__table__, SystemConfig.__table__]
+              Inv2Reward.__table__, Inv2GroupState.__table__, UserItem.__table__, SystemConfig.__table__,
+              SeedlingInventory.__table__, SeedlingAward.__table__]
     # SQLite needs INTEGER, not BIGINT, to generate UserItem primary keys.
-    column = UserItem.__table__.c.id
-    original_type = column.type
-    column.type = Integer()
+    columns = [UserItem.__table__.c.id, SeedlingAward.__table__.c.id]
+    original_types = [column.type for column in columns]
+    for column in columns:
+        column.type = Integer()
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all, tables=tables)
@@ -69,7 +71,8 @@ async def db(monkeypatch):
                 Inv2Region(code="moon", name_fa="درّه ماه", controlling_faction="فرزندان ماه")])
         yield factory, session
     finally:
-        column.type = original_type
+        for column, original_type in zip(columns, original_types):
+            column.type = original_type
         # Phase 8D: never leave a debounced HP-edit task against a closed DB.
         await presentation.cancel_pending_hp_edits()
         await engine.dispose()

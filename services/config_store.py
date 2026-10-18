@@ -13,14 +13,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sib.database.models import SystemConfig
 
 
-# Invasion v2 default; database/admin overrides remain authoritative.
-DEFAULT_INVASION_DIFFICULTY_MULTIPLIER = 2.5
+# Invasion v2 defaults; database/admin overrides remain authoritative.
+DEFAULT_INVASION_DIFFICULTY_MULTIPLIER = 2.0
+DEFAULT_INVASION_JOIN_WINDOW_SECONDS = 1800
+DEFAULT_INVASION_INTERVAL_SECONDS = 14400
 
 
 # Safe built-in defaults. Everything here is overridable via the
 # system_config table and the admin panel.
 CONFIG_DEFAULTS: dict[str, Any] = {
     "invasion_difficulty_multiplier": DEFAULT_INVASION_DIFFICULTY_MULTIPLIER,
+    "invasion_join_window_seconds": DEFAULT_INVASION_JOIN_WINDOW_SECONDS,
+    "invasion_interval_seconds": DEFAULT_INVASION_INTERVAL_SECONDS,
     # Days after which a group member is considered inactive for inv2 power.
     "inv2_member_active_window_days": 30,
     # Minimum number of active group members who must have a main card for an
@@ -112,6 +116,7 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     # Buyable items (shop "Items" section): key -> buy price in Apples.
     "item_buy_prices": {
         "magic_powder": 40,
+        "sib_buff": 50,
         "wedding_ring": 1000,
         "flower": 30,
     },
