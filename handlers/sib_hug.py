@@ -14,7 +14,7 @@ from aiogram import F, Router
 from aiogram.types import Message
 
 from sib.core.logging import logger
-from sib.core.text import plain_display_name
+from sib.core.text import safe_name
 from sib.database.connection import get_session
 from sib.services.marriage_art import send_scene_reply
 from sib.services.sib_hug import (
@@ -48,14 +48,9 @@ HUG_SELF_TEXT = "🤗 نمی‌تونی خودت رو بغل کنی! روی پی
 HUG_GENERIC_FAILURE_TEXT = "🤗 بغل سیبی ثبت نشد. یه لحظه‌ی دیگه دوباره امتحان کن. 🍏"
 
 
-def _display_name(first_name) -> str:
-    """The player's PLAIN sanitized first name for the social line.
-
-    No ``tg://user?id=`` link: a clickable mention would open the other
-    player's private chat from a group message. The name is plain text,
-    Markdown-escaped by ``plain_display_name`` so it cannot break the message.
-    """
-    return plain_display_name(first_name, "یک سیبی")
+def _mention(user_id: int, first_name) -> str:
+    """Markdown mention link with a Markdown-safe display name."""
+    return f"[{safe_name(first_name, 'یک سیبی')}](tg://user?id={int(user_id)})"
 
 
 @router.message(F.text.regexp(HUG_TRIGGER_PATTERN))
@@ -122,8 +117,8 @@ async def handle_sib_hug(message: Message) -> None:
         return
 
     text = pick_hug_message(
-        _display_name(sender.first_name),
-        _display_name(target.first_name),
+        _mention(sender.id, sender.first_name),
+        _mention(target.id, target.first_name),
         result.amount,
     )
     await send_scene_reply(message, HUG_SCENE_KEY, text)
