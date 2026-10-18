@@ -3,7 +3,7 @@
 import asyncio
 import json
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 
 from sib.core.logging import logger
@@ -11,6 +11,9 @@ from sib.database.connection import get_session
 from sib.services.config_store import ConfigService
 from sib.services.timeout import TimeoutService
 
+
+# A party younger than this is never swept: players need time to invite friends.
+ZOMBIE_PARTY_MIN_AGE = timedelta(hours=2)
 
 _INVASION_FLAG_TTL_SECONDS = 60
 _invasion_flag_value = False
@@ -349,35 +352,67 @@ class MaintenanceService:
             logger.info(f"Marriage/Love maintenance: {stats}")
         return stats
 
-    @classmethod
-    async def cleanup_zombie_parties(cls, session=None) -> int:
-        """Delete memberships for stale parties, preserving queued/live matches."""
-        from datetime import timedelta
-        from sqlalchemy import delete, exists, select
-        from sib.database.models import Party, PartyMember, Match, MatchState, MatchmakingQueue
+    @staticmethod
+    def _zombie_party_ids(now: datetime):
+        """SELECT of the parties whose memberships the sweep may delete.
 
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
-        active_match = exists(select(Match.id).where(
-            Match.state == MatchState.ACTIVE,
-            ((Match.party1_id == Party.id) | (Match.party2_id == Party.id)),
-        ))
-        active_queue = exists(select(MatchmakingQueue.id).where(
-            MatchmakingQueue.party_id == Party.id, MatchmakingQueue.is_active == True
-        ))
-        condition = (Party.created_at < cutoff) | (~active_queue & ~active_match)
-        # The WHERE clause references ``parties`` as well, so this is a
-        # multi-table ``DELETE ... USING``. ORM-enabled DML defaults to
-        # ``synchronize_session="auto"``: it cannot evaluate the EXISTS
-        # criteria in Python and falls back to "fetch", i.e. DELETE..RETURNING.
-        # MariaDB has no RETURNING for multi-table DELETE, so every cycle died
-        # with ``CompileError: Dialect "mysql" does not support RETURNING with
-        # DELETE..USING``. This is a pure bulk delete - no loaded ORM objects
-        # need to be kept in sync and the deleted rows are never read back -
-        # so session synchronization is switched off (no RETURNING, no
-        # pre-SELECT). Declared on the statement so BOTH branches below get it.
+        A party is swept only when ALL of these hold:
+
+        * it was created more than ``ZOMBIE_PARTY_MIN_AGE`` (2 hours) ago, so a
+          brand-new lobby is never touched and players have time to invite
+          friends;
+        * it is NOT in the matchmaking queue (no active queue entry);
+        * it is NOT in an active match. "Active" is the same set of match
+          states ``SessionService`` uses (waiting for an opponent, opponent
+          found, waiting for acceptance, active), so a party that was matched
+          a moment ago and is still accepting is protected as well.
+        """
+        from sqlalchemy import exists, select
+        from sib.database.models import Match, MatchmakingQueue, Party
+        from sib.services.session import SessionService
+
+        in_queue = exists(
+            select(MatchmakingQueue.id).where(
+                MatchmakingQueue.party_id == Party.id,
+                MatchmakingQueue.is_active.is_(True),
+            )
+        )
+        in_active_match = exists(
+            select(Match.id).where(
+                Match.state.in_(SessionService.ACTIVE_MATCH_STATES),
+                (Match.party1_id == Party.id) | (Match.party2_id == Party.id),
+            )
+        )
+        return select(Party.id).where(
+            Party.created_at < now - ZOMBIE_PARTY_MIN_AGE,
+            ~in_queue,
+            ~in_active_match,
+        )
+
+    @classmethod
+    async def cleanup_zombie_parties(cls, session=None, *, now=None) -> int:
+        """Delete the memberships of abandoned parties (see ``_zombie_party_ids``).
+
+        Only old parties that are neither queued nor in an active match are
+        touched; every other party keeps its members. ``now`` exists for tests.
+        """
+        from sqlalchemy import delete
+        from sib.database.models import PartyMember
+
+        now = now or datetime.now(timezone.utc)
+        # One single-table DELETE; the sweep condition is an IN-subquery, so the
+        # statement has no extra FROM. (Its predecessor was a multi-table
+        # ``DELETE ... USING``: under ORM-enabled DML's default
+        # ``synchronize_session="auto"`` it fell back to "fetch", i.e.
+        # DELETE..RETURNING, which MariaDB lacks for multi-table deletes, and
+        # every cycle died with ``CompileError: Dialect "mysql" does not support
+        # RETURNING with DELETE..USING``.) This is still a pure bulk delete - no
+        # loaded ORM object needs syncing and the deleted rows are never read
+        # back - so session synchronization stays off: no RETURNING, no
+        # pre-SELECT. Declared on the statement so BOTH branches below get it.
         stmt = (
             delete(PartyMember)
-            .where(PartyMember.party_id == Party.id, condition, ~active_match)
+            .where(PartyMember.party_id.in_(cls._zombie_party_ids(now)))
             .execution_options(synchronize_session=False)
         )
         if session is not None:
@@ -414,6 +449,7 @@ class MaintenanceService:
         """
         resolved_ids: list = []
         fallbacks: list[dict] = []
+        war_outcomes: list = []
 
         try:
             await cls.cleanup_zombie_parties()
@@ -459,16 +495,30 @@ class MaintenanceService:
             logger.exception("Maintenance task failed: expired queue entries")
 
         # War expiration/shields are isolated from matchmaking and Telegram.
-        # Winner, 12h peace shield and in_war flags of every due war commit
-        # together when this session closes.
+        # Winner, loot, 12h peace shield and in_war flags of every due war
+        # commit together when this session closes; the result messages are
+        # sent only afterwards, in the presentation phase below.
         try:
             from sib.services.war_service import WarService
 
             async with get_session() as session:
-                finished_wars = await WarService.finish_expired_wars(session)
+                finished_wars = await WarService.finish_expired_wars(
+                    session, outcomes=war_outcomes
+                )
             if finished_wars:
                 logger.info("Finalized %s expired Apple Clash war(s)", finished_wars)
+                for outcome in war_outcomes:
+                    logger.info(
+                        "Apple Clash war %s settled: winner=%s loser=%s loot=%s",
+                        outcome.war_id,
+                        outcome.winner_id,
+                        outcome.loser_id,
+                        outcome.loot,
+                    )
         except Exception:
+            # The transaction rolled back, so none of these wars is finished:
+            # nothing may be announced.
+            war_outcomes.clear()
             logger.exception("Apple Clash expiration failed")
 
         # A transient Account XP failure is isolated by a savepoint in match
@@ -546,6 +596,11 @@ class MaintenanceService:
                 await cls._present_bot_fallbacks(cls._bot, fallbacks)
             except Exception:
                 logger.exception("Could not render bot fallback match screen")
+        if war_outcomes and cls._bot is not None:
+            try:
+                await cls._announce_war_results(cls._bot, war_outcomes)
+            except Exception:
+                logger.exception("Could not announce Apple Clash war results")
         if resolved_ids and cls._bot is not None:
             try:
                 await cls._sync_resolved_matches(resolved_ids)
@@ -561,6 +616,24 @@ class MaintenanceService:
             await PlayerXPService.deliver_pending_notifications(cls._bot)
         except Exception:  # pragma: no cover - background presentation
             logger.exception("Could not deliver pending XP level-up notices")
+
+    @classmethod
+    async def _announce_war_results(cls, bot, outcomes: list) -> None:
+        """Send the final message of every war settled in this cycle.
+
+        Runs after the settlement committed. Best effort: a failed announcement
+        is logged and never undoes a committed settlement, and one war's
+        failure never skips the next war (each group is isolated as well).
+        """
+        from sib.services.war_presentation import announce_war_result
+
+        for outcome in outcomes:
+            try:
+                await announce_war_result(bot, outcome)
+            except Exception:
+                logger.exception(
+                    "Could not announce Apple Clash war %s result", outcome.war_id
+                )
 
     @classmethod
     async def _sync_resolved_matches(cls, resolved_ids: list) -> None:

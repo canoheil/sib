@@ -1,6 +1,7 @@
 """Apple Clash (Group War) tests covering energy, cooldown, items, declaration and UI styling."""
 
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 import pytest
@@ -21,10 +22,10 @@ from sib.database.models import (
 from sib.handlers.castle import keyboard as castle_keyboard
 from sib.handlers.war import war_keyboard
 from sib.services.apple_wallet import AppleWalletService
-from sib.services.castle_service import CastleService
+from sib.services.castle_service import CastleService, THRESHOLDS, level_for_total
 from sib.services.items import ITEM_CATALOG, ItemService
 from sib.services.player_cards import PlayerCardService
-from sib.services.war_service import WarError, WarService
+from sib.services.war_service import WarError, WarOutcome, WarService, war_loot
 
 
 @pytest_asyncio.fixture
@@ -856,3 +857,599 @@ async def test_war_expiration_failure_rolls_back_shield_and_flags(
 
 async def test_war_expiration_ignores_missing_war(war_session):
     assert not await WarService.finish_war(war_session, 999999)
+
+
+# ---------------------------------------------------------------------------
+# C2-5: loot
+# ---------------------------------------------------------------------------
+
+ATTACKER, DEFENDER = -1001, -1002
+START = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)
+END = START + timedelta(hours=5)
+
+
+async def _fresh_castle(s, group_id):
+    """Re-read a castle from the database (not from the identity map)."""
+    return await s.scalar(
+        select(GroupCastle)
+        .where(GroupCastle.group_id == group_id)
+        .execution_options(populate_existing=True)
+    )
+
+
+async def _set_treasury(s, group_id, total):
+    """Give a castle a treasury (and the level that goes with it)."""
+    castle = await s.get(GroupCastle, group_id)
+    castle.total_donated = total
+    castle.level = level_for_total(total)
+    await s.flush()
+
+
+async def _declare(s, *, attacker_damage, defender_damage, now=START):
+    war = await WarService.declare_war(s, ATTACKER, DEFENDER, now=now)
+    war.attacker_damage, war.defender_damage = attacker_damage, defender_damage
+    await s.commit()
+    return war
+
+
+@pytest.mark.parametrize("attacker_wins", [True, False], ids=["attacker-wins", "defender-wins"])
+@pytest.mark.parametrize(
+    "loser_total, winner_total, loot",
+    [
+        (10_000, 7_000, 1_500),  # exactly 15%
+        (10_001, 0, 1_500),  # rounded DOWN (1500.15)
+        (999, 123, 149),  # rounded DOWN (149.85)
+        (1_300_000, 20_000, 195_000),
+    ],
+)
+async def test_war_loot_transfers_15_percent(
+    war_session, attacker_wins, loser_total, winner_total, loot
+):
+    """The loser's treasury drops by 15% and the winner's grows by the same amount."""
+    s = war_session
+    winner_id, loser_id = (ATTACKER, DEFENDER) if attacker_wins else (DEFENDER, ATTACKER)
+    await _set_treasury(s, winner_id, winner_total)
+    await _set_treasury(s, loser_id, loser_total)
+    war = await _declare(
+        s,
+        attacker_damage=300 if attacker_wins else 100,
+        defender_damage=100 if attacker_wins else 300,
+    )
+    assert loot == int(loser_total * 0.15)  # the specified formula, spelled out
+
+    outcome = await WarService.finish_war(s, war.id, now=END)
+    await s.commit()
+
+    loser = await _fresh_castle(s, loser_id)
+    winner = await _fresh_castle(s, winner_id)
+    assert loser.total_donated == loser_total - loot
+    assert winner.total_donated == winner_total + loot
+    # Apples only move: nothing is created or destroyed.
+    assert loser.total_donated + winner.total_donated == loser_total + winner_total
+    assert war.looted_apples == loot
+    assert (outcome.winner_id, outcome.loser_id, outcome.loot) == (winner_id, loser_id, loot)
+
+    # Settling again (next maintenance cycle) never loots a second time.
+    assert await WarService.finish_war(s, war.id, now=END + timedelta(minutes=1)) is None
+    assert await WarService.finish_expired_wars(s, now=END + timedelta(minutes=1)) == 0
+    assert (await _fresh_castle(s, loser_id)).total_donated == loser_total - loot
+    assert (await _fresh_castle(s, winner_id)).total_donated == winner_total + loot
+    assert war.looted_apples == loot
+
+
+def test_war_loot_formula_equals_int_of_total_times_015():
+    """Integer maths, same numbers as ``int(total_donated * 0.15)`` - no float drift."""
+    probes = list(range(0, 60_000))
+    probes += list(THRESHOLDS) + [t - 1 for t in THRESHOLDS[1:]]
+    probes += [2**31 - 1, 2**31 - 2, 1_000_000_000]
+    probes += [20 * k for k in range(10**6 - 100, 10**6 + 100)]  # 15% is a whole number
+    for total in probes:
+        assert war_loot(total) == int(total * 0.15), total
+    assert [war_loot(n) for n in (0, 6, 7, 19, 20, 100, 10_000)] == [0, 0, 1, 2, 3, 15, 1_500]
+    assert war_loot(-5) == 0  # never negative
+
+
+async def test_war_loot_is_taken_under_row_locks_from_current_values(war_session):
+    """Loot is computed under ``SELECT ... FOR UPDATE`` on both castles and the war.
+
+    SQLite drops FOR UPDATE when it renders SQL, so the statements are
+    inspected before they are compiled. A donation that committed after this
+    session last read the castle must be seen (the in-memory copy is stale).
+    """
+    from sqlalchemy import event, update
+    from sqlalchemy.sql.dml import Update
+
+    s = war_session
+    await _set_treasury(s, ATTACKER, 10_000)  # the loser ...
+    await _set_treasury(s, DEFENDER, 0)
+    war = await _declare(s, attacker_damage=1, defender_damage=9)
+    stale = await s.get(GroupCastle, ATTACKER)
+    assert stale.total_donated == 10_000
+
+    # Somebody donates 10_000 more right before the war ends (written behind
+    # this session's back, like another connection's committed donation).
+    await s.execute(
+        update(GroupCastle)
+        .where(GroupCastle.group_id == ATTACKER)
+        .values(total_donated=20_000)
+        .execution_options(synchronize_session=False)
+    )
+    assert stale.total_donated == 10_000  # stale in memory
+
+    seen = []
+
+    def record(conn, clauseelement, multiparams, params, execution_options):
+        if isinstance(clauseelement, Update):
+            seen.append(("update", clauseelement.table.name, False))
+        elif hasattr(clauseelement, "_for_update_arg"):
+            tables = tuple(sorted(f.name for f in clauseelement.get_final_froms()))
+            seen.append(("select", tables, clauseelement._for_update_arg is not None))
+
+    event.listen(s.bind.sync_engine, "before_execute", record)
+    try:
+        outcome = await WarService.finish_war(s, war.id, now=END)
+    finally:
+        event.remove(s.bind.sync_engine, "before_execute", record)
+    await s.commit()
+
+    assert outcome.loot == 3_000  # 15% of the CURRENT 20_000, not of the stale 10_000
+    assert (await _fresh_castle(s, ATTACKER)).total_donated == 17_000
+    assert (await _fresh_castle(s, DEFENDER)).total_donated == 3_000
+    # Both castles are locked first (group-id order), then the war row ...
+    locking = [tables for kind, tables, locked in seen if kind == "select" and locked]
+    assert locking == [("group_castles",), ("group_wars",)]
+    # ... and nothing is written before every lock is held.
+    first_write = next(i for i, (kind, *_rest) in enumerate(seen) if kind == "update")
+    last_lock = max(i for i, (kind, _t, locked) in enumerate(seen) if kind == "select" and locked)
+    assert last_lock < first_write
+    assert {t for kind, t, _l in seen if kind == "update"} == {"group_castles", "group_wars"}
+
+
+async def test_war_loot_is_all_or_nothing(war_session, monkeypatch):
+    """A failure anywhere in the settlement undoes the loot with everything else."""
+    s = war_session
+    await _set_treasury(s, ATTACKER, 10_000)
+    await _set_treasury(s, DEFENDER, 4_000)
+    war = await _declare(s, attacker_damage=1, defender_damage=2)
+    war_id = war.id
+    original_flush = s.flush
+
+    async def fail_flush(*args, **kwargs):
+        await original_flush(*args, **kwargs)  # the writes DID reach the transaction
+        raise RuntimeError("settlement failure")
+
+    monkeypatch.setattr(s, "flush", fail_flush)
+    with pytest.raises(RuntimeError, match="settlement failure"):
+        await WarService.finish_war(s, war_id, now=END)
+    await s.rollback()
+    monkeypatch.setattr(s, "flush", original_flush)
+
+    saved = await s.scalar(
+        select(GroupWar).where(GroupWar.id == war_id).execution_options(populate_existing=True)
+    )
+    assert saved.status == "active" and saved.winner_id is None and saved.looted_apples == 0
+    assert (await _fresh_castle(s, ATTACKER)).total_donated == 10_000
+    assert (await _fresh_castle(s, DEFENDER)).total_donated == 4_000
+    for group_id in (ATTACKER, DEFENDER):
+        castle = await _fresh_castle(s, group_id)
+        assert castle.in_war and castle.shield_until is None
+
+    # The retry settles it - and loots exactly once.
+    outcome = await WarService.finish_war(s, war_id, now=END)
+    await s.commit()
+    assert outcome.loot == 1_500
+    assert (await _fresh_castle(s, ATTACKER)).total_donated == 8_500
+    assert (await _fresh_castle(s, DEFENDER)).total_donated == 5_500
+
+
+async def test_war_tie_moves_no_loot(war_session):
+    s = war_session
+    await _set_treasury(s, ATTACKER, 10_000)
+    await _set_treasury(s, DEFENDER, 20_000)
+    war = await _declare(s, attacker_damage=250, defender_damage=250)
+
+    outcome = await WarService.finish_war(s, war.id, now=END)
+    await s.commit()
+
+    assert outcome.is_draw and outcome.loot == 0
+    assert outcome.winner_id is None and outcome.loser_id is None
+    assert war.looted_apples == 0 and war.winner_id is None
+    assert (await _fresh_castle(s, ATTACKER)).total_donated == 10_000
+    assert (await _fresh_castle(s, DEFENDER)).total_donated == 20_000
+    for group_id in (ATTACKER, DEFENDER):
+        assert (await _fresh_castle(s, group_id)).shield_until is None
+
+
+async def test_war_without_loot_leaves_castles_alone(war_session):
+    """A treasury too small to be plundered (15% of 6 rounds down to 0)."""
+    s = war_session
+    await _set_treasury(s, ATTACKER, 6)
+    await _set_treasury(s, DEFENDER, 50)
+    # Levels that do not match the totals (the fixture made them up): with
+    # nothing moved there is nothing to re-derive, so they must stay as they are.
+    (await s.get(GroupCastle, ATTACKER)).level = 3
+    (await s.get(GroupCastle, DEFENDER)).level = 4
+    war = await _declare(s, attacker_damage=1, defender_damage=2)
+
+    outcome = await WarService.finish_war(s, war.id, now=END)
+    await s.commit()
+
+    assert outcome.loot == 0 and war.looted_apples == 0 and war.status == "finished"
+    loser = await _fresh_castle(s, ATTACKER)
+    winner = await _fresh_castle(s, DEFENDER)
+    assert (loser.total_donated, winner.total_donated) == (6, 50)
+    assert (loser.level, winner.level) == (3, 4)
+    assert loser.shield_until is not None and winner.shield_until is None  # shield still applies
+
+
+@pytest.mark.parametrize(
+    "loser_total, winner_total, loser_level, winner_level",
+    [
+        (21_000, 19_000, 2, 3),  # 3_150 moves: loser 17_850 < 20_000, winner 22_150 >= 20_000
+        (1_000_000, 1_200_000, 8, 10),  # 150_000 moves: 850_000 -> 8, 1_350_000 -> 10
+        (1_300_000, 880_000, 9, 9),  # a maxed castle that loses is no longer at the cap
+    ],
+)
+async def test_war_loot_keeps_castle_levels_in_step_with_their_totals(
+    war_session, loser_total, winner_total, loser_level, winner_level
+):
+    """``level`` is derived from ``total_donated`` (CastleService.donate keeps them
+    in step), so moving apples re-derives both levels. Consequence: the loser of
+    a war may drop a level and the winner may gain one."""
+    s = war_session
+    await _set_treasury(s, ATTACKER, loser_total)
+    await _set_treasury(s, DEFENDER, winner_total)
+    war = await _declare(s, attacker_damage=1, defender_damage=2)  # the defender wins
+
+    await WarService.finish_war(s, war.id, now=END)
+    await s.commit()
+
+    loser = await _fresh_castle(s, ATTACKER)
+    winner = await _fresh_castle(s, DEFENDER)
+    assert (loser.level, winner.level) == (loser_level, winner_level)
+    for castle in (loser, winner):
+        assert castle.level == level_for_total(castle.total_donated)
+
+
+# ---------------------------------------------------------------------------
+# C2-5: the final message of a war
+# ---------------------------------------------------------------------------
+
+ZWNJ = "\u200c"
+
+
+def victory_text(loot):
+    """The winner's caption exactly as specified (two lines)."""
+    return (
+        "🏆 پیروزی در جدال سیبی!\n"
+        f"دشمن را در هم کوبیدیم. ۱۵\u066a از خزانه{ZWNJ}ی آن{ZWNJ}ها غنیمت گرفتیم: "
+        f"{loot} سیب به قلعه اضافه شد."
+    )
+
+
+def defeat_text(loot):
+    """The loser's caption exactly as specified (two lines)."""
+    return (
+        "💔 شکست در جدال سیبی...\n"
+        f"دشمن {loot} سیب از خزانه{ZWNJ}ی ما غارت کرد. "
+        "اما ناامید نشوید، ۱۲ ساعت سپر صلح فعال شد."
+    )
+
+
+def _fake_bot():
+    reply = SimpleNamespace(message_id=1)
+    return SimpleNamespace(
+        send_photo=AsyncMock(return_value=reply),
+        send_message=AsyncMock(return_value=reply),
+    )
+
+
+def _prepare_cycle(monkeypatch, s, bot):
+    """Everything in ``run_once`` except war finalization + announcement is stubbed."""
+    from contextlib import asynccontextmanager
+    from sib.services.apple_duel_presentation import AppleDuelPresentation
+    from sib.services.maintenance import service as maintenance
+    from sib.services.match_result import MatchResultService
+    from sib.services.player_xp import PlayerXPService
+    from sib.services.session import SessionService
+    from sib.services.timeout import TimeoutService
+    from sib.services.trading import TradeService
+
+    @asynccontextmanager
+    async def session_ctx():  # what get_session() does: commit, or roll back and raise
+        try:
+            yield s
+            await s.commit()
+        except Exception:
+            await s.rollback()
+            raise
+
+    monkeypatch.setattr(maintenance, "get_session", session_ctx)
+    worker = maintenance.MaintenanceService
+    for method in [
+        "cleanup_zombie_parties",
+        "process_expired_queue_entries",
+        "run_marriage_love_cycle",
+        "_resume_pending_bot_turns",
+    ]:
+        monkeypatch.setattr(worker, method, AsyncMock())
+    monkeypatch.setattr(worker, "_invasion_enabled", AsyncMock(return_value=False))
+    monkeypatch.setattr(worker, "_bot", bot)
+    monkeypatch.setattr(SessionService, "reconcile_stale_state", AsyncMock())
+    monkeypatch.setattr(TradeService, "expire_overdue", AsyncMock())
+    monkeypatch.setattr(TimeoutService, "process_acceptance_timeouts", AsyncMock())
+    monkeypatch.setattr(TimeoutService, "process_turn_timeouts", AsyncMock(return_value=[]))
+    monkeypatch.setattr(MatchResultService, "retry_pending_xp_awards", AsyncMock(return_value=0))
+    monkeypatch.setattr(AppleDuelPresentation, "recover_and_publish", AsyncMock())
+    monkeypatch.setattr(PlayerXPService, "deliver_pending_notifications", AsyncMock())
+    return worker
+
+
+async def _due_war(s, *, attacker_damage, defender_damage, hours_ago=6):
+    war = await WarService.declare_war(
+        s, ATTACKER, DEFENDER, now=datetime.now(timezone.utc) - timedelta(hours=hours_ago)
+    )
+    war.attacker_damage, war.defender_damage = attacker_damage, defender_damage
+    await s.commit()
+    return war
+
+
+async def test_war_finish_sends_messages_to_both_groups(war_session, monkeypatch):
+    """When a war finishes, BOTH groups get a victory-banner message."""
+    s = war_session
+    await _set_treasury(s, ATTACKER, 10_000)  # the loser: 15% = 1_500 are plundered
+    await _set_treasury(s, DEFENDER, 4_000)
+    war = await _due_war(s, attacker_damage=100, defender_damage=250)  # the DEFENDER wins
+    bot = _fake_bot()
+    worker = _prepare_cycle(monkeypatch, s, bot)
+
+    await worker.run_once()
+
+    # One photo per group - and nothing else.
+    assert bot.send_photo.await_count == 2
+    bot.send_message.assert_not_awaited()
+    sent = {call.args[0]: call for call in bot.send_photo.await_args_list}
+    assert set(sent) == {ATTACKER, DEFENDER}
+    assert sent[DEFENDER].kwargs["caption"] == victory_text("۱۵۰۰")  # winner
+    assert sent[ATTACKER].kwargs["caption"] == defeat_text("۱۵۰۰")  # loser
+    for call in sent.values():  # no defeat banner exists: both use the victory image
+        assert Path(call.args[1].path).name == "war_bg_victory.jpg"
+        assert Path(call.args[1].path).is_file()
+
+    # What the messages say is what was committed.
+    await s.refresh(war)
+    assert war.status == "finished" and war.winner_id == DEFENDER and war.looted_apples == 1_500
+    assert (await _fresh_castle(s, ATTACKER)).total_donated == 8_500
+    assert (await _fresh_castle(s, DEFENDER)).total_donated == 5_500
+
+    # The next cycles must not announce the same war again.
+    await worker.run_once()
+    await worker.run_once()
+    assert bot.send_photo.await_count == 2
+
+
+async def test_war_result_is_sent_only_after_the_settlement_committed(
+    war_session, monkeypatch
+):
+    s = war_session
+    await _set_treasury(s, ATTACKER, 10_000)
+    await _due_war(s, attacker_damage=1, defender_damage=2)
+    bot = _fake_bot()
+    worker = _prepare_cycle(monkeypatch, s, bot)
+    events = []
+    original_commit = s.commit
+
+    async def logging_commit(*args, **kwargs):
+        events.append("commit")
+        return await original_commit(*args, **kwargs)
+
+    async def logging_send(*args, **kwargs):
+        events.append("send")
+
+    monkeypatch.setattr(s, "commit", logging_commit)
+    bot.send_photo.side_effect = logging_send
+
+    await worker.run_once()
+
+    assert events.count("send") == 2
+    assert events.index("commit") < events.index("send")  # settled and saved first
+
+
+async def test_war_result_is_not_announced_when_the_settlement_rolls_back(
+    war_session, monkeypatch
+):
+    """Nothing is announced for a war whose settlement did not commit; the next
+    cycle settles it and announces it exactly once."""
+    s = war_session
+    await _set_treasury(s, ATTACKER, 10_000)
+    first = await _due_war(s, attacker_damage=1, defender_damage=2)
+    s.add_all(
+        [
+            Group(id=-1003, title="قبیله گرگ", is_active=True),
+            Group(id=-1004, title="قبیله ببر", is_active=True),
+        ]
+    )
+    await s.flush()
+    await CastleService.get_or_create_castle(s, -1003)
+    await CastleService.get_or_create_castle(s, -1004)
+    second = await WarService.declare_war(
+        s, -1003, -1004, now=datetime.now(timezone.utc) - timedelta(hours=6)
+    )
+    second.attacker_damage = 5  # it has a winner too (a tie is announced as text)
+    await s.commit()
+    bot = _fake_bot()
+    worker = _prepare_cycle(monkeypatch, s, bot)
+
+    real_finish = WarService.finish_war
+    first_id, second_id = first.id, second.id
+
+    async def finish_then_crash(session, war_id, **kwargs):
+        outcome = await real_finish(session, war_id, **kwargs)
+        if war_id == second_id:
+            raise RuntimeError("second war cannot be settled")
+        return outcome
+
+    monkeypatch.setattr(WarService, "finish_war", staticmethod(finish_then_crash))
+    await worker.run_once()  # must not raise
+
+    bot.send_photo.assert_not_awaited()
+    bot.send_message.assert_not_awaited()
+    for war_id in (first_id, second_id):  # the whole batch was rolled back
+        saved = await s.scalar(
+            select(GroupWar).where(GroupWar.id == war_id).execution_options(populate_existing=True)
+        )
+        assert saved.status == "active" and saved.looted_apples == 0
+    assert (await _fresh_castle(s, ATTACKER)).total_donated == 10_000
+
+    monkeypatch.setattr(WarService, "finish_war", staticmethod(real_finish))
+    await worker.run_once()
+    assert bot.send_photo.await_count == 4  # two wars x two groups, once each
+
+
+async def test_failed_delivery_never_undoes_the_settlement(war_session, monkeypatch):
+    s = war_session
+    await _set_treasury(s, ATTACKER, 10_000)
+    war = await _due_war(s, attacker_damage=1, defender_damage=2)
+    bot = _fake_bot()
+    bot.send_photo.side_effect = RuntimeError("telegram is down")
+    bot.send_message.side_effect = RuntimeError("telegram is down")
+    worker = _prepare_cycle(monkeypatch, s, bot)
+
+    await worker.run_once()  # must not raise
+
+    assert bot.send_photo.await_count == 2  # it tried both groups
+    await s.refresh(war)
+    assert war.status == "finished" and war.looted_apples == 1_500
+    assert (await _fresh_castle(s, ATTACKER)).total_donated == 8_500
+    assert (await _fresh_castle(s, DEFENDER)).total_donated == 1_500
+
+
+async def test_war_is_settled_but_not_announced_when_there_is_no_bot(war_session, monkeypatch):
+    """Maintenance started without a bot (tests, tooling) still settles wars."""
+    from sib.services import war_presentation
+
+    s = war_session
+    await _set_treasury(s, ATTACKER, 10_000)
+    war = await _due_war(s, attacker_damage=1, defender_damage=2)
+    worker = _prepare_cycle(monkeypatch, s, None)
+    announce = AsyncMock()
+    monkeypatch.setattr(war_presentation, "announce_war_result", announce)
+
+    await worker.run_once()
+
+    announce.assert_not_awaited()
+    await s.refresh(war)
+    assert war.status == "finished" and war.looted_apples == 1_500
+
+
+async def test_one_failing_war_announcement_does_not_skip_the_next_war(monkeypatch):
+    from sib.services import war_presentation
+    from sib.services.maintenance.service import MaintenanceService
+
+    outcomes = [
+        WarOutcome(1, -1, -2, -2, -1, 10),
+        WarOutcome(2, -3, -4, -3, -4, 20),
+    ]
+    announced = []
+
+    async def flaky(bot, outcome):
+        if outcome.war_id == 1:
+            raise RuntimeError("boom")
+        announced.append(outcome.war_id)
+
+    monkeypatch.setattr(war_presentation, "announce_war_result", flaky)
+    await MaintenanceService._announce_war_results(object(), outcomes)  # must not raise
+    assert announced == [2]
+
+
+async def test_war_result_falls_back_to_text_when_the_photo_fails():
+    from sib.services.war_presentation import announce_war_result
+
+    bot = _fake_bot()
+    bot.send_photo.side_effect = RuntimeError("photo upload rejected")
+
+    reached = await announce_war_result(bot, WarOutcome(7, ATTACKER, DEFENDER, DEFENDER, ATTACKER, 1_500))
+
+    assert reached == 2
+    texts = {call.args[0]: call.args[1] for call in bot.send_message.await_args_list}
+    assert texts == {DEFENDER: victory_text("۱۵۰۰"), ATTACKER: defeat_text("۱۵۰۰")}
+
+
+async def test_one_unreachable_group_does_not_cost_the_other_its_message():
+    from sib.services.war_presentation import announce_war_result
+
+    bot = _fake_bot()
+
+    async def photo(chat_id, *args, **kwargs):
+        if chat_id == DEFENDER:  # e.g. the bot was removed from this group
+            raise RuntimeError("Forbidden: bot was kicked")
+        return SimpleNamespace(message_id=1)
+
+    bot.send_photo.side_effect = photo
+    bot.send_message.side_effect = RuntimeError("Forbidden: bot was kicked")
+
+    reached = await announce_war_result(bot, WarOutcome(7, ATTACKER, DEFENDER, DEFENDER, ATTACKER, 1_500))
+
+    assert reached == 1  # the loser still heard about it
+    delivered = [call for call in bot.send_photo.await_args_list if call.args[0] == ATTACKER]
+    assert len(delivered) == 1 and delivered[0].kwargs["caption"] == defeat_text("۱۵۰۰")
+
+
+async def test_a_crash_while_sending_to_one_group_is_contained(monkeypatch):
+    """Even an unexpected exception for one group cannot skip the other group."""
+    from sib.services import war_presentation
+
+    chats = []
+
+    async def flaky_send(bot, chat_id, text, **kwargs):
+        chats.append(chat_id)
+        if chat_id == DEFENDER:
+            raise RuntimeError("unexpected crash")
+        return SimpleNamespace(message_id=1)
+
+    monkeypatch.setattr(war_presentation, "safe_send_screen", flaky_send)
+
+    reached = await war_presentation.announce_war_result(
+        object(), WarOutcome(7, ATTACKER, DEFENDER, DEFENDER, ATTACKER, 1_500)
+    )
+
+    assert chats == [DEFENDER, ATTACKER]  # the winner crashed, the loser was still served
+    assert reached == 1
+
+
+async def test_war_result_without_the_victory_image_is_sent_as_text(monkeypatch, tmp_path):
+    from sib.services import war_presentation
+
+    monkeypatch.setattr(war_presentation, "VICTORY_IMAGE", tmp_path / "missing.jpg")
+    bot = _fake_bot()
+
+    reached = await war_presentation.announce_war_result(
+        bot, WarOutcome(7, ATTACKER, DEFENDER, ATTACKER, DEFENDER, 0)
+    )
+
+    assert reached == 2
+    bot.send_photo.assert_not_awaited()
+    texts = {call.args[0]: call.args[1] for call in bot.send_message.await_args_list}
+    assert texts == {ATTACKER: victory_text("۰"), DEFENDER: defeat_text("۰")}  # 0 loot is still stated
+
+
+async def test_war_draw_sends_a_plain_notice_to_both_groups(war_session, monkeypatch):
+    """The brief names a winner and a loser only; a tie gets a short text-only
+    notice (no loot, no shield, no victory banner)."""
+    s = war_session
+    await _set_treasury(s, ATTACKER, 10_000)
+    war = await _due_war(s, attacker_damage=200, defender_damage=200)
+    bot = _fake_bot()
+    worker = _prepare_cycle(monkeypatch, s, bot)
+
+    await worker.run_once()
+
+    bot.send_photo.assert_not_awaited()
+    assert bot.send_message.await_count == 2
+    assert {call.args[0] for call in bot.send_message.await_args_list} == {ATTACKER, DEFENDER}
+    for call in bot.send_message.await_args_list:
+        text = call.args[1]
+        assert "مساوی" in text and not any(d in text for d in "0123456789")
+    await s.refresh(war)
+    assert war.status == "finished" and war.winner_id is None and war.looted_apples == 0
+    assert (await _fresh_castle(s, ATTACKER)).total_donated == 10_000

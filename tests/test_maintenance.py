@@ -18,20 +18,34 @@ Covered here:
 * Every ``MaintenanceService.run_once`` task is isolated: one failing task is
   logged and all the others still run, a failed task never rolls back what
   another task committed, and the worker loop survives a crashing cycle.
+
+Phase C2-5 (safe sweep): the sweep deletes the members of a party only when the
+party is older than 2 hours AND not queued AND not in an active match. Those
+tests run the REAL statement against real rows (it is a plain single-table
+DELETE now, so SQLite can execute it as well).
 """
 
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.exc import CompileError
 from sqlalchemy.orm import Session
 
-from sib.database.models import Game, Party, PartyMember, PartyStatus
+from sib.database.models import (
+    Game,
+    Match,
+    MatchmakingQueue,
+    MatchState,
+    Party,
+    PartyMember,
+    PartyStatus,
+)
 from sib.services.maintenance import service as maintenance_module
 from sib.services.maintenance.service import MaintenanceService
 from sib.tests.test_parties import create_test_group, create_test_user
@@ -181,36 +195,226 @@ async def test_zombie_party_cleanup_does_not_crash_on_mysql(
 
     # The statement the service really built must compile AND execute through
     # the real ORM on the MySQL/MariaDB dialect: no CompileError (that was the
-    # crash), a single DELETE..USING, no RETURNING and no pre-SELECT.
+    # crash), ONE plain single-table DELETE (its condition is a sub-SELECT, so
+    # there is no multi-table DELETE..USING any more), no RETURNING and no
+    # pre-SELECT.
     orm_session, executed = server_session(flavour)
     result = orm_session.execute(stmt)
     assert result.rowcount == 4
     assert len(executed) == 1
     sql = _normalised(executed[0])
-    assert sql.startswith("DELETE FROM party_members USING party_members, parties")
+    assert sql.startswith(
+        "DELETE FROM party_members WHERE party_members.party_id IN "
+        "(SELECT parties.id FROM parties WHERE"
+    )
+    assert " USING " not in sql
     assert "RETURNING" not in sql.upper()
 
 
 @pytest.mark.parametrize("flavour", ["mariadb-10.11", "mariadb-11.4"])
 async def test_zombie_party_cleanup_control_reproduces_the_production_error(
-    monkeypatch, server_session, flavour
+    server_session, flavour
 ):
-    """Control: without the option the SAME statement raises the logged error.
+    """Control: the multi-table DELETE the sweep USED to be raises the logged error.
 
     Guards the harness above - if it ever stopped reproducing the original
-    crash, the "does not crash" test would pass for the wrong reason.
+    crash, the "does not crash" test would pass for the wrong reason. The
+    legacy statement is rebuilt here (a WHERE clause that also references
+    ``parties`` makes ORM DML a multi-table ``DELETE ... USING``).
     """
-    session = SimpleNamespace(
-        execute=AsyncMock(return_value=SimpleNamespace(rowcount=0)), commit=AsyncMock()
+    from sqlalchemy import delete, exists
+
+    from sib.database.models import Match
+
+    legacy = delete(PartyMember).where(
+        PartyMember.party_id == Party.id,
+        ~exists(select(Match.id).where(Match.party1_id == Party.id)),
     )
-    await MaintenanceService.cleanup_zombie_parties(session)
-    stmt = session.execute.await_args.args[0]
-    unfixed = stmt.execution_options(synchronize_session="auto")  # the old default
 
     orm_session, executed = server_session(flavour)
     with pytest.raises(CompileError, match=r"does not support RETURNING with DELETE\.\.USING"):
-        orm_session.execute(unfixed)
+        orm_session.execute(legacy)  # ORM DML default: synchronize_session="auto"
     assert executed == []
+
+    # ... and the C2-4.5 fix of that shape (no synchronisation) did compile.
+    orm_session.execute(legacy.execution_options(synchronize_session=False))
+    assert _normalised(executed[0]).startswith("DELETE FROM party_members USING party_members, parties")
+
+
+# ---------------------------------------------------------------------------
+# C2-5: the sweep only touches OLD parties that are idle
+# ---------------------------------------------------------------------------
+
+
+async def _make_party(
+    db_session, *, age, status=PartyStatus.OPEN, members=1, now=None
+) -> Party:
+    """A real party created ``age`` ago, with ``members`` real members."""
+    now = now or datetime.now(timezone.utc)
+    group = await create_test_group(db_session, "گروه پاکسازی")
+    creator = await create_test_user(db_session, "سازنده")
+    game = await db_session.scalar(select(Game).where(Game.code == "rock_paper_scissors"))
+    party = Party(
+        group_id=group.id,
+        game_id=game.id,
+        mode="2v2",
+        max_players=max(2, members),
+        current_players_count=members,
+        status=status,
+        creator_user_id=creator.id,
+        created_at=now - age,
+    )
+    db_session.add(party)
+    await db_session.flush()
+    db_session.add(PartyMember(party_id=party.id, user_id=creator.id))
+    for index in range(members - 1):
+        extra = await create_test_user(db_session, f"عضو {index}")
+        db_session.add(PartyMember(party_id=party.id, user_id=extra.id))
+    await db_session.commit()
+    return party
+
+
+async def _member_count(db_session, party_id: int) -> int:
+    count = await db_session.scalar(
+        select(func.count()).select_from(PartyMember).where(PartyMember.party_id == party_id)
+    )
+    await db_session.commit()  # end the read transaction: the sweep writes next
+    return count
+
+
+async def _attach(db_session, party: Party, kind: str) -> None:
+    """Give ``party`` a queue entry or a match: ``queue:<active|inactive>`` or
+    ``match:<STATE>:<1|2>`` (which side of the match the party is on)."""
+    if kind.startswith("queue:"):
+        db_session.add(
+            MatchmakingQueue(
+                party_id=party.id,
+                group_id=party.group_id,
+                game_id=party.game_id,
+                mode=party.mode,
+                expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+                is_active=kind == "queue:active",
+            )
+        )
+    else:
+        _, state, side = kind.split(":")
+        other = await _make_party(db_session, age=timedelta(minutes=1))
+        mine, theirs = (party, other) if side == "1" else (other, party)
+        db_session.add(
+            Match(
+                game_id=party.game_id,
+                mode=party.mode,
+                state=getattr(MatchState, state),
+                group1_id=mine.group_id,
+                group2_id=theirs.group_id,
+                party1_id=mine.id,
+                party2_id=theirs.id,
+            )
+        )
+    await db_session.commit()
+
+
+async def test_zombie_cleanup_skips_new_open_parties(db_session):
+    """A brand-new lobby keeps its members, however idle it looks.
+
+    Before C2-5 the sweep also removed the members of ANY party that was not
+    queued yet - i.e. every lobby still waiting for friends.
+    """
+    fresh = {
+        "open, 10 minutes old": await _make_party(db_session, age=timedelta(minutes=10)),
+        "full, 10 minutes old": await _make_party(
+            db_session, age=timedelta(minutes=10), status=PartyStatus.FULL, members=2
+        ),
+        "open, 1 minute old": await _make_party(db_session, age=timedelta(minutes=1)),
+        "open, just under the 2 hour limit": await _make_party(
+            db_session, age=timedelta(hours=1, minutes=59)
+        ),
+    }
+    before = {name: await _member_count(db_session, p.id) for name, p in fresh.items()}
+    assert all(before.values()), "fixture: every party starts with members"
+
+    deleted = await MaintenanceService.cleanup_zombie_parties(db_session)
+
+    assert deleted == 0
+    after = {name: await _member_count(db_session, p.id) for name, p in fresh.items()}
+    assert after == before
+
+
+async def test_zombie_cleanup_deletes_old_parties(db_session):
+    """An abandoned party (3 hours old, not queued, not in a match) is swept."""
+    old_open = await _make_party(db_session, age=timedelta(hours=3), members=2)
+    old_full = await _make_party(
+        db_session, age=timedelta(hours=5), status=PartyStatus.FULL, members=2
+    )
+    old_cancelled = await _make_party(
+        db_session, age=timedelta(hours=3), status=PartyStatus.CANCELLED
+    )
+    new_open = await _make_party(db_session, age=timedelta(minutes=10), members=2)
+
+    # No session passed: this is the path run_once() takes (its own session).
+    deleted = await MaintenanceService.cleanup_zombie_parties()
+
+    assert deleted == 5  # 2 + 2 + 1 members; the young lobby's 2 stay
+    for party in (old_open, old_full, old_cancelled):
+        assert await _member_count(db_session, party.id) == 0
+    assert await _member_count(db_session, new_open.id) == 2
+    # Only memberships are removed; the party rows themselves stay.
+    assert await db_session.get(Party, old_open.id) is not None
+
+
+@pytest.mark.parametrize(
+    "kind, swept",
+    [
+        # Protected however old the party is:
+        ("queue:active", False),
+        ("match:ACTIVE:1", False),
+        ("match:ACTIVE:2", False),
+        # The window right after a match was found: the queue entry is already
+        # inactive and the match is not ACTIVE yet, but the party is mid-game.
+        ("match:WAITING_FOR_ACCEPTANCE:1", False),
+        ("match:WAITING_FOR_ACCEPTANCE:2", False),
+        ("match:OPPONENT_FOUND:1", False),
+        ("match:WAITING_FOR_OPPONENT:2", False),
+        # Nothing live is left behind these: the party is a zombie.
+        ("queue:inactive", True),
+        ("match:FINISHED:1", True),
+        ("match:CANCELLED:2", True),
+    ],
+)
+async def test_zombie_cleanup_keeps_old_parties_that_are_queued_or_in_a_match(
+    db_session, kind, swept
+):
+    old = await _make_party(db_session, age=timedelta(hours=3), members=2)
+    await _attach(db_session, old, kind)
+
+    deleted = await MaintenanceService.cleanup_zombie_parties(db_session)
+
+    assert await _member_count(db_session, old.id) == (0 if swept else 2)
+    assert deleted == (2 if swept else 0)
+
+
+async def test_zombie_cleanup_age_limit_is_exactly_two_hours(db_session):
+    now = datetime(2026, 10, 19, 12, 0, tzinfo=timezone.utc)
+    on_the_limit = await _make_party(db_session, age=timedelta(hours=2), now=now)
+    just_over = await _make_party(db_session, age=timedelta(hours=2, seconds=1), now=now)
+
+    deleted = await MaintenanceService.cleanup_zombie_parties(db_session, now=now)
+
+    assert deleted == 1
+    assert await _member_count(db_session, on_the_limit.id) == 1  # not older than 2h yet
+    assert await _member_count(db_session, just_over.id) == 0
+
+
+async def test_maintenance_cycle_sweeps_old_parties_but_keeps_new_lobbies(db_session):
+    """The sweep is wired into run_once() and really executes (on SQLite it used
+    to fail inside the cycle, so no cycle test could ever see it delete)."""
+    old = await _make_party(db_session, age=timedelta(hours=3))
+    new = await _make_party(db_session, age=timedelta(minutes=10), status=PartyStatus.FULL)
+
+    await MaintenanceService.run_once()
+
+    assert await _member_count(db_session, old.id) == 0
+    assert await _member_count(db_session, new.id) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +450,7 @@ def _task_table():
         "resume_pending_bot_turns": (MaintenanceService, "_resume_pending_bot_turns"),
         "apple_duel_recovery": (AppleDuelPresentation, "recover_and_publish"),
         "present_bot_fallbacks": (MaintenanceService, "_present_bot_fallbacks"),
+        "announce_war_results": (MaintenanceService, "_announce_war_results"),
         "sync_resolved_matches": (MaintenanceService, "_sync_resolved_matches"),
         "deliver_xp_notifications": (PlayerXPService, "deliver_pending_notifications"),
     }
@@ -256,6 +461,8 @@ def _task_table():
 _NO_INPUT_WHEN_FAILING = {
     "process_expired_queue_entries": {"present_bot_fallbacks"},
     "process_turn_timeouts": {"sync_resolved_matches"},
+    # A war whose settlement failed was rolled back: it must not be announced.
+    "finish_expired_wars": {"announce_war_results"},
 }
 
 
@@ -276,10 +483,17 @@ def maintenance_tasks(monkeypatch):
     async def expire_queue_entries(session, fallbacks):
         fallbacks.append({"match_id": 1})
 
+    async def finish_due_wars(session, *, outcomes=None, **kwargs):
+        from sib.services.war_service import WarOutcome
+
+        if outcomes is not None:
+            outcomes.append(WarOutcome(1, -1001, -1002, -1002, -1001, 150))
+        return 1
+
     mocks = {name: AsyncMock(return_value=None) for name in _task_table()}
     mocks["process_turn_timeouts"].return_value = [7]
     mocks["process_expired_queue_entries"].side_effect = expire_queue_entries
-    mocks["finish_expired_wars"].return_value = 0
+    mocks["finish_expired_wars"].side_effect = finish_due_wars
     mocks["retry_pending_xp_awards"].return_value = 0
     mocks["invasion_tick"].return_value = []
 
@@ -337,8 +551,8 @@ async def test_maintenance_survives_every_task_failing_at_once(maintenance_tasks
     await MaintenanceService.run_once()
 
     for name, mock in maintenance_tasks.items():
-        if name in {"present_bot_fallbacks", "sync_resolved_matches"}:
-            continue  # no committed fallback / resolved match to present
+        if name in {"present_bot_fallbacks", "announce_war_results", "sync_resolved_matches"}:
+            continue  # no committed fallback / settled war / resolved match to present
         assert mock.await_count == 1, name
 
 
