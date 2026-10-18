@@ -279,7 +279,13 @@ class ItemService:
         )
 
     @classmethod
-    async def buy(cls, session: AsyncSession, user_id: int, item_key: str, quantity: int = 1) -> int:
+    async def buy(
+        cls,
+        session: AsyncSession,
+        user_id: int,
+        item_key: str,
+        quantity: int | str = 1,
+    ) -> int:
         """Buy an item with normal Apples (atomic spend + grant).
 
         Repeatable purchase: every press is a real, paid transaction.
@@ -287,10 +293,12 @@ class ItemService:
 
         Everything is validated BEFORE the debit: an unknown or unpriced item
         raises ``ValueError`` with no ledger write. Locks: user row, then the
-        inventory row, then the wallet (lock policy ranks 0, 3, 5).
+        inventory row, then the wallet (lock policy ranks 0, 5, 6).
         """
-        if quantity < 1:
-            raise ValueError("تعداد باید حداقل ۱ باشد.")
+        is_max = isinstance(quantity, str) and quantity.strip().lower() == "max"
+        if not is_max:
+            if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity < 1:
+                raise ValueError("تعداد باید حداقل ۱ باشد.")
         await lock_user_row(session, user_id)
         if item_key not in ITEM_CATALOG:
             raise ValueError("این آیتم در فروشگاه قابل خرید نیست.")
@@ -298,27 +306,44 @@ class ItemService:
         if price is None or price <= 0:
             raise ValueError("این آیتم در فروشگاه قابل خرید نیست.")
         await cls._lock_inventory_row(session, user_id, item_key)
+        if is_max:
+            user_balance = await AppleWalletService.get_balance(
+                session, user_id, for_update=True
+            )
+            max_qty = user_balance // price
+            if max_qty <= 0:
+                raise ValueError("موجودی سیب شما کافی نیست!")
+            qty = max_qty
+        else:
+            qty = int(quantity)
+        total_cost = price * qty
         try:
             await AppleWalletService.spend(
                 session,
                 user_id,
-                price * quantity,
+                total_cost,
                 reason="item_purchase",
                 ref_type="user_item",
                 ref_id=None,
             )
         except InsufficientFundsException:
+            balance = await AppleWalletService.get_balance(session, user_id)
+            max_possible = balance // price
             raise ValueError(
-                f"سیب کافی نیست! قیمت: {price * quantity} سیب 🍎"
+                f"سیب کافی نداری! شما فقط توانایی خرید {max_possible} عدد را دارید."
             )
-        total = await cls.grant(session, user_id, item_key, quantity)
+        try:
+            total = await cls.grant(session, user_id, item_key, qty)
+        except Exception:
+            await session.rollback()
+            raise
         log_event(
             Events.ITEM_PURCHASED,
             {
                 "user_id": user_id,
                 "item_key": item_key,
-                "quantity": quantity,
-                "price": price * quantity,
+                "quantity": qty,
+                "price": total_cost,
                 "total": total,
             },
         )

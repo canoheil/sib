@@ -115,7 +115,7 @@ async def test_good_detail_uses_bundled_art(db_session):
     text, kb, art_photo = await _good_view(user.id, "magic_powder")
 
     assert "پودر جادویی" in text
-    assert "shop_good_buy:magic_powder" in _callbacks(kb)
+    assert "shop:buy:magic_powder:1" in _callbacks(kb)
     assert art_photo is not None  # bundled assets/items/magic_powder.jpg
 
 

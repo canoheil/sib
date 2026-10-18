@@ -162,7 +162,7 @@ async def test_sib_buff_is_in_shop(shop_db):
     assert "shop_good:sib_buff" in [button.callback_data for row in keyboard.inline_keyboard for button in row]
     detail, keyboard, photo = await shop._good_view(1, "sib_buff")
     assert "سیب باف" in detail and "۲ برابر" in detail
-    assert keyboard.inline_keyboard[0][0].callback_data == "shop_good_buy:sib_buff"
+    assert keyboard.inline_keyboard[0][0].callback_data == "shop:buy:sib_buff:1"
     assert Path(photo.path) == bundled_item_path("sib_buff")
     async with get_session() as session:
         assert await ItemService.buy_price(session, "sib_buff") == 50
