@@ -460,7 +460,7 @@ async def _good_view(user_id: int, item_key: str):
     if price is None:
         text = "این آیتم در فروشگاه نیست."
         kb = InlineKeyboardMarkup(
-            inline_keyboard=[[danger_button(text="↩️ بازگشت به آیتم‌ها", callback_data="shop_goods")]]
+            inline_keyboard=[[danger_button(text="🔙 بازگشت", callback_data="shop_goods")]]
         )
         return text, kb, None
 
@@ -475,11 +475,15 @@ async def _good_view(user_id: int, item_key: str):
     ]
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
-            [success_button(
-                text=f"✅ تأیید خرید ({price} 🍎)", callback_data=f"shop_good_buy:{item_key}",
-            )],
-            [primary_button(text="🔄 بروزرسانی", callback_data=f"shop_good:{item_key}")],
-            [danger_button(text="↩️ بازگشت به آیتم‌ها", callback_data="shop_goods")],
+            [
+                success_button(text="🛒 خرید ۱", callback_data=f"shop:buy:{item_key}:1"),
+                success_button(text="🛒 خرید ۵", callback_data=f"shop:buy:{item_key}:5"),
+            ],
+            [
+                success_button(text="🛒 خرید ۱۰", callback_data=f"shop:buy:{item_key}:10"),
+                success_button(text="🛒 خرید حداکثر", callback_data=f"shop:buy:{item_key}:max"),
+            ],
+            [danger_button(text="🔙 بازگشت", callback_data="shop_goods")],
         ]
     )
     return "\n".join(lines), kb, art_photo
@@ -499,9 +503,32 @@ async def handle_shop_good(callback: CallbackQuery, bot: Bot):
     await safe_edit_callback_message(callback, bot, text, reply_markup=kb, photo=art_photo)
 
 
+def _parse_good_buy_callback(data: str) -> tuple[str, str]:
+    """Extract ``(item_key, raw_quantity)`` from a shop item purchase callback.
+
+    Supports ``shop:buy:<item_code>:<quantity>`` as well as legacy
+    ``shop_good_buy:<item_code>[:<quantity>]`` callbacks.
+    """
+    if data.startswith("shop:buy:"):
+        rest = data[len("shop:buy:") :]
+    elif data.startswith("shop_good_buy:"):
+        rest = data[len("shop_good_buy:") :]
+    else:
+        return "", ""
+
+    if ":" in rest:
+        item_key, raw_qty = rest.rsplit(":", 1)
+    else:
+        item_key, raw_qty = rest, "1"
+    return item_key, raw_qty
+
+
+@router.callback_query(F.data.startswith("shop:buy:"))
 @router.callback_query(F.data.startswith("shop_good_buy:"))
 async def handle_shop_good_buy(callback: CallbackQuery, bot: Bot):
-    item_key = callback.data.split(":", 1)[1]
+    if not callback.data:
+        return
+    item_key, raw_qty = _parse_good_buy_callback(callback.data)
     user = callback.from_user
     if not user:
         return
@@ -509,20 +536,53 @@ async def handle_shop_good_buy(callback: CallbackQuery, bot: Bot):
     if not actor or actor != user.id:
         return
 
-    # Refusals escape the transaction block (nothing commits).
+    is_max = raw_qty == "max"
+    quantity = 0
+    if not is_max:
+        if not raw_qty.isdecimal() or not raw_qty.isascii():
+            await safe_answer_callback(callback, "تعداد نامعتبر است.", show_alert=True)
+            return
+        quantity = int(raw_qty)
+        if quantity < 1:
+            await safe_answer_callback(callback, "تعداد باید حداقل ۱ باشد.", show_alert=True)
+            return
+
+    # Refusals and DB errors escape the transaction block (nothing commits).
     try:
         async with get_session() as session:
-            total = await ItemService.buy(session, actor, item_key, 1)
+            if is_max:
+                await lock_user_row(session, actor)
+                if item_key not in ITEM_CATALOG:
+                    raise ValueError("این آیتم در فروشگاه قابل خرید نیست.")
+                item_price = await ItemService.buy_price(session, item_key)
+                if item_price is None or item_price <= 0:
+                    raise ValueError("این آیتم در فروشگاه قابل خرید نیست.")
+                await ItemService._lock_inventory_row(session, actor, item_key)
+                user_balance = await AppleWalletService.get_balance(
+                    session, actor, for_update=True
+                )
+                max_qty = user_balance // item_price
+                if max_qty == 0:
+                    raise ValueError("موجودی سیب شما کافی نیست!")
+                quantity = max_qty
+
+            await ItemService.buy(session, actor, item_key, quantity)
     except ValueError as e:
         await safe_answer_callback(callback, str(e), show_alert=True)
         return
+    except Exception:
+        logger.exception(f"shop item purchase failed (user={actor}, item={item_key})")
+        await safe_answer_callback(
+            callback, "خطایی در خرید رخ داد. دوباره تلاش کنید.", show_alert=True
+        )
+        return
 
-    await safe_answer_callback(
-        callback,
-        f"خرید انجام شد! {item_emoji(item_key)} {item_label(item_key)} خریدی (موجودی: {total}) 🎉",
-    )
-    text, kb = await _goods_view(actor)
-    await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
+    item_name = item_label(item_key)
+    success_msg = f"✅ با موفقیت {quantity} عدد {item_name} خریدید."
+    await safe_answer_callback(callback, success_msg)
+    detail_text, kb, art_photo = await _good_view(actor, item_key)
+    text = f"{success_msg}\n\n{detail_text}"
+    await safe_edit_callback_message(callback, bot, text, reply_markup=kb, photo=art_photo)
 
 
 # ---------------------------------------------------------------------------

@@ -46,6 +46,7 @@ OWNER_SCOPED_CALLBACKS: Tuple[str, ...] = (
     "profile_skin_select:",
     # Shop / cards / trading (spend apples or change ownership)
     "shop_buy:",
+    "shop:buy:",
     "shop_good:",
     "shop_good_buy:",
     "shop_sell_one:",
