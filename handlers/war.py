@@ -1,20 +1,35 @@
-"""Apple Clash (Group War) UI handlers. Status screen, attack execution and healing potion."""
+"""Apple Clash (Group War) UI handlers. Status screen, attack execution, healing potion and battle dispatches."""
 
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
 from pathlib import Path
 from typing import Optional
 
+from PIL import Image
 from aiogram import F, Router
-from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    BufferedInputFile,
+    CallbackQuery,
+    FSInputFile,
+    InlineKeyboardMarkup,
+    Message,
+)
 from sqlalchemy import select
 
 from sib.core.logging import logger
 from sib.database.connection import get_session
-from sib.database.models import Group, GroupWar, User
+from sib.database.models import Character, Group, GroupWar, User
 from sib.keyboards.common import danger_button, primary_button, success_button
+from sib.services.character_art import artwork_path
+from sib.services.player_cards import PlayerCardService
 from sib.services.sib_claim import fa_digits
 from sib.services.telegram_ui import safe_answer_callback
 from sib.services.user import UserService
+from sib.services.war.imaging import compose_war_attack_image
+from sib.services.war.narrative import (
+    render_attacker_narrative,
+    render_defender_narrative,
+)
 from sib.services.war_service import WarError, WarService
 
 router = Router(name="war")
@@ -70,7 +85,11 @@ def format_war_caption(
 
 
 async def show_war_status(
-    message: Message, group_id: int, user_id: int, *, reply_to_callback: Optional[CallbackQuery] = None
+    message: Message,
+    group_id: int,
+    user_id: int,
+    *,
+    reply_to_callback: Optional[CallbackQuery] = None,
 ):
     now = datetime.now(timezone.utc)
     async with get_session() as session:
@@ -110,9 +129,7 @@ async def show_war_status(
         )
         markup = war_keyboard(war.id, group_id, is_attacker)
 
-    bg_name = (
-        "war_bg_attacker.jpg" if is_attacker else "war_bg_defender.jpg"
-    )
+    bg_name = "war_bg_attacker.jpg" if is_attacker else "war_bg_defender.jpg"
     bg_path = Path("assets/apple_clash") / bg_name
 
     if bg_path.is_file():
@@ -122,9 +139,43 @@ async def show_war_status(
             )
             return
         except Exception:
-            logger.warning("War photo delivery failed; falling back to text", exc_info=True)
+            logger.warning(
+                "War photo delivery failed; falling back to text", exc_info=True
+            )
 
     await message.answer(caption, reply_markup=markup)
+
+
+async def get_player_card_bytes(session, user_id: int) -> bytes:
+    """Retrieve framed card art bytes for the user's main card, or return fallback canvas."""
+    card = await PlayerCardService.get_main_card(session, user_id)
+    if card:
+        character = await session.get(Character, card.character_id)
+        if character:
+            path = artwork_path(character)
+            if path and path.is_file():
+                return path.read_bytes()
+
+    # Fallback themed card canvas
+    canvas = Image.new("RGBA", (390, 530), "#1A2238")
+    out = BytesIO()
+    canvas.convert("RGB").save(out, format="JPEG")
+    return out.getvalue()
+
+
+async def _send_dispatch(bot, chat_id: int, photo_bytes: bytes, caption: str):
+    """Deliver battle dispatch photo + caption, with graceful fallback to text."""
+    try:
+        await bot.send_photo(
+            chat_id=chat_id,
+            photo=BufferedInputFile(photo_bytes, filename="attack.jpg"),
+            caption=caption,
+        )
+    except Exception:
+        try:
+            await bot.send_message(chat_id=chat_id, text=caption)
+        except Exception:
+            logger.exception("Failed to deliver war dispatch to chat %s", chat_id)
 
 
 @router.message(F.chat.type.in_(GROUPS), F.text == "وضعیت جنگ")
@@ -171,6 +222,25 @@ async def war_attack_callback(callback: CallbackQuery):
                 session, war_id, user_id, group_id, is_buff_used=(mode == "buff")
             )
 
+            war = await session.get(GroupWar, war_id)
+            if not war:
+                raise WarError("اطلاعات نبرد یافت نشد.")
+
+            attacker_id = war.attacker_id
+            defender_id = war.defender_id
+
+            attacker_group = await session.get(Group, attacker_id)
+            defender_group = await session.get(Group, defender_id)
+            attacker_title = (
+                attacker_group.title if attacker_group else f"گروه {attacker_id}"
+            )
+            defender_title = (
+                defender_group.title if defender_group else f"گروه {defender_id}"
+            )
+
+            card_bytes = await get_player_card_bytes(session, user_id)
+
+        # Notify clicking user
         alert_msg = (
             f"💥 با سیب باف ضربه زدی! {fa_digits(damage)} آسیب وارد شد! (انرژی باقی‌مانده: {fa_digits(energy)})"
             if mode == "buff"
@@ -178,14 +248,41 @@ async def war_attack_callback(callback: CallbackQuery):
         )
         await safe_answer_callback(callback, alert_msg, show_alert=True)
 
-        user_name = callback.from_user.first_name
-        loud_emoji = "💥" if mode == "buff" else "⚔️"
-        buff_label = " [با قدرت سیب باف]" if mode == "buff" else ""
-        notification = (
-            f"{loud_emoji} دلاور «{user_name}» با کارت «{card_name}»{buff_label} وارد میدان شد!\n"
-            f"🎯 میزان خسارت: {fa_digits(damage)} واحد | ⚡️ انرژی باقی‌مانده: {fa_digits(energy)}"
+        # Determine perspectives
+        is_actor_attacker = group_id == attacker_id
+        perspective = "attacker" if is_actor_attacker else "defender"
+        target_title = defender_title if is_actor_attacker else attacker_title
+        source_title = attacker_title if is_actor_attacker else defender_title
+
+        # Compose attack battle card
+        img_bytes = compose_war_attack_image(
+            war_id=war_id,
+            user_id=user_id,
+            card_image_bytes=card_bytes,
+            damage=damage,
+            is_buff=(mode == "buff"),
+            perspective=perspective,
         )
-        await message.answer(notification)
+
+        player_name = callback.from_user.first_name
+        text_attacker = render_attacker_narrative(
+            player=player_name,
+            card=card_name,
+            target_group=target_title,
+            damage=damage,
+            is_buff=(mode == "buff"),
+        )
+        text_defender = render_defender_narrative(
+            player=player_name,
+            card=card_name,
+            source_group=source_title,
+            damage=damage,
+            is_buff=(mode == "buff"),
+        )
+
+        # Send battle dispatches to BOTH groups
+        await _send_dispatch(callback.bot, attacker_id, img_bytes, text_attacker)
+        await _send_dispatch(callback.bot, defender_id, img_bytes, text_defender)
 
     except WarError as exc:
         await safe_answer_callback(callback, str(exc), show_alert=True)
