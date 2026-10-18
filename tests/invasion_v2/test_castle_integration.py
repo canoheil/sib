@@ -13,7 +13,7 @@ from sib.tests.invasion_v2.test_presentation_phase5 import db, callback, create_
 from sib.database.models import PlayerCard
 
 
-@pytest.mark.parametrize("use_item, expected", [(False, 121), (True, 242)])
+@pytest.mark.parametrize("use_item, expected", [(False, 151), (True, 302)])
 async def test_actual_join_castle_before_sib_buff(db, monkeypatch, use_item, expected):
     factory, _ = db
     inv_id = await create_inv(factory, status="ACTIVE", hp=1000, message_id=123)

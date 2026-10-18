@@ -84,14 +84,14 @@ async def test_donation_upgrades_and_replay(castle_session):
 async def test_castle_daily_income_claim(castle_session):
     s = castle_session
     now = datetime(2026, 10, 18, 23, 59, tzinfo=timezone.utc)
-    assert await CastleService.claim_daily_income(s, 1, -1, now=now) == 2
+    assert await CastleService.claim_daily_income(s, 1, -1, now=now) == 100
     with pytest.raises(CastleError):
         await CastleService.claim_daily_income(s, 1, -2, now=now)
     assert (
         await CastleService.claim_daily_income(s, 1, -1, now=now + timedelta(minutes=1))
-        == 2
+        == 100
     )
-    assert await AppleWalletService.get_balance(s, 1) == 10004
+    assert await AppleWalletService.get_balance(s, 1) == 10200
 
 
 async def test_invasion_buff_applied_correctly(castle_session):
@@ -101,9 +101,9 @@ async def test_invasion_buff_applied_correctly(castle_session):
     castle.level = 10
     await s.flush()
     buff = await CastleService.get_invasion_buff(s, -1)
-    assert buff == 0.2
-    assert apply_castle_buff(101, buff) == 121
-    assert apply_castle_buff(101, buff) * 2 == 242
+    assert buff == 0.5
+    assert apply_castle_buff(101, buff) == 151
+    assert apply_castle_buff(101, buff) * 2 == 302
     assert apply_castle_buff(0, buff) == 0
 
 
@@ -267,7 +267,7 @@ async def test_partial_max_at_lifetime_target(castle_session):
     await s.flush()
     assert await CastleService.donate(s, 1, -1, None) == 37
     assert castle.level == 10 and castle.total_donated == THRESHOLDS[-1]
-    assert await AppleWalletService.get_balance(s, 1) == 9963
+    assert await AppleWalletService.get_balance(s, 1) == 10063
 
 
 async def test_insufficient_funds_no_partial_donation(castle_session):
@@ -333,8 +333,8 @@ def test_castle_caption_is_localized_and_uses_persian_digits():
         "🏰 قلعه سیبی\n\n"
         "📊 سطح قلعه: ۲ از ۱۰\n\n"
         "🍏 سیب اهدا شده: ۱۲۳۴۵ / ۲۰۰۰۰\n\n"
-        "⚔️ قدرت حمله در یورش: +۴٪\n\n"
-        "🎁 درآمد روزانه: ۴ سیب\n\n"
+        "⚔️ قدرت حمله در یورش: +۱۰٪\n\n"
+        "🎁 درآمد روزانه: ۲۰۰ سیب\n\n"
         "⚠️ سقف اهدا: روزانه ۵۰۰ سیب (برای هر بازیکن)\n\n"
         "ℹ️ اهدای سیب بازگشت‌پذیر نیست. درآمد روزانه فقط از یک قلعه دریافت می‌شود."
     )
@@ -342,3 +342,182 @@ def test_castle_caption_is_localized_and_uses_persian_digits():
     for unwanted in ("Invasion", "دمیج", "لول", "UTC"):
         assert unwanted not in caption
     assert not any(digit in caption for digit in "0123456789")
+
+
+@pytest.mark.parametrize("level", range(1, 11))
+async def test_castle_daily_income_is_level_times_100(castle_session, level):
+    s = castle_session
+    castle = await CastleService.get_or_create_castle(s, -1)
+    castle.level = level
+    await s.flush()
+    assert await CastleService.claim_daily_income(s, 1, -1) == level * 100
+    claim = await s.scalar(select(CastleIncomeClaim))
+    assert claim.amount == level * 100
+    assert await AppleWalletService.get_balance(s, 1) == 10_000 + level * 100
+
+
+@pytest.mark.parametrize("level", range(1, 11))
+async def test_castle_invasion_buff_is_5_percent_per_level(castle_session, level):
+    s = castle_session
+    castle = await CastleService.get_or_create_castle(s, -1)
+    castle.level = level
+    await s.flush()
+    assert await CastleService.get_invasion_buff(s, -1) == pytest.approx(level * 0.05)
+    group = await s.get(Group, -1)
+    group.is_active = False
+    await s.flush()
+    assert await CastleService.get_invasion_buff(s, -1) == 0
+
+
+async def _seed_reward_donors(s, now):
+    s.add_all([User(id=i, first_name="اهداکننده") for i in range(2, 7)])
+    castle = await CastleService.get_or_create_castle(s, -1)
+    await CastleService.get_or_create_castle(s, -2)
+    castle.total_donated = 4900
+    # One reward per unique user, including exact 24h boundary; no other
+    # castle's donors, older donations or future-dated rows.
+    for i, (user, group, age) in enumerate(
+        [
+            (2, -1, timedelta(hours=1)),
+            (2, -1, timedelta(hours=2)),
+            (3, -1, timedelta(hours=24)),
+            (4, -1, timedelta(hours=24, microseconds=1)),
+            (5, -2, timedelta(hours=1)),
+            (6, -1, -timedelta(seconds=1)),
+        ]
+    ):
+        s.add(
+            CastleDonation(
+                user_id=user,
+                group_id=group,
+                amount=100,
+                donated_at=now - age,
+                request_key=f"seed:{i}",
+            )
+        )
+    await s.commit()
+
+
+async def test_castle_level_up_rewards_recent_donors(castle_session):
+    s = castle_session
+    now = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)
+    await _seed_reward_donors(s, now)
+    # No level-up means no reward.
+    await CastleService.donate(s, 1, -1, 50, now=now, request_key="below-threshold")
+    assert not (
+        await s.scalars(
+            select(AppleTransaction).where(
+                AppleTransaction.reason == "castle_level_up_reward"
+            )
+        )
+    ).all()
+    await CastleService.donate(s, 1, -1, 50, now=now, request_key="level-up")
+    rewards = (
+        await s.scalars(
+            select(AppleTransaction).where(
+                AppleTransaction.reason == "castle_level_up_reward"
+            )
+        )
+    ).all()
+    assert sorted(tx.user_id for tx in rewards) == [1, 2, 3]
+    assert all(tx.amount == 100 and tx.ref_type == "castle_donation" for tx in rewards)
+    assert len({tx.ref_id for tx in rewards}) == 1
+    assert await AppleWalletService.get_balance(s, 1) == 10_000
+    for user in (2, 3):
+        assert await AppleWalletService.get_balance(s, user) == 100
+    for user in (4, 5, 6):
+        assert await AppleWalletService.get_balance(s, user) == 0
+    await s.commit()
+    await CastleService.donate(s, 1, -1, 50, now=now, request_key="level-up")
+    assert (
+        await s.scalar(
+            select(func.count())
+            .select_from(AppleTransaction)
+            .where(AppleTransaction.reason == "castle_level_up_reward")
+        )
+        == 3
+    )
+    assert (await s.get(GroupCastle, -1)).total_donated == 5000
+
+
+async def test_castle_level_up_reward_failure_rolls_back(castle_session, monkeypatch):
+    s = castle_session
+    now = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)
+    await _seed_reward_donors(s, now)
+    original = AppleWalletService.earn
+
+    async def fail_second_reward(session, user_id, *args, **kwargs):
+        if user_id == 2:
+            raise RuntimeError("reward failure")
+        return await original(session, user_id, *args, **kwargs)
+
+    monkeypatch.setattr(AppleWalletService, "earn", fail_second_reward)
+    with pytest.raises(RuntimeError, match="reward failure"):
+        await CastleService.donate(s, 1, -1, 100, now=now, request_key="retry")
+    await s.rollback()
+    castle = await s.get(GroupCastle, -1)
+    assert (castle.level, castle.total_donated) == (1, 4900)
+    assert await AppleWalletService.get_balance(s, 1) == 10_000
+    assert (
+        await s.scalar(
+            select(func.count())
+            .select_from(AppleTransaction)
+            .where(AppleTransaction.reason == "castle_level_up_reward")
+        )
+        == 0
+    )
+    assert (
+        await s.scalar(
+            select(CastleDonation).where(CastleDonation.request_key == "retry")
+        )
+        is None
+    )
+    monkeypatch.setattr(AppleWalletService, "earn", original)
+    await CastleService.donate(s, 1, -1, 100, now=now, request_key="retry")
+    assert (
+        await s.scalar(
+            select(func.count())
+            .select_from(AppleTransaction)
+            .where(AppleTransaction.reason == "castle_level_up_reward")
+        )
+        == 3
+    )
+
+
+async def test_castle_new_donor_during_lock_wait_requires_atomic_retry(
+    castle_session, monkeypatch
+):
+    s = castle_session
+    now = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)
+    await _seed_reward_donors(s, now)
+    original = CastleService._recent_donors
+
+    async def stale_snapshot(session, group_id, at, *, for_update=False):
+        recipients = await original(session, group_id, at, for_update=for_update)
+        # Simulate a donor committed after our initial consistent read.
+        return recipients if for_update else recipients - {2}
+
+    monkeypatch.setattr(CastleService, "_recent_donors", stale_snapshot)
+    with pytest.raises(CastleError, match="دوباره تلاش کنید"):
+        await CastleService.donate(s, 1, -1, 100, now=now, request_key="stale")
+    await s.rollback()
+    assert await AppleWalletService.get_balance(s, 1) == 10_000
+    assert (await s.get(GroupCastle, -1)).total_donated == 4900
+    assert (
+        await s.scalar(
+            select(func.count())
+            .select_from(AppleTransaction)
+            .where(AppleTransaction.reason == "castle_level_up_reward")
+        )
+        == 0
+    )
+    monkeypatch.setattr(CastleService, "_recent_donors", original)
+    await CastleService.donate(s, 1, -1, 100, now=now, request_key="stale")
+    assert (
+        await s.scalar(
+            select(func.count())
+            .select_from(AppleTransaction)
+            .where(AppleTransaction.reason == "castle_level_up_reward")
+        )
+        == 3
+    )

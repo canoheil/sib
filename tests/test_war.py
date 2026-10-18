@@ -65,12 +65,8 @@ async def war_session():
         session.add(char1)
         await session.flush()
 
-        card1 = PlayerCard(
-            id=101, user_id=1, character_id=1, level=1, is_favorite=True
-        )
-        card2 = PlayerCard(
-            id=102, user_id=2, character_id=1, level=1, is_favorite=True
-        )
+        card1 = PlayerCard(id=101, user_id=1, character_id=1, level=1, is_favorite=True)
+        card2 = PlayerCard(id=102, user_id=2, character_id=1, level=1, is_favorite=True)
         session.add_all([card1, card2])
         await session.flush()
 
@@ -154,7 +150,7 @@ async def test_declaration_requires_admin(war_session, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_declaration_creates_war_and_sets_in_war_flag(war_session):
+async def test_war_duration_is_5_hours(war_session):
     s = war_session
     now = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)
 
@@ -171,7 +167,7 @@ async def test_declaration_creates_war_and_sets_in_war_flag(war_session):
     assert war.status == "active"
     assert war.attacker_damage == 0
     assert war.defender_damage == 0
-    assert war.ends_at == now + timedelta(hours=24)
+    assert war.ends_at == now + timedelta(hours=5)
 
     # in_war flags are updated
     assert c1.in_war is True
@@ -183,7 +179,7 @@ async def test_declaration_creates_war_and_sets_in_war_flag(war_session):
 
 
 @pytest.mark.asyncio
-async def test_attack_costs_25_energy(war_session):
+async def test_war_attack_costs_20_energy(war_session):
     s = war_session
     now = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)
     war = await WarService.declare_war(s, -1001, -1002, now=now)
@@ -193,7 +189,7 @@ async def test_attack_costs_25_energy(war_session):
         s, war.id, 1, -1001, now=now
     )
     assert damage > 0
-    assert remaining_energy == 75
+    assert remaining_energy == 80
     assert card_name == "شوالیه سیب"
 
     part = await s.scalar(
@@ -201,7 +197,7 @@ async def test_attack_costs_25_energy(war_session):
             WarParticipant.war_id == war.id, WarParticipant.user_id == 1
         )
     )
-    assert part.energy == 75
+    assert part.energy == 80
     assert part.total_damage == damage
 
 
@@ -212,7 +208,7 @@ async def test_attack_fails_without_enough_energy(war_session):
     war = await WarService.declare_war(s, -1001, -1002, now=now)
 
     part = await WarService.get_or_create_participant(s, war.id, 1, -1001)
-    part.energy = 20  # less than 25
+    part.energy = 19  # less than 20
     await s.flush()
 
     with pytest.raises(WarError, match="انرژی جنگی شما کافی نیست"):
@@ -220,7 +216,7 @@ async def test_attack_fails_without_enough_energy(war_session):
 
 
 @pytest.mark.asyncio
-async def test_attack_cooldown_enforced(war_session):
+async def test_war_attack_cooldown_is_30_seconds(war_session):
     s = war_session
     t0 = datetime(2026, 10, 18, 12, 0, 0, tzinfo=timezone.utc)
     war = await WarService.declare_war(s, -1001, -1002, now=t0)
@@ -228,15 +224,23 @@ async def test_attack_cooldown_enforced(war_session):
     # First attack at t0
     await WarService.attack(s, war.id, 1, -1001, now=t0)
 
-    # Second attack at t0 + 30s (fails due to 1-min cooldown)
-    t_30 = t0 + timedelta(seconds=30)
-    with pytest.raises(WarError, match="صبر کنید"):
-        await WarService.attack(s, war.id, 1, -1001, now=t_30)
+    # Immediate retries show Persian 30, and fractional seconds round UP.
+    for seconds, displayed in [(0, "۳۰"), (29, "۱"), (29.999, "۱")]:
+        with pytest.raises(WarError, match=f"{displayed} ثانیه دیگر صبر کنید"):
+            await WarService.attack(
+                s, war.id, 1, -1001, now=t0 + timedelta(seconds=seconds)
+            )
+    part = await WarService.get_or_create_participant(s, war.id, 1, -1001)
+    assert part.energy == 80
+    assert len((await s.scalars(select(WarAttack))).all()) == 1
 
-    # Third attack at t0 + 61s (succeeds)
-    t_61 = t0 + timedelta(seconds=61)
-    damage2, energy2, _ = await WarService.attack(s, war.id, 1, -1001, now=t_61)
-    assert energy2 == 50  # 75 - 25
+    # Exactly 30 seconds succeeds (also exercises a naive MariaDB timestamp).
+    part.last_attack_at = t0.replace(tzinfo=None)
+    damage2, energy2, _ = await WarService.attack(
+        s, war.id, 1, -1001, now=t0 + timedelta(seconds=30)
+    )
+    assert damage2 > 0
+    assert energy2 == 60
 
 
 @pytest.mark.asyncio
@@ -295,9 +299,7 @@ def test_war_buttons_have_correct_colors():
     """Verify that every button in war menus is styled with semantic glass colors."""
     # 1. Attacker view keyboard
     atk_kb = war_keyboard(war_id=1, group_id=-1001, is_attacker=True)
-    atk_buttons = [
-        btn for row in atk_kb.inline_keyboard for btn in row
-    ]
+    atk_buttons = [btn for row in atk_kb.inline_keyboard for btn in row]
     atk_map = {b.callback_data: (b.text, b.style) for b in atk_buttons}
 
     expected_atk = {
@@ -311,9 +313,7 @@ def test_war_buttons_have_correct_colors():
 
     # 2. Defender view keyboard
     def_kb = war_keyboard(war_id=1, group_id=-1002, is_attacker=False)
-    def_buttons = [
-        btn for row in def_kb.inline_keyboard for btn in row
-    ]
+    def_buttons = [btn for row in def_kb.inline_keyboard for btn in row]
     def_map = {b.callback_data: (b.text, b.style) for b in def_buttons}
 
     expected_def = {
@@ -330,11 +330,15 @@ def test_war_buttons_have_correct_colors():
     admin_castle_buttons = [
         btn for row in admin_castle_kb.inline_keyboard for btn in row
     ]
-    admin_castle_map = {b.callback_data: (b.text, b.style) for b in admin_castle_buttons}
+    admin_castle_map = {
+        b.callback_data: (b.text, b.style) for b in admin_castle_buttons
+    }
 
     assert "castle:war_start:-1001" in admin_castle_map
     assert admin_castle_map["castle:war_start:-1001"] == ("⚔️ شروع حمله", "success")
-    assert all(b.style in {"success", "primary", "danger"} for b in admin_castle_buttons)
+    assert all(
+        b.style in {"success", "primary", "danger"} for b in admin_castle_buttons
+    )
 
 
 def test_war_narrative_pools_have_variants():
@@ -412,7 +416,7 @@ async def test_attack_sends_two_different_narratives(war_session, monkeypatch):
     answer = AsyncMock()
     monkeypatch.setattr(CallbackQuery, "answer", answer)
 
-    now = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
     war = await WarService.declare_war(war_session, -1001, -1002, now=now)
 
     send_photo_mock = AsyncMock()
@@ -445,10 +449,17 @@ async def test_attack_sends_two_different_narratives(war_session, monkeypatch):
     assert -1001 in chat_ids
     assert -1002 in chat_ids
 
-    captions = {call.kwargs.get("chat_id"): call.kwargs.get("caption") for call in call_args_list}
-    assert captions[-1001] != captions[-1002]  # Attacker and defender see different perspectives
+    captions = {
+        call.kwargs.get("chat_id"): call.kwargs.get("caption")
+        for call in call_args_list
+    }
+    assert (
+        captions[-1001] != captions[-1002]
+    )  # Attacker and defender see different perspectives
     assert "tg://user?id=1" in captions[-1001]  # Attacker team sees teammate link
-    assert "tg://user" not in captions[-1002]  # Defender team sees plain text with NO link or ID
+    assert (
+        "tg://user" not in captions[-1002]
+    )  # Defender team sees plain text with NO link or ID
 
 
 def test_defender_narrative_has_no_tg_user_link():
@@ -487,7 +498,9 @@ def test_defender_narrative_has_no_tg_user_link():
         assert "سهراب پهلوان" in text
 
     # 3. Hostile scheme / HTML link injection
-    hostile_player = "@attacker <a href='tg://user?id=99999'>دشمن</a> tg://user?id=77777"
+    hostile_player = (
+        "@attacker <a href='tg://user?id=99999'>دشمن</a> tg://user?id=77777"
+    )
     for _ in range(len(WAR_ATTACK_DEFENDER) * 2):
         text = render_defender_narrative(
             player=hostile_player,
@@ -541,3 +554,191 @@ def test_war_attack_image_perspective(monkeypatch):
         perspective="defender",
     )
     assert any("war_bg_defender.jpg" in f for f in opened_files)
+
+
+@pytest.mark.parametrize("winner_id", [-1001, -1002])
+async def test_war_peace_shield_is_12_hours(war_session, winner_id):
+    s = war_session
+    start = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)
+    war = await WarService.declare_war(s, -1001, -1002, now=start)
+    war.attacker_damage = 200 if winner_id == -1001 else 100
+    war.defender_damage = 100 if winner_id == -1001 else 200
+    await s.commit()
+    end = start + timedelta(hours=5)
+    assert not await WarService.finish_war(
+        s, war.id, now=end - timedelta(microseconds=1)
+    )
+    assert war.status == "active"
+    assert await WarService.finish_expired_wars(s, now=end) == 1
+    loser_id = -1002 if winner_id == -1001 else -1001
+    loser = await s.get(GroupCastle, loser_id)
+    winner = await s.get(GroupCastle, winner_id)
+    assert war.status == "finished" and war.winner_id == winner_id
+    assert not loser.in_war and not winner.in_war
+    assert loser.shield_until == end + timedelta(hours=12)
+    assert winner.shield_until is None
+    await s.commit()
+    shield_end = loser.shield_until
+    # Repeated expiration never extends an already applied shield.
+    assert await WarService.finish_expired_wars(s, now=end + timedelta(minutes=10)) == 0
+    assert not await WarService.finish_war(s, war.id, now=end + timedelta(minutes=10))
+    assert loser.shield_until.replace(tzinfo=timezone.utc) == shield_end.replace(
+        tzinfo=timezone.utc
+    )
+    # Shielded castles cannot be attacked or initiate a war.
+    for attacker, defender in [(winner_id, loser_id), (loser_id, winner_id)]:
+        with pytest.raises(WarError, match="سپر صلح"):
+            await WarService.declare_war(
+                s,
+                attacker,
+                defender,
+                now=end + timedelta(hours=12) - timedelta(microseconds=1),
+            )
+    assert (
+        await WarService.find_target_groups(s, winner_id, now=end + timedelta(hours=11))
+        == []
+    )
+    # Exactly 12 hours after settlement the peace shield has expired.
+    assert (
+        len(
+            await WarService.find_target_groups(
+                s, winner_id, now=end + timedelta(hours=12)
+            )
+        )
+        == 1
+    )
+    new_war = await WarService.declare_war(
+        s, winner_id, loser_id, now=end + timedelta(hours=12)
+    )
+    assert new_war.status == "active"
+
+
+async def test_war_tie_has_no_loser_or_shield(war_session):
+    s = war_session
+    start = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)
+    war = await WarService.declare_war(s, -1001, -1002, now=start)
+    assert await WarService.finish_war(s, war.id, now=start + timedelta(hours=5))
+    assert war.status == "finished" and war.winner_id is None
+    for group in [-1001, -1002]:
+        castle = await s.get(GroupCastle, group)
+        assert not castle.in_war and castle.shield_until is None
+
+
+async def test_war_five_attacks_exhaust_energy(war_session):
+    s = war_session
+    start = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)
+    war = await WarService.declare_war(s, -1001, -1002, now=start)
+    for i in range(5):
+        _, energy, _ = await WarService.attack(
+            s, war.id, 1, -1001, now=start + timedelta(seconds=i * 30)
+        )
+        assert energy == 100 - (i + 1) * 20
+    with pytest.raises(WarError, match="۲۰ انرژی"):
+        await WarService.attack(s, war.id, 1, -1001, now=start + timedelta(seconds=150))
+    assert len((await s.scalars(select(WarAttack))).all()) == 5
+
+
+async def test_war_attacks_stop_at_five_hour_deadline(war_session):
+    s = war_session
+    start = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)
+    war = await WarService.declare_war(s, -1001, -1002, now=start)
+    with pytest.raises(WarError, match="زمان نبرد به پایان رسیده"):
+        await WarService.attack(s, war.id, 1, -1001, now=start + timedelta(hours=5))
+    assert not (await s.scalars(select(WarAttack))).all()
+
+
+@pytest.mark.parametrize(
+    "seconds, expected",
+    [
+        (3 * 3600 + 15 * 60, "۳ ساعت و ۱۵ دقیقه"),
+        (5 * 3600, "۵ ساعت و ۰ دقیقه"),
+        (59, "۰ ساعت و ۰ دقیقه"),
+        (-1, "۰ ساعت و ۰ دقیقه"),
+    ],
+)
+def test_war_menu_shows_remaining_time_in_persian(seconds, expected):
+    from sib.handlers.war import format_war_caption
+
+    caption = format_war_caption("مهاجم", 120, "مدافع", 200, seconds, 80)
+    assert f"⏳ زمان باقی‌مانده: {expected}" in caption
+    assert "هر ضربه ۲۰ انرژی" in caption and "۳۰ ثانیه" in caption
+    assert not any(digit in caption for digit in "0123456789")
+
+
+async def test_war_expiration_runs_in_maintenance(war_session, monkeypatch):
+    from contextlib import asynccontextmanager
+    from sib.services.maintenance import service as maintenance
+    from sib.services.timeout import TimeoutService
+    from sib.services.session import SessionService
+    from sib.services.trading import TradeService
+    from sib.services.match_result import MatchResultService
+    from sib.services.apple_duel_presentation import AppleDuelPresentation
+
+    now = datetime.now(timezone.utc)
+    war = await WarService.declare_war(
+        war_session, -1001, -1002, now=now - timedelta(hours=6)
+    )
+    war.attacker_damage = 1
+    await war_session.commit()
+
+    @asynccontextmanager
+    async def session_ctx():
+        yield war_session
+        await war_session.commit()
+
+    monkeypatch.setattr(maintenance, "get_session", session_ctx)
+    worker = maintenance.MaintenanceService
+    for method in [
+        "cleanup_zombie_parties",
+        "process_expired_queue_entries",
+        "run_marriage_love_cycle",
+        "_resume_pending_bot_turns",
+    ]:
+        monkeypatch.setattr(worker, method, AsyncMock())
+    monkeypatch.setattr(worker, "_invasion_enabled", AsyncMock(return_value=False))
+    monkeypatch.setattr(SessionService, "reconcile_stale_state", AsyncMock())
+    monkeypatch.setattr(TradeService, "expire_overdue", AsyncMock())
+    monkeypatch.setattr(TimeoutService, "process_acceptance_timeouts", AsyncMock())
+    monkeypatch.setattr(
+        TimeoutService, "process_turn_timeouts", AsyncMock(return_value=[])
+    )
+    monkeypatch.setattr(
+        MatchResultService, "retry_pending_xp_awards", AsyncMock(return_value=0)
+    )
+    monkeypatch.setattr(AppleDuelPresentation, "recover_and_publish", AsyncMock())
+    await worker.run_once()
+    assert war.status == "finished"
+    loser = await war_session.get(GroupCastle, -1002)
+    assert loser.shield_until is not None and not loser.in_war
+
+
+async def test_war_expiration_failure_rolls_back_shield_and_flags(
+    war_session, monkeypatch
+):
+    s = war_session
+    start = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)
+    war = await WarService.declare_war(s, -1001, -1002, now=start)
+    war.attacker_damage = 100
+    await s.commit()
+    war_id = war.id
+    original_flush = s.flush
+
+    async def fail_flush(*args, **kwargs):
+        await original_flush(*args, **kwargs)
+        raise RuntimeError("settlement failure")
+
+    monkeypatch.setattr(s, "flush", fail_flush)
+    with pytest.raises(RuntimeError, match="settlement failure"):
+        await WarService.finish_war(s, war_id, now=start + timedelta(hours=5))
+    await s.rollback()
+    monkeypatch.setattr(s, "flush", original_flush)
+    saved = await s.get(GroupWar, war_id)
+    assert saved.status == "active" and saved.winner_id is None
+    for group_id in (-1001, -1002):
+        castle = await s.get(GroupCastle, group_id)
+        assert castle.in_war and castle.shield_until is None
+    assert await WarService.finish_war(s, war_id, now=start + timedelta(hours=5))
+
+
+async def test_war_expiration_ignores_missing_war(war_session):
+    assert not await WarService.finish_war(war_session, 999999)

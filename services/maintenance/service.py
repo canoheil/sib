@@ -414,6 +414,15 @@ class MaintenanceService:
                 resolved_ids = []
                 logger.exception("Maintenance cycle failed")
 
+        # War expiration/shields are isolated from matchmaking and Telegram.
+        try:
+            from sib.services.war_service import WarService
+
+            async with get_session() as session:
+                await WarService.finish_expired_wars(session)
+        except Exception:
+            logger.exception("Apple Clash expiration failed")
+
         # A transient Account XP failure is isolated by a savepoint in match
         # settlement. Retry those committed results before publishing notices.
         try:
