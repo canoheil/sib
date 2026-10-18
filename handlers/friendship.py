@@ -31,7 +31,10 @@ from sib.services.user import UserService
 router = Router(name="friendship")
 
 _YEH = r"[\u06cc\u064a]"
-_FRIEND_REQUEST = re.compile(rf"^\s*دوستی\s+س{_YEH}ب{_YEH}\s*[؟?]?\s*$")
+_FRIEND_REQUEST = re.compile(
+    rf"^\s*(?:دوستی|رفاقت)\s+س{_YEH}ب{_YEH}\s*[؟?]?\s*$"
+)
+_FRIEND_LIST_SHORTCUT = re.compile(r"^\s*(?:لیست\s+دوستان|دوستام)\s*$")
 _UNFRIEND = re.compile(r"^\s*قهر\s+س[\u06cc\u064a]ب[\u06cc\u064a]\s*[؟?]?\s*$")
 _ASSET = Path(__file__).resolve().parent.parent / "assets" / "social" / "friend_request.jpg"
 PAGE_SIZE = 10
@@ -197,6 +200,58 @@ async def handle_friend_reject(callback: CallbackQuery) -> None:
     await _resolve_friend_callback(callback, FRIEND_REJECT)
 
 
+async def _friend_list_screen(user_id: int, display_name: str, page: int = 0):
+    """Render one page of friends for either a profile button or text shortcut."""
+    requested_page = max(0, int(page))
+    async with get_session() as session:
+        friends, total = await FriendshipService.list_friends(
+            session, user_id, offset=requested_page * PAGE_SIZE, limit=PAGE_SIZE
+        )
+    page_count = max(1, math.ceil(total / PAGE_SIZE))
+    page = min(requested_page, page_count - 1)
+    if total and page != requested_page:
+        async with get_session() as session:
+            friends, total = await FriendshipService.list_friends(
+                session, user_id, offset=page * PAGE_SIZE, limit=PAGE_SIZE
+            )
+
+    keyboard = get_friend_list_keyboard(page, page_count)
+    if not total:
+        return (
+            "شما هنوز هیچ دوست سیبی ندارید! روی پیام یک نفر ریپلای کنید و بنویسید «دوستی سیبی».",
+            keyboard,
+            False,
+        )
+
+    first = page * PAGE_SIZE + 1
+    last = min(first + len(friends) - 1, total)
+    names = "\n".join(
+        f"{fa_digits(first + index)}. {html.escape(friend.display_name or 'بازیکن بی‌نام')}"
+        for index, friend in enumerate(friends)
+    )
+    owner_name = html.escape(display_name or "شما")
+    text = (
+        f"🍏 <b>دوستان سیبی {owner_name}</b>\n\n{names}\n\n"
+        f"صفحهٔ {fa_digits(page + 1)} از {fa_digits(page_count)} — "
+        f"{fa_digits(first)} تا {fa_digits(last)} از {fa_digits(total)} نفر"
+    )
+    return text, keyboard, True
+
+
+@router.message(F.text.regexp(_FRIEND_LIST_SHORTCUT))
+async def handle_friend_list_shortcut(message: Message) -> None:
+    """Open the friend list directly from «لیست دوستان» or «دوستام»."""
+    user = message.from_user
+    if user is None:
+        return
+    text, keyboard, has_friends = await _friend_list_screen(user.id, user.first_name or "شما")
+    await message.answer(
+        text,
+        reply_markup=keyboard,
+        parse_mode="HTML" if has_friends else None,
+    )
+
+
 @router.callback_query(F.data == "profile:friends")
 @router.callback_query(F.data.regexp(r"^profile:friends:[0-9]{1,6}$"))
 async def handle_profile_friends(callback: CallbackQuery) -> None:
@@ -208,35 +263,14 @@ async def handle_profile_friends(callback: CallbackQuery) -> None:
         page = max(0, int(data.rsplit(":", 1)[1])) if data.count(":") == 2 else 0
     except ValueError:
         page = 0
-    async with get_session() as session:
-        friends, total = await FriendshipService.list_friends(
-            session, actor.id, offset=page * PAGE_SIZE, limit=PAGE_SIZE
-        )
-    page_count = max(1, math.ceil(total / PAGE_SIZE))
-    page = min(page, page_count - 1)
-    if page * PAGE_SIZE >= total and total:
-        async with get_session() as session:
-            friends, total = await FriendshipService.list_friends(
-                session, actor.id, offset=page * PAGE_SIZE, limit=PAGE_SIZE
-            )
-    if total:
-        first = page * PAGE_SIZE + 1
-        last = min(first + len(friends) - 1, total)
-        names = "\n".join(
-            f"{fa_digits(first + index)}. {html.escape(friend.display_name or 'بازیکن بی‌نام')}"
-            for index, friend in enumerate(friends)
-        )
-        owner_name = html.escape(actor.first_name or "شما")
-        text = (
-            f"🍏 <b>دوستان سیبی {owner_name}</b>\n\n{names}\n\n"
-            f"صفحهٔ {fa_digits(page + 1)} از {fa_digits(page_count)} — "
-            f"{fa_digits(first)} تا {fa_digits(last)} از {fa_digits(total)} نفر"
-        )
-    else:
-        text = "🍏 هنوز دوست سیبی نداری. برای شروع، روی پیام یکی از بازیکن‌ها ریپلای کن و «دوستی سیبی» رو بنویس."
+    text, keyboard, has_friends = await _friend_list_screen(
+        actor.id, actor.first_name or "شما", page
+    )
     await safe_answer_callback(callback)
     await safe_edit_callback_message(
-        callback, callback.bot, text,
-        reply_markup=get_friend_list_keyboard(page, page_count),
-        parse_mode="HTML" if total else None,
+        callback,
+        callback.bot,
+        text,
+        reply_markup=keyboard,
+        parse_mode="HTML" if has_friends else None,
     )

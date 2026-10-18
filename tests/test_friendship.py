@@ -1,10 +1,23 @@
 """Tests for the Apple friendship lifecycle and profile integration."""
 import uuid
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
+from PIL import Image
 from sqlalchemy import select
 
 from sib.database.models import AppleFriendship, FriendshipStatus, User
+from sib.handlers.friendship import (
+    _ASSET,
+    _FRIEND_LIST_SHORTCUT,
+    _FRIEND_REQUEST,
+    handle_friend_list_shortcut,
+    handle_friend_request,
+    router as friendship_router,
+)
+from sib.services.help_content import HELP_SECTIONS
 from sib.services.friendship import (
     FriendshipAlreadyExistsError,
     FriendshipPendingError,
@@ -12,7 +25,6 @@ from sib.services.friendship import (
     profile_friend_count_line,
 )
 
-pytestmark = pytest.mark.asyncio
 
 
 async def _make_user(session, label):
@@ -93,3 +105,56 @@ async def test_friend_list_pagination(db_session):
     assert len(first) == 10
     assert len(second) == 2
     assert {user.id for user in first}.isdisjoint({user.id for user in second})
+
+
+def test_friend_request_image_exists_and_is_correct_size():
+    assert _ASSET == Path(__file__).resolve().parents[1] / "assets" / "social" / "friend_request.jpg"
+    assert _ASSET.is_file()
+    with Image.open(_ASSET) as image:
+        assert image.format == "JPEG"
+        assert image.size == (1024, 1024)
+
+
+def test_friendship_alias_triggers_request():
+    assert _FRIEND_REQUEST.fullmatch("دوستی سیبی")
+    assert _FRIEND_REQUEST.fullmatch("رفاقت سیبی")
+    # Both phrases are handled by the same registered message handler.
+    assert any(entry.callback is handle_friend_request for entry in friendship_router.message.handlers)
+
+
+async def test_direct_friend_list_shortcut(db_session):
+    owner = await _make_user(db_session, "سیب صاحب فهرست")
+    friend = await _make_user(db_session, "سیب دوست")
+    request = await FriendshipService.create_request(db_session, owner.id, friend.id)
+    await FriendshipService.accept_request(db_session, request.id, friend.id)
+    await db_session.commit()
+
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=owner.id, first_name=owner.first_name),
+        answer=AsyncMock(),
+    )
+    assert _FRIEND_LIST_SHORTCUT.fullmatch("لیست دوستان")
+    assert _FRIEND_LIST_SHORTCUT.fullmatch("دوستام")
+    await handle_friend_list_shortcut(message)
+    message.answer.assert_awaited_once()
+    assert "سیب دوست" in message.answer.await_args.args[0]
+    assert message.answer.await_args.kwargs["reply_markup"] is not None
+
+
+async def test_direct_friend_list_empty_state(db_session):
+    owner = await _make_user(db_session, "سیب تنها")
+    await db_session.commit()
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=owner.id, first_name=owner.first_name),
+        answer=AsyncMock(),
+    )
+    await handle_friend_list_shortcut(message)
+    assert message.answer.await_args.args[0] == (
+        "شما هنوز هیچ دوست سیبی ندارید! روی پیام یک نفر ریپلای کنید و بنویسید «دوستی سیبی»."
+    )
+
+
+def test_help_mentions_new_shortcuts():
+    shortcuts = next(section for section in HELP_SECTIONS if section.section_key == "shortcuts")
+    assert "رفاقت سیبی" in shortcuts.body_fa
+    assert "لیست دوستان" in shortcuts.body_fa
