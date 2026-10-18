@@ -47,6 +47,7 @@ from sib.database.models.marriage import (
     ProposalStatus,
     canonical_spouse_ids,
 )
+from sib.database.models.friendship import AppleFriendship, FriendshipStatus
 from sib.database.models.daily_chest import DailyChestClaim
 from sib.database.models.shop_chest import (
     ShopChest,
@@ -108,6 +109,8 @@ __all__ = [
     "FlowerGift",
     "FlowerGiftStatus",
     "canonical_spouse_ids",
+    "AppleFriendship",
+    "FriendshipStatus",
     "DailyChestClaim",
     "ShopChest",
     "ShopChestReward",

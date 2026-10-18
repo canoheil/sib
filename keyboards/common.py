@@ -371,6 +371,12 @@ def get_profile_keyboard(origin: Optional[str] = None) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 primary_button(
+                    text="👥 لیست دوستان",
+                    callback_data="profile:friends",
+                )
+            ],
+            [
+                primary_button(
                     text="🎴 کارت‌های من",
                     callback_data=with_origin("apple_cards", "apple_profile"),
                 )
