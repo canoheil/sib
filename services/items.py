@@ -44,6 +44,11 @@ ITEM_CATALOG: Dict[str, Dict[str, str]] = {
         "label": "سیب باف",
         "description": "با خوردن این سیب، ضربه‌ی بعدی تو در تهاجم ۲ برابر آسیب می‌زند.",
     },
+    "healing_potion": {
+        "emoji": "🧪",
+        "label": "معجون شفا",
+        "description": "با نوشیدن این معجون، ۵۰ واحد از انرژی جنگی خود را در جنگ‌ها بازیابی می‌کنید.",
+    },
     "wedding_ring": {
         "emoji": "💍",
         "label": "حلقه ازدواج",

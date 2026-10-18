@@ -1,8 +1,10 @@
 """Shared castle progression and durable economy operation gates."""
 
 from datetime import datetime
+from typing import Optional
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -29,6 +31,12 @@ class GroupCastle(Base):
     )
     level: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     total_donated: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    shield_until: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    in_war: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", nullable=False
+    )
 
 
 class CastleDonation(Base):

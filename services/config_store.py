@@ -119,6 +119,7 @@ CONFIG_DEFAULTS: dict[str, Any] = {
         "sib_buff": 50,
         "wedding_ring": 1000,
         "flower": 30,
+        "healing_potion": 150,
     },
     # Sellable items (shop "Sell Items" section): key -> sell price in Apples.
     # Magic Powder is deliberately absent: it is consumable progression, not a
