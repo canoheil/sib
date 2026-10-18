@@ -143,3 +143,6 @@ __all__ += ["AppleMineShift"]
 
 from sib.database.models.castle import GroupCastle, CastleDonation, CastleIncomeClaim
 __all__ += ["GroupCastle", "CastleDonation", "CastleIncomeClaim"]
+
+from sib.database.models.war import GroupWar, WarParticipant, WarAttack
+__all__ += ["GroupWar", "WarParticipant", "WarAttack"]
