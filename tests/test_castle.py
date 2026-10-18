@@ -294,3 +294,51 @@ async def test_donation_failure_rolls_back(castle_session, monkeypatch):
     await s.rollback()
     assert await AppleWalletService.get_balance(s, 1) == 10_000
     assert await s.scalar(select(func.count()).select_from(CastleDonation)) == 0
+
+
+def test_castle_buttons_have_the_expected_colors():
+    from sib.handlers.castle import keyboard
+
+    main_keyboard = keyboard(-123)
+    donation_keyboard = keyboard(-123, donate=True)
+    buttons = [
+        button
+        for markup in (main_keyboard, donation_keyboard)
+        for row in markup.inline_keyboard
+        for button in row
+    ]
+    by_callback = {button.callback_data: button for button in buttons}
+
+    expected = {
+        "castle:donate:-123": ("🍏 اهدای سیب", "success"),
+        "castle:income:-123": ("🎁 دریافت درآمد", "primary"),
+        "castle:top:-123": ("🏆 برترین اهداکنندگان", "primary"),
+        "castle:100:-123": ("۱۰۰ 🍏", "success"),
+        "castle:500:-123": ("۵۰۰ 🍏", "success"),
+        "castle:max:-123": ("حداکثر", "success"),
+        "castle:view:-123": ("🔙 بازگشت", "danger"),
+    }
+    assert set(by_callback) == set(expected)
+    assert all(button.style in {"success", "primary", "danger"} for button in buttons)
+    for callback_data, (text, style) in expected.items():
+        assert by_callback[callback_data].text == text
+        assert by_callback[callback_data].style == style
+
+
+def test_castle_caption_is_localized_and_uses_persian_digits():
+    from sib.handlers.castle import format_castle_caption
+
+    caption = format_castle_caption(level=2, total_donated=12_345)
+    assert caption == (
+        "🏰 قلعه سیبی\n\n"
+        "📊 سطح قلعه: ۲ از ۱۰\n\n"
+        "🍏 سیب اهدا شده: ۱۲۳۴۵ / ۲۰۰۰۰\n\n"
+        "⚔️ قدرت حمله در یورش: +۴٪\n\n"
+        "🎁 درآمد روزانه: ۴ سیب\n\n"
+        "⚠️ سقف اهدا: روزانه ۵۰۰ سیب (برای هر بازیکن)\n\n"
+        "ℹ️ اهدای سیب بازگشت‌پذیر نیست. درآمد روزانه فقط از یک قلعه دریافت می‌شود."
+    )
+    assert "سطح قلعه" in caption
+    for unwanted in ("Invasion", "دمیج", "لول", "UTC"):
+        assert unwanted not in caption
+    assert not any(digit in caption for digit in "0123456789")
