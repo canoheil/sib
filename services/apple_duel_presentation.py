@@ -56,6 +56,13 @@ def scene_plate_bytes(index):
 
 
 def scene_text(duel, battle, index):
+    """Persian caption of one indexed scene (0-5).
+
+    Player-facing narration only: internal identifiers (the duel UUID,
+    the battle row id, the RNG seed) are never rendered into the group
+    message. Scene 5 is the terminal result - winner plus the seedling
+    reward line, and nothing else.
+    """
     cards = json.loads(duel.snapshot_json)["cards"]
     a, b = cards
     winner = next(c for c in cards if c["user_id"] == battle.winner_id)
@@ -69,8 +76,7 @@ def scene_text(duel, battle, index):
         "🍃 تغییر جریان\n\nمیدان زیر نور تازه‌ای نمایان می‌شود. هر دو کارت هنوز در قاب‌اند؛ نگاه‌ها منتظر پایان این رویارویی می‌مانند.",
         f"✨ لحظهٔ تعیین‌کننده\n\nانتظار به پایان نزدیک است؛ در نتیجهٔ ثبت‌شدهٔ نبرد، «{winner['name']}» پیش افتاده است. میدان آمادهٔ اعلام پیروز می‌شود.",
         f"🏆 پایان دوئل سیبی\n\nبرنده: {winner['player_name']} با «{winner['name']}»\n"
-        "🌱 یک نهال به برنده داده شد. بازنده نهالی از دست نمی‌دهد.\n"
-        f"شناسهٔ دوئل: {duel.id}",
+        "🌱 یک نهال به برنده داده شد. بازنده نهالی از دست نمی‌دهد.",
     ]
     return scenes[index]
 

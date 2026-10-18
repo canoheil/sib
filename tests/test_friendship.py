@@ -17,6 +17,12 @@ from sib.handlers.friendship import (
     handle_friend_request,
     router as friendship_router,
 )
+from sib.keyboards.friendship import (
+    FRIEND_ACCEPT,
+    FRIEND_REJECT,
+    get_friend_list_keyboard,
+    get_friend_request_keyboard,
+)
 from sib.services.help_content import HELP_SECTIONS
 from sib.services.friendship import (
     FriendshipAlreadyExistsError,
@@ -158,3 +164,64 @@ def test_help_mentions_new_shortcuts():
     shortcuts = next(section for section in HELP_SECTIONS if section.section_key == "shortcuts")
     assert "رفاقت سیبی" in shortcuts.body_fa
     assert "لیست دوستان" in shortcuts.body_fa
+
+
+# --- F1.6: glass colors on the friend-request card ------------------------
+
+
+def test_friend_request_buttons_are_styled():
+    """Accept is green, Reject is red — the card is never transparent.
+
+    Same semantic pair the marriage proposal card uses
+    (``keyboards/marriage.py``): success = confirm, danger = refuse.
+    """
+    keyboard = get_friend_request_keyboard(42)
+    by_callback = {
+        button.callback_data: button
+        for row in keyboard.inline_keyboard
+        for button in row
+    }
+
+    accept = by_callback[f"{FRIEND_ACCEPT}:42"]
+    reject = by_callback[f"{FRIEND_REJECT}:42"]
+
+    assert accept.text == "✅ قبول میکنم"
+    assert accept.style == "success"
+    assert reject.text == "❌ رد میکنم"
+    assert reject.style == "danger"
+    # One row, two buttons: labels and callback contract unchanged.
+    assert [button.text for button in keyboard.inline_keyboard[0]] == [
+        "✅ قبول میکنم",
+        "❌ رد میکنم",
+    ]
+
+
+def test_friend_list_buttons_are_styled():
+    """Pagination is blue (navigation); «back to profile» is red."""
+    keyboard = get_friend_list_keyboard(1, 3)
+    buttons = [button for row in keyboard.inline_keyboard for button in row]
+
+    assert [button.style for button in buttons] == ["primary", "primary", "danger"]
+    assert [button.callback_data for button in buttons] == [
+        "profile:friends:0",
+        "profile:friends:2",
+        "apple_profile",
+    ]
+
+
+def test_friend_request_keyboard_carries_no_unstyled_button():
+    """Every button on both friend surfaces picks one of the three colors."""
+    keyboards = [
+        get_friend_request_keyboard(7),
+        get_friend_list_keyboard(0, 1),
+        get_friend_list_keyboard(0, 4),
+        get_friend_list_keyboard(3, 4),
+    ]
+    for keyboard in keyboards:
+        for row in keyboard.inline_keyboard:
+            for button in row:
+                assert button.style in {"primary", "success", "danger"}, (
+                    button.text,
+                    button.callback_data,
+                    button.style,
+                )

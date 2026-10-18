@@ -34,3 +34,43 @@
 - Claims are committed before Telegram I/O. Transport exceptions are explicitly released, but a hard process crash after a claim and before a successful send can leave that claimed scene skipped; the cursor design is at-most-once rather than exactly-once delivery.
 - Telegram/API and database latency are outside the 1.5-second sleep budget, so wall-clock duration may exceed the delay-only estimates.
 - No engine, damage, reward, narrative string, Apple Battle, invasion-v2, migration, or `_archive_inv1_*` changes were made. The `invasion_enabled` setting was not modified; its live database value was not queried.
+
+## F1.6 follow-up — terminal caption carries no internal duel id
+
+The scene-5 result caption used to end with `شناسهٔ دوئل: {duel.id}`, printing
+the raw 32-character primary key of `apple_duels` into the group. That line was
+removed in F1.6 (`services/apple_duel_presentation.py`, `scene_text` at line
+58). Scene 5 now ends on the seedling-reward line:
+
+```text
+🏆 پایان دوئل سیبی
+
+برنده: [player] با «[card]»
+🌱 یک نهال به برنده داده شد. بازنده نهالی از دست نمی‌دهد.
+```
+
+Scope of the change:
+
+- Only the caption string changed. Scene count (six, indices 0–5), the cursor
+  machine, `claim_scene`/`release_scene`, `publish_terminal`, the reward path
+  and the engine are untouched.
+- `publish_terminal` (line 308) reuses `scene_text(duel, battle, 5)`, so the
+  invitation edit and the queued scene delivery are both clean by construction.
+- The id is still used where it belongs: `callback_data` of the invitation
+  buttons, the uploaded photo filename (`duel-{id}-{index}.jpg`), the durable
+  cursor key and the logs. None of those are group-visible text.
+- No schema or migration change; the `apple_duels.id` column is unchanged.
+
+Coverage added in `tests/apple_duel/test_presentation_play.py`:
+`test_duel_result_does_not_contain_duel_id` (caption-level, all six scenes),
+`test_delivered_duel_scenes_contain_no_duel_id` (everything `play` actually
+sends) and `test_terminal_edit_carries_no_duel_id` (`publish_terminal`).
+
+Two failures in that file predate F1.6 and were left alone:
+`test_play_sends_all_scenes_in_order` still asserts `delay <= 1.6` while
+`DUEL_SCENE_DELAY_SECONDS` is `3.0` (line 19), and
+`test_handler_uses_play_not_direct_tick` runs without the `db_session` fixture
+so `get_session()` reaches for the production MariaDB URL.
+
+The friend-request button colors shipped in the same F1.6 pass are documented
+in `docs/games/F1-REPORT.md`.
