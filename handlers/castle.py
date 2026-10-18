@@ -8,7 +8,10 @@ from sqlalchemy import func, select
 from sib.core.logging import logger
 from sib.database.connection import get_session
 from sib.database.models import CastleDonation, Group, GroupCastle, User
-from sib.services.castle_service import CastleService, CastleError, THRESHOLDS
+from sib.services.castle_service import (
+    CastleService, CastleError, THRESHOLDS,
+    DAILY_INCOME_PER_LEVEL, INVASION_BUFF_PER_LEVEL,
+)
 from sib.services.castle_art import castle_image
 from sib.services.sib_claim import fa_digits
 from sib.services.user import UserService
@@ -44,8 +47,8 @@ def format_castle_caption(level, total_donated):
     next_threshold = (
         THRESHOLDS[level] if level < len(THRESHOLDS) else THRESHOLDS[-1]
     )
-    buff_percent = level * 2
-    income = level * 2
+    buff_percent = round(level * INVASION_BUFF_PER_LEVEL * 100)
+    income = level * DAILY_INCOME_PER_LEVEL
     return (
         "🏰 قلعه سیبی\n\n"
         f"📊 سطح قلعه: {fa_digits(level)} از ۱۰\n\n"
@@ -168,12 +171,12 @@ async def castle_callback(callback: CallbackQuery):
                 await safe_answer_callback(callback, "قلعهٔ هدف یافت نشد.", show_alert=True)
                 return
             text = (
-                "⚠️ تایید اعلان جنگ ۲۴ ساعته\n\n"
+                "⚠️ تایید اعلان جنگ ۵ ساعته\n\n"
                 f"🎯 قلعهٔ هدف: {target_group.title}\n"
                 f"📊 سطح قلعه حریف: {fa_digits(target_castle.level)} از ۱۰\n\n"
-                "⏳ مدت زمان نبرد: ۲۴ ساعت تمام\n"
+                "⏳ مدت زمان نبرد: ۵ ساعت تمام\n"
                 "💰 پاداش فتح: غارت ۱۵٪ از پیشرفت اهدای قلعهٔ حریف\n"
-                "🛡 قانون صلح: گروه مغلوب ۴۸ ساعت سپر صلح دریافت می‌کند.\n\n"
+                "🛡 قانون صلح: گروه مغلوب ۱۲ ساعت سپر صلح دریافت می‌کند.\n\n"
                 "آیا از شروع حمله به این قلعه اطمینان دارید؟"
             )
             markup = InlineKeyboardMarkup(
@@ -200,12 +203,12 @@ async def castle_callback(callback: CallbackQuery):
                 attacker_title = attacker_group.title if attacker_group else f"گروه {group_id}"
                 defender_title = defender_group.title if defender_group else f"گروه {target_id}"
 
-            await safe_answer_callback(callback, "🚀 نبرد ۲۴ ساعته آغاز شد!", show_alert=True)
+            await safe_answer_callback(callback, "🚀 نبرد ۵ ساعته آغاز شد!", show_alert=True)
 
             declaration_text = (
                 "🚨 طبل جنگ در اواریا به صدا درآمد! 🚨\n\n"
                 f"⚔️ گروه «{attacker_title}» رسماً به قلعهٔ «{defender_title}» اعلان جنگ داد!\n"
-                "⏳ مهلت نبرد: ۲۴ ساعت تمام\n"
+                "⏳ مهلت نبرد: ۵ ساعت تمام\n"
                 "🍏 غنیمت فتح: تاراج بخشی از پیشرفت اهدای قلعهٔ مغلوب\n\n"
                 "💥 دلاوران دو قبیله! کارت‌های اصلی خود را بردارید و با ارسال دستور «وضعیت جنگ» در گروه خود، به میدان نبرد بشتابید!"
             )

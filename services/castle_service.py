@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects import mysql, sqlite
 from sib.database.models import Group, GroupCastle, CastleDonation, CastleIncomeClaim
 from sib.services.apple_wallet import AppleWalletService
-from sib.services.lock_order import lock_user_row
+from sib.services.lock_order import lock_user_row, lock_user_rows_in_order
 
 THRESHOLDS = (
     0,
@@ -21,6 +21,9 @@ THRESHOLDS = (
     1_300_000,
 )
 DAILY_CAP = 500
+DAILY_INCOME_PER_LEVEL = 100
+INVASION_BUFF_PER_LEVEL = 0.05
+LEVEL_UP_DONOR_REWARD = 100
 
 
 class CastleError(ValueError):
@@ -85,6 +88,17 @@ class CastleService:
         ).all()
         return max(0, DAILY_CAP - sum(amounts))
 
+    @staticmethod
+    async def _recent_donors(session, group_id, now, *, for_update=False):
+        query = select(CastleDonation.user_id).where(
+            CastleDonation.group_id == group_id,
+            CastleDonation.donated_at >= now - timedelta(hours=24),
+            CastleDonation.donated_at <= now,
+        )
+        if for_update:
+            query = query.with_for_update()
+        return set((await session.scalars(query)).all())
+
     @classmethod
     async def donate(
         cls, session, user_id, group_id, amount, *, request_key=None, now=None
@@ -93,7 +107,13 @@ class CastleService:
         if amount is not None and (type(amount) is not int or amount <= 0):
             raise CastleError("مبلغ معتبر نیست.")
         now = now or datetime.now(timezone.utc)
-        await lock_user_row(session, user_id)
+        # Lock every potentially rewarded user before castle/wallet locks.
+        # Revalidate with a current read below: MariaDB REPEATABLE READ may
+        # have hidden a donor committed while we waited for these locks.
+        donor_ids = await cls._recent_donors(session, group_id, now)
+        locked_users = set(
+            await lock_user_rows_in_order(session, donor_ids | {user_id})
+        )
         castle = await cls.get_or_create_castle(session, group_id)
         key = request_key or f"castle:donate:{uuid4().hex}"
         existing = await session.scalar(
@@ -137,8 +157,29 @@ class CastleService:
         )
         if not result.applied:
             raise CastleError("این پرداخت قبلاً ثبت شده است.")
+        old_level = castle.level
         castle.total_donated += actual
         castle.level = level_for_total(castle.total_donated)
+        if castle.level > old_level:
+            recipients = await cls._recent_donors(
+                session, group_id, now, for_update=True
+            )
+            if not recipients <= locked_users:
+                # Never acquire a new User mutex after castle/wallet locks.
+                # Caller rolls back the entire donation; retry with the same key.
+                raise CastleError(
+                    "اهداکنندگان قلعه تغییر کرده‌اند؛ لطفاً دوباره تلاش کنید."
+                )
+            for donor_id in sorted(recipients):
+                await AppleWalletService.earn(
+                    session,
+                    donor_id,
+                    LEVEL_UP_DONOR_REWARD,
+                    reason="castle_level_up_reward",
+                    ref_type="castle_donation",
+                    ref_id=donation.id,
+                    idempotency_key=f"castle:level-up:{donation.id}:{donor_id}",
+                )
         await session.flush()
         return actual
 
@@ -149,7 +190,7 @@ class CastleService:
             .join(Group, Group.id == GroupCastle.group_id)
             .where(GroupCastle.group_id == group_id, Group.is_active.is_(True))
         )
-        return (level or 0) * 0.02
+        return (level or 0) * INVASION_BUFF_PER_LEVEL
 
     @classmethod
     async def claim_daily_income(cls, session, user_id, group_id, *, now=None):
@@ -166,7 +207,7 @@ class CastleService:
         )
         if previous:
             raise CastleError("درآمد قلعه را امروز دریافت کرده‌اید.")
-        amount = castle.level * 2
+        amount = castle.level * DAILY_INCOME_PER_LEVEL
         claim = CastleIncomeClaim(
             user_id=user_id, group_id=group_id, claim_day=day, amount=amount
         )

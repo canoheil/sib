@@ -37,9 +37,7 @@ router = Router(name="war")
 GROUPS = {"group", "supergroup"}
 
 
-def war_keyboard(
-    war_id: int, group_id: int, is_attacker: bool
-) -> InlineKeyboardMarkup:
+def war_keyboard(war_id: int, group_id: int, is_attacker: bool) -> InlineKeyboardMarkup:
     """Build glass-button keyboard with correct semantic colors for attacker or defender."""
     if is_attacker:
         action_buttons = [
@@ -81,7 +79,7 @@ def format_war_caption(
         f"💥 مجموع خسارت مدافع: {fa_digits(defender_damage)}\n\n"
         f"⏳ زمان باقی‌مانده: {time_str}\n"
         f"⚡️ انرژی جنگی شما: {fa_digits(player_energy)} از ۱۰۰\n\n"
-        "ℹ️ هر ضربه ۲۵ انرژی مصرف می‌کند (فاصله بین ضربات: ۱ دقیقه)."
+        "ℹ️ هر ضربه ۲۰ انرژی مصرف می‌کند (فاصله بین ضربات: ۳۰ ثانیه)."
     )
 
 

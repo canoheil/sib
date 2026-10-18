@@ -1,6 +1,8 @@
 # C1-IMPL — Apple Castle implementation report
 
-Date: 2026-10-18. Branch: `arena/f9e34b29-sib`.
+Date: 2026-10-18. Original branch: `arena/f9e34b29-sib`.
+
+**C2-4 balance update (2026-10-18):** economy values below now reflect C2-4. See [C2-4-REPORT.md](C2-4-REPORT.md) for current behavior and verification; original C1 test counts below are historical.
 
 ## 1. Image generation status
 
@@ -40,9 +42,11 @@ Models are registered in `database/models/__init__.py`. Group IDs retain Telegra
 `CastleService` implements all four requested entry points:
 
 - `get_or_create_castle(session, group_id)` validates a registered active Group, upserts the unique castle and reads it under a row lock. New castles begin at free level 1.
-- `donate(session, user_id, group_id, amount)` takes the existing User economy mutex, locks castle/cap data and wallet, rejects invalid amounts or insufficient capacity/funds, writes the donation audit row, debits through `AppleWalletService.debit_once`, updates cumulative donations and recalculates level. `amount=None` means Max. Fixed amounts are exact; Max is bounded by balance, remaining global daily allowance and remaining lifetime target.
-- `get_invasion_buff(session, group_id)` returns the **bonus fraction** `level × 0.02`; an absent castle or inactive group returns zero. It does not create castles or buff enemy HP.
-- `claim_daily_income(session, user_id, group_id)` gives `level × 2` normal apples once per UTC day across all castles, using a locked User, unique claim row and canonical keyed wallet credit.
+- `donate(session, user_id, group_id, amount)` locks the donating user and recent donors in ascending User-ID order, locks castle/cap data and wallet, rejects invalid amounts or insufficient capacity/funds, writes the donation audit row, debits through `AppleWalletService.debit_once`, updates cumulative donations and recalculates level. `amount=None` means Max. Fixed amounts are exact; Max is bounded by balance, remaining global daily allowance and remaining lifetime target.
+- `get_invasion_buff(session, group_id)` returns the **bonus fraction** `level × 0.05`; an absent castle or inactive group returns zero. It does not create castles or buff enemy HP.
+- `claim_daily_income(session, user_id, group_id)` gives `level × 100` normal apples once per UTC day across all castles, using a locked User, unique claim row and canonical keyed wallet credit.
+
+On a donation-triggered level increase, each distinct donor to that castle in the inclusive rolling UTC window `[now − 24h, now]` receives **100 normal apples**, including the triggering donor. The daily chest is a once-per-day claim, not a grantable inventory item, so C2-4 uses the approved fixed-apple fallback. Credits use reason `castle_level_up_reward`, the triggering donation reference and a per-donation/per-recipient idempotency key. Replays do not pay twice. No increase means no reward.
 
 The caller owns commit/rollback. Ledger debit/credit and all domain updates are atomic. A failed transaction cannot leave a consumed claim or contribution without its wallet movement. Financial operations finish before Telegram acknowledgements or image delivery.
 
@@ -52,24 +56,24 @@ Daily caps count **all castles together**, not 500 per group. Current locking do
 
 ### Lock-order investigation
 
-Do not explicitly lock the parent Group during a castle mutation. Existing invasion spawn code locks Group then invasion; join/settlement can lock invasion then User. Adding User → Group would introduce a cross-feature cycle. Castle operations instead use User → castle → operation gate/wallet; creation is serialized by a dialect-specific upsert on the unique castle key. `docs/lock-order.md` documents this branch without changing existing resource ranks.
+Do not explicitly lock the parent Group during a castle mutation. Existing invasion spawn code locks Group then invasion; join/settlement can lock invasion then User. Adding User → Group would introduce a cross-feature cycle. Castle operations instead use User(s, ascending ID) → castle → operation gate/wallet; creation is serialized by a dialect-specific upsert on the unique castle key. `docs/lock-order.md` documents this branch without changing existing resource ranks.
 
-The Group active flag is a nonlocking check: a transaction already in progress can complete concurrently with deactivation. First-creation foreign-key checks and existing domain locks can still contend. Database errors/deadlocks roll back the transaction; this implementation does not automatically retry failed donations under a new key. Actual MariaDB concurrency validation remains a deployment gate.
+The Group active flag is a nonlocking check: a transaction already in progress can complete concurrently with deactivation. First-creation foreign-key checks and existing domain locks can still contend. Database errors/deadlocks roll back the transaction; this implementation does not automatically retry failed donations under a new key. For level-up rewards, a current locking donor read revalidates the prelocked recipient set. If a newly committed donor was absent from the initial snapshot, the entire donation rolls back with a Persian retry message; no new User lock is taken after castle/wallet locks. Actual MariaDB concurrency validation remains a deployment gate.
 
-### Progression retained from C1-RECON
+### Progression thresholds retained; rewards rebalanced in C2-4
 
 | Level | Cumulative normal apples | Daily income per user | Castle damage bonus |
 |---:|---:|---:|---:|
-| 1 | 0 | 2 | 2% |
-| 2 | 5,000 | 4 | 4% |
-| 3 | 20,000 | 6 | 6% |
-| 4 | 50,000 | 8 | 8% |
-| 5 | 110,000 | 10 | 10% |
-| 6 | 210,000 | 12 | 12% |
-| 7 | 360,000 | 14 | 14% |
-| 8 | 580,000 | 16 | 16% |
-| 9 | 880,000 | 18 | 18% |
-| 10 | 1,300,000 | 20 | 20% |
+| 1 | 0 | 100 | 5% |
+| 2 | 5,000 | 200 | 10% |
+| 3 | 20,000 | 300 | 15% |
+| 4 | 50,000 | 400 | 20% |
+| 5 | 110,000 | 500 | 25% |
+| 6 | 210,000 | 600 | 30% |
+| 7 | 360,000 | 700 | 35% |
+| 8 | 580,000 | 800 | 40% |
+| 9 | 880,000 | 900 | 45% |
+| 10 | 1,300,000 | 1000 | 50% |
 
 The personal daily cap is 500. At 20 donors using the full allowance, the ideal time to level 10 is 130 donation days; at 10 it is 260. Unlike the recon recommendation, **there is no additional 10,000/group/day cap in the implementation request**: a sufficiently large wealthy group can finish sooner. This implementation follows the updated task, not that unapproved recon addition.
 

@@ -6,6 +6,8 @@
 
 ---
 
+**C2-4 update (2026-10-18):** mechanics below reflect the new balance. See [C2-4-REPORT.md](C2-4-REPORT.md) for current tests and lifecycle details. Original C2-2 test counts/logs below are historical.
+
 ## 1. Migration ID & Database Architecture
 
 * **Migration Revision:** `050_apple_clash`
@@ -15,7 +17,7 @@
 ### Schema Changes Summary
 
 1. **`group_castles` Extension:**
-   * `shield_until`: `DateTime(timezone=True)`, nullable (stores the 48-hour Peace Shield expiry).
+   * `shield_until`: `DateTime(timezone=True)`, nullable (stores the 12-hour Peace Shield expiry).
    * `in_war`: `Boolean`, not null, default `False` (server_default `"0"`, fast gate for matchmaking & locking).
 2. **`group_wars` Table:**
    * `id`: `BigInteger` (SQLite `Integer` variant), autoincrement primary key.
@@ -35,7 +37,7 @@
    * `group_id`: `BigInteger`, not null, foreign key referencing `groups(id)`.
    * `energy`: `Integer`, not null, default `100` (server_default `"100"`).
    * `total_damage`: `Integer`, not null, default `0`.
-   * `last_attack_at`: `DateTime(timezone=True)`, nullable (enforces 1-minute cooldown).
+   * `last_attack_at`: `DateTime(timezone=True)`, nullable (enforces 30-second cooldown).
    * Index: `ix_war_participants_war_group(war_id, group_id)`.
 4. **`war_attacks` Table:**
    * `id`: `BigInteger` (SQLite `Integer` variant), autoincrement primary key.
@@ -106,16 +108,16 @@ All buttons across both `handlers/castle.py` and `handlers/war.py` strictly adhe
 
 ### 5.2 Atomic Declaration & Dual Notifications (NO PIN)
 * Both castles are locked in ascending group ID order with `with_for_update()`.
-* Creates `group_wars` with a 24-hour expiration (`ends_at = started_at + timedelta(hours=24)`).
+* Creates `group_wars` with a 5-hour expiration (`ends_at = started_at + timedelta(hours=5)`).
 * Stamped `in_war = True` on both castles.
 * Dispatches `war_bg_declaration.jpg` with loud emojis (🚨) and a red back button to **both** attacker and defender groups.
 * **Pinning Conflict Resolved:** In accordance with the prompt specification, declaration and attack messages are **never pinned** to preserve the pinned message slot for the Invasion feature.
 
 ### 5.3 War Status Menu (`وضعیت جنگ`) & Combat Rules
 * Triggered in group chats by sending `وضعیت جنگ`.
-* Displays clan damage scores, remaining countdown, and player's current energy.
-* **Energy System:** 100 max energy, 25 energy consumed per attack (4 natural attacks).
-* **Cooldown:** 1-minute minimum cooldown between hits (`last_attack_at` timestamp check).
+* Displays clan damage scores, remaining hours and minutes using Persian digits (e.g. «۳ ساعت و ۱۵ دقیقه»), and player's current energy.
+* **Energy System:** 100 max energy, 20 energy consumed per attack (5 natural attacks).
+* **Cooldown:** 30-second minimum cooldown between hits (`last_attack_at` timestamp check).
 * **Damage Pipeline:**
   1. Base power from player's active Main Card.
   2. Castle buff from `CastleService.get_invasion_buff(group_id)`.
@@ -124,6 +126,12 @@ All buttons across both `handlers/castle.py` and `handlers/war.py` strictly adhe
   5. Audit entry logged in `war_attacks` and aggregated in `war_participants`.
 
 ---
+
+### 5.4 Expiration & Peace Shield (C2-4)
+* Maintenance now finishes expired wars atomically, clears both `in_war` flags and records the higher-damage side in `winner_id`.
+* The loser receives a **12-hour** shield from settlement time. Ties have no loser and no new shield. Repeated settlement does not extend the shield.
+* Shielded castles cannot initiate or receive declarations. Exactly at expiration, matchmaking/declaration is allowed again.
+* The checkout had no implemented war settlement/shield setter; C2-4 adds only expiration/winner/shield lifecycle. The previously advertised loot transfer and victory/defeat presentation remain unimplemented and outside this balance patch.
 
 ## 6. Test Suite & Verification Results
 
