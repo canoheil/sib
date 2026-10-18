@@ -712,6 +712,120 @@ async def test_war_expiration_runs_in_maintenance(war_session, monkeypatch):
     assert loser.shield_until is not None and not loser.in_war
 
 
+async def test_expired_wars_are_finalized_in_maintenance(war_session, monkeypatch):
+    """C2-4.5: the maintenance loop finalizes every DUE war - and only those.
+
+    The zombie-party sweep is the first task of each cycle and was failing with
+    the production ``CompileError``; war finalization must not depend on it.
+    """
+    from contextlib import asynccontextmanager
+    from sqlalchemy.exc import CompileError
+    from sib.services.maintenance import service as maintenance
+    from sib.services.timeout import TimeoutService
+    from sib.services.session import SessionService
+    from sib.services.trading import TradeService
+    from sib.services.match_result import MatchResultService
+    from sib.services.apple_duel_presentation import AppleDuelPresentation
+
+    def aware(moment):
+        return moment.replace(tzinfo=timezone.utc) if moment.tzinfo is None else moment
+
+    s = war_session
+    now = datetime.now(timezone.utc)
+    # A second, unrelated pair of castles whose war is still running.
+    s.add_all(
+        [
+            Group(id=-1003, title="قبیله گرگ", is_active=True),
+            Group(id=-1004, title="قبیله ببر", is_active=True),
+        ]
+    )
+    await s.flush()
+    await CastleService.get_or_create_castle(s, -1003)
+    await CastleService.get_or_create_castle(s, -1004)
+
+    due = await WarService.declare_war(s, -1001, -1002, now=now - timedelta(hours=6))
+    due.attacker_damage, due.defender_damage = 100, 250  # the DEFENDER wins
+    running = await WarService.declare_war(s, -1003, -1004, now=now)  # ~5h left
+    running.attacker_damage = 999
+    await s.commit()
+    due_id, running_id = due.id, running.id
+
+    @asynccontextmanager
+    async def session_ctx():
+        yield s
+        await s.commit()
+
+    monkeypatch.setattr(maintenance, "get_session", session_ctx)
+    worker = maintenance.MaintenanceService
+    production_error = CompileError(
+        'Dialect "mysql" does not support RETURNING with DELETE..USING; for '
+        "synchronize_session='fetch', please add the additional execution "
+        "option 'is_delete_using=True' to the statement"
+    )
+    monkeypatch.setattr(worker, "cleanup_zombie_parties", AsyncMock(side_effect=production_error))
+    for method in [
+        "process_expired_queue_entries",
+        "run_marriage_love_cycle",
+        "_resume_pending_bot_turns",
+    ]:
+        monkeypatch.setattr(worker, method, AsyncMock())
+    monkeypatch.setattr(worker, "_invasion_enabled", AsyncMock(return_value=False))
+    monkeypatch.setattr(SessionService, "reconcile_stale_state", AsyncMock())
+    monkeypatch.setattr(TradeService, "expire_overdue", AsyncMock())
+    monkeypatch.setattr(TimeoutService, "process_acceptance_timeouts", AsyncMock())
+    monkeypatch.setattr(
+        TimeoutService, "process_turn_timeouts", AsyncMock(return_value=[])
+    )
+    monkeypatch.setattr(
+        MatchResultService, "retry_pending_xp_awards", AsyncMock(return_value=0)
+    )
+    monkeypatch.setattr(AppleDuelPresentation, "recover_and_publish", AsyncMock())
+
+    # Re-read from the database (not the identity map) to see what was committed.
+    async def war_row(war_id):
+        return await s.scalar(
+            select(GroupWar)
+            .where(GroupWar.id == war_id)
+            .execution_options(populate_existing=True)
+        )
+
+    async def castle_row(group_id):
+        return await s.scalar(
+            select(GroupCastle)
+            .where(GroupCastle.group_id == group_id)
+            .execution_options(populate_existing=True)
+        )
+
+    before = datetime.now(timezone.utc)
+    await worker.run_once()  # the sweep above raises; finalization must still run
+    after = datetime.now(timezone.utc)
+
+    # The due war: finished, higher damage wins, loser (only) gets a 12h shield.
+    war = await war_row(due_id)
+    assert war.status == "finished"
+    assert war.winner_id == -1002
+    loser = await castle_row(-1001)
+    winner = await castle_row(-1002)
+    assert not loser.in_war and not winner.in_war
+    assert before + timedelta(hours=12) <= aware(loser.shield_until) <= after + timedelta(hours=12)
+    assert winner.shield_until is None
+
+    # A war that has not reached its deadline is left strictly alone.
+    still_running = await war_row(running_id)
+    assert still_running.status == "active" and still_running.winner_id is None
+    for group_id in (-1003, -1004):
+        castle = await castle_row(group_id)
+        assert castle.in_war and castle.shield_until is None
+
+    # The loop repeats forever: later cycles must not touch a settled war.
+    shield = aware(loser.shield_until)
+    await worker.run_once()
+    again = await castle_row(-1001)
+    assert aware(again.shield_until) == shield
+    assert (await war_row(due_id)).winner_id == -1002
+    assert (await war_row(running_id)).status == "active"
+
+
 async def test_war_expiration_failure_rolls_back_shield_and_flags(
     war_session, monkeypatch
 ):

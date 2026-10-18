@@ -365,8 +365,20 @@ class MaintenanceService:
             MatchmakingQueue.party_id == Party.id, MatchmakingQueue.is_active == True
         ))
         condition = (Party.created_at < cutoff) | (~active_queue & ~active_match)
-        stmt = delete(PartyMember).where(
-            PartyMember.party_id == Party.id, condition, ~active_match
+        # The WHERE clause references ``parties`` as well, so this is a
+        # multi-table ``DELETE ... USING``. ORM-enabled DML defaults to
+        # ``synchronize_session="auto"``: it cannot evaluate the EXISTS
+        # criteria in Python and falls back to "fetch", i.e. DELETE..RETURNING.
+        # MariaDB has no RETURNING for multi-table DELETE, so every cycle died
+        # with ``CompileError: Dialect "mysql" does not support RETURNING with
+        # DELETE..USING``. This is a pure bulk delete - no loaded ORM objects
+        # need to be kept in sync and the deleted rows are never read back -
+        # so session synchronization is switched off (no RETURNING, no
+        # pre-SELECT). Declared on the statement so BOTH branches below get it.
+        stmt = (
+            delete(PartyMember)
+            .where(PartyMember.party_id == Party.id, condition, ~active_match)
+            .execution_options(synchronize_session=False)
         )
         if session is not None:
             result = await session.execute(stmt)
@@ -386,6 +398,14 @@ class MaintenanceService:
     async def run_once(cls) -> None:
         """Run one maintenance cycle, then publish any committed fallbacks.
 
+        Failure isolation: EVERY task below runs inside its own
+        ``try/except Exception``. A failing task is logged and the next one
+        still runs, so one broken task (e.g. the zombie-party sweep) can
+        never starve war finalization, timeouts or the invasion tick. Each
+        database task also runs in its OWN transaction, so a failure rolls
+        back only that task's uncommitted work and never the work another
+        task already committed.
+
         Ordering is part of the bot-turn contract: every DB work of the
         cycle is committed first, bot turns are scheduled IMMEDIATELY after
         the commit, and only then does best-effort Telegram presentation
@@ -394,32 +414,60 @@ class MaintenanceService:
         """
         resolved_ids: list = []
         fallbacks: list[dict] = []
+
         try:
             await cls.cleanup_zombie_parties()
         except Exception:
             logger.exception("Zombie party cleanup failed")
-        async with get_session() as session:
-            try:
-                from sib.services.session import SessionService
-                from sib.services.trading import TradeService
 
+        try:
+            from sib.services.session import SessionService
+
+            async with get_session() as session:
                 await SessionService.reconcile_stale_state(session)
+        except Exception:
+            logger.exception("Maintenance task failed: stale state reconciliation")
+
+        try:
+            from sib.services.trading import TradeService
+
+            async with get_session() as session:
                 await TradeService.expire_overdue(session)
+        except Exception:
+            logger.exception("Maintenance task failed: trade expiration")
+
+        try:
+            async with get_session() as session:
                 await TimeoutService.process_acceptance_timeouts(session)
+        except Exception:
+            logger.exception("Maintenance task failed: acceptance timeouts")
+
+        try:
+            async with get_session() as session:
                 resolved_ids = await TimeoutService.process_turn_timeouts(session)
+        except Exception:
+            resolved_ids = []
+            logger.exception("Maintenance task failed: turn timeouts")
+
+        try:
+            async with get_session() as session:
                 await cls.process_expired_queue_entries(session, fallbacks)
-            except Exception:
-                await session.rollback()
-                fallbacks.clear()
-                resolved_ids = []
-                logger.exception("Maintenance cycle failed")
+        except Exception:
+            # Fallback matches created by the rolled-back transaction do not
+            # exist, so they must never be presented.
+            fallbacks.clear()
+            logger.exception("Maintenance task failed: expired queue entries")
 
         # War expiration/shields are isolated from matchmaking and Telegram.
+        # Winner, 12h peace shield and in_war flags of every due war commit
+        # together when this session closes.
         try:
             from sib.services.war_service import WarService
 
             async with get_session() as session:
-                await WarService.finish_expired_wars(session)
+                finished_wars = await WarService.finish_expired_wars(session)
+            if finished_wars:
+                logger.info("Finalized %s expired Apple Clash war(s)", finished_wars)
         except Exception:
             logger.exception("Apple Clash expiration failed")
 
@@ -445,10 +493,11 @@ class MaintenanceService:
         except Exception:
             logger.exception("Marriage/Love maintenance cycle failed")
 
-        # V2 is the only production invasion cycle.
-        if await cls._invasion_enabled():
-            # [INVASION-REWORK] guarded — see docs/invasion-rework/
-            try:
+        # V2 is the only production invasion cycle. The feature-flag read is
+        # inside the guard too: it must never be able to abort the cycle.
+        try:
+            if await cls._invasion_enabled():
+                # [INVASION-REWORK] guarded — see docs/invasion-rework/
                 from sib.services.invasion_v2.scheduler import InvasionScheduler
 
                 terminal = await InvasionScheduler.tick()
@@ -469,10 +518,10 @@ class MaintenanceService:
                         except Exception:
                             logger.exception("inv2 terminal settlement failed id=%s", inv_id)
                     await presenter.publish_pending(cls._bot)
-            except Exception as exc:
-                from sib.services.invasion_v2 import admin_runtime
-                admin_runtime.last_error = str(exc)[:240]
-                logger.exception("Invasion v2 maintenance cycle failed")
+        except Exception as exc:
+            from sib.services.invasion_v2 import admin_runtime
+            admin_runtime.last_error = str(exc)[:240]
+            logger.exception("Invasion v2 maintenance cycle failed")
 
         # Committed bot matches whose bot turn needs a task (a fallback match
         # that just started, or a task lost to a restart) are scheduled here -
@@ -498,7 +547,10 @@ class MaintenanceService:
             except Exception:
                 logger.exception("Could not render bot fallback match screen")
         if resolved_ids and cls._bot is not None:
-            await cls._sync_resolved_matches(resolved_ids)
+            try:
+                await cls._sync_resolved_matches(resolved_ids)
+            except Exception:
+                logger.exception("Maintenance task failed: resolved match sync")
 
         # Every source commits level-up state into the XP ledger before this
         # post-transaction publisher runs; this also retries temporary
@@ -561,7 +613,14 @@ class MaintenanceService:
 
         try:
             while not stop_event.is_set():
-                await cls.run_once()
+                try:
+                    await cls.run_once()
+                except Exception:
+                    # run_once isolates every task itself. This is the last
+                    # line of defence: bot.py never awaits this task until
+                    # shutdown, so an escaped error would silently kill ALL
+                    # maintenance (incl. war finalization) for good.
+                    logger.exception("Maintenance cycle crashed; retrying next interval")
                 try:
                     await asyncio.wait_for(stop_event.wait(), timeout=cls.INTERVAL_SECONDS)
                 except asyncio.TimeoutError:
