@@ -140,3 +140,6 @@ __all__ += ["AdminLog"]
 
 from sib.database.models.apple_mine import AppleMineShift
 __all__ += ["AppleMineShift"]
+
+from sib.database.models.castle import GroupCastle, CastleDonation, CastleIncomeClaim
+__all__ += ["GroupCastle", "CastleDonation", "CastleIncomeClaim"]

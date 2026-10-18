@@ -36,6 +36,7 @@ from sib.handlers.inv2_controls import router as inv2_controls_router
 from sib.handlers.inv2_dashboard import router as inv2_dashboard_router
 from sib.handlers.sib_hug import router as sib_hug_router
 from sib.handlers.sib_kiss import router as sib_kiss_router
+from sib.handlers.castle import router as castle_router
 from sib.handlers.daily_chest import router as daily_chest_router
 from sib.handlers.apple_mine import router as apple_mine_router
 
@@ -80,6 +81,7 @@ def register_all_handlers(dp: Dispatcher) -> None:
     dp.include_router(inv2_admin_router)
     dp.include_router(inv2_join_router)
     dp.include_router(group_lifecycle_router)
+    dp.include_router(castle_router)
     dp.include_router(start_router)
 
 

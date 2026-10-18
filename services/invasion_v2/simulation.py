@@ -8,6 +8,7 @@ from sib.database.models import Character, Inv2GroupMember
 from sib.services.card_progression import MAX_CARD_LEVEL, card_attributes
 from sib.services.config_store import ConfigService, DEFAULT_INVASION_DIFFICULTY_MULTIPLIER
 from sib.services.player_cards import PlayerCardService
+from sib.services.castle_service import CastleService, apply_castle_buff
 from .damage import compute_damage
 from .enemy import choose_enemy_type, compute_enemy_hp, enemy_spec
 from .farsi import fa_number, fa_percent
@@ -54,6 +55,7 @@ async def simulate(session, group_raw: str, enemy_raw: str | None = None) -> str
     difficulty = float(DEFAULT_INVASION_DIFFICULTY_MULTIPLIER if raw_difficulty is None else raw_difficulty)
     if not math.isfinite(difficulty) or difficulty <= 0:
         return "سختی یورش معتبر نیست."
+    castle_buff = await CastleService.get_invasion_buff(session, group_id)
     hp = compute_enemy_hp(average, enemy, difficulty)
     if hp <= 0:
         return "جان دشمن معتبر نیست."
@@ -64,10 +66,11 @@ async def simulate(session, group_raw: str, enemy_raw: str | None = None) -> str
     for count in JOINERS:
         wins = total_damage = 0
         for _ in range(TRIALS):
-            damage = sum(compute_damage(rng.choice(powers), rng)[0] for _ in range(count))
+            damage = sum(apply_castle_buff(compute_damage(rng.choice(powers), rng)[0], castle_buff) for _ in range(count))
             total_damage += damage
             wins += damage >= hp
         lines.append(f"{fa_number(count)} نگهبان: آسیب موردانتظار {fa_number(round(total_damage / TRIALS))}"
                      f" · بخت پیروزی {fa_percent(wins / TRIALS)}")
+    lines.append(f"باف قلعهٔ فعلی: {fa_percent(castle_buff)}؛ بدون مصرف سیب باف.")
     lines.append("برآورد با نمونه‌گیری مجدد از کارت‌های مشاهده‌شده؛ تضمین پیروزی نیست.")
     return "\n".join(lines)

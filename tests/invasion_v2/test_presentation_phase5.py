@@ -31,7 +31,8 @@ ART = Path(__file__).resolve().parents[2] / "assets/characters/sib_sabz.jpg"
 @pytest.fixture
 async def db(monkeypatch):
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", poolclass=StaticPool)
-    tables = [User.__table__, Group.__table__, Character.__table__, PlayerCard.__table__,
+    from sib.database.models import GroupCastle
+    tables = [GroupCastle.__table__, User.__table__, Group.__table__, Character.__table__, PlayerCard.__table__,
               Inv2Region.__table__, Inv2Invasion.__table__, Inv2Attack.__table__,
               Inv2Reward.__table__, Inv2GroupState.__table__, UserItem.__table__, SystemConfig.__table__,
               SeedlingInventory.__table__, SeedlingAward.__table__]
