@@ -1,6 +1,7 @@
 """Self-driving Apple Duel scene-player behavior."""
 
 import asyncio
+import re
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -278,3 +279,112 @@ async def test_schedule_play_keeps_task_reference_and_deduplicates(monkeypatch):
     assert play.await_count == 1
     await asyncio.sleep(0)
     assert duel_id not in presentation._play_tasks
+
+
+# --- F1.6: the terminal result never leaks an internal identifier ----------
+
+# A raw duel id (32 hex chars) or its dashed UUID spelling. Nothing like this
+# belongs in a caption a player reads in the group.
+_INTERNAL_ID = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+    r"|[0-9a-fA-F]{32}"
+)
+
+
+def _delivered_texts(bot):
+    """Every string this (mocked) bot pushed to the group, in send order."""
+    texts = [
+        call.kwargs["caption"]
+        for call in bot.send_photo.await_args_list
+        if "caption" in call.kwargs
+    ]
+    texts += [
+        call.args[1]
+        for call in bot.send_message.await_args_list
+        if len(call.args) > 1
+    ]
+    texts += [
+        call.args[0]
+        for call in bot.edit_message_text.await_args_list
+        if call.args
+    ]
+    texts += [
+        call.kwargs["text"]
+        for call in bot.edit_message_text.await_args_list
+        if "text" in call.kwargs
+    ]
+    return texts
+
+
+async def test_duel_result_does_not_contain_duel_id(db_session, monkeypatch):
+    """The «🏆 پایان دوئل سیبی» caption carries no raw internal duel id."""
+    duel = await setup_duel(db_session)
+    await accept(db_session, duel)
+    await db_session.commit()
+    battle = await db_session.get(AppleBattle, duel.battle_id)
+
+    result_text = scene_text(duel, battle, 5)
+
+    # The removed line, and the identifier it used to print.
+    assert "شناسهٔ دوئل" not in result_text
+    assert "شناسه" not in result_text
+    assert duel.id not in result_text
+    assert str(duel.id) not in result_text
+    assert not _INTERNAL_ID.search(result_text)
+
+    # No scene of the six-scene presentation exposes an internal identifier.
+    for index in range(6):
+        caption = scene_text(duel, battle, index)
+        assert duel.id not in caption, index
+        assert not _INTERNAL_ID.search(caption), index
+
+    # The result still tells the group who won and what the reward was.
+    assert result_text.startswith("🏆 پایان دوئل سیبی")
+    assert "برنده:" in result_text
+    assert "یک نهال به برنده داده شد" in result_text
+    assert result_text.rstrip().endswith("بازنده نهالی از دست نمی‌دهد.")
+
+
+async def test_delivered_duel_scenes_contain_no_duel_id(db_session, monkeypatch):
+    """End to end: what actually reaches the group has no internal id."""
+    duel = await setup_duel(db_session)
+    await accept(db_session, duel)
+    await db_session.commit()
+    await _capture_play_sleeps(monkeypatch)
+    bot = await _play_bot()
+    monkeypatch.setattr(Presentation, "_photo", AsyncMock(return_value="photo"))
+
+    await Presentation.play(bot, duel.id)
+
+    # Six scene photos, plus the terminal edit of the invitation message.
+    captions = [
+        call.kwargs["caption"]
+        for call in bot.send_photo.await_args_list
+        if "caption" in call.kwargs
+    ]
+    assert len(captions) == 6
+
+    delivered = _delivered_texts(bot)
+    assert len(delivered) >= 6
+    for text in delivered:
+        assert duel.id not in text
+        assert "شناسهٔ دوئل" not in text
+        assert not _INTERNAL_ID.search(text)
+
+
+async def test_terminal_edit_carries_no_duel_id(db_session, monkeypatch):
+    """``publish_terminal`` edits the invitation into the result — also clean."""
+    duel = await setup_duel(db_session)
+    await accept(db_session, duel)
+    await db_session.commit()
+    battle = await db_session.get(AppleBattle, duel.battle_id)
+    bot = await _play_bot()
+
+    await Presentation.publish_terminal(bot, duel, battle)
+
+    texts = _delivered_texts(bot)
+    assert texts, "terminal result was not delivered"
+    for text in texts:
+        assert duel.id not in text
+        assert "شناسهٔ دوئل" not in text
+        assert not _INTERNAL_ID.search(text)
