@@ -133,7 +133,10 @@ def test_iv2_alembic_upgrade_and_downgrade_from_046(tmp_path):
             ])
         result = _run_alembic("stamp", "046_inv2_min_players_with_card", db_url=url)
         assert result.returncode == 0, result.stderr
-        result = _run_alembic("upgrade", "head", db_url=url)
+        # Pinned to the last revision this synthetic config-only database can
+        # execute (051+ alters core tables such as ``users``); the assertions
+        # below only exercise the 047 data migration anyway.
+        result = _run_alembic("upgrade", "050_apple_clash", db_url=url)
         assert result.returncode == 0, result.stderr
         with engine.connect() as connection:
             values = _values(connection)
@@ -146,7 +149,7 @@ def test_iv2_alembic_upgrade_and_downgrade_from_046(tmp_path):
         assert result.returncode == 0, result.stderr
         with engine.connect() as connection:
             assert _values(connection)["invasion_interval_seconds"] == "3600"
-        result = _run_alembic("upgrade", "head", db_url=url)
+        result = _run_alembic("upgrade", "050_apple_clash", db_url=url)
         assert result.returncode == 0, result.stderr
     finally:
         engine.dispose()

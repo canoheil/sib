@@ -180,7 +180,7 @@ async def test_callback_donation_and_replay(castle_session, monkeypatch):
     from contextlib import asynccontextmanager
     from datetime import datetime
     from types import SimpleNamespace
-    from aiogram.types import CallbackQuery, Chat, Message, User as TgUser
+    from aiogram.types import CallbackQuery, Chat, Message, PhotoSize, User as TgUser
     from sib.handlers import castle as handler
 
     @asynccontextmanager
@@ -194,16 +194,23 @@ async def test_callback_donation_and_replay(castle_session, monkeypatch):
 
     answer = AsyncMock()
     monkeypatch.setattr(handler, "get_session", session)
-    monkeypatch.setattr(handler, "show_castle", AsyncMock())
     monkeypatch.setattr(CallbackQuery, "answer", answer)
-    bot = SimpleNamespace(
-        get_chat_member=AsyncMock(return_value=SimpleNamespace(status="member"))
-    )
     actor = TgUser(id=1, first_name="سازنده", is_bot=False)
+    # The live castle menu is a PHOTO message (level art + caption).
     message = Message(
         message_id=1,
         date=datetime.now(timezone.utc),
         chat=Chat(id=-1, type="supergroup"),
+        photo=[PhotoSize(file_id="castle", file_unique_id="castle", width=1280, height=720)],
+    )
+    bot = SimpleNamespace(
+        get_chat_member=AsyncMock(return_value=SimpleNamespace(status="member")),
+        edit_message_media=AsyncMock(return_value=message),
+        edit_message_caption=AsyncMock(return_value=message),
+        edit_message_text=AsyncMock(return_value=message),
+        send_photo=AsyncMock(),
+        send_message=AsyncMock(),
+        delete_message=AsyncMock(),
     )
     cb = CallbackQuery(
         id="donate-once",
@@ -220,6 +227,91 @@ async def test_callback_donation_and_replay(castle_session, monkeypatch):
         == 1
     )
     assert answer.await_count == 2
+    # C2-7: both clicks refresh the same menu in place - nothing is re-sent.
+    assert bot.edit_message_media.await_count == 2
+    bot.send_photo.assert_not_awaited()
+    bot.send_message.assert_not_awaited()
+    bot.delete_message.assert_not_awaited()
+
+
+async def test_castle_callback_edits_message_in_place(castle_session, monkeypatch):
+    """C2-7: donate-submenu and donation clicks edit the menu, never re-send it."""
+    from contextlib import asynccontextmanager
+    from datetime import datetime
+    from types import SimpleNamespace
+    from aiogram.types import CallbackQuery, Chat, Message, PhotoSize, User as TgUser
+    from sib.handlers import castle as handler
+
+    @asynccontextmanager
+    async def session():
+        try:
+            yield castle_session
+            await castle_session.commit()
+        except Exception:
+            await castle_session.rollback()
+            raise
+
+    answer = AsyncMock()
+    monkeypatch.setattr(handler, "get_session", session)
+    monkeypatch.setattr(CallbackQuery, "answer", answer)
+    actor = TgUser(id=1, first_name="سازنده", is_bot=False)
+    message = Message(
+        message_id=7,
+        date=datetime.now(timezone.utc),
+        chat=Chat(id=-1, type="supergroup"),
+        photo=[PhotoSize(file_id="castle", file_unique_id="castle", width=1280, height=720)],
+        caption="🏰 قلعه سیبی",
+    )
+    bot = SimpleNamespace(
+        get_chat_member=AsyncMock(return_value=SimpleNamespace(status="member")),
+        edit_message_media=AsyncMock(return_value=message),
+        edit_message_caption=AsyncMock(return_value=message),
+        edit_message_text=AsyncMock(return_value=message),
+        send_photo=AsyncMock(),
+        send_message=AsyncMock(),
+        delete_message=AsyncMock(),
+    )
+
+    def click(data):
+        return CallbackQuery(
+            id=f"cb-{data}",
+            from_user=actor,
+            chat_instance="test",
+            message=message,
+            data=data,
+        ).as_(bot)
+
+    # 1. Opening the donate submenu only swaps the keyboard on the same photo.
+    await handler.castle_callback(click("castle:donate:-1"))
+    bot.edit_message_media.assert_awaited_once()
+    submenu_markup = bot.edit_message_media.await_args.kwargs["reply_markup"]
+    submenu_callbacks = [
+        b.callback_data for row in submenu_markup.inline_keyboard for b in row
+    ]
+    assert "castle:100:-1" in submenu_callbacks
+
+    # 2. Donating edits the same message again: new total in the caption,
+    #    main keyboard restored, receipt still delivered as an alert.
+    await handler.castle_callback(click("castle:100:-1"))
+    assert bot.edit_message_media.await_count == 2
+    media_kwargs = bot.edit_message_media.await_args.kwargs
+    assert media_kwargs["chat_id"] == -1
+    assert media_kwargs["message_id"] == 7
+    assert "سیب اهدا شده: ۱۰۰" in media_kwargs["media"].caption
+    main_callbacks = [
+        b.callback_data
+        for row in media_kwargs["reply_markup"].inline_keyboard
+        for b in row
+    ]
+    assert "castle:income:-1" in main_callbacks
+    assert await AppleWalletService.get_balance(castle_session, 1) == 9900
+    assert "سیب به قلعه اهدا شد" in str(answer.await_args)
+
+    # The whole flow sent nothing new into the group.
+    bot.send_photo.assert_not_awaited()
+    bot.send_message.assert_not_awaited()
+    bot.delete_message.assert_not_awaited()
+    bot.edit_message_text.assert_not_awaited()
 
 
 async def test_callback_rejects_cross_group_and_nonmember(castle_session, monkeypatch):

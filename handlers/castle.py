@@ -15,7 +15,7 @@ from sib.services.castle_service import (
 from sib.services.castle_art import castle_image
 from sib.services.sib_claim import fa_digits
 from sib.services.user import UserService
-from sib.services.telegram_ui import safe_answer_callback
+from sib.services.telegram_ui import safe_answer_callback, safe_edit_callback_message
 from sib.keyboards.common import danger_button, primary_button, success_button
 from sib.services.war_service import (
     WarError,
@@ -101,7 +101,13 @@ def format_castle_caption(level, total_donated, shield_seconds=None):
     )
 
 
-async def show_castle(message, group_id, *, donation_menu=False, is_admin=False):
+async def build_castle_screen(group_id, *, donation_menu=False, is_admin=False):
+    """(caption, reply_markup, photo) for the castle menu; no delivery.
+
+    ``photo`` is an ``FSInputFile`` for the level art, or ``None`` when no
+    art is deployed (a text screen). Both delivery paths below render this
+    one screen, so the sent and edited menus can never drift apart.
+    """
     async with get_session() as session:
         castle = await CastleService.get_or_create_castle(session, group_id)
         level, total = castle.level, castle.total_donated
@@ -109,15 +115,36 @@ async def show_castle(message, group_id, *, donation_menu=False, is_admin=False)
     caption = format_castle_caption(level, total, shield_seconds)
     markup = keyboard(group_id, donation_menu, is_admin=is_admin)
     image = castle_image(level)
-    if image:
+    return caption, markup, FSInputFile(image) if image else None
+
+
+async def send_castle(message, group_id, *, donation_menu=False, is_admin=False):
+    """Send a NEW castle menu (the «قلعه سیبی» text entry only)."""
+    caption, markup, photo = await build_castle_screen(
+        group_id, donation_menu=donation_menu, is_admin=is_admin
+    )
+    if photo is not None:
         try:
-            await message.answer_photo(
-                FSInputFile(image), caption=caption, reply_markup=markup
-            )
+            await message.answer_photo(photo, caption=caption, reply_markup=markup)
             return
         except Exception:
             logger.warning("Castle photo delivery failed; using text", exc_info=True)
     await message.answer(caption, reply_markup=markup)
+
+
+async def edit_castle(callback, group_id, *, donation_menu=False, is_admin=False):
+    """Render the castle menu onto the message behind a callback (C2-7).
+
+    Callback flows must never post a fresh menu into the group: the shared
+    transition engine edits the photo/caption in place, and an unchanged
+    screen is a harmless no-op instead of another message.
+    """
+    caption, markup, photo = await build_castle_screen(
+        group_id, donation_menu=donation_menu, is_admin=is_admin
+    )
+    return await safe_edit_callback_message(
+        callback, callback.bot, caption, reply_markup=markup, photo=photo
+    )
 
 
 @router.message(F.chat.type.in_(GROUPS), F.text == "قلعه سیبی")
@@ -130,16 +157,17 @@ async def castle_entry(message: Message):
                 is_admin = member.status in ("creator", "administrator")
             except Exception:
                 pass
-        await show_castle(message, message.chat.id, is_admin=is_admin)
+        await send_castle(message, message.chat.id, is_admin=is_admin)
     except CastleError as exc:
         await message.answer(str(exc))
 
 
-async def offer_war_targets(callback: CallbackQuery, message: Message, group_id: int) -> bool:
-    """Show the eligible enemy castles; True when a list was sent.
+async def offer_war_targets(callback: CallbackQuery, group_id: int) -> bool:
+    """Show the eligible enemy castles; True when the list is on screen.
 
     C2-6: only castles WITHOUT an active peace shield are listed (the service
     query filters them out), so a protected group can never be picked.
+    C2-7: the list edits the menu message in place, never a new message.
     """
     async with get_session() as session:
         targets = await WarService.find_target_groups(session, group_id)
@@ -157,10 +185,12 @@ async def offer_war_targets(callback: CallbackQuery, message: Message, group_id:
     ]
     buttons.append([danger_button("🔙 بازگشت", f"castle:view:{group_id}")])
     await safe_answer_callback(callback, "🎯 انتخاب هدف")
-    await message.answer(
-        WAR_TARGET_PROMPT, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+    return await safe_edit_callback_message(
+        callback,
+        callback.bot,
+        WAR_TARGET_PROMPT,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
     )
-    return True
 
 
 @router.callback_query(F.data.startswith("castle:"))
@@ -216,9 +246,11 @@ async def castle_callback(callback: CallbackQuery):
                     ]
                 )
                 await safe_answer_callback(callback, "🛡 سپر صلح فعال است", show_alert=True)
-                await message.answer(WAR_SHIELD_WARNING, reply_markup=warning_markup)
+                await safe_edit_callback_message(
+                    callback, callback.bot, WAR_SHIELD_WARNING, reply_markup=warning_markup
+                )
                 return
-            await offer_war_targets(callback, message, group_id)
+            await offer_war_targets(callback, group_id)
             return
 
         if action == "war_break_shield_confirm":
@@ -233,7 +265,7 @@ async def castle_callback(callback: CallbackQuery):
                 await safe_answer_callback(callback, "🛡 سپر صلح شکسته شد")
             else:
                 await safe_answer_callback(callback, "🛡 سپر فعالی وجود ندارد")
-            await offer_war_targets(callback, message, group_id)
+            await offer_war_targets(callback, group_id)
             return
 
         if action == "war_pick":
@@ -265,7 +297,9 @@ async def castle_callback(callback: CallbackQuery):
                 ]
             )
             await safe_answer_callback(callback, "⚠️ تایید نبرد")
-            await message.answer(text, reply_markup=markup)
+            await safe_edit_callback_message(
+                callback, callback.bot, text, reply_markup=markup
+            )
             return
 
         if action == "war_confirm":
@@ -381,10 +415,20 @@ async def castle_callback(callback: CallbackQuery):
                 )
                 or "هنوز کمکی ثبت نشده است."
             )
-            await message.answer(text, parse_mode="HTML")
+            await safe_edit_callback_message(
+                callback,
+                callback.bot,
+                text,
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [danger_button("🔙 بازگشت", f"castle:view:{group_id}")]
+                    ]
+                ),
+                parse_mode="HTML",
+            )
         else:
-            await show_castle(
-                message, group_id, donation_menu=action == "donate", is_admin=is_admin
+            await edit_castle(
+                callback, group_id, donation_menu=action == "donate", is_admin=is_admin
             )
     except (CastleError, WarError) as exc:
         await safe_answer_callback(callback, str(exc), show_alert=True)

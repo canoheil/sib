@@ -24,7 +24,7 @@ from sib.keyboards.common import danger_button, primary_button, success_button
 from sib.services.character_art import artwork_path
 from sib.services.player_cards import PlayerCardService
 from sib.services.sib_claim import fa_digits
-from sib.services.telegram_ui import safe_answer_callback
+from sib.services.telegram_ui import safe_answer_callback, safe_edit_callback_message
 from sib.services.user import UserService
 from sib.services.war.imaging import compose_war_attack_image
 from sib.services.war.narrative import (
@@ -83,23 +83,22 @@ def format_war_caption(
     )
 
 
-async def show_war_status(
-    message: Message,
-    group_id: int,
-    user_id: int,
-    *,
-    reply_to_callback: Optional[CallbackQuery] = None,
-):
+NO_WAR_TEXT = "🏰 این گروه در حال حاضر در هیچ نبردی شرکت ندارد. مدیران می‌توانند از منوی «قلعه سیبی» اعلان جنگ کنند."
+
+
+async def build_war_status_screen(group_id: int, user_id: int):
+    """(caption, reply_markup, photo) for the war status menu; no delivery.
+
+    ``None`` when the group has no active war. ``photo`` is an
+    ``FSInputFile`` for the side's background, or ``None`` when the asset
+    is not deployed (a text screen). Viewing the status registers the
+    viewer as a war participant, exactly as before.
+    """
     now = datetime.now(timezone.utc)
     async with get_session() as session:
         war = await WarService.get_active_war(session, group_id)
         if not war:
-            text = "🏰 این گروه در حال حاضر در هیچ نبردی شرکت ندارد. مدیران می‌توانند از منوی «قلعه سیبی» اعلان جنگ کنند."
-            if reply_to_callback:
-                await safe_answer_callback(reply_to_callback, text, show_alert=True)
-            else:
-                await message.answer(text)
-            return
+            return None
 
         attacker = await session.get(Group, war.attacker_id)
         defender = await session.get(Group, war.defender_id)
@@ -130,12 +129,20 @@ async def show_war_status(
 
     bg_name = "war_bg_attacker.jpg" if is_attacker else "war_bg_defender.jpg"
     bg_path = Path("assets/apple_clash") / bg_name
+    photo = FSInputFile(str(bg_path)) if bg_path.is_file() else None
+    return caption, markup, photo
 
-    if bg_path.is_file():
+
+async def send_war_status(message: Message, group_id: int, user_id: int):
+    """Send a NEW war status menu (the «وضعیت جنگ» text entry only)."""
+    screen = await build_war_status_screen(group_id, user_id)
+    if screen is None:
+        await message.answer(NO_WAR_TEXT)
+        return
+    caption, markup, photo = screen
+    if photo is not None:
         try:
-            await message.answer_photo(
-                FSInputFile(str(bg_path)), caption=caption, reply_markup=markup
-            )
+            await message.answer_photo(photo, caption=caption, reply_markup=markup)
             return
         except Exception:
             logger.warning(
@@ -143,6 +150,23 @@ async def show_war_status(
             )
 
     await message.answer(caption, reply_markup=markup)
+
+
+async def edit_war_status(callback: CallbackQuery, group_id: int, user_id: int) -> bool:
+    """Refresh the war status on the message behind a callback (C2-7).
+
+    Attack/defend/potion clicks update damage and energy in place instead
+    of posting another status photo into the group. When the war is over
+    the clicker just gets the no-war alert.
+    """
+    screen = await build_war_status_screen(group_id, user_id)
+    if screen is None:
+        await safe_answer_callback(callback, NO_WAR_TEXT, show_alert=True)
+        return False
+    caption, markup, photo = screen
+    return await safe_edit_callback_message(
+        callback, callback.bot, caption, reply_markup=markup, photo=photo
+    )
 
 
 async def get_player_card_bytes(session, user_id: int) -> bytes:
@@ -194,7 +218,7 @@ async def _send_dispatch(bot, chat_id: int, photo_bytes: bytes, caption: str):
 async def war_status_entry(message: Message):
     if not message.from_user:
         return
-    await show_war_status(message, message.chat.id, message.from_user.id)
+    await send_war_status(message, message.chat.id, message.from_user.id)
 
 
 @router.callback_query(F.data.startswith("war:atk:"))
@@ -306,6 +330,11 @@ async def war_attack_callback(callback: CallbackQuery):
         await _send_dispatch(callback.bot, actor_chat_id, img_bytes, text_attacker)
         await _send_dispatch(callback.bot, enemy_chat_id, img_bytes, text_defender)
 
+        # C2-7: the dispatches above are cross-group announcements and stay
+        # new messages; the status menu behind this click instead refreshes
+        # in place (new damage totals + the clicker's remaining energy).
+        await edit_war_status(callback, group_id, user_id)
+
     except WarError as exc:
         await safe_answer_callback(callback, str(exc), show_alert=True)
     except Exception:
@@ -356,6 +385,9 @@ async def war_potion_callback(callback: CallbackQuery):
             f"🧪 معجون شفا نوشیده شد! ۵۰ واحد انرژی بازیابی شد. (انرژی کنونی: {fa_digits(new_energy)})",
             show_alert=True,
         )
+
+        # C2-7: show the restored energy on the status menu in place.
+        await edit_war_status(callback, group_id, user_id)
 
     except WarError as exc:
         await safe_answer_callback(callback, str(exc), show_alert=True)

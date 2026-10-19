@@ -116,7 +116,7 @@ def test_migration_chain_head():
     cfg = Config()
     cfg.set_main_option("script_location", str(ROOT / "database/migrations"))
     scripts = ScriptDirectory.from_config(cfg)
-    assert scripts.get_current_head() == "050_apple_clash"
+    assert scripts.get_current_head() == "051_referrals"
     assert _migration().down_revision == "039_archive_inv1_tables"
     chain = {
         "041_inv2_announcement_narrative": "040_inv2_difficulty_default",
@@ -129,6 +129,7 @@ def test_migration_chain_head():
         "048_apple_friendships": "047_inv2_rebalance_sib_buff",
         "049_apple_castles": "048_apple_friendships",
         "050_apple_clash": "049_apple_castles",
+        "051_referrals": "050_apple_clash",
     }
     for revision, parent in chain.items():
         path = ROOT / f"database/migrations/versions/{revision}.py"

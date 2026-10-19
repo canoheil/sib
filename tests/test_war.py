@@ -417,7 +417,7 @@ def test_compose_war_attack_image_returns_jpeg():
 @pytest.mark.asyncio
 async def test_attack_sends_two_different_narratives(war_session, monkeypatch):
     from contextlib import asynccontextmanager
-    from aiogram.types import CallbackQuery, Chat, Message, User as TgUser
+    from aiogram.types import CallbackQuery, Chat, Message, PhotoSize, User as TgUser
     from sib.handlers import war as war_handler
 
     @asynccontextmanager
@@ -432,16 +432,22 @@ async def test_attack_sends_two_different_narratives(war_session, monkeypatch):
     war = await WarService.declare_war(war_session, -1001, -1002, now=now)
 
     send_photo_mock = AsyncMock()
-    bot = SimpleNamespace(
-        get_chat_member=AsyncMock(return_value=SimpleNamespace(status="member")),
-        send_photo=send_photo_mock,
-        send_message=AsyncMock(),
-    )
     actor = TgUser(id=1, first_name="آرش کمانگیر", is_bot=False)
+    # The live war status menu is a PHOTO message (background + caption).
     msg = Message(
         message_id=10,
         date=now,
         chat=Chat(id=-1001, type="supergroup"),
+        photo=[PhotoSize(file_id="war-bg", file_unique_id="war-bg", width=1280, height=720)],
+    )
+    bot = SimpleNamespace(
+        get_chat_member=AsyncMock(return_value=SimpleNamespace(status="member")),
+        send_photo=send_photo_mock,
+        send_message=AsyncMock(),
+        edit_message_media=AsyncMock(return_value=msg),
+        edit_message_caption=AsyncMock(return_value=msg),
+        edit_message_text=AsyncMock(return_value=msg),
+        delete_message=AsyncMock(),
     )
     cb = CallbackQuery(
         id="cb-atk",
@@ -472,6 +478,75 @@ async def test_attack_sends_two_different_narratives(war_session, monkeypatch):
     assert (
         "tg://user" not in captions[-1002]
     )  # Defender team sees plain text with NO link or ID
+
+
+@pytest.mark.asyncio
+async def test_war_callback_edits_message_in_place(war_session, monkeypatch):
+    """C2-7: an attack refreshes the status menu in place; only the two
+    battle dispatches remain new (cross-group announcement) messages."""
+    from contextlib import asynccontextmanager
+    from aiogram.types import CallbackQuery, Chat, Message, PhotoSize, User as TgUser
+    from sib.handlers import war as war_handler
+
+    @asynccontextmanager
+    async def session_ctx():
+        yield war_session
+
+    monkeypatch.setattr(war_handler, "get_session", session_ctx)
+    answer = AsyncMock()
+    monkeypatch.setattr(CallbackQuery, "answer", answer)
+
+    now = datetime.now(timezone.utc)
+    war = await WarService.declare_war(war_session, -1001, -1002, now=now)
+
+    actor = TgUser(id=1, first_name="آرش کمانگیر", is_bot=False)
+    msg = Message(
+        message_id=10,
+        date=now,
+        chat=Chat(id=-1001, type="supergroup"),
+        photo=[PhotoSize(file_id="war-bg", file_unique_id="war-bg", width=1280, height=720)],
+        caption="⚔️ جدال سیبی — میدان نبرد 🏰",
+    )
+    bot = SimpleNamespace(
+        get_chat_member=AsyncMock(return_value=SimpleNamespace(status="member")),
+        send_photo=AsyncMock(),
+        send_message=AsyncMock(),
+        edit_message_media=AsyncMock(return_value=msg),
+        edit_message_caption=AsyncMock(return_value=msg),
+        edit_message_text=AsyncMock(return_value=msg),
+        delete_message=AsyncMock(),
+    )
+    cb = CallbackQuery(
+        id="cb-atk-edit",
+        from_user=actor,
+        chat_instance="test",
+        message=msg,
+        data=f"war:atk:{war.id}:-1001:normal",
+    ).as_(bot)
+
+    await war_handler.war_attack_callback(cb)
+
+    # The receipt alert is unchanged...
+    assert "ضربه ثبت شد" in str(answer.await_args)
+    # ...the two cross-group battle dispatches are still new photo messages...
+    assert bot.send_photo.await_count == 2
+    assert {c.kwargs["chat_id"] for c in bot.send_photo.await_args_list} == {-1001, -1002}
+    bot.send_message.assert_not_awaited()
+    # ...and the status menu behind the click was edited in place exactly
+    # once: same chat/message, fresh energy (۱۰۰ - ۲۰), live war buttons.
+    bot.edit_message_media.assert_awaited_once()
+    edit_kwargs = bot.edit_message_media.await_args.kwargs
+    assert edit_kwargs["chat_id"] == -1001
+    assert edit_kwargs["message_id"] == 10
+    assert "انرژی جنگی شما: ۸۰" in edit_kwargs["media"].caption
+    edit_callbacks = [
+        b.callback_data
+        for row in edit_kwargs["reply_markup"].inline_keyboard
+        for b in row
+    ]
+    assert f"war:atk:{war.id}:-1001:normal" in edit_callbacks
+    bot.delete_message.assert_not_awaited()
+    bot.edit_message_text.assert_not_awaited()
 
 
 def test_defender_narrative_has_no_tg_user_link():
@@ -1746,12 +1821,16 @@ async def test_declaration_text_does_not_promise_15_percent(war_session, monkeyp
 
     monkeypatch.setattr(castle_handler, "get_session", session_ctx)
     monkeypatch.setattr(CallbackQuery, "answer", AsyncMock())
+    # C2-7: callback sub-screens edit in place - capture the text edit.
     prompt = AsyncMock()
-    monkeypatch.setattr(Message, "answer", prompt)
     bot = SimpleNamespace(
         get_chat_member=AsyncMock(return_value=SimpleNamespace(status="administrator")),
         send_photo=AsyncMock(),
         send_message=AsyncMock(),
+        edit_message_text=prompt,
+        edit_message_media=AsyncMock(),
+        edit_message_caption=AsyncMock(),
+        delete_message=AsyncMock(),
     )
     admin = TgUser(id=99, first_name="مدیر", is_bot=False)
     message = Message(
@@ -1927,12 +2006,16 @@ def _castle_handler_driver(monkeypatch, session):
 
     monkeypatch.setattr(castle_handler, "get_session", session_ctx)
     monkeypatch.setattr(CallbackQuery, "answer", AsyncMock())
+    # C2-7: callback sub-screens edit in place - capture the text edit.
     prompt = AsyncMock()
-    monkeypatch.setattr(Message, "answer", prompt)
     bot = SimpleNamespace(
         get_chat_member=AsyncMock(return_value=SimpleNamespace(status="administrator")),
         send_photo=AsyncMock(return_value=SimpleNamespace(message_id=1)),
         send_message=AsyncMock(return_value=SimpleNamespace(message_id=1)),
+        edit_message_text=prompt,
+        edit_message_media=AsyncMock(),
+        edit_message_caption=AsyncMock(),
+        delete_message=AsyncMock(),
     )
     return castle_handler, bot, prompt
 
