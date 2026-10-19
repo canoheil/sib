@@ -521,3 +521,22 @@ async def test_castle_new_donor_during_lock_wait_requires_atomic_retry(
         )
         == 3
     )
+
+
+def test_castle_caption_shows_an_active_peace_shield():
+    """C2-6: an active shield is announced in the castle menu; an expired one
+    is not, and the menu itself stays exactly as it was."""
+    from sib.handlers.castle import format_castle_caption
+
+    active = format_castle_caption(
+        level=2, total_donated=12_345, shield_seconds=4 * 3600 + 12 * 60
+    )
+    assert "🛡 سپر صلح: فعال (تا ۴ ساعت و ۱۲ دقیقه دیگر)" in active
+    # Only the shield line was added: the rest is the unchanged menu.
+    assert active.replace("🛡 سپر صلح: فعال (تا ۴ ساعت و ۱۲ دقیقه دیگر)\n\n", "") == (
+        format_castle_caption(level=2, total_donated=12_345)
+    )
+    assert not any(digit in active for digit in "0123456789")
+
+    # Sub-minute shields still read as Persian text, never as a Latin digit.
+    assert "کمتر از یک دقیقه" in format_castle_caption(2, 12_345, shield_seconds=10)
