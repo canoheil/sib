@@ -1,25 +1,35 @@
-"""Apple Mine reward, cooldown, and handler regression tests."""
+"""Apple Mine pickaxe rework: service, handler, schema and copy tests."""
 
+import dataclasses
+import re
 from collections import Counter
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
-import random
-import re
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+import sqlalchemy as sa
 
 from sib.handlers import apple_mine as mine_handler
 from sib.services import apple_mine as mine_service
 from sib.services import apple_mine_narrative as narrative
 from sib.services import telegram_ui
-from sib.services.apple_mine import CooldownError, ShiftResult
-from sib.database.models import AppleMineShift
+from sib.services.apple_mine import (
+    CooldownError,
+    PickaxeInsufficientFunds,
+    PickaxeMaxLevelError,
+    RewardRow,
+    ShiftResult,
+    UpgradeResult,
+)
+from sib.services.apple_wallet import AppleWalletService
+from sib.database.models import AppleMineShift, AppleTransaction, UserPickaxe
 
 
-NOW = datetime(2026, 10, 15, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 19, 12, 0, tzinfo=timezone.utc)
 
 
 def _session_context(session):
@@ -30,15 +40,44 @@ def _session_context(session):
     return _context
 
 
+def _load_module(path: Path, name: str):
+    spec = spec_from_file_location(name, path)
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _default_reward_rows() -> list[RewardRow]:
+    return mine_service._parse_reward_table(
+        mine_service.ConfigService.default("pickaxe_rewards")
+    )
+
+
+def _view(level=2, balance=350, cooldown=0) -> mine_handler.MineView:
+    rows = _default_reward_rows()
+    costs = mine_service._parse_cost_table(
+        mine_service.ConfigService.default("pickaxe_upgrade_costs")
+    )
+    below_max = level < mine_service.MAX_PICKAXE_LEVEL
+    return mine_handler.MineView(
+        level=level,
+        reward=rows[level - 1],
+        next_reward=rows[level] if below_max else None,
+        # index i = cost to enter level i+1; the next step of level L sits at i = L
+        upgrade_cost=costs[level] if below_max else None,
+        balance=balance,
+        cooldown=cooldown,
+    )
+
+
 class _ShiftSession:
     """Small fake session for service logic that is independently unit-tested."""
 
-    def __init__(self, last_worked_at=None, *, card_id=None):
+    def __init__(self, last_worked_at=None):
         self.last_worked_at = last_worked_at
-        self.card_id = card_id
         self.shifts = []
         self.flush = AsyncMock(side_effect=self._flush)
-        self.scalar = AsyncMock(return_value=card_id)
+        self.scalar = AsyncMock(return_value=None)  # no previous shift
 
     def add(self, row):
         if isinstance(row, AppleMineShift):
@@ -50,60 +89,278 @@ class _ShiftSession:
             self.last_worked_at = self.shifts[-1].worked_at
 
 
-@pytest.fixture
-def deterministic_normal_roll(monkeypatch):
+def _shift_fixtures(monkeypatch, *, level: int, roll: str) -> None:
+    """Pin the pickaxe level, the level's reward row and the RNG."""
+    monkeypatch.setattr(mine_service, "lock_user_row", AsyncMock())
+    monkeypatch.setattr(mine_service, "_database_now", AsyncMock(return_value=NOW))
     monkeypatch.setattr(
-        mine_service.random,
-        "choices",
-        lambda population, weights, k: [("normal", 60, "apple_normal", 15)],
+        mine_service, "get_pickaxe_level", AsyncMock(return_value=level)
     )
-
-
-def test_weights_sum_to_100():
-    assert sum(weight for _code, weight, _item, _amount in mine_service.OUTCOMES) == 100
-
-
-def test_outcome_distribution_within_tolerance():
-    rng = random.Random(20261015)
-    outcomes = rng.choices(
-        mine_service.OUTCOMES,
-        weights=[entry[1] for entry in mine_service.OUTCOMES],
-        k=10_000,
+    monkeypatch.setattr(
+        mine_service,
+        "reward_table_for_level",
+        AsyncMock(return_value=_default_reward_rows()[level - 1]),
     )
-    counts = Counter(outcome[0] for outcome in outcomes)
-    for code, weight, _item_code, _amount in mine_service.OUTCOMES:
-        expected = 10_000 * weight / 100
-        assert abs(counts[code] - expected) <= expected * 0.20
+    if roll == "normal":
+        # Never hit the special bands; normal roll always returns the max.
+        monkeypatch.setattr(mine_service.random, "random", lambda: 0.9999)
+        monkeypatch.setattr(mine_service.random, "randint", lambda a, b: b)
+    else:
+        # Hit the first special band (gold) on every roll.
+        monkeypatch.setattr(mine_service.random, "random", lambda: 0.0001)
+
+
+# ---------------------------------------------------------------------------
+# Configuration tables
+# ---------------------------------------------------------------------------
+
+
+def test_parse_reward_table_accepts_defaults_and_rejects_bad_rows():
+    rows = _default_reward_rows()
+    assert [row.level for row in rows] == [1, 2, 3, 4, 5]
+    assert rows[0].min_apples == 10 and rows[0].max_apples == 15
+    assert rows[4].min_apples == 45 and rows[4].max_apples == 60
+    for row in rows:
+        assert 0 <= row.special_pct <= 100
+
+    bad = [
+        [],  # wrong length
+        [{"min": 1, "max": 2, "gold": 0, "diamond": 0, "obsidian": 0}] * 4,
+        [{"min": 20, "max": 10, "gold": 1, "diamond": 1, "obsidian": 1}] * 5,
+        [{"min": 0, "max": 10, "gold": 1, "diamond": 1, "obsidian": 1}] * 5,
+        [{"min": 1, "max": 10, "gold": 100, "diamond": 1, "obsidian": 0}] * 5,
+        [{"min": 1, "max": 10, "gold": 50, "diamond": 50, "obsidian": 1}] * 5,
+        [{"min": 1, "max": 10, "gold": -1, "diamond": 0, "obsidian": 0}] * 5,
+        [{"max": 10, "gold": 0, "diamond": 0, "obsidian": 0}] * 5,
+    ]
+    for entry in bad:
+        with pytest.raises(ValueError):
+            mine_service._parse_reward_table(entry)
+
+
+def test_parse_cost_table_accepts_defaults_and_rejects_bad_values():
+    assert mine_service._parse_cost_table(
+        mine_service.ConfigService.default("pickaxe_upgrade_costs")
+    ) == [0, 300, 600, 1000, 1500]
+
+    bad = [
+        [300, 600, 1000, 1500, 2000],  # level 1 must be free
+        [0, -1, 600, 1000, 1500],
+        [0, "300", 600, 1000, 1500],
+        [0, True, 600, 1000, 1500],
+        [0, 300, 600, 1000],  # wrong length
+    ]
+    for entry in bad:
+        with pytest.raises(ValueError):
+            mine_service._parse_cost_table(entry)
 
 
 @pytest.mark.asyncio
-async def test_grant_called_once_per_shift(monkeypatch):
-    session = _ShiftSession(card_id=51)
-    monkeypatch.setattr(mine_service, "lock_user_row", AsyncMock())
-    monkeypatch.setattr(mine_service, "_database_now", AsyncMock(return_value=NOW))
-    monkeypatch.setattr(mine_service, "_last_worked_at", AsyncMock(return_value=None))
+async def test_invalid_config_falls_back_to_defaults(monkeypatch):
     monkeypatch.setattr(
-        mine_service.random,
-        "choices",
-        lambda population, weights, k: [("golden", 25, "apple_gold", 3)],
+        mine_service.ConfigService, "get", AsyncMock(return_value={"broken": True})
     )
-    grant = AsyncMock(return_value=3)
-    monkeypatch.setattr(mine_service.ItemService, "grant", grant)
+    table = await mine_service.reward_table(object())
+    assert table == _default_reward_rows()
+    costs = await mine_service.upgrade_costs(object())
+    assert costs == [0, 300, 600, 1000, 1500]
 
-    result = await mine_service.perform_shift(
-        session, user_id=101, group_id=None, card_id=51
+
+@pytest.mark.asyncio
+async def test_upgrade_cost_for_level_is_none_at_max(monkeypatch):
+    monkeypatch.setattr(
+        mine_service.ConfigService,
+        "get",
+        AsyncMock(return_value=mine_service.ConfigService.default("pickaxe_upgrade_costs")),
+    )
+    assert await mine_service.upgrade_cost_for_level(object(), 4) == 1500
+    assert await mine_service.upgrade_cost_for_level(object(), 5) is None
+
+
+# ---------------------------------------------------------------------------
+# Shift roll: distribution and scaling with pickaxe level
+# ---------------------------------------------------------------------------
+
+
+def test_special_chance_distribution_within_tolerance():
+    for row in (_default_reward_rows()[0], _default_reward_rows()[4]):
+        counts: Counter = Counter()
+        amounts = []
+        for _ in range(10_000):
+            code, _item, amount = mine_service._roll_shift(row)
+            counts[code] += 1
+            if code == "normal":
+                assert row.min_apples <= amount <= row.max_apples
+                amounts.append(amount)
+        for code, pct in (
+            ("golden", row.gold_pct),
+            ("diamond", row.diamond_pct),
+            ("obsidian", row.obsidian_pct),
+        ):
+            expected = 10_000 * pct / 100
+            assert abs(counts[code] - expected) <= expected * 0.20 + 5, (code, row.level)
+        expected_normal = 10_000 * (100 - row.special_pct) / 100
+        assert abs(counts["normal"] - expected_normal) <= expected_normal * 0.05
+        # The range is actually sampled, not pinned.
+        assert min(amounts) > row.min_apples - 1
+        assert max(amounts) < row.max_apples + 1
+        assert len(set(amounts)) > 1
+
+
+@pytest.mark.asyncio
+async def test_work_rewards_scale_with_pickaxe_level(db_session, monkeypatch):
+    from sib.database.models import AppleWallet, User
+
+    monkeypatch.setattr(mine_service.random, "random", lambda: 0.9999)
+    monkeypatch.setattr(mine_service.random, "randint", lambda a, b: b)
+
+    cases = [(9201, 1, 15), (9202, 5, 60)]
+    for user_id, level, expected_amount in cases:
+        db_session.add(User(id=user_id, first_name="تست"))
+        db_session.add(UserPickaxe(user_id=user_id, level=level))
+        await db_session.flush()
+        result = await mine_service.perform_shift(
+            db_session, user_id=user_id, group_id=None
+        )
+        assert result.pickaxe_level == level
+        assert result.amount == expected_amount
+
+    shifts = (
+        (
+            await db_session.execute(
+                sa.select(AppleMineShift).where(
+                    AppleMineShift.user_id.in_([case[0] for case in cases])
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    by_user = {shift.user_id: shift for shift in shifts}
+    assert by_user[9201].amount == 15
+    assert by_user[9201].pickaxe_level == 1
+    assert by_user[9201].card_id is None
+    assert by_user[9202].amount == 60
+    assert by_user[9202].pickaxe_level == 5
+    assert await AppleWalletService.get_balance(db_session, 9202) == 60
+
+
+# ---------------------------------------------------------------------------
+# Pickaxe progression (real SQLite session)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pickaxe_starts_at_level_1(db_session):
+    from sib.database.models import User
+
+    db_session.add(User(id=9101, first_name="تست"))
+    await db_session.flush()
+
+    assert await mine_service.get_pickaxe_level(db_session, user_id=9101) == 1
+    row = await db_session.get(UserPickaxe, 9101)
+    assert row is not None
+    assert row.level == 1
+
+
+@pytest.mark.asyncio
+async def test_upgrade_deducts_apples_and_increases_level(db_session):
+    from sib.database.models import AppleWallet, User
+
+    db_session.add(User(id=9102, first_name="تست"))
+    db_session.add(AppleWallet(user_id=9102, balance=1000))
+    await db_session.flush()
+
+    result = await mine_service.upgrade_pickaxe(db_session, user_id=9102)
+
+    assert result.level == 2
+    assert result.cost == 300
+    assert result.balance_after == 700
+    assert await AppleWalletService.get_balance(db_session, 9102) == 700
+    assert (await db_session.get(UserPickaxe, 9102)).level == 2
+    ledger = (
+        (
+            await db_session.execute(
+                sa.select(AppleTransaction).where(AppleTransaction.user_id == 9102)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert any(
+        entry.reason == "pickaxe_upgrade" and entry.amount == -300
+        for entry in ledger
     )
 
-    grant.assert_awaited_once_with(session, 101, "apple_gold", quantity=3)
-    assert result.outcome_code == "golden"
-    assert len(session.shifts) == 1
+
+@pytest.mark.asyncio
+async def test_upgrade_requires_sequential_steps(db_session):
+    from sib.database.models import AppleWallet, User
+
+    db_session.add(User(id=9105, first_name="تست"))
+    db_session.add(AppleWallet(user_id=9105, balance=10000))
+    await db_session.flush()
+
+    first = await mine_service.upgrade_pickaxe(db_session, user_id=9105)
+    second = await mine_service.upgrade_pickaxe(db_session, user_id=9105)
+
+    assert first.level == 2 and first.cost == 300
+    assert second.level == 3 and second.cost == 600
+    assert await AppleWalletService.get_balance(db_session, 9105) == 9100
+
+
+@pytest.mark.asyncio
+async def test_cannot_upgrade_past_level_5(db_session):
+    from sib.database.models import AppleWallet, User
+
+    db_session.add(User(id=9103, first_name="تست"))
+    db_session.add(AppleWallet(user_id=9103, balance=10_000))
+    db_session.add(UserPickaxe(user_id=9103, level=5))
+    await db_session.flush()
+
+    with pytest.raises(PickaxeMaxLevelError):
+        await mine_service.upgrade_pickaxe(db_session, user_id=9103)
+
+    assert await AppleWalletService.get_balance(db_session, 9103) == 10_000
+    assert (await db_session.get(UserPickaxe, 9103)).level == 5
+    ledger = (
+        (
+            await db_session.execute(
+                sa.select(AppleTransaction).where(AppleTransaction.user_id == 9103)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert ledger == []
+
+
+@pytest.mark.asyncio
+async def test_upgrade_insufficient_funds_reports_shortfall(db_session):
+    from sib.database.models import AppleWallet, User
+
+    db_session.add(User(id=9104, first_name="تست"))
+    db_session.add(AppleWallet(user_id=9104, balance=250))
+    await db_session.flush()
+
+    with pytest.raises(PickaxeInsufficientFunds) as exc_info:
+        await mine_service.upgrade_pickaxe(db_session, user_id=9104)
+
+    assert exc_info.value.cost == 300
+    assert exc_info.value.missing == 50
+    assert (await db_session.get(UserPickaxe, 9104)).level == 1
+    assert await AppleWalletService.get_balance(db_session, 9104) == 250
+
+
+# ---------------------------------------------------------------------------
+# Cooldown (unchanged from M1)
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_cooldown_blocks_second_shift_within_30_min(monkeypatch):
     session = _ShiftSession()
-    monkeypatch.setattr(mine_service, "lock_user_row", AsyncMock())
-    monkeypatch.setattr(mine_service, "_database_now", AsyncMock(return_value=NOW))
+    _shift_fixtures(monkeypatch, level=1, roll="normal")
     monkeypatch.setattr(
         mine_service,
         "_last_worked_at",
@@ -111,9 +368,7 @@ async def test_cooldown_blocks_second_shift_within_30_min(monkeypatch):
     )
 
     with pytest.raises(CooldownError) as error:
-        await mine_service.perform_shift(
-            session, user_id=102, group_id=None, card_id=None
-        )
+        await mine_service.perform_shift(session, user_id=102, group_id=None)
 
     assert error.value.remaining_seconds == 1
     assert session.shifts == []
@@ -121,7 +376,9 @@ async def test_cooldown_blocks_second_shift_within_30_min(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_cooldown_expires_after_30_min(monkeypatch):
-    session = SimpleNamespace(scalar=AsyncMock(side_effect=[NOW, NOW - timedelta(seconds=1801)]))
+    session = SimpleNamespace(
+        scalar=AsyncMock(side_effect=[NOW, NOW - timedelta(seconds=1801)])
+    )
     assert await mine_service.remaining_cooldown(session, user_id=103) == 0
 
 
@@ -140,50 +397,110 @@ def test_cooldown_message_uses_persian_digits():
     assert re.search(r"[0-9]", message) is None
 
 
+# ---------------------------------------------------------------------------
+# Shift grants (fake session)
+# ---------------------------------------------------------------------------
+
+
 @pytest.mark.asyncio
-async def test_no_cards_flow(monkeypatch):
+async def test_grant_called_once_per_shift(monkeypatch):
+    session = _ShiftSession()
+    _shift_fixtures(monkeypatch, level=2, roll="golden")
+    grant = AsyncMock(return_value=3)
+    monkeypatch.setattr(mine_service.ItemService, "grant", grant)
+
+    result = await mine_service.perform_shift(session, user_id=101, group_id=None)
+
+    grant.assert_awaited_once_with(session, 101, "apple_gold", quantity=3)
+    assert result.outcome_code == "golden"
+    assert result.pickaxe_level == 2
+    assert session.shifts[0].pickaxe_level == 2
+    assert session.shifts[0].card_id is None
+    assert len(session.shifts) == 1
+
+
+@pytest.mark.asyncio
+async def test_normal_currency_uses_wallet_credit_once(monkeypatch):
+    session = _ShiftSession()
+    _shift_fixtures(monkeypatch, level=1, roll="normal")
+    earn = AsyncMock(return_value=15)
+    monkeypatch.setattr(mine_service.AppleWalletService, "earn", earn)
+
+    result = await mine_service.perform_shift(session, user_id=109, group_id=None)
+
+    assert result.item_code == "apple_normal"
+    assert result.amount == 15
+    earn.assert_awaited_once_with(
+        session,
+        user_id=109,
+        amount=15,
+        reason="apple_mine",
+        ref_type="apple_mine_shift",
+        ref_id=1,
+        idempotency_key="apple_mine:1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_double_tap_safety(monkeypatch):
+    session = _ShiftSession()
+    _shift_fixtures(monkeypatch, level=3, roll="golden")
+
+    async def last_worked(_session, _user_id):
+        return session.last_worked_at
+
+    monkeypatch.setattr(mine_service, "_last_worked_at", last_worked)
+    grant = AsyncMock(return_value=3)
+    monkeypatch.setattr(mine_service.ItemService, "grant", grant)
+
+    first = await mine_service.perform_shift(session, user_id=108, group_id=None)
+    assert first.outcome_code == "golden"
+    with pytest.raises(CooldownError):
+        await mine_service.perform_shift(session, user_id=108, group_id=None)
+
+    assert len(session.shifts) == 1
+    grant.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Handler: main menu, work flow, pickaxe screens
+# ---------------------------------------------------------------------------
+
+
+def test_no_card_selection_required_for_mine():
+    import inspect
+
+    kb = mine_handler._main_keyboard().inline_keyboard
+    assert len(kb) == 1 and len(kb[0]) == 2
+    callbacks = {button.callback_data for row in kb for button in row}
+    assert callbacks == {"mine:work", "mine:pickaxe"}
+
+    # The M1 card-list screen is gone: no route, no service, no callback.
+    source = inspect.getsource(mine_handler)
+    assert "mine:card:" not in source
+    assert "PlayerCardService" not in source
+    assert "handle_mine_card" not in source
+
+
+@pytest.mark.asyncio
+async def test_work_performs_shift_directly(monkeypatch):
     session = object()
     monkeypatch.setattr(mine_handler, "get_session", _session_context(session))
     monkeypatch.setattr(
         mine_handler, "_register_user_and_group", AsyncMock(return_value=None)
     )
-    monkeypatch.setattr(mine_handler, "remaining_cooldown", AsyncMock(return_value=0))
     monkeypatch.setattr(
-        mine_handler.PlayerCardService, "list_cards", AsyncMock(return_value=[])
+        mine_handler, "remaining_cooldown", AsyncMock(return_value=0)
     )
-
-    user = SimpleNamespace(id=106)
-    message = SimpleNamespace(
-        chat=SimpleNamespace(id=501, type="private"),
-        answer=AsyncMock(),
-    )
-    callback = SimpleNamespace(
-        from_user=user,
-        message=message,
-        answer=AsyncMock(),
-    )
-    bot = SimpleNamespace(send_message=AsyncMock())
-
-    await mine_handler.handle_mine_work(callback, bot)
-
-    callback.answer.assert_awaited_once()
-    message.answer.assert_awaited_once()
-    assert message.answer.await_args.args[0] == mine_handler.NO_CARDS_TEXT
-
-
-@pytest.mark.asyncio
-async def test_panel_edit_after_success(monkeypatch):
-    session = object()
-    monkeypatch.setattr(mine_handler, "get_session", _session_context(session))
-    register = AsyncMock(return_value=None)
-    monkeypatch.setattr(mine_handler, "_register_user_and_group", register)
     result = ShiftResult(
-        outcome_code="golden",
-        item_code="apple_gold",
-        amount=3,
-        narrative="نوری طلایی از شکاف سنگ تابید؛ سیب طلایی درخشید.",
+        outcome_code="normal",
+        item_code="apple_normal",
+        amount=18,
+        narrative="چند سیب از دل سنگ بیرون آمد.",
+        pickaxe_level=2,
     )
-    monkeypatch.setattr(mine_handler, "perform_shift", AsyncMock(return_value=result))
+    perform = AsyncMock(return_value=result)
+    monkeypatch.setattr(mine_handler, "perform_shift", perform)
     edit_caption = AsyncMock(return_value=True)
     monkeypatch.setattr(mine_handler, "safe_edit_message_caption", edit_caption)
 
@@ -192,87 +509,288 @@ async def test_panel_edit_after_success(monkeypatch):
         chat=SimpleNamespace(id=-501),
         message_id=77,
         photo=photo,
+        answer=AsyncMock(),
     )
     callback = SimpleNamespace(
-        data="mine:card:51",
+        data="mine:work",
         from_user=SimpleNamespace(id=107),
         message=message,
         answer=AsyncMock(),
     )
     bot = SimpleNamespace()
 
-    await mine_handler.handle_mine_card(callback, bot)
+    await mine_handler.handle_mine_work(callback, bot)
 
-    register.assert_not_awaited()
-    callback.answer.assert_awaited_once()
+    perform.assert_awaited_once()
+    args, kwargs = perform.await_args
+    assert args == (session,)
+    assert kwargs == {"user_id": 107, "group_id": None}
+    assert "card_id" not in kwargs
     edit_caption.assert_awaited_once()
-    args, kwargs = edit_caption.await_args
-    assert args[:3] == (bot, -501, 77)
-    assert kwargs["reply_markup"].inline_keyboard == []
-    assert kwargs["parse_mode"] is None
-    assert "🌕 +۳ سیب طلایی" in args[3]
+    edit_args, edit_kwargs = edit_caption.await_args
+    assert edit_args[:3] == (bot, -501, 77)
+    assert edit_kwargs["reply_markup"].inline_keyboard == []
+    assert edit_kwargs["parse_mode"] is None
+    caption = edit_args[3]
+    assert "🍎 +۱۸ سیب معمولی" in caption
+    assert "🔨 کلنگ سطح ۲" in caption
+    assert "⏳ شیفت بعدی: ۳۰ دقیقه و ۰ ثانیه" in caption
     assert message.photo is photo
 
 
 @pytest.mark.asyncio
-async def test_double_tap_safety(monkeypatch):
-    session = _ShiftSession()
-    monkeypatch.setattr(mine_service, "lock_user_row", AsyncMock())
-    monkeypatch.setattr(mine_service, "_database_now", AsyncMock(return_value=NOW))
-
-    async def last_worked(_session, _user_id):
-        return session.last_worked_at
-
-    monkeypatch.setattr(mine_service, "_last_worked_at", last_worked)
+async def test_work_cooldown_alerts_before_shifting(monkeypatch):
+    monkeypatch.setattr(mine_handler, "get_session", _session_context(object()))
     monkeypatch.setattr(
-        mine_service.random,
-        "choices",
-        lambda population, weights, k: [("golden", 25, "apple_gold", 3)],
+        mine_handler, "_register_user_and_group", AsyncMock(return_value=None)
     )
-    grant = AsyncMock(return_value=3)
-    monkeypatch.setattr(mine_service.ItemService, "grant", grant)
-
-    first = await mine_service.perform_shift(
-        session, user_id=108, group_id=None, card_id=None
+    monkeypatch.setattr(
+        mine_handler, "remaining_cooldown", AsyncMock(return_value=600)
     )
-    assert first.outcome_code == "golden"
-    with pytest.raises(CooldownError):
-        await mine_service.perform_shift(
-            session, user_id=108, group_id=None, card_id=None
-        )
+    perform = AsyncMock()
+    monkeypatch.setattr(mine_handler, "perform_shift", perform)
 
-    assert len(session.shifts) == 1
-    grant.assert_awaited_once()
-
-
-def test_no_english_letters_in_user_text():
-    from sib.services.apple_mine_narrative import (
-        COOLDOWN,
-        DIAMOND,
-        GOLDEN,
-        NORMAL,
-        OBSIDIAN,
+    message = SimpleNamespace(
+        chat=SimpleNamespace(id=-504), message_id=80, photo=[object()]
+    )
+    callback = SimpleNamespace(
+        data="mine:work",
+        from_user=SimpleNamespace(id=111),
+        message=message,
+        answer=AsyncMock(),
     )
 
-    user_texts = [
-        mine_handler.PANEL_CAPTION,
-        mine_handler.CARD_PICK_CAPTION,
-        mine_handler.NO_CARDS_TEXT,
-        mine_handler.MINE_FAILURE_TEXT,
-        mine_handler.CARD_NOT_OWNED_TEXT,
-        mine_handler.CARD_LIST_FAILURE_TEXT,
-        *NORMAL,
-        *GOLDEN,
-        *DIAMOND,
-        *OBSIDIAN,
-        *[line.replace("{mm}", "۲").replace("{ss}", "۵") for line in COOLDOWN],
-        mine_handler._result_caption(
-            ShiftResult("normal", "apple_normal", 15, "چند سیب از دل سنگ بیرون آمد.")
-        ),
-        telegram_ui.work_button_kb(supports_style=False).inline_keyboard[0][0].text,
-    ]
-    for text in user_texts:
-        assert re.search(r"[A-Za-z]", text) is None, text
+    await mine_handler.handle_mine_work(callback, SimpleNamespace())
+
+    perform.assert_not_awaited()
+    args, kwargs = callback.answer.await_args
+    assert kwargs.get("show_alert") is True
+    assert "۱۰ دقیقه و ۰ ثانیه" in args[0]
+
+
+@pytest.mark.asyncio
+async def test_pickaxe_screen_swaps_photo_in_place(monkeypatch, tmp_path):
+    session = object()
+    monkeypatch.setattr(mine_handler, "get_session", _session_context(session))
+    monkeypatch.setattr(
+        mine_handler, "_register_user_and_group", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        mine_handler, "_read_mine_view", AsyncMock(return_value=_view(level=2))
+    )
+    media = AsyncMock(return_value=True)
+    monkeypatch.setattr(mine_handler, "safe_edit_message_media", media)
+    fake_asset = tmp_path / "pickaxe_2.jpg"
+    fake_asset.write_bytes(b"fake-jpeg")
+    monkeypatch.setattr(
+        mine_handler, "_pickaxe_image_path", lambda level: fake_asset
+    )
+
+    photo = [object()]
+    message = SimpleNamespace(
+        chat=SimpleNamespace(id=-502), message_id=78, photo=photo
+    )
+    callback = SimpleNamespace(
+        data="mine:pickaxe",
+        from_user=SimpleNamespace(id=112),
+        message=message,
+        answer=AsyncMock(),
+    )
+    bot = SimpleNamespace()
+
+    await mine_handler.handle_mine_pickaxe(callback, bot)
+
+    media.assert_awaited_once()
+    args, kwargs = media.await_args
+    assert args[:3] == (bot, -502, 78)
+    assert str(getattr(kwargs["photo"], "path", kwargs["photo"])).endswith(
+        "pickaxe_2.jpg"
+    )
+    assert "📊 سطح فعلی: ۲ از ۵" in kwargs["text"]
+    assert "💰 هزینه ارتقا: ۶۰۰ سیب 🍎" in kwargs["text"]
+    assert kwargs["parse_mode"] is None
+    kb = kwargs["reply_markup"].inline_keyboard
+    assert {b.callback_data for row in kb for b in row} == {
+        "mine:pickaxe:upgrade",
+        "mine:pickaxe:back",
+    }
+
+
+@pytest.mark.asyncio
+async def test_upgrade_success_edits_to_new_level(monkeypatch, tmp_path):
+    monkeypatch.setattr(mine_handler, "get_session", _session_context(object()))
+    monkeypatch.setattr(
+        mine_handler,
+        "upgrade_pickaxe",
+        AsyncMock(return_value=UpgradeResult(level=3, cost=600, balance_after=750)),
+    )
+    monkeypatch.setattr(
+        mine_handler,
+        "_read_mine_view",
+        AsyncMock(return_value=_view(level=3, balance=750)),
+    )
+    media = AsyncMock(return_value=True)
+    monkeypatch.setattr(mine_handler, "safe_edit_message_media", media)
+    fake_asset = tmp_path / "pickaxe_3.jpg"
+    fake_asset.write_bytes(b"fake-jpeg")
+    monkeypatch.setattr(
+        mine_handler, "_pickaxe_image_path", lambda level: fake_asset
+    )
+
+    message = SimpleNamespace(
+        chat=SimpleNamespace(id=-505), message_id=81, photo=[object()]
+    )
+    callback = SimpleNamespace(
+        data="mine:pickaxe:upgrade",
+        from_user=SimpleNamespace(id=113),
+        message=message,
+        answer=AsyncMock(),
+    )
+
+    await mine_handler.handle_mine_pickaxe_upgrade(callback, SimpleNamespace())
+
+    args, kwargs = media.await_args
+    assert str(getattr(kwargs["photo"], "path", kwargs["photo"])).endswith(
+        "pickaxe_3.jpg"
+    )
+    assert "🎉 کلنگ به سطح ۳ ارتقا یافت!" in kwargs["text"]
+    assert "💰 سیب‌های شما: ۷۵۰" in kwargs["text"]
+
+
+@pytest.mark.asyncio
+async def test_upgrade_insufficient_shows_shortfall_alert(monkeypatch):
+    monkeypatch.setattr(mine_handler, "get_session", _session_context(object()))
+    monkeypatch.setattr(
+        mine_handler,
+        "upgrade_pickaxe",
+        AsyncMock(side_effect=PickaxeInsufficientFunds(cost=600, missing=250)),
+    )
+
+    message = SimpleNamespace(
+        chat=SimpleNamespace(id=-506), message_id=82, photo=[object()]
+    )
+    callback = SimpleNamespace(
+        data="mine:pickaxe:upgrade",
+        from_user=SimpleNamespace(id=114),
+        message=message,
+        answer=AsyncMock(),
+    )
+
+    await mine_handler.handle_mine_pickaxe_upgrade(callback, SimpleNamespace())
+
+    args, kwargs = callback.answer.await_args
+    assert kwargs.get("show_alert") is True
+    assert "۲۵۰" in args[0]
+
+
+@pytest.mark.asyncio
+async def test_upgrade_stale_max_level_renders_max_screen(monkeypatch, tmp_path):
+    monkeypatch.setattr(mine_handler, "get_session", _session_context(object()))
+    monkeypatch.setattr(
+        mine_handler,
+        "upgrade_pickaxe",
+        AsyncMock(side_effect=PickaxeMaxLevelError(5)),
+    )
+    monkeypatch.setattr(
+        mine_handler,
+        "_read_mine_view",
+        AsyncMock(return_value=_view(level=5, balance=999)),
+    )
+    media = AsyncMock(return_value=True)
+    monkeypatch.setattr(mine_handler, "safe_edit_message_media", media)
+    fake_asset = tmp_path / "pickaxe_5.jpg"
+    fake_asset.write_bytes(b"fake-jpeg")
+    monkeypatch.setattr(
+        mine_handler, "_pickaxe_image_path", lambda level: fake_asset
+    )
+
+    message = SimpleNamespace(
+        chat=SimpleNamespace(id=-507), message_id=83, photo=[object()]
+    )
+    callback = SimpleNamespace(
+        data="mine:pickaxe:upgrade",
+        from_user=SimpleNamespace(id=115),
+        message=message,
+        answer=AsyncMock(),
+    )
+
+    await mine_handler.handle_mine_pickaxe_upgrade(callback, SimpleNamespace())
+
+    args, kwargs = media.await_args
+    assert str(getattr(kwargs["photo"], "path", kwargs["photo"])).endswith(
+        "pickaxe_5.jpg"
+    )
+    assert "🏆 کلنگ شما به بالاترین سطح (۵) رسیده است!" in kwargs["text"]
+    assert "🎉" not in kwargs["text"]
+    kb = kwargs["reply_markup"].inline_keyboard
+    assert {b.callback_data for row in kb for b in row} == {"mine:pickaxe:back"}
+
+
+# ---------------------------------------------------------------------------
+# Captions and keyboards
+# ---------------------------------------------------------------------------
+
+
+def test_panel_caption_shows_pickaxe_level_and_ready_state():
+    caption = mine_handler._panel_caption(_view(level=1, cooldown=0), 7)
+    assert "⛏ معدن سیبی" in caption
+    assert "🔨 کلنگ شما: سطح ۱" in caption
+    assert "⛏ هر شیفت: ۱۰ تا ۱۵ سیب معمولی" in caption
+    assert "🍎 شانس سیب ویژه: ۱۰٪" in caption
+    assert "⏳ معدن آماده‌ی کار است!" in caption
+
+
+def test_panel_caption_shows_cooldown_line():
+    caption = mine_handler._panel_caption(dataclasses.replace(_view(), cooldown=125), 7)
+    assert "۲ دقیقه و ۵ ثانیه" in caption
+    assert "آماده" not in caption
+
+
+def test_pickaxe_caption_shows_preview_and_cost():
+    caption = mine_handler._pickaxe_caption(_view(level=2, balance=350))
+    assert "📊 سطح فعلی: ۲ از ۵" in caption
+    assert "⬆️ با ارتقا به سطح ۳:" in caption
+    assert "💰 هزینه ارتقا: ۶۰۰ سیب 🍎" in caption
+    assert "💰 سیب‌های شما: ۳۵۰" in caption
+
+
+def test_pickaxe_caption_max_level():
+    caption = mine_handler._pickaxe_caption(_view(level=5, balance=999))
+    assert "🏆 کلنگ شما به بالاترین سطح (۵) رسیده است!" in caption
+    assert "هزینه ارتقا" not in caption
+
+
+def test_pickaxe_caption_success():
+    caption = mine_handler._pickaxe_caption(_view(level=3, balance=750), success=True)
+    assert "🎉 کلنگ به سطح ۳ ارتقا یافت!" in caption
+    assert "📊 سطح فعلی: ۳ از ۵" in caption
+    assert "💰 سیب‌های شما: ۷۵۰" in caption
+
+
+def test_main_menu_keyboard_layout():
+    kb = mine_handler._main_keyboard().inline_keyboard
+    assert len(kb) == 1 and len(kb[0]) == 2
+    work, pickaxe = kb[0]
+    assert work.callback_data == "mine:work"
+    assert work.text == "⛏ کار کردن در معدن"
+    assert pickaxe.callback_data == "mine:pickaxe"
+    assert pickaxe.text == "🔨 ارتقا کلنگ"
+
+
+def test_pickaxe_keyboard_upgrade_label_and_back():
+    kb = mine_handler._pickaxe_keyboard(_view(level=4)).inline_keyboard
+    assert len(kb) == 2
+    upgrade, back = kb[0][0], kb[1][0]
+    assert upgrade.callback_data == "mine:pickaxe:upgrade"
+    assert "۵" in upgrade.text and "۱۵۰۰" in upgrade.text
+    assert back.callback_data == "mine:pickaxe:back"
+    assert back.text == "🔙 بازگشت"
+
+
+def test_pickaxe_keyboard_max_level_has_back_only():
+    kb = mine_handler._pickaxe_keyboard(_view(level=5)).inline_keyboard
+    assert len(kb) == 1
+    assert kb[0][0].callback_data == "mine:pickaxe:back"
 
 
 def test_supported_work_button_uses_success_style():
@@ -305,39 +823,51 @@ def test_style_type_error_falls_back(monkeypatch):
     assert button.style is None
 
 
-@pytest.mark.asyncio
-async def test_normal_currency_uses_wallet_credit_once(monkeypatch):
-    session = _ShiftSession()
-    monkeypatch.setattr(mine_service, "lock_user_row", AsyncMock())
-    monkeypatch.setattr(mine_service, "_database_now", AsyncMock(return_value=NOW))
-    monkeypatch.setattr(mine_service, "_last_worked_at", AsyncMock(return_value=None))
-    monkeypatch.setattr(
-        mine_service.random,
-        "choices",
-        lambda population, weights, k: [("normal", 60, "apple_normal", 15)],
-    )
-    earn = AsyncMock(return_value=15)
-    monkeypatch.setattr(mine_service.AppleWalletService, "earn", earn)
-
-    result = await mine_service.perform_shift(
-        session, user_id=109, group_id=None, card_id=None
+def test_no_english_letters_in_user_text():
+    from sib.services.apple_mine_narrative import (
+        COOLDOWN,
+        DIAMOND,
+        GOLDEN,
+        NORMAL,
+        OBSIDIAN,
     )
 
-    assert result.item_code == "apple_normal"
-    earn.assert_awaited_once_with(
-        session,
-        user_id=109,
-        amount=15,
-        reason="apple_mine",
-        ref_type="apple_mine_shift",
-        ref_id=1,
-        idempotency_key="apple_mine:1",
+    view = _view()
+    result = ShiftResult(
+        "normal", "apple_normal", 15, "چند سیب از دل سنگ بیرون آمد.", pickaxe_level=2
     )
+    user_texts = [
+        mine_handler._panel_caption(view, 1),
+        mine_handler._panel_caption(dataclasses.replace(view, cooldown=25), 1),
+        mine_handler._pickaxe_caption(view),
+        mine_handler._pickaxe_caption(view, success=True),
+        mine_handler._pickaxe_caption(_view(level=5)),
+        mine_handler._result_caption(result),
+        mine_handler._insufficient_text(
+            PickaxeInsufficientFunds(cost=600, missing=250)
+        ),
+        mine_handler.MINE_FAILURE_TEXT,
+        *NORMAL,
+        *GOLDEN,
+        *DIAMOND,
+        *OBSIDIAN,
+        *[line.replace("{mm}", "۲").replace("{ss}", "۵") for line in COOLDOWN],
+        *[b.text for row in mine_handler._main_keyboard().inline_keyboard for b in row],
+        *[b.text for row in mine_handler._pickaxe_keyboard(view).inline_keyboard for b in row],
+        telegram_ui.work_button_kb(supports_style=False).inline_keyboard[0][0].text,
+    ]
+    for text in user_texts:
+        assert re.search(r"[A-Za-z]", text) is None, text
 
 
 def test_narratives_avoid_repeating_last_five_for_one_user():
     picked = [narrative.pick_narrative("normal", user_id=110) for _ in range(6)]
     assert len(set(picked)) == 6
+
+
+# ---------------------------------------------------------------------------
+# Schema and migration
+# ---------------------------------------------------------------------------
 
 
 def test_shift_model_has_required_indexes_and_nullable_foreign_keys():
@@ -349,25 +879,31 @@ def test_shift_model_has_required_indexes_and_nullable_foreign_keys():
     assert table.c.user_id.nullable is False
     assert table.c.group_id.nullable is True
     assert table.c.card_id.nullable is True
+    assert table.c.pickaxe_level.nullable is True
 
 
-def test_migration_upgrade_and_downgrade_are_reversible():
-    from importlib.util import module_from_spec, spec_from_file_location
+def test_user_pickaxe_model_shape():
+    table = UserPickaxe.__table__
+    assert set(table.c.keys()) == {"user_id", "level", "created_at", "updated_at"}
+    assert set(table.primary_key.columns.keys()) == {"user_id"}
+    assert table.c.level.nullable is False
+    foreign_keys = list(table.c.user_id.foreign_keys)
+    assert foreign_keys and foreign_keys[0].target_fullname == "users.id"
 
+
+def test_migration_053_upgrade_and_downgrade_are_reversible():
     from alembic.migration import MigrationContext
     from alembic.operations import Operations
     from sqlalchemy import create_engine, inspect
 
-    migration_path = (
+    versions = (
         Path(__file__).resolve().parents[2]
         / "database"
         / "migrations"
         / "versions"
-        / "043_apple_mine_shift.py"
     )
-    spec = spec_from_file_location("apple_mine_migration", migration_path)
-    migration = module_from_spec(spec)
-    spec.loader.exec_module(migration)
+    migration_043 = _load_module(versions / "043_apple_mine_shift.py", "m043")
+    migration_053 = _load_module(versions / "053_apple_pickaxes.py", "m053")
 
     engine = create_engine("sqlite:///:memory:")
     with engine.begin() as connection:
@@ -376,21 +912,23 @@ def test_migration_upgrade_and_downgrade_are_reversible():
         connection.exec_driver_sql("CREATE TABLE player_cards (id BIGINT PRIMARY KEY)")
         context = MigrationContext.configure(connection)
         with Operations.context(context):
-            migration.upgrade()
+            migration_043.upgrade()
+            migration_053.upgrade()
         inspector = inspect(connection)
-        assert "apple_mine_shift" in inspector.get_table_names()
-        assert {column["name"] for column in inspector.get_columns("apple_mine_shift")} == {
-            "id",
-            "user_id",
-            "group_id",
-            "card_id",
-            "outcome",
-            "item_code",
-            "amount",
-            "worked_at",
-            "created_at",
+        assert "user_pickaxes" in inspector.get_table_names()
+        assert {
+            column["name"] for column in inspector.get_columns("user_pickaxes")
+        } == {"user_id", "level", "created_at", "updated_at"}
+        assert "pickaxe_level" in {
+            column["name"] for column in inspector.get_columns("apple_mine_shift")
         }
         with Operations.context(context):
-            migration.downgrade()
-        assert "apple_mine_shift" not in inspect(connection).get_table_names()
+            migration_053.downgrade()
+        inspector = inspect(connection)
+        assert "user_pickaxes" not in inspector.get_table_names()
+        assert "pickaxe_level" not in {
+            column["name"] for column in inspector.get_columns("apple_mine_shift")
+        }
+        with Operations.context(context):
+            migration_043.downgrade()
     engine.dispose()

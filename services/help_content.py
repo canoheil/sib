@@ -76,15 +76,27 @@ class HelpSection:
 # The data behind the copy (numbers are rendered through fa_digits)
 # ---------------------------------------------------------------------------
 
-#: Apple Mine outcomes: (label, weight out of 100, amount).
-APPLE_MINE_OUTCOMES: Tuple[Tuple[str, int, int], ...] = (
-    ("🍎 سیب معمولی", 60, 15),
-    ("🌕 سیب طلایی", 25, 3),
-    ("💎 سیب الماسی", 12, 1),
-    ("🌑 سیب ابسیدینی", 3, 1),
+#: Apple Mine pickaxe reward table (M2-RECON; service default is
+#: ``pickaxe_rewards`` in services/config_store.py):
+#: (level, (min, max) normal apples, gold %, diamond %, obsidian %).
+APPLE_MINE_PICKAXE_REWARDS: Tuple[Tuple[int, Tuple[int, int], int, int, int], ...] = (
+    (1, (10, 15), 7, 2, 1),
+    (2, (15, 22), 10, 3, 1),
+    (3, (21, 30), 13, 4, 2),
+    (4, (28, 40), 16, 5, 2),
+    (5, (45, 60), 20, 6, 3),
 )
 
-#: Apple Mine cooldown, in seconds (services/apple_mine.py).
+#: Apple Mine pickaxe upgrade costs in normal Apples, by target level
+#: (``pickaxe_upgrade_costs`` in services/config_store.py).
+APPLE_MINE_PICKAXE_COSTS: Tuple[Tuple[int, int], ...] = (
+    (2, 300),
+    (3, 600),
+    (4, 1000),
+    (5, 1500),
+)
+
+#: Apple Mine cooldown, in minutes (services/apple_mine.py).
 APPLE_MINE_COOLDOWN_MINUTES = 30
 
 #: The five shop chests and their price in Apples (data/shop_chests/*.json).
@@ -110,10 +122,12 @@ INVASION_OBSIDIAN_CHANCE_PERCENT = 2
 
 
 def _mine_table() -> str:
-    """The Apple Mine reward table, as one line per outcome."""
+    """The Apple Mine pickaxe reward table, one line per level."""
     return "\n".join(
-        f"• {label}: شانس {fa_digits(weight)}٪، {fa_digits(amount)} سیب"
-        for label, weight, amount in APPLE_MINE_OUTCOMES
+        f"• سطح {fa_digits(level)}: {fa_digits(apples[0])} تا {fa_digits(apples[1])} "
+        f"سیب معمولی؛ شانس سیب طلایی {fa_digits(gold)}٪، الماسی "
+        f"{fa_digits(diamond)}٪ و ابسیدینی {fa_digits(obsidian)}٪"
+        for level, apples, gold, diamond, obsidian in APPLE_MINE_PICKAXE_REWARDS
     )
 
 
@@ -210,14 +224,22 @@ _MINE = HelpSection(
     section_key="mine",
     title_fa="⛏️ معدن سیبی",
     body_fa=(
-        "با «معدن سیبی» معدن را باز می‌کنی، یکی از کارت‌هایت را انتخاب "
-        "می‌کنی و یک شیفت کار می‌کنی. هر شیفت فقط یک جایزه می‌دهد و بین دو "
-        f"شیفت {fa_digits(APPLE_MINE_COOLDOWN_MINUTES)} دقیقه فاصله لازم "
-        "است.\n\n"
-        "**جدول جایزه‌ها**\n"
+        "با «معدن سیبی» معدن را باز می‌کنی و با دکمه «کار کردن در معدن» "
+        "یک شیفت کار می‌کنی. هر شیفت فقط یک جایزه می‌دهد و بین دو شیفت "
+        f"{fa_digits(APPLE_MINE_COOLDOWN_MINUTES)} دقیقه فاصله لازم است.\n\n"
+        f"🔨 کلنگ تو {fa_digits(5)} سطح دارد؛ هرچه سطحش بالاتر برود، سیب "
+        "هر شیفت بیشتر می‌شود و شانس سیب‌های ویژه هم بهتر. ارتقا فقط با "
+        "سیب معمولی هزینه دارد.\n\n"
+        "**جدول جایزه‌ها بر حسب سطح کلنگ**\n"
         f"{_mine_table()}\n\n"
-        "کارتی که با آن کار می‌کنی فقط برای ظاهر صحنه است؛ نه مصرف می‌شود "
-        "و نه روی شانس اثر دارد."
+        "**هزینه ارتقا**\n"
+        + "\n".join(
+            f"• سطح {fa_digits(level)}: {fa_digits(cost)} سیب"
+            for level, cost in APPLE_MINE_PICKAXE_COSTS
+        )
+        + "\n\n"
+        "سیب‌های ویژه با تعداد ثابت می‌آیند: ۳ سیب طلایی، ۱ سیب الماسی و "
+        "۱ سیب ابسیدینی."
     ),
 )
 
