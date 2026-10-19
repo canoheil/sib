@@ -3,7 +3,7 @@
 from typing import Optional
 
 from aiogram import Router, F, Bot
-from aiogram.filters import CommandStart, Filter
+from aiogram.filters import CommandObject, CommandStart, Filter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from sib.core.config import settings
@@ -19,6 +19,7 @@ from sib.keyboards.common import (
     get_cards_keyboard,
     get_profile_keyboard,
     get_profile_skin_keyboard,
+    get_referral_invite_keyboard,
     nav_back_row,
 )
 from sib.services.nav import back_label_for, back_target, parse_callback, with_origin
@@ -38,6 +39,7 @@ from sib.services.help_content import (
 from sib.services.panel import PanelOwnershipService
 from sib.services.telegram_ui import safe_answer_callback, safe_edit_callback_message
 from sib.services.membership.checker import MembershipService
+from sib.services.referral import ReferralService
 from sib.services.user import UserService
 from sib.services.group import GroupService
 
@@ -67,35 +69,92 @@ def _private_start_text(first_name: str) -> str:
     )
 
 
+def _start_payload(message: Message, command: Optional[CommandObject]) -> Optional[str]:
+    """The ``/start`` deep-link payload (``command.args``).
+
+    aiogram injects the parsed :class:`CommandObject`; the text fallback
+    only covers direct unit-test calls that pass no command object.
+    """
+    args = getattr(command, "args", None) if command is not None else None
+    if isinstance(args, str) and args.strip():
+        return args
+    text = getattr(message, "text", None)
+    if isinstance(text, str):
+        parts = text.split(maxsplit=1)
+        if len(parts) == 2 and parts[0].startswith("/start"):
+            return parts[1]
+    return None
+
+
+@router.message(CommandStart(deep_link=True))
+async def handle_start_deep_link(message: Message, bot: Bot, command: CommandObject):
+    """``/start <payload>`` - e.g. a REF1 friend-referral deep link.
+
+    ``CommandStart(deep_link=True)`` *only* matches when a payload is
+    present, so the plain ``/start`` keeps flowing to ``handle_start``
+    below; both entry points share the one implementation.
+    """
+    await handle_start(message, bot, command)
+
+
 @router.message(CommandStart())
-async def handle_start(message: Message, bot: Bot):
-    """Handle /start command in private and group chats."""
+async def handle_start(message: Message, bot: Bot, command: Optional[CommandObject] = None):
+    """Handle /start command in private and group chats.
+
+    REF1: a ``ref_<inviter id>`` payload attributes a *brand-new* account
+    to its inviter (validation in ``UserService``/``ReferralService`` -
+    already-registered users and self-referrals are ignored). The apples
+    are not paid yet: the reward fires when the invitee first acts inside
+    a group - right here on a group ``/start``, or via the first-group-
+    activity ``ReferralRewardMiddleware``.
+    """
     user = message.from_user
     chat = message.chat
 
     if not user:
         return
 
+    referrer_id = ReferralService.parse_referrer_id(_start_payload(message, command))
+    referral_reward = None
+    group_welcome_text = None
+
     async with get_session() as session:
-        # Register user
-        await UserService.get_or_create_user(session, user)
+        # Register user (a referral payload only counts for a NEW account)
+        await UserService.get_or_create_user(
+            session, user, referred_by_id=referrer_id
+        )
 
         # 1. Group / Supergroup chat
         if chat.type in ("group", "supergroup"):
             group = await GroupService.get_or_create_group(session, chat)
+            # REF1: acting inside a group is what earns the referral
+            # reward (idempotent - a later /start pays nothing more).
+            referral_reward = await ReferralService.grant_reward_if_due(
+                session, user.id
+            )
             # Phase A3: Ovarya-first group welcome; keyboard unchanged.
             # Plain text (no parse mode) so group titles can never break
             # Markdown parsing.
-            welcome_text = (
+            group_welcome_text = (
                 f"🍏 سیب وارد شد! سلام به {chat.title}.\n\n"
                 "گروه شما به جمع مدافعان اواریا پیوست. از این پس با هر یورش شیاسیب، "
                 "در کنار هم می‌جنگید و با هر پیروزی، افتخاری به نام گروه‌تان ثبت می‌شود.\n\n"
                 "برای شروع، دکمه‌های زیر را لمس کنید 👇\n\n"
                 f"🔧 پشتیبانی: {SUPPORT_HANDLE}"
             )
-            await message.reply(welcome_text, reply_markup=get_group_welcome_keyboard(), parse_mode=None)
-            return
 
+    if group_welcome_text is not None:
+        # The session is committed here, so the inviter is only ever
+        # notified about apples that really landed in their wallet.
+        await ReferralService.notify_inviter(bot, referral_reward)
+        await message.reply(
+            group_welcome_text,
+            reply_markup=get_group_welcome_keyboard(),
+            parse_mode=None,
+        )
+        return
+
+    async with get_session() as session:
         # 2. Private chat
         # Check channel membership gate
         is_member, missing_channel = await MembershipService.check_user_membership(bot, user.id, session)
@@ -672,6 +731,52 @@ async def handle_profile_skin_selection(callback: CallbackQuery, bot: Bot):
     if callback.message:
         await safe_edit_callback_message(
             callback, bot, text, reply_markup=keyboard
+        )
+    await _claim_panel(callback, "profile", prev_message_id)
+
+
+# ---------------------------------------------------------------------------
+# REF1 — «🎁 دعوت دوستان» (profile -> invite friends)
+# ---------------------------------------------------------------------------
+
+
+def _referral_invite_screen(user_id: int) -> tuple:
+    """(text, keyboard) of the invite-friends panel - ONE builder.
+
+    The raw deep link is always in the text (long-press to copy, like
+    everywhere else in Telegram); the button opens the share sheet.
+    Plain text only: the link contains ``_`` (``ref_<id>``), which legacy
+    Markdown would try to parse as italics.
+    """
+    link = ReferralService.build_referral_link(settings.BOT_USERNAME, user_id)
+    text = (
+        "👋 دوستانت رو به سیب دعوت کن!\n\n"
+        "با هر دوستی که با لینک تو وارد بازی بشه و توی یه گروه بازی کنه، "
+        "۱۰۰ سیب هدیه می‌گیری و دوستت هم ۵۰ سیب هدیه می‌گیره.\n\n"
+        "لینک اختصاصی شما:\n"
+        f"{link}"
+    )
+    return text, get_referral_invite_keyboard(settings.BOT_USERNAME, user_id)
+
+
+@router.callback_query(F.data == "referral_invite")
+async def handle_referral_invite(callback: CallbackQuery, bot: Bot):
+    """Show the player's personal referral deep link (profile button)."""
+    user = callback.from_user
+    if not user:
+        return
+
+    prev_message_id = getattr(callback.message, "message_id", None)
+    async with get_session() as session:
+        # Same account-repair behaviour as the skin picker: a player first
+        # seen through this callback is registered before getting a link.
+        await UserService.get_or_create_user(session, user)
+
+    text, keyboard = _referral_invite_screen(user.id)
+    await safe_answer_callback(callback)
+    if callback.message:
+        await safe_edit_callback_message(
+            callback, bot, text, reply_markup=keyboard, parse_mode=None
         )
     await _claim_panel(callback, "profile", prev_message_id)
 

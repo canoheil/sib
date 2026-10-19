@@ -32,6 +32,22 @@ class User(Base, TimestampMixin):
     banned_by: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True)
     ban_reason: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
+    # Friend referral (REF1, migration 051_referrals). ``referred_by_id`` is
+    # written exactly once, when a brand-new user registers through a
+    # ``?start=ref_<inviter id>`` deep link; it is never overwritten for an
+    # already-registered user. ``referral_rewarded`` flips to True in the
+    # same transaction that pays both sides, so the pair can be rewarded
+    # at most once (see sib.services.referral).
+    referred_by_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger,
+        ForeignKey("users.id", name="fk_users_referred_by"),
+        nullable=True,
+        index=True,
+    )
+    referral_rewarded: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false(), nullable=False
+    )
+
     @property
     def display_name(self) -> str:
         """Friendly display name for Telegram messages."""

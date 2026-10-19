@@ -377,6 +377,12 @@ def get_profile_keyboard(origin: Optional[str] = None) -> InlineKeyboardMarkup:
             ],
             [
                 primary_button(
+                    text="🎁 دعوت دوستان",
+                    callback_data="referral_invite",
+                )
+            ],
+            [
+                primary_button(
                     text="🎴 کارت‌های من",
                     callback_data=with_origin("apple_cards", "apple_profile"),
                 )
@@ -409,6 +415,30 @@ def get_profile_keyboard(origin: Optional[str] = None) -> InlineKeyboardMarkup:
     )
     keyboard.inline_keyboard.extend(nav_back_row(back_label_for(origin), back_target(origin)))
     return keyboard
+
+
+def get_referral_invite_keyboard(
+    bot_username: str, user_id: int
+) -> InlineKeyboardMarkup:
+    """«🎁 دعوت دوستان» panel (REF1): share the personal deep link.
+
+    The share button uses Telegram's ``t.me/share/url`` sheet, so it works
+    even with the bot's inline mode disabled; the raw link itself is always
+    in the message text for manual copying. Back returns to the profile.
+    """
+    from sib.services.referral import ReferralService
+
+    rows: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton(
+                text="🔗 اشتراک‌گذاری لینک",
+                url=ReferralService.build_share_url(bot_username, user_id),
+                style="primary",
+            )
+        ]
+    ]
+    rows.extend(nav_back_row("↩️ بازگشت به پروفایل", "apple_profile"))
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def get_profile_skin_keyboard(selected_skin) -> InlineKeyboardMarkup:

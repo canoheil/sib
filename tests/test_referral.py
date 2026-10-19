@@ -1,0 +1,460 @@
+"""REF1 - friend referral system tests.
+
+Isolated in-memory SQLite (same pattern as the castle/war suites): the
+deep-link ``/start`` handler, the referral service, the first-group-
+activity middleware, the invite-friends UI and the 051 migration run
+for real; only Telegram I/O is mocked.
+"""
+
+import asyncio
+import importlib.util
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
+from urllib.parse import quote
+
+import pytest
+import pytest_asyncio
+from aiogram.enums import ChatType
+from aiogram.filters import CommandObject
+from aiogram.types import CallbackQuery, Chat, Message
+from aiogram.types import User as TelegramUser
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
+from sqlalchemy import create_engine, inspect, select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.pool import StaticPool
+
+import sib.handlers.start as start_module
+import sib.middleware.referral_reward as referral_mw_module
+from sib.core.config import settings
+from sib.database.models import AppleTransaction, User
+from sib.handlers.start import handle_start, handle_start_deep_link
+from sib.keyboards.common import get_profile_keyboard
+from sib.middleware.referral_reward import ReferralRewardMiddleware
+from sib.services.apple_wallet import AppleWalletService
+from sib.services.membership.checker import MembershipService
+from sib.services.referral import (
+    INVITEE_REWARD_APPLES,
+    INVITER_NOTIFICATION_TEXT,
+    INVITER_REWARD_APPLES,
+    ReferralService,
+)
+
+INVITER_ID = 1001
+INVITEE_ID = 2002
+GROUP_ID = -1001234567
+
+
+@pytest_asyncio.fixture
+async def ref_db(monkeypatch):
+    engine = create_async_engine(
+        "sqlite+aiosqlite:///:memory:", poolclass=StaticPool
+    )
+    async with engine.begin() as conn:
+        from sib.tests.conftest import _create_all_compatible
+
+        await conn.run_sync(_create_all_compatible)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    @asynccontextmanager
+    async def session_scope():
+        async with factory() as session:
+            try:
+                yield session
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+
+    monkeypatch.setattr(start_module, "get_session", session_scope)
+    monkeypatch.setattr(referral_mw_module, "get_session", session_scope)
+    monkeypatch.setattr(
+        MembershipService,
+        "check_user_membership",
+        AsyncMock(return_value=(True, None)),
+    )
+
+    async with factory.begin() as session:
+        session.add(User(id=INVITER_ID, first_name="دعوت‌کننده"))
+    yield factory
+    await engine.dispose()
+
+
+async def _load_user(factory, user_id):
+    async with factory() as session:
+        user = await session.get(User, user_id)
+        if user is not None:
+            session.expunge(user)
+        return user
+
+
+async def _balance(factory, user_id):
+    async with factory() as session:
+        return await AppleWalletService.get_balance(session, user_id)
+
+
+async def _referral_ledger(factory):
+    async with factory() as session:
+        rows = (
+            await session.scalars(
+                select(AppleTransaction).where(
+                    AppleTransaction.ref_type == "referral"
+                )
+            )
+        ).all()
+        return [(row.user_id, row.amount, row.reason, row.idempotency_key) for row in rows]
+
+
+def _private_start_message(user_id=INVITEE_ID, payload=None):
+    msg = MagicMock(spec=Message)
+    msg.chat = Chat(id=user_id, type=ChatType.PRIVATE)
+    msg.from_user = TelegramUser(id=user_id, is_bot=False, first_name="تازه‌وارد")
+    msg.text = f"/start {payload}" if payload else "/start"
+    msg.answer = AsyncMock()
+    msg.reply = AsyncMock()
+    return msg
+
+
+def _group_start_message(user_id=INVITEE_ID):
+    msg = MagicMock(spec=Message)
+    msg.chat = Chat(id=GROUP_ID, type=ChatType.SUPERGROUP, title="گروه دوستان")
+    msg.from_user = TelegramUser(id=user_id, is_bot=False, first_name="تازه‌وارد")
+    msg.text = "/start"
+    msg.answer = AsyncMock()
+    msg.reply = AsyncMock()
+    return msg
+
+
+async def _register_invitee_with_referral(bot):
+    command = CommandObject(
+        prefix="/", command="start", mention=None, args=f"ref_{INVITER_ID}"
+    )
+    await handle_start_deep_link(_private_start_message(), bot, command)
+
+
+# ---------------------------------------------------------------------------
+# Deep-link handling
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deep_link_saves_referrer(ref_db):
+    bot = AsyncMock()
+    await _register_invitee_with_referral(bot)
+
+    invitee = await _load_user(ref_db, INVITEE_ID)
+    assert invitee is not None
+    assert invitee.referred_by_id == INVITER_ID
+    assert invitee.referral_rewarded is False
+    # Clicking the link alone pays nothing: the reward needs group activity.
+    assert await _balance(ref_db, INVITER_ID) == 0
+    assert await _balance(ref_db, INVITEE_ID) == 0
+    bot.send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_self_referral_blocked(ref_db):
+    bot = AsyncMock()
+    command = CommandObject(
+        prefix="/", command="start", mention=None, args=f"ref_{INVITEE_ID}"
+    )
+    await handle_start_deep_link(_private_start_message(), bot, command)
+
+    invitee = await _load_user(ref_db, INVITEE_ID)
+    assert invitee is not None
+    assert invitee.referred_by_id is None
+
+    # The guard also holds when the would-be referrer row exists.
+    async with ref_db() as session:
+        assert (
+            await ReferralService.resolve_referrer_id(
+                session,
+                new_user_id=INVITER_ID,
+                candidate_referrer_id=INVITER_ID,
+            )
+            is None
+        )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    ["ref_999999", "ref_abc", "ref_", "ref_-5", "ref_0", "something_else"],
+)
+@pytest.mark.asyncio
+async def test_unknown_or_malformed_referrer_ignored(ref_db, payload):
+    bot = AsyncMock()
+    command = CommandObject(prefix="/", command="start", mention=None, args=payload)
+    await handle_start_deep_link(_private_start_message(), bot, command)
+
+    invitee = await _load_user(ref_db, INVITEE_ID)
+    assert invitee is not None
+    assert invitee.referred_by_id is None
+    assert ReferralService.parse_referrer_id(payload) in (None, 999999)
+
+
+@pytest.mark.asyncio
+async def test_existing_user_deep_link_is_ignored(ref_db):
+    bot = AsyncMock()
+    # Register first without any referral...
+    await handle_start(_private_start_message(), bot)
+    # ... then open someone else's referral link: attribution must not appear.
+    await _register_invitee_with_referral(bot)
+
+    invitee = await _load_user(ref_db, INVITEE_ID)
+    assert invitee.referred_by_id is None
+
+
+def test_deep_link_start_is_routed_before_plain_start():
+    """``CommandStart(deep_link=True)`` must win for payloads, while the
+    plain ``/start`` keeps its own handler right behind it."""
+    start_handlers = [
+        handler
+        for handler in start_module.router.message.handlers
+        if getattr(handler.callback, "__name__", "")
+        in ("handle_start_deep_link", "handle_start")
+    ]
+    assert [h.callback.__name__ for h in start_handlers] == [
+        "handle_start_deep_link",
+        "handle_start",
+    ]
+    deep_link_flags = [
+        getattr(f.callback, "deep_link", None)
+        for h in start_handlers
+        for f in h.filters
+    ]
+    assert deep_link_flags == [True, None]
+
+
+# ---------------------------------------------------------------------------
+# Reward
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reward_given_on_first_group_join(ref_db):
+    bot = AsyncMock()
+    await _register_invitee_with_referral(bot)
+
+    group_msg = _group_start_message()
+    await handle_start(group_msg, bot)
+
+    group_msg.reply.assert_awaited_once()
+    assert await _balance(ref_db, INVITER_ID) == INVITER_REWARD_APPLES == 100
+    assert await _balance(ref_db, INVITEE_ID) == INVITEE_REWARD_APPLES == 50
+
+    invitee = await _load_user(ref_db, INVITEE_ID)
+    assert invitee.referral_rewarded is True
+
+    bot.send_message.assert_awaited_once_with(
+        chat_id=INVITER_ID,
+        text="🎉 یکی از دوستان شما با لینک شما وارد بازی شد! ۱۰۰ سیب هدیه گرفتید.",
+        parse_mode=None,
+    )
+    assert INVITER_NOTIFICATION_TEXT == bot.send_message.await_args.kwargs["text"]
+    assert sorted(await _referral_ledger(ref_db)) == sorted(
+        [
+            (INVITER_ID, 100, "referral_inviter", f"referral_inviter:{INVITEE_ID}"),
+            (INVITEE_ID, 50, "referral_invitee", f"referral_invitee:{INVITEE_ID}"),
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_reward_given_only_once(ref_db):
+    bot = AsyncMock()
+    await _register_invitee_with_referral(bot)
+    await handle_start(_group_start_message(), bot)
+
+    # A later group /start, and even a direct service retry, pay nothing more.
+    await handle_start(_group_start_message(), bot)
+    async with ref_db.begin() as session:
+        assert await ReferralService.grant_reward_if_due(session, INVITEE_ID) is None
+
+    assert await _balance(ref_db, INVITER_ID) == 100
+    assert await _balance(ref_db, INVITEE_ID) == 50
+    assert len(await _referral_ledger(ref_db)) == 2
+    bot.send_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_middleware_grants_on_first_group_activity(ref_db):
+    async with ref_db.begin() as session:
+        session.add(
+            User(id=INVITEE_ID, first_name="تازه‌وارد", referred_by_id=INVITER_ID)
+        )
+
+    bot = AsyncMock()
+    middleware = ReferralRewardMiddleware()
+    handled = []
+
+    async def handler(event, data):
+        handled.append(event)
+        return "ok"
+
+    now = datetime.now(timezone.utc)
+    message = Message(
+        message_id=1,
+        date=now,
+        chat=Chat(id=GROUP_ID, type=ChatType.SUPERGROUP, title="گروه دوستان"),
+        from_user=TelegramUser(id=INVITEE_ID, is_bot=False, first_name="تازه‌وارد"),
+        text="سیب منو",
+    )
+    assert await middleware(handler, message, {"bot": bot}) == "ok"
+    await asyncio.gather(*list(middleware._tasks))
+
+    assert handled == [message]  # the update itself was never disturbed
+    assert await _balance(ref_db, INVITER_ID) == 100
+    assert await _balance(ref_db, INVITEE_ID) == 50
+    bot.send_message.assert_awaited_once()
+
+    # Resolved users are not checked again (and never paid twice).
+    assert INVITEE_ID in middleware._resolved
+    assert await middleware(handler, message, {"bot": bot}) == "ok"
+    assert not middleware._tasks
+    assert await _balance(ref_db, INVITER_ID) == 100
+
+
+@pytest.mark.asyncio
+async def test_middleware_ignores_private_activity(ref_db):
+    async with ref_db.begin() as session:
+        session.add(
+            User(id=INVITEE_ID, first_name="تازه‌وارد", referred_by_id=INVITER_ID)
+        )
+
+    middleware = ReferralRewardMiddleware()
+    message = Message(
+        message_id=1,
+        date=datetime.now(timezone.utc),
+        chat=Chat(id=INVITEE_ID, type=ChatType.PRIVATE),
+        from_user=TelegramUser(id=INVITEE_ID, is_bot=False, first_name="تازه‌وارد"),
+        text="سلام",
+    )
+    assert await middleware(AsyncMock(return_value="ok"), message, {}) == "ok"
+    assert not middleware._tasks
+    assert await _balance(ref_db, INVITER_ID) == 0
+
+
+# ---------------------------------------------------------------------------
+# Invite UI
+# ---------------------------------------------------------------------------
+
+
+def test_profile_has_invite_friends_button():
+    buttons = [
+        button
+        for row in get_profile_keyboard().inline_keyboard
+        for button in row
+    ]
+    invite = next(b for b in buttons if b.callback_data == "referral_invite")
+    assert invite.text == "🎁 دعوت دوستان"
+    assert invite.style == "primary"
+
+
+def test_invite_screen_shows_personal_deep_link_and_share_button():
+    text, keyboard = start_module._referral_invite_screen(4242)
+    link = f"https://t.me/{settings.BOT_USERNAME}?start=ref_4242"
+
+    assert "👋 دوستانت رو به سیب دعوت کن!" in text
+    assert "۱۰۰ سیب هدیه می‌گیری" in text
+    assert "لینک اختصاصی شما:" in text
+    assert link in text
+
+    buttons = [b for row in keyboard.inline_keyboard for b in row]
+    share = next(b for b in buttons if b.text == "🔗 اشتراک‌گذاری لینک")
+    assert share.style == "primary"
+    assert share.url.startswith("https://t.me/share/url?url=")
+    assert quote(link, safe="") in share.url
+    assert any(b.callback_data == "apple_profile" for b in buttons)
+
+
+@pytest.mark.asyncio
+async def test_invite_callback_sends_screen(ref_db, monkeypatch):
+    edit = AsyncMock()
+    monkeypatch.setattr(start_module, "safe_edit_callback_message", edit)
+    monkeypatch.setattr(start_module, "_claim_panel", AsyncMock())
+
+    callback = MagicMock(spec=CallbackQuery)
+    callback.from_user = TelegramUser(id=7777, is_bot=False, first_name="مهمان")
+    callback.data = "referral_invite"
+    callback.answer = AsyncMock()
+    callback.message = MagicMock(spec=Message)
+    callback.message.message_id = 10
+    callback.message.chat = Chat(id=7777, type=ChatType.PRIVATE)
+
+    await start_module.handle_referral_invite(callback, AsyncMock())
+
+    callback.answer.assert_awaited()
+    text = edit.await_args.args[2]
+    assert f"https://t.me/{settings.BOT_USERNAME}?start=ref_7777" in text
+    assert edit.await_args.kwargs["parse_mode"] is None
+
+
+def test_referral_link_builders():
+    assert (
+        ReferralService.build_referral_link("@sib_game_bot", 42)
+        == "https://t.me/sib_game_bot?start=ref_42"
+    )
+    assert ReferralService.parse_referrer_id("ref_42") == 42
+    assert ReferralService.parse_referrer_id("  ref_42  ") == 42
+    assert ReferralService.parse_referrer_id(None) is None
+    assert ReferralService.parse_referrer_id("ref_4_2") is None
+
+
+# ---------------------------------------------------------------------------
+# Migration 051
+# ---------------------------------------------------------------------------
+
+
+def test_051_referrals_migration_is_reversible():
+    migration_path = (
+        Path(__file__).resolve().parents[1]
+        / "database/migrations/versions/051_referrals.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "migration_051_referrals", migration_path
+    )
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    assert migration.revision == "051_referrals"
+    assert migration.down_revision == "050_apple_clash"
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "CREATE TABLE users (id BIGINT PRIMARY KEY, first_name VARCHAR(255))"
+        )
+        connection.exec_driver_sql("INSERT INTO users (id, first_name) VALUES (7, 'x')")
+
+        with Operations.context(MigrationContext.configure(connection)):
+            migration.upgrade()
+
+        inspector = inspect(connection)
+        columns = {c["name"]: c for c in inspector.get_columns("users")}
+        assert columns["referred_by_id"]["nullable"] is True
+        assert "BIGINT" in str(columns["referred_by_id"]["type"]).upper()
+        assert columns["referral_rewarded"]["nullable"] is False
+        fks = inspector.get_foreign_keys("users")
+        assert any(
+            fk["referred_table"] == "users"
+            and fk["constrained_columns"] == ["referred_by_id"]
+            for fk in fks
+        )
+        assert "ix_users_referred_by_id" in {
+            ix["name"] for ix in inspector.get_indexes("users")
+        }
+        # Existing players default to "not rewarded", and a referral can be stored.
+        assert connection.exec_driver_sql(
+            "SELECT referral_rewarded FROM users WHERE id = 7"
+        ).scalar() in (0, False)
+        connection.exec_driver_sql(
+            "INSERT INTO users (id, first_name, referred_by_id) VALUES (8, 'y', 7)"
+        )
+
+        with Operations.context(MigrationContext.configure(connection)):
+            migration.downgrade()
+        names = {c["name"] for c in inspect(connection).get_columns("users")}
+        assert "referred_by_id" not in names
+        assert "referral_rewarded" not in names
+    engine.dispose()
