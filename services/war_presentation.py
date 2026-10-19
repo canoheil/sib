@@ -22,35 +22,58 @@ VICTORY_IMAGE = (
 )
 
 
-def victory_caption(loot: int) -> str:
+def _shield_hours_text(hours: int) -> str:
+    return f"{fa_digits(hours)} ساعت سپر صلح فعال شد."
+
+
+def victory_caption(loot: int, *, shield_hours: Optional[int] = None) -> str:
     """Final message for the winning group.
 
     States the amount ACTUALLY taken: the loot is capped so the loser keeps its
     level (it can be less than 15%, or 0), so no percentage is promised.
+
+    ``shield_hours`` is passed only when this winner is the DEFENDER (C2-6: the
+    defender is always shielded, the attacker never is).
     """
-    return (
+    text = (
         "🏆 پیروزی در جدال سیبی!\n"
         "دشمن را در هم کوبیدیم. "
         f"🎁 غنیمت تصرف‌شده: {fa_digits(loot)} سیب به خزانه‌ی قلعه اضافه شد."
     )
+    if shield_hours:
+        text += f"\n🛡 {_shield_hours_text(shield_hours)}"
+    return text
 
 
-def defeat_caption(loot: int) -> str:
-    """Final message for the losing group (it is the one that gets the shield)."""
-    shield_hours = int(PEACE_SHIELD_DURATION.total_seconds() // 3600)
-    return (
+def defeat_caption(loot: int, *, shield_hours: Optional[int] = None) -> str:
+    """Final message for the losing group.
+
+    C2-6: the shield belongs to the DEFENDER, so a losing defender is told
+    about its 5 hour peace shield, while a losing attacker is told it gets
+    none (it can be attacked again immediately).
+    """
+    text = (
         "💔 شکست در جدال سیبی...\n"
-        f"دشمن {fa_digits(loot)} سیب از خزانه‌ی ما غارت کرد. "
-        f"اما ناامید نشوید، {fa_digits(shield_hours)} ساعت سپر صلح فعال شد."
+        f"دشمن {fa_digits(loot)} سیب از خزانه‌ی ما غارت کرد."
     )
+    if shield_hours:
+        text += f"\n🛡 اما ناامید نشوید، {_shield_hours_text(shield_hours)}"
+    else:
+        text += "\n⚔️ گروه مهاجم پس از پایان نبرد سپر صلح دریافت نمی‌کند."
+    return text
 
 
-def draw_caption() -> str:
-    """Final message of a tie: no winner, so no loot and no shield."""
-    return (
+def draw_caption(*, shield_hours: Optional[int] = None) -> str:
+    """Final message of a tie: no loot, but the defender is still shielded."""
+    text = (
         "🤝 جدال سیبی مساوی شد!\n"
-        "هیچ‌کدام از دو قلعه پیروز نشد؛ غنیمتی جابه‌جا نشد و سپر صلحی هم فعال نشد."
+        "هیچ‌کدام از دو قلعه پیروز نشد؛ غنیمتی جابه‌جا نشد."
     )
+    if shield_hours:
+        text += f" 🛡 {_shield_hours_text(shield_hours)}"
+    else:
+        text += " گروه مهاجم سپر صلحی دریافت نمی‌کند."
+    return text
 
 
 async def _deliver(
@@ -85,17 +108,35 @@ async def announce_war_result(bot, outcome: WarOutcome) -> int:
     """Send the final message of one finished war to BOTH groups.
 
     The winner and the loser both get the victory banner with their own text;
-    a draw gets a plain text notice. Returns how many groups were reached.
+    a draw gets a plain text notice. C2-6: only the DEFENDER is told about the
+    5 hour peace shield (it gets one win, lose or draw); the ATTACKER is never
+    shielded. Returns how many groups were reached.
     """
+    shield_hours = int(PEACE_SHIELD_DURATION.total_seconds() // 3600)
     if outcome.is_draw:
         deliveries = [
+            (outcome.defender_id, draw_caption(shield_hours=shield_hours), None),
             (outcome.attacker_id, draw_caption(), None),
-            (outcome.defender_id, draw_caption(), None),
         ]
     else:
+        winner_is_defender = outcome.winner_id == outcome.defender_id
         deliveries = [
-            (outcome.winner_id, victory_caption(outcome.loot), VICTORY_IMAGE),
-            (outcome.loser_id, defeat_caption(outcome.loot), VICTORY_IMAGE),
+            (
+                outcome.winner_id,
+                victory_caption(
+                    outcome.loot,
+                    shield_hours=shield_hours if winner_is_defender else None,
+                ),
+                VICTORY_IMAGE,
+            ),
+            (
+                outcome.loser_id,
+                defeat_caption(
+                    outcome.loot,
+                    shield_hours=None if winner_is_defender else shield_hours,
+                ),
+                VICTORY_IMAGE,
+            ),
         ]
     reached = 0
     for chat_id, text, image in deliveries:

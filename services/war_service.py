@@ -30,7 +30,9 @@ from sib.services.lock_order import lock_user_row
 from sib.services.player_cards import PlayerCardService
 
 WAR_DURATION = timedelta(hours=5)
-PEACE_SHIELD_DURATION = timedelta(hours=12)
+# C2-6: the DEFENDER of a war always receives this shield when the war ends,
+# whether it won, lost or drew. The ATTACKER never receives one.
+PEACE_SHIELD_DURATION = timedelta(hours=5)
 # The winner plunders at most this share of the loser's ``total_donated`` (see
 # ``war_loot``: never so much that the loser would lose its level).
 WAR_LOOT_PERCENT = 15
@@ -40,6 +42,27 @@ ATTACK_COOLDOWN_SECONDS = 30
 
 def _utc(value: datetime) -> datetime:
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
+
+def shield_remaining_seconds(
+    shield_until: Optional[datetime], *, now: Optional[datetime] = None
+) -> Optional[int]:
+    """Seconds left on a peace shield, or ``None`` when it is not active.
+
+    A ``shield_until`` in the past is simply an expired shield: the castle is
+    no longer protected (the column is never cleared by a timer, only by the
+    settlement or by breaking the shield when the group attacks).
+    """
+    if shield_until is None:
+        return None
+    now = now or datetime.now(timezone.utc)
+    left = (_utc(shield_until) - _utc(now)).total_seconds()
+    return int(left) if left > 0 else None
+
+
+def has_active_shield(castle: GroupCastle, *, now: Optional[datetime] = None) -> bool:
+    """True when ``castle`` is still under its peace shield at ``now``."""
+    return shield_remaining_seconds(castle.shield_until, now=now) is not None
 
 
 def war_loot(loser_total_donated: int, loser_level: int) -> int:
@@ -78,7 +101,8 @@ class WarOutcome:
     """What one finished war settled; the input of the result announcement.
 
     ``winner_id`` / ``loser_id`` are group ids (a group id is its Telegram chat
-    id). Both are ``None`` for a draw, which has no loot and no peace shield.
+    id). Both are ``None`` for a draw, which has no loot; the peace shield is
+    independent of the result and goes to the defender (C2-6).
     """
 
     war_id: int
@@ -95,10 +119,50 @@ class WarOutcome:
 
 class WarService:
     @staticmethod
+    async def active_shield(
+        session, group_id: int, *, now: Optional[datetime] = None
+    ) -> Optional[datetime]:
+        """The group's peace-shield deadline, or ``None`` when it has none.
+
+        Returns the stored ``shield_until`` only while it is still in the
+        future; an expired timestamp reads as no shield at all.
+        """
+        now = now or datetime.now(timezone.utc)
+        castle = await session.get(GroupCastle, group_id)
+        if castle is None or not has_active_shield(castle, now=now):
+            return None
+        return _utc(castle.shield_until)
+
+    @staticmethod
+    async def break_shield(
+        session, group_id: int, *, now: Optional[datetime] = None
+    ) -> bool:
+        """Break a group's peace shield immediately (rule: attacking ends it).
+
+        The castle row is locked, the shield is set to ``NULL`` and the caller's
+        transaction is flushed. Returns whether a shield was actually broken,
+        so a stale confirmation click is harmless.
+        """
+        now = now or datetime.now(timezone.utc)
+        castle = await session.get(
+            GroupCastle, group_id, with_for_update=True, populate_existing=True
+        )
+        if castle is None or not has_active_shield(castle, now=now):
+            return False
+        castle.shield_until = None
+        await session.flush()
+        return True
+
+    @staticmethod
     async def find_target_groups(
         session, group_id: int, *, now: Optional[datetime] = None
     ) -> List[Tuple[GroupCastle, str]]:
-        """Query up to 5 candidate enemy groups with castle level delta <= 3, not in war, and no active shield."""
+        """Query up to 5 candidate enemy groups with castle level delta <= 3, not in war, and no active shield.
+
+        C2-6: a group under an active peace shield is never listed as a target
+        (it is protected), and a shielded group cannot browse targets before it
+        has confirmed breaking its own shield.
+        """
         now = now or datetime.now(timezone.utc)
         castle = await session.scalar(
             select(GroupCastle).where(GroupCastle.group_id == group_id)
@@ -107,7 +171,7 @@ class WarService:
             raise WarError("قلعه‌ای برای این گروه یافت نشد.")
         if castle.in_war:
             raise WarError("گروه شما در حال حاضر در یک نبرد فعال است!")
-        if castle.shield_until and _utc(castle.shield_until) > now:
+        if has_active_shield(castle, now=now):
             raise WarError("قلعهٔ شما تحت پوشش سپر صلح است!")
 
         min_level = max(1, castle.level - 3)
@@ -165,10 +229,13 @@ class WarService:
             raise WarError("گروه مهاجم در حال حاضر در نبرد است.")
         if defender_castle.in_war:
             raise WarError("گروه مدافع در حال حاضر در نبرد است.")
-        if attacker_castle.shield_until and _utc(attacker_castle.shield_until) > now:
-            raise WarError("گروه مهاجم تحت پوشش سپر صلح است.")
-        if defender_castle.shield_until and _utc(defender_castle.shield_until) > now:
+        if has_active_shield(defender_castle, now=now):
             raise WarError("گروه مدافع تحت پوشش سپر صلح است.")
+        # C2-6: declaring a war breaks the attacker's own peace shield at this
+        # instant. The UI asks for confirmation first; this is the enforcement,
+        # so no caller can attack while still protected.
+        if has_active_shield(attacker_castle, now=now):
+            attacker_castle.shield_until = None
 
         attacker_castle.in_war = True
         defender_castle.in_war = True
@@ -201,13 +268,16 @@ class WarService:
         war is re-checked under its lock, so a second or concurrent run is a
         no-op (never a double loot).
 
-        * the higher damage wins; a tie has no winner, no loot and no shield;
+        * the higher damage wins; a tie has no winner and no loot;
         * the winner plunders ``war_loot(loser.total_donated, loser.level)``:
           15% rounded down, but never more than the loser holds above the
           floor of its current level, so a lost war cannot demote it. The loot
           moves from the loser's ``total_donated`` to the winner's and is
           recorded in ``looted_apples``;
-        * only the loser gets the 12 hour peace shield;
+        * C2-6: the DEFENDER always gets the 5 hour peace shield when the war
+          ends - on a win, on a loss and on a draw. The ATTACKER never gets
+          one (a leftover shield, if any, is cleared), so it can be attacked
+          again immediately;
         * ``in_war`` is cleared on both castles and the war becomes finished.
         """
         now = now or datetime.now(timezone.utc)
@@ -271,8 +341,13 @@ class WarService:
 
         for castle in castles:
             castle.in_war = False
-            if castle.group_id == loser_id:
+            if castle.group_id == war.defender_id:
+                # The defender is always shielded when the war ends, whatever
+                # the result. A draw grants it too (``defender_id`` is fixed).
                 castle.shield_until = now + PEACE_SHIELD_DURATION
+            else:
+                # The attacker is never shielded: it can be attacked at once.
+                castle.shield_until = None
         war.looted_apples = loot
         war.status = "finished"
         await session.flush()

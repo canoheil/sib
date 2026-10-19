@@ -17,10 +17,40 @@ from sib.services.sib_claim import fa_digits
 from sib.services.user import UserService
 from sib.services.telegram_ui import safe_answer_callback
 from sib.keyboards.common import danger_button, primary_button, success_button
-from sib.services.war_service import WarError, WarService
+from sib.services.war_service import (
+    WarError,
+    WarService,
+    shield_remaining_seconds,
+)
 
 router = Router(name="castle")
 GROUPS = {"group", "supergroup"}
+
+# C2-6: shown before a shielded group may browse war targets. Confirming it
+# breaks the shield at once; cancelling keeps the castle protected.
+WAR_SHIELD_WARNING = (
+    "⚠️ شما در حال حاضر سپر صلح فعال دارید. اگر به گروهی حمله کنید، "
+    "سپر شما فوراً شکسته می‌شود و در معرض حمله قرار می‌گیرید."
+)
+
+WAR_TARGET_PROMPT = (
+    "⚔️ انتخاب هدف برای نبرد (جدال سیبی)\n\n"
+    "🎯 گروه‌های زیر با اختلاف سطح حداکثر ±۳ و بدون سپر صلح در دسترس هستند:\n"
+    "یکی از قلعه‌ها را برای تهاجم انتخاب کنید:"
+)
+
+WAR_NO_TARGETS = (
+    "هیچ گروه دشمن مناسبی (اختلاف سطح حداکثر ۳ یا بدون سپر صلح) در دسترس نیست."
+)
+
+
+def format_remaining_time(seconds: int) -> str:
+    """Persian duration for the shield line (e.g. «۴ ساعت و ۱۲ دقیقه»)."""
+    hours, rest = divmod(max(0, int(seconds)), 3600)
+    minutes = rest // 60
+    if hours == 0 and minutes == 0:
+        return "کمتر از یک دقیقه"
+    return f"{fa_digits(hours)} ساعت و {fa_digits(minutes)} دقیقه"
 
 
 def keyboard(group_id, donate=False, is_admin=False):
@@ -42,16 +72,27 @@ def keyboard(group_id, donate=False, is_admin=False):
     return InlineKeyboardMarkup(inline_keyboard=[[button] for button in buttons])
 
 
-def format_castle_caption(level, total_donated):
-    """Render the Apple Castle status in Persian with Persian numerals."""
+def format_castle_caption(level, total_donated, shield_seconds=None):
+    """Render the Apple Castle status in Persian with Persian numerals.
+
+    ``shield_seconds`` is the remaining lifetime of an ACTIVE peace shield
+    (C2-6); a shield line is only added when there is one. Expired or absent
+    shields leave the caption exactly as it was.
+    """
     next_threshold = (
         THRESHOLDS[level] if level < len(THRESHOLDS) else THRESHOLDS[-1]
     )
     buff_percent = round(level * INVASION_BUFF_PER_LEVEL * 100)
     income = level * DAILY_INCOME_PER_LEVEL
+    shield_line = (
+        f"🛡 سپر صلح: فعال (تا {format_remaining_time(shield_seconds)} دیگر)\n\n"
+        if shield_seconds is not None
+        else ""
+    )
     return (
         "🏰 قلعه سیبی\n\n"
         f"📊 سطح قلعه: {fa_digits(level)} از ۱۰\n\n"
+        f"{shield_line}"
         f"🍏 سیب اهدا شده: {fa_digits(total_donated)} / {fa_digits(next_threshold)}\n\n"
         f"⚔️ قدرت حمله در یورش: +{fa_digits(buff_percent)}٪\n\n"
         f"🎁 درآمد روزانه: {fa_digits(income)} سیب\n\n"
@@ -64,7 +105,8 @@ async def show_castle(message, group_id, *, donation_menu=False, is_admin=False)
     async with get_session() as session:
         castle = await CastleService.get_or_create_castle(session, group_id)
         level, total = castle.level, castle.total_donated
-    caption = format_castle_caption(level, total)
+        shield_seconds = shield_remaining_seconds(castle.shield_until)
+    caption = format_castle_caption(level, total, shield_seconds)
     markup = keyboard(group_id, donation_menu, is_admin=is_admin)
     image = castle_image(level)
     if image:
@@ -93,6 +135,34 @@ async def castle_entry(message: Message):
         await message.answer(str(exc))
 
 
+async def offer_war_targets(callback: CallbackQuery, message: Message, group_id: int) -> bool:
+    """Show the eligible enemy castles; True when a list was sent.
+
+    C2-6: only castles WITHOUT an active peace shield are listed (the service
+    query filters them out), so a protected group can never be picked.
+    """
+    async with get_session() as session:
+        targets = await WarService.find_target_groups(session, group_id)
+    if not targets:
+        await safe_answer_callback(callback, WAR_NO_TARGETS, show_alert=True)
+        return False
+    buttons = [
+        [
+            primary_button(
+                f"🏰 {title[:20]} (سطح {fa_digits(c.level)})",
+                f"castle:war_pick:{group_id}:{c.group_id}",
+            )
+        ]
+        for c, title in targets
+    ]
+    buttons.append([danger_button("🔙 بازگشت", f"castle:view:{group_id}")])
+    await safe_answer_callback(callback, "🎯 انتخاب هدف")
+    await message.answer(
+        WAR_TARGET_PROMPT, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+    )
+    return True
+
+
 @router.callback_query(F.data.startswith("castle:"))
 async def castle_callback(callback: CallbackQuery):
     message = callback.message
@@ -109,7 +179,7 @@ async def castle_callback(callback: CallbackQuery):
     action, group_id = parts[1], message.chat.id
     valid_actions = {
         "donate", "view", "100", "500", "max", "income", "top",
-        "war_start", "war_pick", "war_confirm"
+        "war_start", "war_pick", "war_confirm", "war_break_shield_confirm",
     }
     if action not in valid_actions:
         await safe_answer_callback(callback, "این دکمه معتبر نیست.", show_alert=True)
@@ -129,32 +199,41 @@ async def castle_callback(callback: CallbackQuery):
                     callback, "تنها مدیران گروه اجازهٔ اعلان جنگ دارند.", show_alert=True
                 )
                 return
+            # C2-6: a shielded group is warned first - attacking breaks the
+            # shield immediately. The target list only opens after confirmation.
             async with get_session() as session:
-                targets = await WarService.find_target_groups(session, group_id)
-            if not targets:
+                shield_until = await WarService.active_shield(session, group_id)
+            if shield_until is not None:
+                warning_markup = InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            success_button(
+                                "✅ بله، سپر را بشکن و ادامه بده",
+                                f"castle:war_break_shield_confirm:{group_id}",
+                            )
+                        ],
+                        [danger_button("🔙 انصراف", f"castle:view:{group_id}")],
+                    ]
+                )
+                await safe_answer_callback(callback, "🛡 سپر صلح فعال است", show_alert=True)
+                await message.answer(WAR_SHIELD_WARNING, reply_markup=warning_markup)
+                return
+            await offer_war_targets(callback, message, group_id)
+            return
+
+        if action == "war_break_shield_confirm":
+            if not is_admin:
                 await safe_answer_callback(
-                    callback,
-                    "هیچ گروه دشمن مناسبی (اختلاف سطح حداکثر ۳ یا بدون سپر صلح) در دسترس نیست.",
-                    show_alert=True,
+                    callback, "تنها مدیران گروه اجازهٔ اعلان جنگ دارند.", show_alert=True
                 )
                 return
-            buttons = [
-                [
-                    primary_button(
-                        f"🏰 {title[:20]} (سطح {fa_digits(c.level)})",
-                        f"castle:war_pick:{group_id}:{c.group_id}",
-                    )
-                ]
-                for c, title in targets
-            ]
-            buttons.append([danger_button("🔙 بازگشت", f"castle:view:{group_id}")])
-            text = (
-                "⚔️ انتخاب هدف برای نبرد (جدال سیبی)\n\n"
-                "🎯 گروه‌های زیر با اختلاف سطح حداکثر ±۳ و بدون سپر صلح در دسترس هستند:\n"
-                "یکی از قلعه‌ها را برای تهاجم انتخاب کنید:"
-            )
-            await safe_answer_callback(callback, "🎯 انتخاب هدف")
-            await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+            async with get_session() as session:
+                broken = await WarService.break_shield(session, group_id)
+            if broken:
+                await safe_answer_callback(callback, "🛡 سپر صلح شکسته شد")
+            else:
+                await safe_answer_callback(callback, "🛡 سپر فعالی وجود ندارد")
+            await offer_war_targets(callback, message, group_id)
             return
 
         if action == "war_pick":
@@ -176,7 +255,7 @@ async def castle_callback(callback: CallbackQuery):
                 f"📊 سطح قلعه حریف: {fa_digits(target_castle.level)} از ۱۰\n\n"
                 "⏳ مدت زمان نبرد: ۵ ساعت تمام\n"
                 "💰 پاداش فتح: بخشی از پیشرفت قلعه‌ی دشمن را غنیمت می‌گیرید (مقدار دقیق پس از پیروزی مشخص می‌شود).\n"
-                "🛡 قانون صلح: گروه مغلوب ۱۲ ساعت سپر صلح دریافت می‌کند.\n\n"
+                "🛡 قانون صلح: گروه مدافع پس از پایان نبرد (برد، باخت یا تساوی) ۵ ساعت سپر صلح می‌گیرد و گروه مهاجم سپری ندارد.\n\n"
                 "آیا از شروع حمله به این قلعه اطمینان دارید؟"
             )
             markup = InlineKeyboardMarkup(
