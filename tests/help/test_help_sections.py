@@ -304,14 +304,16 @@ def test_help_mentions_invasion():
 
 
 def test_help_mentions_apple_mine():
-    """The Apple Mine is explained: command, cooldown, reward table."""
+    """The Apple Mine is explained: command, cooldown, pickaxe ladder."""
     body = get_section("mine").body_fa
     assert "معدن سیبی" in body
     assert fa_digits(30) in body  # 30 minutes between shifts
     for label in ("سیب معمولی", "سیب طلایی", "سیب الماسی", "سیب ابسیدینی"):
         assert label in body, label
-    # The card is cosmetic: it is neither consumed nor a bonus.
-    assert "مصرف" in body
+    # M2-RECON: the pickaxe is the progression; card selection is gone.
+    assert "کلنگ" in body
+    assert fa_digits(300) in body  # first upgrade cost
+    assert "کارت" not in body
 
 
 def test_help_mentions_chests():

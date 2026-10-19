@@ -138,8 +138,8 @@ __all__ += ["Inv2GroupMember"]
 from sib.database.models.admin_log import AdminLog
 __all__ += ["AdminLog"]
 
-from sib.database.models.apple_mine import AppleMineShift
-__all__ += ["AppleMineShift"]
+from sib.database.models.apple_mine import AppleMineShift, UserPickaxe
+__all__ += ["AppleMineShift", "UserPickaxe"]
 
 from sib.database.models.castle import GroupCastle, CastleDonation, CastleIncomeClaim
 __all__ += ["GroupCastle", "CastleDonation", "CastleIncomeClaim"]

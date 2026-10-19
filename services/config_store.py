@@ -80,6 +80,32 @@ CONFIG_DEFAULTS: dict[str, Any] = {
         {"apples": 1300, "item": "apple_obsidian", "quantity": 6},  # 8 -> 9
         {"apples": 1600, "item": "apple_obsidian", "quantity": 8},  # 9 -> 10
     ],
+    # Apple Mine pickaxe progression (M2-RECON, docs/games/M2-RECON.md).
+    #
+    # Balance basis: one 30-minute shift per player; a dedicated miner works
+    # 8 shifts/day. EV per shift counts special apples at their sell value
+    # (gold 50 / diamond 100 / obsidian 200): L1 ≈ 25.8, L5 ≈ 79.3 Apples,
+    # so the ladder (300/600/1000/1500 = 3400 total, ~55% of the card-
+    # upgrade ladder) pays back in ~9-10 days for a dedicated miner and
+    # ~2-3 weeks for a casual one. Level 1 is deliberately below the old M1
+    # flat table (≈64.5/shift): the pickaxe is the progression hook.
+    #
+    # ``pickaxe_upgrade_costs``: index i = normal-Apple cost to ENTER level
+    # i+1 (index 0 = level 1, always free). Rebalancing = edit this list
+    # (or override it in system_config); no code.
+    "pickaxe_upgrade_costs": [0, 300, 600, 1000, 1500],
+    # ``pickaxe_rewards``: index i = the reward table of level i+1. A shift
+    # rolls the special chances first (gold/diamond/obsidian, mutually
+    # exclusive, percentages of 100; fixed drop quantities 3/1/1) and
+    # otherwise grants a uniform random number of normal Apples between
+    # ``min`` and ``max``.
+    "pickaxe_rewards": [
+        {"min": 10, "max": 15, "gold": 7, "diamond": 2, "obsidian": 1},
+        {"min": 15, "max": 22, "gold": 10, "diamond": 3, "obsidian": 1},
+        {"min": 21, "max": 30, "gold": 13, "diamond": 4, "obsidian": 2},
+        {"min": 28, "max": 40, "gold": 16, "diamond": 5, "obsidian": 2},
+        {"min": 45, "max": 60, "gold": 20, "diamond": 6, "obsidian": 3},
+    ],
     # Apple Battle
     "apple_battle_winner_seedlings": 1,
     "apple_battle_queue_timeout_seconds": 600,

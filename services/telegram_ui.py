@@ -152,8 +152,8 @@ def _log_work_button_path(*, uses_style: bool) -> None:
     _WORK_BUTTON_PATH_LOGGED = True
 
 
-def work_button_kb(*, supports_style: bool) -> InlineKeyboardMarkup:
-    """Build the work button using the green style when the client supports it."""
+def _work_button(supports_style: bool) -> InlineKeyboardButton:
+    """The green work button, with the legacy-client label fallback."""
     label = "⛏ کار کردن در معدن"
     if supports_style:
         try:
@@ -176,7 +176,32 @@ def work_button_kb(*, supports_style: bool) -> InlineKeyboardMarkup:
             text=f"🟢 {label}",
             callback_data="mine:work",
         )
-    return InlineKeyboardMarkup(inline_keyboard=[[button]])
+    return button
+
+
+def work_button_kb(*, supports_style: bool) -> InlineKeyboardMarkup:
+    """Build the work button using the green style when the client supports it."""
+    return InlineKeyboardMarkup(inline_keyboard=[[_work_button(supports_style)]])
+
+
+def mine_menu_kb(*, supports_style: bool) -> InlineKeyboardMarkup:
+    """Main mine menu (M2-RECON): work (green) + pickaxe upgrade (blue).
+
+    One row, two buttons. The pickaxe button uses the standard styled
+    ``primary`` path like every other game navigation button.
+    """
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                _work_button(supports_style),
+                InlineKeyboardButton(
+                    text="🔨 ارتقا کلنگ",
+                    callback_data="mine:pickaxe",
+                    style="primary",
+                ),
+            ]
+        ]
+    )
 
 
 def with_refresh_button(
