@@ -39,54 +39,87 @@ from sib.services.war_service import (
 )
 
 
+async def _seed_war_world(session):
+    """Create two users, two warring groups, their castles, a card and wallets."""
+    # Create users
+    u1 = User(id=1, first_name="مهاجم اول", language_code="fa")
+    u2 = User(id=2, first_name="مدافع اول", language_code="fa")
+    session.add_all([u1, u2])
+
+    # Create groups
+    g1 = Group(id=-1001, title="قبیله عقاب", is_active=True)
+    g2 = Group(id=-1002, title="قبیله شیر", is_active=True)
+    session.add_all([g1, g2])
+    await session.flush()
+
+    # Create castles
+    c1 = await CastleService.get_or_create_castle(session, -1001)
+    c2 = await CastleService.get_or_create_castle(session, -1002)
+    c1.level = 3
+    c2.level = 4
+    await session.flush()
+
+    # Create character and cards
+    char1 = Character(
+        id=1,
+        code="apple_knight",
+        name_fa="شوالیه سیب",
+        power=50,
+        speed=30,
+        intelligence=20,
+    )
+    session.add(char1)
+    await session.flush()
+
+    card1 = PlayerCard(id=101, user_id=1, character_id=1, level=1, is_favorite=True)
+    card2 = PlayerCard(id=102, user_id=2, character_id=1, level=1, is_favorite=True)
+    session.add_all([card1, card2])
+    await session.flush()
+
+    # Wallets
+    await AppleWalletService.earn(session, 1, 5000, reason="test")
+    await AppleWalletService.earn(session, 2, 5000, reason="test")
+
+    # Returned so the fixture can keep the seeded rows strongly referenced:
+    # the session's identity map only holds them weakly and several war tests
+    # compare the in-memory (timezone-aware) values with ``is``-like equality.
+    return u1, u2, g1, g2, c1, c2, char1, card1, card2
+
+
+async def _create_schema(conn):
+    from sib.tests.conftest import _create_all_compatible
+
+    await conn.run_sync(_create_all_compatible)
+
+
 @pytest_asyncio.fixture
 async def war_session():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:
-        from sib.tests.conftest import _create_all_compatible
-
-        await conn.run_sync(_create_all_compatible)
+        await _create_schema(conn)
     async with async_sessionmaker(engine, expire_on_commit=False)() as session:
-        # Create users
-        u1 = User(id=1, first_name="مهاجم اول", language_code="fa")
-        u2 = User(id=2, first_name="مدافع اول", language_code="fa")
-        session.add_all([u1, u2])
-
-        # Create groups
-        g1 = Group(id=-1001, title="قبیله عقاب", is_active=True)
-        g2 = Group(id=-1002, title="قبیله شیر", is_active=True)
-        session.add_all([g1, g2])
-        await session.flush()
-
-        # Create castles
-        c1 = await CastleService.get_or_create_castle(session, -1001)
-        c2 = await CastleService.get_or_create_castle(session, -1002)
-        c1.level = 3
-        c2.level = 4
-        await session.flush()
-
-        # Create character and cards
-        char1 = Character(
-            id=1,
-            code="apple_knight",
-            name_fa="شوالیه سیب",
-            power=50,
-            speed=30,
-            intelligence=20,
-        )
-        session.add(char1)
-        await session.flush()
-
-        card1 = PlayerCard(id=101, user_id=1, character_id=1, level=1, is_favorite=True)
-        card2 = PlayerCard(id=102, user_id=2, character_id=1, level=1, is_favorite=True)
-        session.add_all([card1, card2])
-        await session.flush()
-
-        # Wallets
-        await AppleWalletService.earn(session, 1, 5000, reason="test")
-        await AppleWalletService.earn(session, 2, 5000, reason="test")
+        _seeded = await _seed_war_world(session)
         await session.commit()
         yield session
+    await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def war_session_factory(tmp_path):
+    """File-backed engine: a second session opens a SECOND connection.
+
+    The in-memory fixture uses a ``StaticPool`` (one shared connection), so it
+    cannot prove that a commit really reached the database. The file-backed
+    factory is used by the persistence tests (C2-8.5).
+    """
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'war.db'}")
+    async with engine.begin() as conn:
+        await _create_schema(conn)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as session:
+        await _seed_war_world(session)
+        await session.commit()
+    yield factory
     await engine.dispose()
 
 
@@ -223,7 +256,7 @@ async def test_attack_fails_without_enough_energy(war_session):
     part.energy = 19  # less than 20
     await s.flush()
 
-    with pytest.raises(WarError, match="انرژی جنگی شما کافی نیست"):
+    with pytest.raises(WarError, match="انرژی جنگی کافی ندارید"):
         await WarService.attack(s, war.id, 1, -1001, now=now)
 
 
@@ -236,12 +269,13 @@ async def test_war_attack_cooldown_is_30_seconds(war_session):
     # First attack at t0
     await WarService.attack(s, war.id, 1, -1001, now=t0)
 
-    # Immediate retries show Persian 30, and fractional seconds round UP.
-    for seconds, displayed in [(0, "۳۰"), (29, "۱"), (29.999, "۱")]:
-        with pytest.raises(WarError, match=f"{displayed} ثانیه دیگر صبر کنید"):
+    # Immediate retries (including fractional seconds) are refused.
+    for seconds in (0, 29, 29.999):
+        with pytest.raises(WarError) as exc:
             await WarService.attack(
                 s, war.id, 1, -1001, now=t0 + timedelta(seconds=seconds)
             )
+        assert str(exc.value) == "⏳ لطفاً ۳۰ ثانیه صبر کنید."
     part = await WarService.get_or_create_participant(s, war.id, 1, -1001)
     assert part.energy == 80
     assert len((await s.scalars(select(WarAttack))).all()) == 1
@@ -286,7 +320,7 @@ async def test_healing_potion_restores_50_energy(war_session):
 
     # Trying to drink at 100 energy raises error
     await ItemService.grant(s, 1, "healing_potion", 1)
-    with pytest.raises(WarError, match="انرژی جنگی شما پر است"):
+    with pytest.raises(WarError, match="انرژی شما در حال حاضر کامل است"):
         await WarService.use_healing_potion(s, war.id, 1, -1001)
 
 
@@ -718,7 +752,7 @@ async def test_war_five_attacks_exhaust_energy(war_session):
             s, war.id, 1, -1001, now=start + timedelta(seconds=i * 30)
         )
         assert energy == 100 - (i + 1) * 20
-    with pytest.raises(WarError, match="۲۰ انرژی"):
+    with pytest.raises(WarError, match="انرژی جنگی کافی ندارید"):
         await WarService.attack(s, war.id, 1, -1001, now=start + timedelta(seconds=150))
     assert len((await s.scalars(select(WarAttack))).all()) == 5
 
@@ -2106,3 +2140,165 @@ async def test_confirming_warning_breaks_shield_and_starts_war(war_session, monk
     assert defender.shield_until.replace(tzinfo=timezone.utc) >= datetime.now(
         timezone.utc
     ) + timedelta(hours=10)
+
+
+# ---------------------------------------------------------------------------
+# C2-8.5 - hard attack cap, committed energy/cooldown, potion cap
+# ---------------------------------------------------------------------------
+
+ATTACK_LIMIT_ALERT = "🛑 شما به سقف حداکثر ۱۰ حمله در این جنگ رسیده‌اید!"
+COOLDOWN_ALERT = "⏳ لطفاً ۳۰ ثانیه صبر کنید."
+FULL_ENERGY_ALERT = "⚡️ انرژی شما در حال حاضر کامل است!"
+
+
+@pytest.mark.asyncio
+async def test_cannot_exceed_10_attacks(war_session):
+    """A participant already at 10 attacks is refused before anything is spent."""
+    s = war_session
+    now = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)
+    war = await WarService.declare_war(s, -1001, -1002, now=now)
+
+    part = await WarService.get_or_create_participant(s, war.id, 1, -1001)
+    part.attack_count = 10
+    await s.flush()
+
+    with pytest.raises(WarError) as exc:
+        await WarService.attack(s, war.id, 1, -1001, now=now)
+
+    assert str(exc.value) == ATTACK_LIMIT_ALERT
+    # The blocked click spent no energy, no attack and wrote no war_attacks row.
+    assert part.energy == 100
+    assert part.attack_count == 10
+    assert not (await s.scalars(select(WarAttack))).all()
+
+
+@pytest.mark.asyncio
+async def test_energy_is_deducted_and_committed(war_session_factory):
+    """After commit, a NEW connection reads energy 80 and attack_count 1."""
+    factory = war_session_factory
+    now = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)
+
+    async with factory() as session:
+        war = await WarService.declare_war(session, -1001, -1002, now=now)
+        await session.commit()
+        await WarService.attack(session, war.id, 1, -1001, now=now)
+        await session.commit()
+
+    async with factory() as session:
+        part = await session.scalar(
+            select(WarParticipant).where(
+                WarParticipant.war_id == war.id, WarParticipant.user_id == 1
+            )
+        )
+        assert part.energy == 80
+        assert part.attack_count == 1
+        assert part.last_attack_at is not None
+        assert len((await session.scalars(select(WarAttack))).all()) == 1
+
+
+@pytest.mark.asyncio
+async def test_cooldown_is_enforced_in_db(war_session_factory):
+    """The 30s cooldown is measured from the value stored in the database."""
+    factory = war_session_factory
+    t0 = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)
+
+    async with factory() as session:
+        war = await WarService.declare_war(session, -1001, -1002, now=t0)
+        await session.commit()
+        await WarService.attack(session, war.id, 1, -1001, now=t0)
+        await session.commit()
+
+    async with factory() as session:
+        stored = await session.scalar(
+            select(WarParticipant.last_attack_at).where(
+                WarParticipant.war_id == war.id, WarParticipant.user_id == 1
+            )
+        )
+        assert stored is not None
+        if stored.tzinfo is None:
+            stored = stored.replace(tzinfo=timezone.utc)
+        assert stored == t0
+
+        with pytest.raises(WarError) as exc:
+            await WarService.attack(
+                session, war.id, 1, -1001, now=t0 + timedelta(seconds=1)
+            )
+        assert str(exc.value) == COOLDOWN_ALERT
+        await session.rollback()
+
+        energy, attack_count = (
+            await session.execute(
+                select(WarParticipant.energy, WarParticipant.attack_count).where(
+                    WarParticipant.war_id == war.id, WarParticipant.user_id == 1
+                )
+            )
+        ).one()
+        assert (energy, attack_count) == (80, 1)
+
+
+@pytest.mark.asyncio
+async def test_ten_attacks_allowed_and_eleventh_blocked(war_session):
+    """The cap counts attacks, not energy: refilling energy does not bypass it."""
+    s = war_session
+    start = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)
+    war = await WarService.declare_war(s, -1001, -1002, now=start)
+
+    part = await WarService.get_or_create_participant(s, war.id, 1, -1001)
+    for i in range(10):
+        part.energy = 100  # what a healing potion can restore at most
+        await s.flush()
+        await WarService.attack(
+            s, war.id, 1, -1001, now=start + timedelta(seconds=31 * i)
+        )
+        assert part.attack_count == i + 1
+
+    with pytest.raises(WarError) as exc:
+        await WarService.attack(
+            s, war.id, 1, -1001, now=start + timedelta(seconds=31 * 10)
+        )
+    assert str(exc.value) == ATTACK_LIMIT_ALERT
+    assert len((await s.scalars(select(WarAttack))).all()) == 10
+    assert part.energy == 80  # the refused 11th hit spent nothing
+
+
+@pytest.mark.asyncio
+async def test_potion_caps_at_100_energy(war_session):
+    """70 energy + 50 from a potion is 100, never 120."""
+    s = war_session
+    now = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)
+    war = await WarService.declare_war(s, -1001, -1002, now=now)
+
+    part = await WarService.get_or_create_participant(s, war.id, 1, -1001)
+    part.energy = 70
+    await s.flush()
+    await ItemService.grant(s, 1, "healing_potion", 1)
+
+    new_energy = await WarService.use_healing_potion(s, war.id, 1, -1001)
+    assert new_energy == 100
+    assert part.energy == 100
+
+
+@pytest.mark.asyncio
+async def test_potion_is_consumed_from_inventory(war_session):
+    """A drink removes exactly one item; a refused drink removes none."""
+    s = war_session
+    now = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)
+    war = await WarService.declare_war(s, -1001, -1002, now=now)
+
+    part = await WarService.get_or_create_participant(s, war.id, 1, -1001)
+    part.energy = 40
+    await s.flush()
+    await ItemService.grant(s, 1, "healing_potion", 2)
+    assert await ItemService.get_total(s, 1, "healing_potion") == 2
+
+    # 40 + 50 = 90 and the inventory drops to 1.
+    assert await WarService.use_healing_potion(s, war.id, 1, -1001) == 90
+    assert await ItemService.get_total(s, 1, "healing_potion") == 1
+
+    # At 100 the potion is refused and NOT consumed.
+    part.energy = 100
+    await s.flush()
+    with pytest.raises(WarError) as exc:
+        await WarService.use_healing_potion(s, war.id, 1, -1001)
+    assert str(exc.value) == FULL_ENERGY_ALERT
+    assert await ItemService.get_total(s, 1, "healing_potion") == 1
