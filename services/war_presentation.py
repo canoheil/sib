@@ -15,11 +15,7 @@ from aiogram.types import FSInputFile
 from sib.core.logging import logger
 from sib.services.sib_claim import fa_digits
 from sib.services.telegram_ui import safe_send_screen
-from sib.services.war_service import (
-    PEACE_SHIELD_DURATION,
-    WAR_LOOT_PERCENT,
-    WarOutcome,
-)
+from sib.services.war_service import PEACE_SHIELD_DURATION, WarOutcome
 
 VICTORY_IMAGE = (
     Path(__file__).resolve().parent.parent / "assets" / "apple_clash" / "war_bg_victory.jpg"
@@ -27,11 +23,15 @@ VICTORY_IMAGE = (
 
 
 def victory_caption(loot: int) -> str:
-    """Final message for the winning group."""
+    """Final message for the winning group.
+
+    States the amount ACTUALLY taken: the loot is capped so the loser keeps its
+    level (it can be less than 15%, or 0), so no percentage is promised.
+    """
     return (
         "🏆 پیروزی در جدال سیبی!\n"
-        f"دشمن را در هم کوبیدیم. {fa_digits(WAR_LOOT_PERCENT)}٪ از خزانه‌ی آن‌ها غنیمت گرفتیم: "
-        f"{fa_digits(loot)} سیب به قلعه اضافه شد."
+        "دشمن را در هم کوبیدیم. "
+        f"🎁 غنیمت تصرف‌شده: {fa_digits(loot)} سیب به خزانه‌ی قلعه اضافه شد."
     )
 
 

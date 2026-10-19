@@ -1291,11 +1291,13 @@ ZWNJ = "\u200c"
 
 
 def victory_text(loot):
-    """The winner's caption exactly as specified (two lines)."""
+    """The winner's caption exactly as specified (two lines).
+
+    C2-5.6: it states the loot actually taken; there is no percentage in it.
+    """
     return (
         "🏆 پیروزی در جدال سیبی!\n"
-        f"دشمن را در هم کوبیدیم. ۱۵\u066a از خزانه{ZWNJ}ی آن{ZWNJ}ها غنیمت گرفتیم: "
-        f"{loot} سیب به قلعه اضافه شد."
+        f"دشمن را در هم کوبیدیم. 🎁 غنیمت تصرف{ZWNJ}شده: {loot} سیب به خزانه{ZWNJ}ی قلعه اضافه شد."
     )
 
 
@@ -1642,3 +1644,107 @@ async def test_war_draw_sends_a_plain_notice_to_both_groups(war_session, monkeyp
     await s.refresh(war)
     assert war.status == "finished" and war.winner_id is None and war.looted_apples == 0
     assert (await _fresh_castle(s, ATTACKER)).total_donated == 10_000
+
+
+# ---------------------------------------------------------------------------
+# C2-5.6: the texts promise no percentage (the loot is capped, so it varies)
+# ---------------------------------------------------------------------------
+
+
+async def test_winner_text_shows_actual_loot_not_percentage(war_session, monkeypatch):
+    """The winner's caption states the loot really taken - never a percentage.
+
+    Since the level cap (C2-5.5) the loot is often less than 15% of the loser's
+    treasury (or 0), so a hardcoded "15%" would lie. Checked end to end, in a
+    war where the cap bites: 15% of 21_000 is 3_150, but only 1_000 may go.
+    """
+    import re
+
+    s = war_session
+    await _set_treasury(s, ATTACKER, 21_000)
+    await _set_treasury(s, DEFENDER, 4_000)
+    await _due_war(s, attacker_damage=100, defender_damage=250)  # the DEFENDER wins
+    bot = _fake_bot()
+    worker = _prepare_cycle(monkeypatch, s, bot)
+
+    await worker.run_once()
+
+    captions = {call.args[0]: call.kwargs["caption"] for call in bot.send_photo.await_args_list}
+    winner = captions[DEFENDER]
+    assert winner == victory_text("۱۰۰۰")  # exactly the specified text
+    assert f"🎁 غنیمت تصرف{ZWNJ}شده: ۱۰۰۰ سیب به خزانه{ZWNJ}ی قلعه اضافه شد." in winner
+    # No percentage - not even the uncapped number it would have been.
+    for promise in ("٪", "%", "درصد", "۱۵", "۳۱۵۰"):
+        assert promise not in winner, promise
+    assert not re.search(r"[A-Za-z0-9]", winner)  # Persian only (Persian digits)
+    # The amount shown is what the castles really moved.
+    loser = await _fresh_castle(s, ATTACKER)
+    assert loser.total_donated == 21_000 - 1_000
+
+
+@pytest.mark.parametrize("loot", [0, 1, 149, 1_000, 180_000])
+def test_winner_caption_states_whatever_amount_was_taken(loot):
+    """Whatever the cap left to take - even nothing - is stated as it is."""
+    from sib.services.sib_claim import fa_digits
+    from sib.services.war_presentation import victory_caption
+
+    text = victory_caption(loot)
+
+    assert text == victory_text(fa_digits(loot))
+    assert "٪" not in text and "%" not in text and "درصد" not in text
+
+
+async def test_declaration_text_does_not_promise_15_percent(war_session, monkeypatch):
+    """Neither the war confirmation prompt nor the declaration says "15%".
+
+    The loot is capped (C2-5.5), so how much is plundered is only known after
+    the victory. Driven through the real handler: the texts are what the
+    admin and both groups would actually receive.
+    """
+    import re
+    from contextlib import asynccontextmanager
+    from aiogram.types import CallbackQuery, Chat, Message, User as TgUser
+    from sib.handlers import castle as castle_handler
+
+    @asynccontextmanager
+    async def session_ctx():
+        yield war_session
+
+    monkeypatch.setattr(castle_handler, "get_session", session_ctx)
+    monkeypatch.setattr(CallbackQuery, "answer", AsyncMock())
+    prompt = AsyncMock()
+    monkeypatch.setattr(Message, "answer", prompt)
+    bot = SimpleNamespace(
+        get_chat_member=AsyncMock(return_value=SimpleNamespace(status="administrator")),
+        send_photo=AsyncMock(),
+        send_message=AsyncMock(),
+    )
+    admin = TgUser(id=99, first_name="مدیر", is_bot=False)
+    message = Message(
+        message_id=1, date=datetime.now(timezone.utc), chat=Chat(id=-1001, type="supergroup")
+    )
+
+    def click(data):
+        return CallbackQuery(
+            id=f"cb-{data}", from_user=admin, chat_instance="test", message=message, data=data
+        ).as_(bot)
+
+    # 1. The confirmation the admin reads after choosing a target.
+    await castle_handler.castle_callback(click("castle:war_pick:-1001:-1002"))
+    prompt.assert_awaited_once()
+    confirmation = prompt.await_args.args[0]
+    assert (
+        f"💰 پاداش فتح: بخشی از پیشرفت قلعه{ZWNJ}ی دشمن را غنیمت می{ZWNJ}گیرید "
+        f"(مقدار دقیق پس از پیروزی مشخص می{ZWNJ}شود)."
+    ) in confirmation
+
+    # 2. The declaration both groups receive once the war starts.
+    await castle_handler.castle_callback(click("castle:war_confirm:-1001:-1002"))
+    sent = {call.kwargs["chat_id"]: call.kwargs["caption"] for call in bot.send_photo.await_args_list}
+    sent.update({call.kwargs["chat_id"]: call.kwargs["text"] for call in bot.send_message.await_args_list})
+    assert set(sent) == {ATTACKER, DEFENDER}  # both groups were told
+
+    for name, text in {"confirmation": confirmation, **{f"declaration {k}": v for k, v in sent.items()}}.items():
+        for promise in ("٪", "%", "درصد", "۱۵", "15"):
+            assert promise not in text, (name, promise)
+        assert not re.search(r"[A-Za-z0-9]", text), name  # Persian only (Persian digits)
