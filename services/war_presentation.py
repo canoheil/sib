@@ -49,7 +49,7 @@ def defeat_caption(loot: int, *, shield_hours: Optional[int] = None) -> str:
     """Final message for the losing group.
 
     C2-6: the shield belongs to the DEFENDER, so a losing defender is told
-    about its 5 hour peace shield, while a losing attacker is told it gets
+    about its peace shield (C2-9: 2 hours), while a losing attacker is told it gets
     none (it can be attacked again immediately).
     """
     text = (
@@ -109,7 +109,7 @@ async def announce_war_result(bot, outcome: WarOutcome) -> int:
 
     The winner and the loser both get the victory banner with their own text;
     a draw gets a plain text notice. C2-6: only the DEFENDER is told about the
-    5 hour peace shield (it gets one win, lose or draw); the ATTACKER is never
+    peace shield (C2-9: 2 hours; one win, lose or draw); the ATTACKER is never
     shielded. Returns how many groups were reached.
     """
     shield_hours = int(PEACE_SHIELD_DURATION.total_seconds() // 3600)

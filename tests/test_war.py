@@ -31,6 +31,8 @@ from sib.services.castle_service import (
 from sib.services.items import ITEM_CATALOG, ItemService
 from sib.services.player_cards import PlayerCardService
 from sib.services.war_service import (
+    PEACE_SHIELD_DURATION,
+    WAR_DURATION,
     WarError,
     WarOutcome,
     WarService,
@@ -195,9 +197,11 @@ async def test_declaration_requires_admin(war_session, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_war_duration_is_5_hours(war_session):
+async def test_war_duration_is_1_hour(war_session):
+    """C2-9: War Blitz - the war lasts exactly one hour, not five."""
     s = war_session
     now = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)
+    assert WAR_DURATION == timedelta(hours=1)
 
     # Both castles start not in war
     c1 = await s.scalar(select(GroupCastle).where(GroupCastle.group_id == -1001))
@@ -212,7 +216,9 @@ async def test_war_duration_is_5_hours(war_session):
     assert war.status == "active"
     assert war.attacker_damage == 0
     assert war.defender_damage == 0
-    assert war.ends_at == now + timedelta(hours=5)
+    assert war.ends_at == now + timedelta(hours=1)
+    assert war.started_at == now
+    assert war.ends_at - war.started_at == timedelta(hours=1)
 
     # in_war flags are updated
     assert c1.in_war is True
@@ -221,6 +227,15 @@ async def test_war_duration_is_5_hours(war_session):
     # Declaring another war while in war fails
     with pytest.raises(WarError, match="در حال حاضر در نبرد است"):
         await WarService.declare_war(s, -1001, -1002, now=now)
+
+
+def test_war_announcements_state_the_blitz_durations():
+    """C2-9: the castle screens quote the constants, not a stale "5 hours"."""
+    from sib.handlers import castle as castle_handler
+
+    assert castle_handler.WAR_HOURS_TEXT == "یک ساعت"
+    assert castle_handler.WAR_HOURS_ADJECTIVE == "یک\u200cساعته"
+    assert castle_handler.SHIELD_HOURS_TEXT == "۲"
 
 
 @pytest.mark.asyncio
@@ -678,14 +693,14 @@ def test_war_attack_image_perspective(monkeypatch):
 
 
 @pytest.mark.parametrize("winner_id", [-1001, -1002])
-async def test_war_peace_shield_is_5_hours_on_the_defender(war_session, winner_id):
+async def test_war_peace_shield_is_2_hours_on_the_defender(war_session, winner_id):
     s = war_session
     start = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)
     war = await WarService.declare_war(s, -1001, -1002, now=start)
     war.attacker_damage = 200 if winner_id == -1001 else 100
     war.defender_damage = 100 if winner_id == -1001 else 200
     await s.commit()
-    end = start + timedelta(hours=5)
+    end = start + timedelta(hours=1)
     assert not await WarService.finish_war(
         s, war.id, now=end - timedelta(microseconds=1)
     )
@@ -695,8 +710,8 @@ async def test_war_peace_shield_is_5_hours_on_the_defender(war_session, winner_i
     attacker = await s.get(GroupCastle, -1001)
     assert war.status == "finished" and war.winner_id == winner_id
     assert not defender.in_war and not attacker.in_war
-    # C2-6: the DEFENDER is shielded for exactly 5 hours, win or lose.
-    assert defender.shield_until == end + timedelta(hours=5)
+    # C2-6/C2-9: the DEFENDER is shielded for exactly 2 hours, win or lose.
+    assert defender.shield_until == end + timedelta(hours=2)
     # The ATTACKER never gets one.
     assert attacker.shield_until is None
     await s.commit()
@@ -714,32 +729,32 @@ async def test_war_peace_shield_is_5_hours_on_the_defender(war_session, winner_i
         )
     # It is not listed as a target while the shield lasts ...
     assert (
-        await WarService.find_target_groups(s, -1001, now=end + timedelta(hours=4))
+        await WarService.find_target_groups(s, -1001, now=end + timedelta(hours=1))
         == []
     )
-    # ... and exactly 5 hours after settlement it can be attacked again.
+    # ... and exactly 2 hours after settlement it can be attacked again.
     targets = await WarService.find_target_groups(
-        s, -1001, now=end + timedelta(hours=5)
+        s, -1001, now=end + timedelta(hours=2)
     )
     assert [c.group_id for c, _title in targets] == [-1002]
     new_war = await WarService.declare_war(
-        s, -1001, -1002, now=end + timedelta(hours=5)
+        s, -1001, -1002, now=end + timedelta(hours=2)
     )
     assert new_war.status == "active"
 
 
 async def test_war_tie_has_no_loser_but_the_defender_is_shielded(war_session):
-    """A draw has no winner/loser, but the defender still gets its 5h shield."""
+    """A draw has no winner/loser, but the defender still gets its 2h shield."""
     s = war_session
     start = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)
     war = await WarService.declare_war(s, -1001, -1002, now=start)
-    end = start + timedelta(hours=5)
+    end = start + timedelta(hours=1)
     assert await WarService.finish_war(s, war.id, now=end)
     assert war.status == "finished" and war.winner_id is None
     defender = await s.get(GroupCastle, -1002)
     attacker = await s.get(GroupCastle, -1001)
     assert not defender.in_war and not attacker.in_war
-    assert defender.shield_until == end + timedelta(hours=5)
+    assert defender.shield_until == end + timedelta(hours=2)
     assert attacker.shield_until is None
 
 
@@ -757,12 +772,12 @@ async def test_war_five_attacks_exhaust_energy(war_session):
     assert len((await s.scalars(select(WarAttack))).all()) == 5
 
 
-async def test_war_attacks_stop_at_five_hour_deadline(war_session):
+async def test_war_attacks_stop_at_one_hour_deadline(war_session):
     s = war_session
     start = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)
     war = await WarService.declare_war(s, -1001, -1002, now=start)
     with pytest.raises(WarError, match="زمان نبرد به پایان رسیده"):
-        await WarService.attack(s, war.id, 1, -1001, now=start + timedelta(hours=5))
+        await WarService.attack(s, war.id, 1, -1001, now=start + timedelta(hours=1))
     assert not (await s.scalars(select(WarAttack))).all()
 
 
@@ -928,7 +943,11 @@ async def test_expired_wars_are_finalized_in_maintenance(war_session, monkeypatc
     attacker = await castle_row(-1001)
     defender = await castle_row(-1002)
     assert not attacker.in_war and not defender.in_war
-    assert before + timedelta(hours=5) <= aware(defender.shield_until) <= after + timedelta(hours=5)
+    assert (
+        before + PEACE_SHIELD_DURATION
+        <= aware(defender.shield_until)
+        <= after + PEACE_SHIELD_DURATION
+    )
     assert attacker.shield_until is None
 
     # A war that has not reached its deadline is left strictly alone.
@@ -964,7 +983,7 @@ async def test_war_expiration_failure_rolls_back_shield_and_flags(
 
     monkeypatch.setattr(s, "flush", fail_flush)
     with pytest.raises(RuntimeError, match="settlement failure"):
-        await WarService.finish_war(s, war_id, now=start + timedelta(hours=5))
+        await WarService.finish_war(s, war_id, now=start + WAR_DURATION)
     await s.rollback()
     monkeypatch.setattr(s, "flush", original_flush)
     saved = await s.get(GroupWar, war_id)
@@ -972,7 +991,7 @@ async def test_war_expiration_failure_rolls_back_shield_and_flags(
     for group_id in (-1001, -1002):
         castle = await s.get(GroupCastle, group_id)
         assert castle.in_war and castle.shield_until is None
-    assert await WarService.finish_war(s, war_id, now=start + timedelta(hours=5))
+    assert await WarService.finish_war(s, war_id, now=start + WAR_DURATION)
 
 
 async def test_war_expiration_ignores_missing_war(war_session):
@@ -985,7 +1004,7 @@ async def test_war_expiration_ignores_missing_war(war_session):
 
 ATTACKER, DEFENDER = -1001, -1002
 START = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)
-END = START + timedelta(hours=5)
+END = START + WAR_DURATION  # C2-9: one hour
 
 
 async def _fresh_castle(s, group_id):
@@ -1409,7 +1428,7 @@ async def test_war_never_lowers_the_level_of_a_winner_either(war_session):
 ZWNJ = "\u200c"
 
 
-SHIELD_LINE = "۵ ساعت سپر صلح فعال شد."
+SHIELD_LINE = "۲ ساعت سپر صلح فعال شد."
 
 
 def victory_text(loot, *, shield=False):
@@ -1898,7 +1917,7 @@ async def test_declaration_text_does_not_promise_15_percent(war_session, monkeyp
 
 
 # ---------------------------------------------------------------------------
-# C2-6: the definitive peace shield (defender only, 5 hours)
+# C2-6: the definitive peace shield (defender only; C2-9: 2 hours)
 # ---------------------------------------------------------------------------
 
 
@@ -1915,11 +1934,9 @@ async def _add_third_group(s, group_id=-1003, title="قبیله گرگ", level=3
 @pytest.mark.parametrize(
     "defender_wins", [True, False], ids=["defender-wins", "defender-loses"]
 )
-async def test_defender_gets_5h_shield_on_win_or_loss(war_session, defender_wins):
-    """Whatever the result, the DEFENDER ends the war with a 5 hour shield."""
-    from sib.services.war_service import PEACE_SHIELD_DURATION
-
-    assert PEACE_SHIELD_DURATION == timedelta(hours=5)
+async def test_defender_gets_2h_shield_on_win_or_loss(war_session, defender_wins):
+    """Whatever the result, the DEFENDER ends the war with a 2 hour shield."""
+    assert PEACE_SHIELD_DURATION == timedelta(hours=2)
 
     s = war_session
     war = await _declare(
@@ -1933,13 +1950,15 @@ async def test_defender_gets_5h_shield_on_win_or_loss(war_session, defender_wins
     assert outcome.winner_id == (DEFENDER if defender_wins else ATTACKER)
     defender = await _fresh_castle(s, DEFENDER)
     assert defender.shield_until is not None
-    assert defender.shield_until.replace(tzinfo=timezone.utc) == END + timedelta(hours=5)
+    assert defender.shield_until.replace(tzinfo=timezone.utc) == END + PEACE_SHIELD_DURATION
     assert not defender.in_war
     # The active shield is what keeps it out of every target list.
-    assert shield_remaining_seconds(defender.shield_until, now=END + timedelta(hours=4)) == 3600
+    assert shield_remaining_seconds(
+        defender.shield_until, now=END + timedelta(hours=1)
+    ) == 3600
 
 
-async def test_defender_gets_5h_shield_after_a_draw(war_session):
+async def test_defender_gets_2h_shield_after_a_draw(war_session):
     """A tie has no winner, but the war still "ends" for the defender."""
     s = war_session
     war = await _declare(s, attacker_damage=200, defender_damage=200)
@@ -1948,7 +1967,7 @@ async def test_defender_gets_5h_shield_after_a_draw(war_session):
 
     assert outcome.is_draw
     defender = await _fresh_castle(s, DEFENDER)
-    assert defender.shield_until.replace(tzinfo=timezone.utc) == END + timedelta(hours=5)
+    assert defender.shield_until.replace(tzinfo=timezone.utc) == END + PEACE_SHIELD_DURATION
     assert (await _fresh_castle(s, ATTACKER)).shield_until is None
 
 
@@ -2005,7 +2024,7 @@ async def test_shielded_group_not_in_target_list(war_session):
         s, ATTACKER, now=now + PEACE_SHIELD_DURATION
     )
     assert sorted(c.group_id for c, _title in listed) == sorted([-1003, DEFENDER])
-    assert shield_remaining_seconds(shielded.shield_until, now=now) == 5 * 3600
+    assert shield_remaining_seconds(shielded.shield_until, now=now) == 2 * 3600
 
 
 def _war_click(bot, data, chat_id=ATTACKER, user_id=99):
@@ -2059,7 +2078,7 @@ async def test_attacking_while_shielded_triggers_warning(war_session, monkeypatc
     s = war_session
     await _add_third_group(s)
     now = datetime.now(timezone.utc)
-    shield_end = now + timedelta(hours=5)
+    shield_end = now + PEACE_SHIELD_DURATION
     (await s.get(GroupCastle, ATTACKER)).shield_until = shield_end
     await s.commit()
 
@@ -2093,7 +2112,7 @@ async def test_confirming_warning_breaks_shield_and_starts_war(war_session, monk
     s = war_session
     await _add_third_group(s, level=4)  # a second, still shielded choice
     now = datetime.now(timezone.utc)
-    (await s.get(GroupCastle, ATTACKER)).shield_until = now + timedelta(hours=5)
+    (await s.get(GroupCastle, ATTACKER)).shield_until = now + PEACE_SHIELD_DURATION
     await s.commit()
 
     handler, bot, prompt = _castle_handler_driver(monkeypatch, s)
@@ -2115,7 +2134,7 @@ async def test_confirming_warning_breaks_shield_and_starts_war(war_session, monk
     assert f"castle:war_pick:{ATTACKER}:{DEFENDER}" in listed
     assert f"castle:war_pick:{ATTACKER}:-1003" in listed
 
-    # Choosing the target and confirming really starts the 5 hour war.
+    # Choosing the target and confirming really starts the one hour war.
     await handler.castle_callback(
         _war_click(bot, f"castle:war_pick:{ATTACKER}:{DEFENDER}")
     )
@@ -2125,21 +2144,23 @@ async def test_confirming_warning_breaks_shield_and_starts_war(war_session, monk
     war = await WarService.get_active_war(s, ATTACKER)
     assert war is not None
     assert (war.attacker_id, war.defender_id, war.status) == (ATTACKER, DEFENDER, "active")
-    assert war.ends_at.replace(tzinfo=timezone.utc) <= datetime.now(timezone.utc) + timedelta(hours=5, minutes=1)
+    assert war.ends_at.replace(tzinfo=timezone.utc) <= datetime.now(
+        timezone.utc
+    ) + WAR_DURATION + timedelta(minutes=1)
     assert (await _fresh_castle(s, ATTACKER)).in_war is True
     assert (await _fresh_castle(s, DEFENDER)).in_war is True
 
-    # Rule 5: the NEW defender is shielded for 5 hours when this war ends.
-    outcome = await WarService.finish_war(
-        s, war.id, now=datetime.now(timezone.utc) + timedelta(hours=6)
-    )
+    # Rule 5: the NEW defender is shielded for 2 hours when this war ends.
+    settled_at = datetime.now(timezone.utc) + timedelta(hours=3)
+    outcome = await WarService.finish_war(s, war.id, now=settled_at)
     await s.commit()
     assert outcome is not None and outcome.defender_id == DEFENDER
     defender = await _fresh_castle(s, DEFENDER)
     assert defender.shield_until is not None
-    assert defender.shield_until.replace(tzinfo=timezone.utc) >= datetime.now(
-        timezone.utc
-    ) + timedelta(hours=10)
+    assert (
+        defender.shield_until.replace(tzinfo=timezone.utc)
+        == settled_at + PEACE_SHIELD_DURATION
+    )
 
 
 # ---------------------------------------------------------------------------

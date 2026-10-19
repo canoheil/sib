@@ -27,10 +27,12 @@ from sib.services.items import ItemService
 from sib.services.lock_order import lock_user_row
 from sib.services.player_cards import PlayerCardService
 
-WAR_DURATION = timedelta(hours=5)
+# C2-9: War Blitz - a war is a fast, intense one-hour event.
+WAR_DURATION = timedelta(hours=1)
 # C2-6: the DEFENDER of a war always receives this shield when the war ends,
 # whether it won, lost or drew. The ATTACKER never receives one.
-PEACE_SHIELD_DURATION = timedelta(hours=5)
+# C2-9: shortened to 2 hours for the Blitz format.
+PEACE_SHIELD_DURATION = timedelta(hours=2)
 # The winner plunders at most this share of the loser's ``total_donated`` (see
 # ``war_loot``: never so much that the loser would lose its level).
 WAR_LOOT_PERCENT = 15
@@ -212,7 +214,10 @@ class WarService:
         *,
         now: Optional[datetime] = None,
     ) -> GroupWar:
-        """Lock both castles in ASC order, verify availability, set in_war, and create 5h GroupWar."""
+        """Lock both castles in ASC order, verify availability, set in_war, and create the war.
+
+        The deadline is ``now + WAR_DURATION`` (C2-9: one hour, Blitz mode).
+        """
         now = now or datetime.now(timezone.utc)
         if attacker_group_id == defender_group_id:
             raise WarError("امکان اعلان جنگ به گروه خودی وجود ندارد.")
@@ -283,10 +288,11 @@ class WarService:
           floor of its current level, so a lost war cannot demote it. The loot
           moves from the loser's ``total_donated`` to the winner's and is
           recorded in ``looted_apples``;
-        * C2-6: the DEFENDER always gets the 5 hour peace shield when the war
-          ends - on a win, on a loss and on a draw. The ATTACKER never gets
-          one (a leftover shield, if any, is cleared), so it can be attacked
-          again immediately;
+        * C2-6: the DEFENDER always gets the peace shield
+          (``PEACE_SHIELD_DURATION``, C2-9: 2 hours) when the war ends - on a
+          win, on a loss and on a draw. The ATTACKER never gets one (a
+          leftover shield, if any, is cleared), so it can be attacked again
+          immediately;
         * ``in_war`` is cleared on both castles and the war becomes finished.
         """
         now = now or datetime.now(timezone.utc)
