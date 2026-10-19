@@ -1,5 +1,6 @@
 """Apple Clash (Group War) domain service. Caller owns commit/rollback."""
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import random
 from math import ceil
@@ -16,7 +17,12 @@ from sib.database.models import (
     WarParticipant,
 )
 from sib.services.card_progression import card_attributes
-from sib.services.castle_service import CastleService, apply_castle_buff
+from sib.services.castle_service import (
+    CastleService,
+    apply_castle_buff,
+    level_floor,
+    level_for_total,
+)
 from sib.services.invasion_v2.damage import compute_damage
 from sib.services.items import ItemService
 from sib.services.sib_claim import fa_digits
@@ -25,6 +31,9 @@ from sib.services.player_cards import PlayerCardService
 
 WAR_DURATION = timedelta(hours=5)
 PEACE_SHIELD_DURATION = timedelta(hours=12)
+# The winner plunders at most this share of the loser's ``total_donated`` (see
+# ``war_loot``: never so much that the loser would lose its level).
+WAR_LOOT_PERCENT = 15
 ATTACK_ENERGY_COST = 20
 ATTACK_COOLDOWN_SECONDS = 30
 
@@ -33,8 +42,55 @@ def _utc(value: datetime) -> datetime:
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
 
 
+def war_loot(loser_total_donated: int, loser_level: int) -> int:
+    """Apples plundered from the loser: 15% of its treasury, capped to keep its level.
+
+    ::
+
+        intended_loot = total_donated * 15 // 100          # == int(total_donated * 0.15)
+        max_safe_loot = total_donated - level_floor(level)  # held above its level's threshold
+        actual_loot   = min(intended_loot, max_safe_loot)   # and never below zero
+
+    "Castle levels never downgrade": the loser always keeps at least the
+    ``level_floor`` of its CURRENT level, so a lost war cannot demote it. A
+    castle that has only just reached its level (or a maxed castle: donations
+    stop at exactly the level-10 floor) has little or nothing above the floor
+    and loses little or nothing.
+
+    ``intended_loot`` is ``int(total_donated * 0.15)`` computed in integers: the
+    same number for every value an INT column can hold (0 .. 2**31 - 1, checked
+    exhaustively), but without binary-float rounding. ``loser_level`` is the
+    loser's stored level; a level the total cannot support (a negative
+    ``max_safe_loot``) yields 0 rather than a negative loot.
+    """
+    total = max(0, int(loser_total_donated))
+    intended_loot = total * WAR_LOOT_PERCENT // 100
+    max_safe_loot = total - level_floor(loser_level)
+    return max(0, min(intended_loot, max_safe_loot))
+
+
 class WarError(ValueError):
     pass
+
+
+@dataclass(frozen=True)
+class WarOutcome:
+    """What one finished war settled; the input of the result announcement.
+
+    ``winner_id`` / ``loser_id`` are group ids (a group id is its Telegram chat
+    id). Both are ``None`` for a draw, which has no loot and no peace shield.
+    """
+
+    war_id: int
+    attacker_id: int
+    defender_id: int
+    winner_id: Optional[int]
+    loser_id: Optional[int]
+    loot: int
+
+    @property
+    def is_draw(self) -> bool:
+        return self.winner_id is None
 
 
 class WarService:
@@ -132,12 +188,27 @@ class WarService:
         return war
 
     @staticmethod
-    async def finish_war(session, war_id: int, *, now=None) -> bool:
-        """Finish a due war once; unlock castles and shield only the loser.
+    async def finish_war(session, war_id: int, *, now=None) -> Optional[WarOutcome]:
+        """Settle a due war exactly once; return what was settled (None: nothing due).
 
-        Castles are locked in declaration order before the war row. Attacks
-        lock only the war row and cannot pass the stored ends_at deadline.
-        Ties have no loser (winner_id remains NULL), hence no peace shield.
+        Everything happens in the caller's transaction, under row locks: both
+        castle rows (group-id order, as in ``declare_war``) and then the war row
+        are read with ``SELECT ... FOR UPDATE`` and refreshed from the database.
+        Attacks lock only the war row and cannot pass the stored ``ends_at``
+        deadline; donations lock the castle row. Once the locks are held the
+        damage totals and both treasuries are final, so loot is computed from
+        current values and nothing can change before the caller commits. The
+        war is re-checked under its lock, so a second or concurrent run is a
+        no-op (never a double loot).
+
+        * the higher damage wins; a tie has no winner, no loot and no shield;
+        * the winner plunders ``war_loot(loser.total_donated, loser.level)``:
+          15% rounded down, but never more than the loser holds above the
+          floor of its current level, so a lost war cannot demote it. The loot
+          moves from the loser's ``total_donated`` to the winner's and is
+          recorded in ``looted_apples``;
+        * only the loser gets the 12 hour peace shield;
+        * ``in_war`` is cleared on both castles and the war becomes finished.
         """
         now = now or datetime.now(timezone.utc)
         sides = (
@@ -148,7 +219,7 @@ class WarService:
             )
         ).first()
         if sides is None:
-            return False
+            return None
         castles = list(
             (
                 await session.scalars(
@@ -166,26 +237,68 @@ class WarService:
             .with_for_update()
             .execution_options(populate_existing=True)
         )
+        if war is None:
+            return None
         ends_at = _utc(war.ends_at)
         if war.status != "active" or ends_at > now:
-            return False
+            return None
+
+        winner_id = loser_id = None
         if war.attacker_damage != war.defender_damage:
-            war.winner_id = (
-                war.attacker_id
-                if war.attacker_damage > war.defender_damage
-                else war.defender_id
-            )
+            if war.attacker_damage > war.defender_damage:
+                winner_id, loser_id = war.attacker_id, war.defender_id
+            else:
+                winner_id, loser_id = war.defender_id, war.attacker_id
+            war.winner_id = winner_id
+
+        by_group = {castle.group_id: castle for castle in castles}
+        winner_castle = by_group.get(winner_id)
+        loser_castle = by_group.get(loser_id)
+        loot = 0
+        if winner_castle is not None and loser_castle is not None:
+            # Treasury and level of the loser as they are NOW (read under the locks).
+            loot = war_loot(loser_castle.total_donated, loser_castle.level)
+            if loot:
+                loser_castle.total_donated -= loot
+                winner_castle.total_donated += loot
+                # The cap leaves the loser at or above the floor of its level,
+                # so its ``level`` is not touched: a war never lowers a
+                # castle's level. The winner may cross a threshold; re-derive
+                # its level the way CastleService.donate does - never lower it.
+                winner_castle.level = max(
+                    winner_castle.level, level_for_total(winner_castle.total_donated)
+                )
+
         for castle in castles:
             castle.in_war = False
-            if war.winner_id is not None and castle.group_id != war.winner_id:
+            if castle.group_id == loser_id:
                 castle.shield_until = now + PEACE_SHIELD_DURATION
+        war.looted_apples = loot
         war.status = "finished"
         await session.flush()
-        return True
+        return WarOutcome(
+            war_id=war.id,
+            attacker_id=war.attacker_id,
+            defender_id=war.defender_id,
+            winner_id=winner_id,
+            loser_id=loser_id,
+            loot=loot,
+        )
 
     @classmethod
-    async def finish_expired_wars(cls, session, *, now=None) -> int:
-        """Maintenance entry point; caller commits expiration and shield together."""
+    async def finish_expired_wars(
+        cls,
+        session,
+        *,
+        now=None,
+        outcomes: Optional[List[WarOutcome]] = None,
+    ) -> int:
+        """Maintenance entry point; caller commits expiration, loot and shield together.
+
+        Returns how many wars were settled. ``outcomes`` optionally collects
+        what each of them decided, so the caller can announce the results AFTER
+        its commit while the historic integer return value is preserved.
+        """
         now = now or datetime.now(timezone.utc)
         ids = (
             await session.scalars(
@@ -196,7 +309,12 @@ class WarService:
         ).all()
         finished = 0
         for war_id in ids:
-            finished += await cls.finish_war(session, war_id, now=now)
+            outcome = await cls.finish_war(session, war_id, now=now)
+            if outcome is None:
+                continue
+            finished += 1
+            if outcomes is not None:
+                outcomes.append(outcome)
         return finished
 
     @staticmethod

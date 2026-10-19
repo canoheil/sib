@@ -34,6 +34,17 @@ def level_for_total(total: int) -> int:
     return sum(total >= threshold for threshold in THRESHOLDS)
 
 
+def level_floor(level: int) -> int:
+    """Least ``total_donated`` a castle needs to hold ``level``.
+
+    The inverse of ``level_for_total``: ``level_for_total(level_floor(n)) == n``
+    and one apple less is already level ``n - 1``. A level outside 1..10 (the
+    ``ck_castle_level`` constraint never lets one exist) is clamped to the
+    nearest valid level.
+    """
+    return THRESHOLDS[min(max(int(level), 1), len(THRESHOLDS)) - 1]
+
+
 def apply_castle_buff(damage: int, buff: float) -> int:
     return int(damage * (1 + buff))
 
