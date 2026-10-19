@@ -21,7 +21,7 @@ from aiogram.types import (
 
 from sib.core.logging import logger
 from sib.database.connection import get_session
-from sib.keyboards.common import danger_button, success_button
+from sib.keyboards.common import danger_button, primary_button, success_button
 from sib.services.apple_mine import (
     MAX_PICKAXE_LEVEL,
     WORK_COOLDOWN_SECONDS,
@@ -30,7 +30,6 @@ from sib.services.apple_mine import (
     PickaxeMaxLevelError,
     RewardRow,
     ShiftResult,
-    UpgradeResult,
     get_pickaxe_level,
     perform_shift,
     remaining_cooldown,
@@ -41,15 +40,14 @@ from sib.services.apple_mine import (
 from sib.services.apple_mine_narrative import cooldown_message
 from sib.services.apple_wallet import AppleWalletService
 from sib.services.group import GroupService
-from sib.services.items import item_emoji, item_label
 from sib.services.sib_claim import fa_digits
 from sib.services.telegram_ui import (
     APPLE_MINE_WORK_BUTTON_SUPPORTS_STYLE,
-    mine_menu_kb,
     safe_answer_callback,
     safe_edit_callback_message,
     safe_edit_message_caption,
     safe_edit_message_media,
+    work_button_kb,
 )
 from sib.services.user import UserService
 
@@ -106,7 +104,7 @@ async def _read_mine_view(session, user_id: int) -> MineView:
 
 
 # ---------------------------------------------------------------------------
-# Captions (Persian, plain text, fa_digits — same policy as M1)
+# Captions (Persian, Markdown, fa_digits)
 # ---------------------------------------------------------------------------
 
 def _range_text(row: RewardRow) -> str:
@@ -118,48 +116,53 @@ def _pct_text(value: float) -> str:
     return f"{fa_digits(number)}٪"
 
 
-def _stats_lines(row: RewardRow) -> list[str]:
+def _stats_lines(row: RewardRow, *, bold_values: bool = False) -> list[str]:
+    extraction = f"{_range_text(row)} سیب"
+    chance = _pct_text(row.special_pct)
+    if bold_values:
+        extraction = f"**{extraction}**"
+        chance = f"**{chance}**"
     return [
-        f"⛏ سیب معمولی هر شیفت: {_range_text(row)}",
-        f"🍎 شانس سیب ویژه: {_pct_text(row.special_pct)}",
+        f"⛏ استخراج: {extraction}",
+        f"✨ شانس سیب ویژه: {chance}",
     ]
 
 
 def _panel_caption(view: MineView, user_id: int) -> str:
     lines = [
-        "⛏ معدن سیبی",
+        "⛏ **معدن سیبی**",
         "",
-        "داخل معدن تاریک است. صدای چکش از دور می‌آید.",
+        "داخل معدن تاریک است. صدای چکش از دور می‌آید...",
         "",
-        f"🔨 کلنگ شما: سطح {fa_digits(view.level)}",
-        f"⛏ هر شیفت: {_range_text(view.reward)} سیب معمولی",
-        f"🍎 شانس سیب ویژه: {_pct_text(view.reward.special_pct)}",
+        f"🔨 **کلنگ شما:** سطح {fa_digits(view.level)}",
+        f"🎁 **پاداش هر شیفت:** {_range_text(view.reward)} سیب",
+        f"✨ **شانس یافتن سیب افسانه‌ای:** {_pct_text(view.reward.special_pct)}",
         "",
     ]
     if view.cooldown > 0:
-        lines.append(cooldown_message(view.cooldown, user_id))
+        minutes, seconds = divmod(max(0, int(view.cooldown)), 60)
+        cooldown = f"{fa_digits(minutes)} دقیقه و {fa_digits(seconds)} ثانیه"
+        lines.append(
+            f"⏳ دیوارهای معدن خاموش‌اند. **{cooldown}** دیگر برگرد تا فانوس‌ها روشن شوند."
+        )
     else:
-        lines.append("⏳ معدن آماده‌ی کار است!")
+        lines.append("✨ معدن آماده است! می‌توانی کلنگ بزنی.")
     return "\n".join(lines)
 
 
-def _pickaxe_caption(view: MineView, *, success: bool = False) -> str:
-    if success:
-        lines = [f"🎉 کلنگ به سطح {fa_digits(view.level)} ارتقا یافت!", ""]
-    else:
-        lines = ["🔨 ارتقا کلنگ", ""]
-        if view.level >= MAX_PICKAXE_LEVEL:
-            lines.extend(
-                [
-                    f"🏆 کلنگ شما به بالاترین سطح ({fa_digits(MAX_PICKAXE_LEVEL)}) "
-                    "رسیده است!",
-                    "",
-                ]
-            )
+def _pickaxe_caption(view: MineView) -> str:
+    lines = ["🔨 **ارتقای کلنگ**", ""]
+    if view.level >= MAX_PICKAXE_LEVEL:
+        lines.extend(
+            [
+                f"🏆 کلنگ شما به بالاترین سطح ({fa_digits(MAX_PICKAXE_LEVEL)}) رسیده است!",
+                "",
+            ]
+        )
 
     lines.extend(
         [
-            f"📊 سطح فعلی: {fa_digits(view.level)} از {fa_digits(MAX_PICKAXE_LEVEL)}",
+            f"📊 **سطح فعلی:** {fa_digits(view.level)} از {fa_digits(MAX_PICKAXE_LEVEL)}",
             *_stats_lines(view.reward),
         ]
     )
@@ -167,30 +170,32 @@ def _pickaxe_caption(view: MineView, *, success: bool = False) -> str:
         lines.extend(
             [
                 "",
-                f"⬆️ با ارتقا به سطح {fa_digits(view.level + 1)}:",
-                *_stats_lines(view.next_reward),
+                f"⬆️ **پس از ارتقا به سطح {fa_digits(view.level + 1)}:**",
+                *_stats_lines(view.next_reward, bold_values=True),
                 "",
-                f"💰 هزینه ارتقا: {fa_digits(view.upgrade_cost)} سیب 🍎",
-                f"💰 سیب‌های شما: {fa_digits(view.balance)}",
+                f"💰 هزینه ارتقا: **{fa_digits(view.upgrade_cost)} سیب**",
+                f"🍎 موجودی شما: **{fa_digits(view.balance)} سیب**",
             ]
         )
-    elif success:
-        lines.extend(["", f"💰 سیب‌های شما: {fa_digits(view.balance)}"])
+    else:
+        lines.extend(["", f"🍎 موجودی شما: **{fa_digits(view.balance)} سیب**"])
     return "\n".join(lines)
 
 
 def _result_caption(result: ShiftResult) -> str:
-    if result.item_code == "apple_normal":
-        emoji, display_name = "🍎", "سیب معمولی"
-    else:
-        emoji = item_emoji(result.item_code)
-        display_name = item_label(result.item_code)
-    minutes, seconds = divmod(WORK_COOLDOWN_SECONDS, 60)
+    reward_types = {
+        "apple_normal": "معمولی",
+        "apple_gold": "طلایی",
+        "apple_diamond": "الماسی",
+        "apple_obsidian": "ابسیدینی",
+    }
+    reward_type = reward_types.get(result.item_code, "ویژه")
+    minutes = WORK_COOLDOWN_SECONDS // 60
     return (
         f"{result.narrative}\n\n"
-        f"{emoji} +{fa_digits(result.amount)} {display_name}\n"
-        f"🔨 کلنگ سطح {fa_digits(result.pickaxe_level)}\n"
-        f"⏳ شیفت بعدی: {fa_digits(minutes)} دقیقه و {fa_digits(seconds)} ثانیه"
+        f"🍎 **پاداش شما:** +{fa_digits(result.amount)} سیب {reward_type}\n"
+        f"🔨 **کلنگ:** سطح {fa_digits(result.pickaxe_level)}\n\n"
+        f"⏳ شیفت بعدی: **{fa_digits(minutes)} دقیقه دیگر**"
     )
 
 
@@ -203,8 +208,15 @@ def _insufficient_text(error: PickaxeInsufficientFunds) -> str:
 # ---------------------------------------------------------------------------
 
 def _main_keyboard() -> InlineKeyboardMarkup:
-    """Work (green) + pickaxe upgrade (blue), one row."""
-    return mine_menu_kb(supports_style=APPLE_MINE_WORK_BUTTON_SUPPORTS_STYLE)
+    """Work (green) + pickaxe upgrade (blue), stacked in separate rows."""
+    work_button = work_button_kb(
+        supports_style=APPLE_MINE_WORK_BUTTON_SUPPORTS_STYLE
+    ).inline_keyboard[0][0]
+    pickaxe_button = primary_button(
+        text="🔨 ارتقا کلنگ",
+        callback_data="mine:pickaxe",
+    )
+    return InlineKeyboardMarkup(inline_keyboard=[[work_button], [pickaxe_button]])
 
 
 def _pickaxe_keyboard(view: MineView) -> InlineKeyboardMarkup:
@@ -213,10 +225,7 @@ def _pickaxe_keyboard(view: MineView) -> InlineKeyboardMarkup:
         rows.append(
             [
                 success_button(
-                    text=(
-                        f"🍏 ارتقا به سطح {fa_digits(view.level + 1)} "
-                        f"(هزینه: {fa_digits(view.upgrade_cost)} سیب)"
-                    ),
+                    text=f"🍏 ارتقا به سطح {fa_digits(view.level + 1)}",
                     callback_data="mine:pickaxe:upgrade",
                 )
             ]
@@ -248,7 +257,7 @@ async def _register_user_and_group(session, user, chat) -> int | None:
 
 async def _safe_message_reply(message: Message, text: str, *, reply_markup=None) -> None:
     try:
-        await message.answer(text, reply_markup=reply_markup, parse_mode=None)
+        await message.answer(text, reply_markup=reply_markup, parse_mode="Markdown")
     except Exception:
         logger.exception("Apple Mine could not send a message reply")
 
@@ -285,7 +294,7 @@ async def _edit_screen(
                 photo=FSInputFile(str(image_path)),
                 text=caption,
                 reply_markup=reply_markup,
-                parse_mode=None,
+                parse_mode="Markdown",
             )
         return await safe_edit_message_caption(
             bot,
@@ -293,14 +302,14 @@ async def _edit_screen(
             message_id,
             caption,
             reply_markup=reply_markup,
-            parse_mode=None,
+            parse_mode="Markdown",
         )
     return await safe_edit_callback_message(
         callback,
         bot,
         caption,
         reply_markup=reply_markup,
-        parse_mode=None,
+        parse_mode="Markdown",
     )
 
 
@@ -308,9 +317,11 @@ async def _send_callback_message(callback: CallbackQuery, bot: Bot, text: str) -
     message = callback.message
     try:
         if message is not None and hasattr(message, "answer"):
-            await message.answer(text, parse_mode=None)
+            await message.answer(text, parse_mode="Markdown")
         else:
-            await bot.send_message(callback.from_user.id, text, parse_mode=None)
+            await bot.send_message(
+                callback.from_user.id, text, parse_mode="Markdown"
+            )
     except Exception:
         logger.exception("Apple Mine could not send a callback message")
 
@@ -341,7 +352,7 @@ async def _send_panel(message: Message) -> None:
             photo=FSInputFile(str(MINE_IMAGE_PATH)),
             caption=caption,
             reply_markup=keyboard,
-            parse_mode=None,
+            parse_mode="Markdown",
         )
     except Exception:
         # Keep the feature usable if a local asset cannot be read or Telegram
@@ -465,11 +476,10 @@ async def handle_mine_pickaxe_upgrade(callback: CallbackQuery, bot: Bot) -> None
         await safe_answer_callback(callback, MINE_FAILURE_TEXT, show_alert=True)
         return
 
-    outcome: UpgradeResult | None = None
     try:
         async with get_session() as session:
             try:
-                outcome = await upgrade_pickaxe(session, user_id=user.id)
+                await upgrade_pickaxe(session, user_id=user.id)
             except PickaxeInsufficientFunds as error:
                 await safe_answer_callback(
                     callback, _insufficient_text(error), show_alert=True
@@ -477,7 +487,7 @@ async def handle_mine_pickaxe_upgrade(callback: CallbackQuery, bot: Bot) -> None
                 return
             except PickaxeMaxLevelError:
                 # Stale screen (the pickaxe already moved): re-render as-is.
-                outcome = None
+                pass
             view = await _read_mine_view(session, user.id)
     except Exception:
         logger.exception("Apple Mine pickaxe upgrade failed for user=%s", user.id)
@@ -486,7 +496,7 @@ async def handle_mine_pickaxe_upgrade(callback: CallbackQuery, bot: Bot) -> None
 
     try:
         await safe_answer_callback(callback)
-        caption = _pickaxe_caption(view, success=outcome is not None)
+        caption = _pickaxe_caption(view)
         if not await _edit_screen(
             callback,
             bot,
