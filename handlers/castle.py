@@ -18,6 +18,8 @@ from sib.services.user import UserService
 from sib.services.telegram_ui import safe_answer_callback, safe_edit_callback_message
 from sib.keyboards.common import danger_button, primary_button, success_button
 from sib.services.war_service import (
+    PEACE_SHIELD_DURATION,
+    WAR_DURATION,
     WarError,
     WarService,
     shield_remaining_seconds,
@@ -42,6 +44,20 @@ WAR_TARGET_PROMPT = (
 WAR_NO_TARGETS = (
     "هیچ گروه دشمن مناسبی (اختلاف سطح حداکثر ۳ یا بدون سپر صلح) در دسترس نیست."
 )
+
+
+def _duration_words(duration) -> tuple[str, str]:
+    """(«یک ساعت», «یک\u200cساعته») for one hour; («۲ ساعت», «۲ ساعته») otherwise."""
+    hours = int(duration.total_seconds() // 3600)
+    if hours == 1:
+        return "یک ساعت", "یک\u200cساعته"
+    return f"{fa_digits(hours)} ساعت", f"{fa_digits(hours)} ساعته"
+
+
+# C2-9: these texts are built from the constants so a duration change can
+# never leave the announcement promising the old number.
+WAR_HOURS_TEXT, WAR_HOURS_ADJECTIVE = _duration_words(WAR_DURATION)
+SHIELD_HOURS_TEXT = fa_digits(int(PEACE_SHIELD_DURATION.total_seconds() // 3600))
 
 
 def format_remaining_time(seconds: int) -> str:
@@ -282,12 +298,12 @@ async def castle_callback(callback: CallbackQuery):
                 await safe_answer_callback(callback, "قلعهٔ هدف یافت نشد.", show_alert=True)
                 return
             text = (
-                "⚠️ تایید اعلان جنگ ۵ ساعته\n\n"
+                f"⚠️ تایید اعلان جنگ {WAR_HOURS_ADJECTIVE}\n\n"
                 f"🎯 قلعهٔ هدف: {target_group.title}\n"
                 f"📊 سطح قلعه حریف: {fa_digits(target_castle.level)} از ۱۰\n\n"
-                "⏳ مدت زمان نبرد: ۵ ساعت تمام\n"
+                f"⏳ مدت زمان نبرد: {WAR_HOURS_TEXT} تمام\n"
                 "💰 پاداش فتح: بخشی از پیشرفت قلعه‌ی دشمن را غنیمت می‌گیرید (مقدار دقیق پس از پیروزی مشخص می‌شود).\n"
-                "🛡 قانون صلح: گروه مدافع پس از پایان نبرد (برد، باخت یا تساوی) ۵ ساعت سپر صلح می‌گیرد و گروه مهاجم سپری ندارد.\n\n"
+                f"🛡 قانون صلح: گروه مدافع پس از پایان نبرد (برد، باخت یا تساوی) {SHIELD_HOURS_TEXT} ساعت سپر صلح می‌گیرد و گروه مهاجم سپری ندارد.\n\n"
                 "آیا از شروع حمله به این قلعه اطمینان دارید؟"
             )
             markup = InlineKeyboardMarkup(
@@ -316,12 +332,14 @@ async def castle_callback(callback: CallbackQuery):
                 attacker_title = attacker_group.title if attacker_group else f"گروه {group_id}"
                 defender_title = defender_group.title if defender_group else f"گروه {target_id}"
 
-            await safe_answer_callback(callback, "🚀 نبرد ۵ ساعته آغاز شد!", show_alert=True)
+            await safe_answer_callback(
+                callback, f"🚀 نبرد {WAR_HOURS_ADJECTIVE} آغاز شد!", show_alert=True
+            )
 
             declaration_text = (
                 "🚨 طبل جنگ در اواریا به صدا درآمد! 🚨\n\n"
                 f"⚔️ گروه «{attacker_title}» رسماً به قلعهٔ «{defender_title}» اعلان جنگ داد!\n"
-                "⏳ مهلت نبرد: ۵ ساعت تمام\n"
+                f"⏳ مهلت نبرد: {WAR_HOURS_TEXT} تمام\n"
                 "🍏 غنیمت فتح: تاراج بخشی از پیشرفت اهدای قلعهٔ مغلوب\n\n"
                 "💥 دلاوران دو قبیله! کارت‌های اصلی خود را بردارید و با ارسال دستور «وضعیت جنگ» در گروه خود، به میدان نبرد بشتابید!"
             )

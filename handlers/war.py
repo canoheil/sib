@@ -257,6 +257,11 @@ async def war_attack_callback(callback: CallbackQuery):
             damage, energy, card_name = await WarService.attack(
                 session, war_id, user_id, group_id, is_buff_used=(mode == "buff")
             )
+            # C2-8.5: persist the spent energy, the ++attack_count counter,
+            # last_attack_at and the war damage BEFORE any image/render work.
+            # The attack is durable even if a later UI step fails, and the
+            # next click reads the committed cooldown/energy/counter.
+            await session.commit()
 
             war = await session.get(GroupWar, war_id)
             if not war:
@@ -379,6 +384,10 @@ async def war_potion_callback(callback: CallbackQuery):
             new_energy = await WarService.use_healing_potion(
                 session, war_id, user_id, group_id
             )
+            # C2-8.5: the inventory decrement and the capped energy are
+            # committed together; a later UI failure cannot resurrect the
+            # potion or roll back the heal.
+            await session.commit()
 
         await safe_answer_callback(
             callback,

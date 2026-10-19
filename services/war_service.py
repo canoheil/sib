@@ -3,7 +3,6 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import random
-from math import ceil
 from typing import List, Optional, Tuple
 from sqlalchemy import func, or_, select
 
@@ -25,19 +24,31 @@ from sib.services.castle_service import (
 )
 from sib.services.invasion_v2.damage import compute_damage
 from sib.services.items import ItemService
-from sib.services.sib_claim import fa_digits
 from sib.services.lock_order import lock_user_row
 from sib.services.player_cards import PlayerCardService
 
-WAR_DURATION = timedelta(hours=5)
+# C2-9: War Blitz - a war is a fast, intense one-hour event.
+WAR_DURATION = timedelta(hours=1)
 # C2-6: the DEFENDER of a war always receives this shield when the war ends,
 # whether it won, lost or drew. The ATTACKER never receives one.
-PEACE_SHIELD_DURATION = timedelta(hours=5)
+# C2-9: shortened to 2 hours for the Blitz format.
+PEACE_SHIELD_DURATION = timedelta(hours=2)
 # The winner plunders at most this share of the loser's ``total_donated`` (see
 # ``war_loot``: never so much that the loser would lose its level).
 WAR_LOOT_PERCENT = 15
 ATTACK_ENERGY_COST = 20
 ATTACK_COOLDOWN_SECONDS = 30
+# C2-8.5: an absolute ceiling per player per war. Energy can be refilled with
+# healing potions, so energy alone never bounded the number of attacks.
+MAX_ATTACKS_PER_WAR = 10
+MAX_WAR_ENERGY = 100
+HEALING_POTION_ENERGY = 50
+
+# C2-8.5: user-facing alerts for the attack gate. Persian only (rule).
+ATTACK_LIMIT_MESSAGE = "🛑 شما به سقف حداکثر ۱۰ حمله در این جنگ رسیده‌اید!"
+COOLDOWN_MESSAGE = "⏳ لطفاً ۳۰ ثانیه صبر کنید."
+ENERGY_MESSAGE = "⚡️ انرژی جنگی کافی ندارید!"
+FULL_ENERGY_MESSAGE = "⚡️ انرژی شما در حال حاضر کامل است!"
 
 
 def _utc(value: datetime) -> datetime:
@@ -203,7 +214,10 @@ class WarService:
         *,
         now: Optional[datetime] = None,
     ) -> GroupWar:
-        """Lock both castles in ASC order, verify availability, set in_war, and create 5h GroupWar."""
+        """Lock both castles in ASC order, verify availability, set in_war, and create the war.
+
+        The deadline is ``now + WAR_DURATION`` (C2-9: one hour, Blitz mode).
+        """
         now = now or datetime.now(timezone.utc)
         if attacker_group_id == defender_group_id:
             raise WarError("امکان اعلان جنگ به گروه خودی وجود ندارد.")
@@ -274,10 +288,11 @@ class WarService:
           floor of its current level, so a lost war cannot demote it. The loot
           moves from the loser's ``total_donated`` to the winner's and is
           recorded in ``looted_apples``;
-        * C2-6: the DEFENDER always gets the 5 hour peace shield when the war
-          ends - on a win, on a loss and on a draw. The ATTACKER never gets
-          one (a leftover shield, if any, is cleared), so it can be attacked
-          again immediately;
+        * C2-6: the DEFENDER always gets the peace shield
+          (``PEACE_SHIELD_DURATION``, C2-9: 2 hours) when the war ends - on a
+          win, on a loss and on a draw. The ATTACKER never gets one (a
+          leftover shield, if any, is cleared), so it can be attacked again
+          immediately;
         * ``in_war`` is cleared on both castles and the war becomes finished.
         """
         now = now or datetime.now(timezone.utc)
@@ -412,7 +427,13 @@ class WarService:
     async def get_or_create_participant(
         session, war_id: int, user_id: int, group_id: int
     ) -> WarParticipant:
-        """Get or create participant row under row lock with 100 energy default."""
+        """Get or create the participant row, locked, with 100 energy and 0 attacks.
+
+        ``populate_existing`` refreshes an instance that is already in the
+        session's identity map, so every caller decides on the values that are
+        actually stored - never on a stale in-memory copy. The ``FOR UPDATE``
+        lock is what serializes concurrent attack clicks for the same player.
+        """
         part = await session.scalar(
             select(WarParticipant)
             .where(
@@ -420,14 +441,16 @@ class WarService:
                 WarParticipant.user_id == user_id,
             )
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
         if part is None:
             part = WarParticipant(
                 war_id=war_id,
                 user_id=user_id,
                 group_id=group_id,
-                energy=100,
+                energy=MAX_WAR_ENERGY,
                 total_damage=0,
+                attack_count=0,
             )
             session.add(part)
             await session.flush()
@@ -444,7 +467,23 @@ class WarService:
         is_buff_used: bool = False,
         now: Optional[datetime] = None,
     ) -> Tuple[int, int, str]:
-        """Execute an attack or defense hit. Costs 20 energy, checks 30s cooldown. Returns (damage, remaining_energy, card_name)."""
+        """Execute an attack or defense hit.
+
+        The attack gate runs under row locks, in this order:
+
+        1. the participant row is locked (``SELECT ... FOR UPDATE``);
+        2. ``attack_count < 10`` - an absolute cap, independent of energy;
+        3. 30-second cooldown since the STORED ``last_attack_at``;
+        4. at least 20 energy left.
+
+        Only then are 20 energy and one attack spent, ``last_attack_at`` is
+        stamped, the damage is added to the war and a ``war_attacks`` row is
+        written. Everything is part of the caller's transaction, which the
+        handler commits immediately after this call returns; the returned
+        energy is therefore already the value the next click will read.
+
+        Returns ``(damage, remaining_energy, card_name)``.
+        """
         now = now or datetime.now(timezone.utc)
         await lock_user_row(session, user_id)
 
@@ -462,9 +501,16 @@ class WarService:
             war.defender_id if group_id == war.attacker_id else war.attacker_id
         )
 
+        # 1. Locked participant row (fresh values, FOR UPDATE held).
         part = await cls.get_or_create_participant(session, war_id, user_id, group_id)
 
-        # 30-second cooldown check
+        # 2. Hard cap: 10 attacks per player per war, whatever the energy is.
+        #    Checked before any resource is spent, so a capped player loses
+        #    nothing by clicking (no energy, no buff, no potion).
+        if part.attack_count >= MAX_ATTACKS_PER_WAR:
+            raise WarError(ATTACK_LIMIT_MESSAGE)
+
+        # 3. 30-second cooldown, measured against the STORED timestamp.
         if part.last_attack_at is not None:
             last_at = (
                 part.last_attack_at.replace(tzinfo=timezone.utc)
@@ -473,14 +519,11 @@ class WarService:
             )
             elapsed = (now - last_at).total_seconds()
             if elapsed < ATTACK_COOLDOWN_SECONDS:
-                remaining_sec = ceil(ATTACK_COOLDOWN_SECONDS - elapsed)
-                raise WarError(
-                    f"برای ضربهٔ بعدی باید {fa_digits(remaining_sec)} ثانیه دیگر صبر کنید."
-                )
+                raise WarError(COOLDOWN_MESSAGE)
 
-        # Energy check
+        # 4. Energy check
         if part.energy < ATTACK_ENERGY_COST:
-            raise WarError("انرژی جنگی شما کافی نیست! (حداقل ۲۰ انرژی نیاز است).")
+            raise WarError(ENERGY_MESSAGE)
 
         # Sib-Buff item check
         if is_buff_used:
@@ -509,7 +552,9 @@ class WarService:
             damage *= 2
             await ItemService.consume(session, user_id, "sib_buff", 1)
 
-        # Deduct attack energy & record
+        # 5-7. Spend the attack: energy, cap counter, cooldown stamp and damage
+        #      are written together in the caller's transaction.
+        part.attack_count += 1
         part.energy -= ATTACK_ENERGY_COST
         part.total_damage += damage
         part.last_attack_at = now
@@ -538,7 +583,17 @@ class WarService:
     async def use_healing_potion(
         cls, session, war_id: int, user_id: int, group_id: int
     ) -> int:
-        """Drink 1 healing potion to restore 50 energy (capped at 100). Returns updated energy."""
+        """Drink 1 healing potion to restore 50 energy, capped at 100.
+
+        The potion row is locked and checked first (a player with none is told
+        so and loses nothing), then the participant row is locked. At full
+        energy the potion is NOT consumed. Otherwise exactly one potion is
+        removed from the inventory and the energy is capped with
+        ``min(100, current + 50)`` - drinking at 70 gives 100, never 120. The
+        caller commits the inventory decrement and the new energy together.
+
+        Returns the updated war energy.
+        """
         await lock_user_row(session, user_id)
         potion_count = await ItemService.get_total(
             session, user_id, "healing_potion", for_update=True
@@ -549,10 +604,10 @@ class WarService:
             )
 
         part = await cls.get_or_create_participant(session, war_id, user_id, group_id)
-        if part.energy >= 100:
-            raise WarError("انرژی جنگی شما پر است (۱۰۰ از ۱۰۰).")
+        if part.energy >= MAX_WAR_ENERGY:
+            raise WarError(FULL_ENERGY_MESSAGE)
 
         await ItemService.consume(session, user_id, "healing_potion", 1)
-        part.energy = min(100, part.energy + 50)
+        part.energy = min(MAX_WAR_ENERGY, part.energy + HEALING_POTION_ENERGY)
         await session.flush()
         return part.energy

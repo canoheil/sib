@@ -79,6 +79,12 @@ class WarParticipant(Base):
     total_damage: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0", nullable=False
     )
+    # C2-8.5: hard cap counter (max 10 attacks per player per war). It starts
+    # at 0 so a fresh participant really gets ten attacks; ``DEFAULT 0`` also
+    # backfills rows created before this column existed.
+    attack_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
     last_attack_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
