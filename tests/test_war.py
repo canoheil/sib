@@ -22,7 +22,12 @@ from sib.database.models import (
 from sib.handlers.castle import keyboard as castle_keyboard
 from sib.handlers.war import war_keyboard
 from sib.services.apple_wallet import AppleWalletService
-from sib.services.castle_service import CastleService, THRESHOLDS, level_for_total
+from sib.services.castle_service import (
+    CastleService,
+    THRESHOLDS,
+    level_floor,
+    level_for_total,
+)
 from sib.services.items import ITEM_CATALOG, ItemService
 from sib.services.player_cards import PlayerCardService
 from sib.services.war_service import WarError, WarOutcome, WarService, war_loot
@@ -899,13 +904,17 @@ async def _declare(s, *, attacker_damage, defender_damage, now=START):
         (10_000, 7_000, 1_500),  # exactly 15%
         (10_001, 0, 1_500),  # rounded DOWN (1500.15)
         (999, 123, 149),  # rounded DOWN (149.85)
-        (1_300_000, 20_000, 195_000),
+        (1_200_000, 20_000, 180_000),  # level 9: 15% fits above the 880_000 floor
     ],
 )
 async def test_war_loot_transfers_15_percent(
     war_session, attacker_wins, loser_total, winner_total, loot
 ):
-    """The loser's treasury drops by 15% and the winner's grows by the same amount."""
+    """The loser's treasury drops by 15% and the winner's grows by the same amount.
+
+    (Cases where the level cap does not bind; the capped ones are in
+    ``test_war_loot_capped_to_prevent_level_drop``.)
+    """
     s = war_session
     winner_id, loser_id = (ATTACKER, DEFENDER) if attacker_wins else (DEFENDER, ATTACKER)
     await _set_treasury(s, winner_id, winner_total)
@@ -938,43 +947,49 @@ async def test_war_loot_transfers_15_percent(
 
 
 def test_war_loot_formula_equals_int_of_total_times_015():
-    """Integer maths, same numbers as ``int(total_donated * 0.15)`` - no float drift."""
+    """Integer maths, same numbers as ``int(total_donated * 0.15)`` - no float drift.
+
+    Level 1 has a floor of 0, so the level cap can never bind there: what is
+    left is the plain 15% rule.
+    """
     probes = list(range(0, 60_000))
     probes += list(THRESHOLDS) + [t - 1 for t in THRESHOLDS[1:]]
     probes += [2**31 - 1, 2**31 - 2, 1_000_000_000]
     probes += [20 * k for k in range(10**6 - 100, 10**6 + 100)]  # 15% is a whole number
     for total in probes:
-        assert war_loot(total) == int(total * 0.15), total
-    assert [war_loot(n) for n in (0, 6, 7, 19, 20, 100, 10_000)] == [0, 0, 1, 2, 3, 15, 1_500]
-    assert war_loot(-5) == 0  # never negative
+        assert war_loot(total, 1) == int(total * 0.15), total
+    assert [war_loot(n, 1) for n in (0, 6, 7, 19, 20, 100, 10_000)] == [0, 0, 1, 2, 3, 15, 1_500]
+    assert war_loot(-5, 1) == 0  # never negative
 
 
 async def test_war_loot_is_taken_under_row_locks_from_current_values(war_session):
-    """Loot is computed under ``SELECT ... FOR UPDATE`` on both castles and the war.
+    """Loot - and its level cap - are computed under ``SELECT ... FOR UPDATE``.
 
     SQLite drops FOR UPDATE when it renders SQL, so the statements are
     inspected before they are compiled. A donation that committed after this
-    session last read the castle must be seen (the in-memory copy is stale).
+    session last read the castle must be seen: the new total AND the new level
+    (the in-memory copy is stale).
     """
     from sqlalchemy import event, update
     from sqlalchemy.sql.dml import Update
 
     s = war_session
-    await _set_treasury(s, ATTACKER, 10_000)  # the loser ...
+    await _set_treasury(s, ATTACKER, 10_000)  # the loser: level 2 ...
     await _set_treasury(s, DEFENDER, 0)
     war = await _declare(s, attacker_damage=1, defender_damage=9)
     stale = await s.get(GroupCastle, ATTACKER)
-    assert stale.total_donated == 10_000
+    assert (stale.total_donated, stale.level) == (10_000, 2)
 
-    # Somebody donates 10_000 more right before the war ends (written behind
-    # this session's back, like another connection's committed donation).
+    # A donation of 10_100 commits right before the war ends and lifts the
+    # loser into level 3 (written behind this session's back, like another
+    # connection's committed donation: CastleService.donate sets both columns).
     await s.execute(
         update(GroupCastle)
         .where(GroupCastle.group_id == ATTACKER)
-        .values(total_donated=20_000)
+        .values(total_donated=20_100, level=3)
         .execution_options(synchronize_session=False)
     )
-    assert stale.total_donated == 10_000  # stale in memory
+    assert (stale.total_donated, stale.level) == (10_000, 2)  # stale in memory
 
     seen = []
 
@@ -992,9 +1007,13 @@ async def test_war_loot_is_taken_under_row_locks_from_current_values(war_session
         event.remove(s.bind.sync_engine, "before_execute", record)
     await s.commit()
 
-    assert outcome.loot == 3_000  # 15% of the CURRENT 20_000, not of the stale 10_000
-    assert (await _fresh_castle(s, ATTACKER)).total_donated == 17_000
-    assert (await _fresh_castle(s, DEFENDER)).total_donated == 3_000
+    # 15% of the CURRENT 20_100 is 3_015, but only 100 apples are above the
+    # floor of the CURRENT level 3. (The stale copy would take 1_500; the stale
+    # level 2 with the fresh total would take 3_015 and demote the loser.)
+    assert outcome.loot == 100
+    loser = await _fresh_castle(s, ATTACKER)
+    assert (loser.total_donated, loser.level) == (20_000, 3)
+    assert (await _fresh_castle(s, DEFENDER)).total_donated == 100
     # Both castles are locked first (group-id order), then the war row ...
     locking = [tables for kind, tables, locked in seen if kind == "select" and locked]
     assert locking == [("group_castles",), ("group_wars",)]
@@ -1082,33 +1101,186 @@ async def test_war_without_loot_leaves_castles_alone(war_session):
     assert loser.shield_until is not None and winner.shield_until is None  # shield still applies
 
 
+# ---------------------------------------------------------------------------
+# C2-5.5: the loot never demotes the loser ("castle levels never downgrade")
+# ---------------------------------------------------------------------------
+
+
 @pytest.mark.parametrize(
-    "loser_total, winner_total, loser_level, winner_level",
+    "loser_total, winner_total, loot",
     [
-        (21_000, 19_000, 2, 3),  # 3_150 moves: loser 17_850 < 20_000, winner 22_150 >= 20_000
-        (1_000_000, 1_200_000, 8, 10),  # 150_000 moves: 850_000 -> 8, 1_350_000 -> 10
-        (1_300_000, 880_000, 9, 9),  # a maxed castle that loses is no longer at the cap
+        # (loser treasury, winner treasury, loot actually taken)
+        (21_000, 19_000, 1_000),  # level 3: 15% = 3_150 would leave 17_850 (level 2); only the 1_000 above the 20_000 floor may go
+        (23_528, 0, 3_528),  # one apple short of where 15% fits: 3_529 would leave 19_999
+        (1_000_000, 1_200_000, 120_000),  # level 9: 15% = 150_000, but only 120_000 are above the 880_000 floor
+        (110_000, 5_000, 0),  # exactly on the floor of level 5: nothing may be taken
+        (1_300_000, 880_000, 0),  # a maxed castle (donations stop at exactly 1_300_000): nothing above its floor
     ],
 )
-async def test_war_loot_keeps_castle_levels_in_step_with_their_totals(
-    war_session, loser_total, winner_total, loser_level, winner_level
+async def test_war_loot_capped_to_prevent_level_drop(
+    war_session, loser_total, winner_total, loot
 ):
-    """``level`` is derived from ``total_donated`` (CastleService.donate keeps them
-    in step), so moving apples re-derives both levels. Consequence: the loser of
-    a war may drop a level and the winner may gain one."""
+    """The 15% loot is capped at what the loser holds above its level's floor,
+    so a lost war can never demote it."""
     s = war_session
+    loser_level = level_for_total(loser_total)
+    uncapped = int(loser_total * 0.15)
+    # The point of the test: the plain 15% WOULD have dropped the loser a level.
+    assert level_for_total(loser_total - uncapped) < loser_level
+    assert loot == min(uncapped, loser_total - THRESHOLDS[loser_level - 1]) < uncapped
+
     await _set_treasury(s, ATTACKER, loser_total)
     await _set_treasury(s, DEFENDER, winner_total)
     war = await _declare(s, attacker_damage=1, defender_damage=2)  # the defender wins
 
-    await WarService.finish_war(s, war.id, now=END)
+    outcome = await WarService.finish_war(s, war.id, now=END)
     await s.commit()
 
     loser = await _fresh_castle(s, ATTACKER)
     winner = await _fresh_castle(s, DEFENDER)
-    assert (loser.level, winner.level) == (loser_level, winner_level)
-    for castle in (loser, winner):
-        assert castle.level == level_for_total(castle.total_donated)
+    assert outcome.loot == loot == war.looted_apples
+    assert loser.total_donated == loser_total - loot
+    assert winner.total_donated == winner_total + loot
+    # The loser keeps its level, and still holds at least that level's floor.
+    assert loser.level == loser_level
+    assert loser.total_donated >= THRESHOLDS[loser_level - 1]
+    assert level_for_total(loser.total_donated) == loser_level
+    # The cap changes the amount only: the war is lost all the same.
+    assert war.status == "finished" and war.winner_id == DEFENDER
+    assert loser.shield_until is not None and winner.shield_until is None
+    assert not loser.in_war and not winner.in_war
+
+
+@pytest.mark.parametrize("attacker_wins", [True, False], ids=["attacker-wins", "defender-wins"])
+@pytest.mark.parametrize(
+    "loser_total, winner_total, loot",
+    [
+        (10_000, 7_000, 1_500),  # level 2: 15% fits comfortably above the 5_000 floor
+        (23_529, 0, 3_529),  # the exact point where 15% just fits: the loser lands ON its 20_000 floor
+        (1_200_000, 20_000, 180_000),  # level 9
+        (1_600_000, 0, 240_000),  # level 10 above the donation cap (it won loot earlier): floor 1_300_000
+        (999, 123, 149),  # level 1 has no floor to protect
+    ],
+)
+async def test_war_loot_standard_case(
+    war_session, attacker_wins, loser_total, winner_total, loot
+):
+    """When 15% does not cost the loser its level, the full 15% (rounded down) is taken."""
+    s = war_session
+    winner_id, loser_id = (ATTACKER, DEFENDER) if attacker_wins else (DEFENDER, ATTACKER)
+    loser_level = level_for_total(loser_total)
+    assert loot == int(loser_total * 0.15)  # the plain 15% ...
+    assert loser_total - loot >= THRESHOLDS[loser_level - 1]  # ... fits above the floor
+
+    await _set_treasury(s, winner_id, winner_total)
+    await _set_treasury(s, loser_id, loser_total)
+    war = await _declare(
+        s,
+        attacker_damage=300 if attacker_wins else 100,
+        defender_damage=100 if attacker_wins else 300,
+    )
+
+    outcome = await WarService.finish_war(s, war.id, now=END)
+    await s.commit()
+
+    loser = await _fresh_castle(s, loser_id)
+    winner = await _fresh_castle(s, winner_id)
+    assert outcome.loot == loot == war.looted_apples
+    assert loser.total_donated == loser_total - loot
+    assert winner.total_donated == winner_total + loot
+    assert loser.level == loser_level
+    assert winner.level == level_for_total(winner.total_donated)
+
+
+def test_war_loot_cap_matches_the_spec_formula_for_every_level():
+    """actual = min(total * 15 // 100, total - THRESHOLDS[level - 1]), at every
+    level, densely just above its floor - which is where the cap bites."""
+    for level, floor in enumerate(THRESHOLDS, start=1):
+        ceiling = THRESHOLDS[level] if level < len(THRESHOLDS) else floor + 600_000
+        totals = set(range(floor, min(ceiling, floor + 6_000)))
+        totals |= set(range(floor, ceiling, max(1, (ceiling - floor) // 3_000)))
+        totals.add(ceiling - 1)
+        for total in totals:
+            intended = total * 15 // 100
+            loot = war_loot(total, level)
+            assert loot == min(intended, total - floor), (level, total)
+            assert 0 <= loot <= intended, (level, total)
+            assert level_for_total(total - loot) == level, (level, total)  # level unchanged
+            if intended <= total - floor:  # the cap does not bind: the plain 15%
+                assert loot == int(total * 0.15), (level, total)
+
+    # The boundary, spelled out: at level 3, 15% just fits from 23_529 apples on.
+    assert [war_loot(t, 3) for t in (20_000, 20_001, 23_528, 23_529, 23_530)] == [
+        0, 1, 3_528, 3_529, 3_529,
+    ]
+    assert war_loot(1_300_000, 10) == 0 and war_loot(1_300_001, 10) == 1  # a maxed castle
+    assert war_loot(17_000, 3) == 0  # a level its total cannot support: never negative
+    assert war_loot(100, 0) == war_loot(100, 1) == 15  # out-of-range levels are clamped
+    assert war_loot(2_000_000, 99) == war_loot(2_000_000, 10) == 300_000
+    assert war_loot(-5, 1) == 0
+
+
+def test_level_floor_is_the_inverse_of_level_for_total():
+    for level in range(1, 11):
+        floor = level_floor(level)
+        assert floor == THRESHOLDS[level - 1]
+        assert level_for_total(floor) == level  # the floor itself holds the level ...
+        if floor:
+            assert level_for_total(floor - 1) == level - 1  # ... one apple less does not
+    assert level_floor(0) == level_floor(-3) == level_floor(1) == 0  # clamped
+    assert level_floor(11) == level_floor(99) == level_floor(10) == 1_300_000
+
+
+async def test_war_loot_is_zero_when_the_total_cannot_support_the_level(war_session):
+    """Loot is never negative: a loser whose stored level is above what its
+    total supports (data the fixture made up) loses nothing."""
+    s = war_session
+    await _set_treasury(s, ATTACKER, 17_000)
+    (await s.get(GroupCastle, ATTACKER)).level = 3  # floor 20_000: above its own total
+    await _set_treasury(s, DEFENDER, 4_000)
+    war = await _declare(s, attacker_damage=1, defender_damage=2)
+
+    outcome = await WarService.finish_war(s, war.id, now=END)
+    await s.commit()
+
+    assert outcome.loot == 0 and war.looted_apples == 0 and war.status == "finished"
+    loser = await _fresh_castle(s, ATTACKER)
+    winner = await _fresh_castle(s, DEFENDER)
+    assert (loser.total_donated, winner.total_donated) == (17_000, 4_000)
+    assert loser.level == 3 and loser.shield_until is not None
+
+
+async def test_war_winner_may_level_up_through_loot(war_session):
+    s = war_session
+    await _set_treasury(s, ATTACKER, 100_000)  # loser: level 4 (floor 50_000), 15% fits
+    await _set_treasury(s, DEFENDER, 19_000)  # winner: level 2
+    war = await _declare(s, attacker_damage=1, defender_damage=2)
+
+    outcome = await WarService.finish_war(s, war.id, now=END)
+    await s.commit()
+
+    assert outcome.loot == 15_000
+    loser = await _fresh_castle(s, ATTACKER)
+    winner = await _fresh_castle(s, DEFENDER)
+    assert (loser.total_donated, loser.level) == (85_000, 4)  # the loser keeps level 4
+    assert (winner.total_donated, winner.level) == (34_000, 3)  # 19_000 -> 34_000: level 2 -> 3
+
+
+async def test_war_never_lowers_the_level_of_a_winner_either(war_session):
+    """A winner whose stored level is above what its total supports (data the
+    fixture made up) keeps that level: a war only ever raises a level."""
+    s = war_session
+    await _set_treasury(s, ATTACKER, 10_000)  # loser: level 2, 15% = 1_500 fits
+    await _set_treasury(s, DEFENDER, 10_000)
+    (await s.get(GroupCastle, DEFENDER)).level = 3  # its total supports level 2 only
+    war = await _declare(s, attacker_damage=1, defender_damage=2)
+
+    await WarService.finish_war(s, war.id, now=END)
+    await s.commit()
+
+    winner = await _fresh_castle(s, DEFENDER)
+    assert winner.total_donated == 11_500
+    assert winner.level == 3  # not re-derived down to 2
 
 
 # ---------------------------------------------------------------------------
@@ -1226,6 +1398,23 @@ async def test_war_finish_sends_messages_to_both_groups(war_session, monkeypatch
     await worker.run_once()
     await worker.run_once()
     assert bot.send_photo.await_count == 2
+
+
+async def test_war_messages_state_the_capped_loot(war_session, monkeypatch):
+    """The announced amount is what was really taken after the level cap."""
+    s = war_session
+    await _set_treasury(s, ATTACKER, 21_000)  # 15% = 3_150, but only 1_000 are above its floor
+    await _set_treasury(s, DEFENDER, 4_000)
+    await _due_war(s, attacker_damage=100, defender_damage=250)  # the DEFENDER wins
+    bot = _fake_bot()
+    worker = _prepare_cycle(monkeypatch, s, bot)
+
+    await worker.run_once()
+
+    sent = {call.args[0]: call.kwargs["caption"] for call in bot.send_photo.await_args_list}
+    assert sent == {DEFENDER: victory_text("۱۰۰۰"), ATTACKER: defeat_text("۱۰۰۰")}
+    loser = await _fresh_castle(s, ATTACKER)
+    assert (loser.total_donated, loser.level) == (20_000, 3)
 
 
 async def test_war_result_is_sent_only_after_the_settlement_committed(

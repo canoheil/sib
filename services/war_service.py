@@ -17,7 +17,12 @@ from sib.database.models import (
     WarParticipant,
 )
 from sib.services.card_progression import card_attributes
-from sib.services.castle_service import CastleService, apply_castle_buff, level_for_total
+from sib.services.castle_service import (
+    CastleService,
+    apply_castle_buff,
+    level_floor,
+    level_for_total,
+)
 from sib.services.invasion_v2.damage import compute_damage
 from sib.services.items import ItemService
 from sib.services.sib_claim import fa_digits
@@ -26,7 +31,8 @@ from sib.services.player_cards import PlayerCardService
 
 WAR_DURATION = timedelta(hours=5)
 PEACE_SHIELD_DURATION = timedelta(hours=12)
-# Share of the loser's ``total_donated`` the winner plunders when a war ends.
+# The winner plunders at most this share of the loser's ``total_donated`` (see
+# ``war_loot``: never so much that the loser would lose its level).
 WAR_LOOT_PERCENT = 15
 ATTACK_ENERGY_COST = 20
 ATTACK_COOLDOWN_SECONDS = 30
@@ -36,14 +42,31 @@ def _utc(value: datetime) -> datetime:
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
 
 
-def war_loot(loser_total_donated: int) -> int:
-    """Apples plundered from the loser: 15% of its ``total_donated``, rounded down.
+def war_loot(loser_total_donated: int, loser_level: int) -> int:
+    """Apples plundered from the loser: 15% of its treasury, capped to keep its level.
 
-    This is ``int(total_donated * 0.15)`` computed in integers: the result is
-    identical for every value an INT column can hold (0 .. 2**31 - 1, checked
-    exhaustively), but no binary-float rounding is involved.
+    ::
+
+        intended_loot = total_donated * 15 // 100          # == int(total_donated * 0.15)
+        max_safe_loot = total_donated - level_floor(level)  # held above its level's threshold
+        actual_loot   = min(intended_loot, max_safe_loot)   # and never below zero
+
+    "Castle levels never downgrade": the loser always keeps at least the
+    ``level_floor`` of its CURRENT level, so a lost war cannot demote it. A
+    castle that has only just reached its level (or a maxed castle: donations
+    stop at exactly the level-10 floor) has little or nothing above the floor
+    and loses little or nothing.
+
+    ``intended_loot`` is ``int(total_donated * 0.15)`` computed in integers: the
+    same number for every value an INT column can hold (0 .. 2**31 - 1, checked
+    exhaustively), but without binary-float rounding. ``loser_level`` is the
+    loser's stored level; a level the total cannot support (a negative
+    ``max_safe_loot``) yields 0 rather than a negative loot.
     """
-    return max(0, int(loser_total_donated)) * WAR_LOOT_PERCENT // 100
+    total = max(0, int(loser_total_donated))
+    intended_loot = total * WAR_LOOT_PERCENT // 100
+    max_safe_loot = total - level_floor(loser_level)
+    return max(0, min(intended_loot, max_safe_loot))
 
 
 class WarError(ValueError):
@@ -179,9 +202,11 @@ class WarService:
         no-op (never a double loot).
 
         * the higher damage wins; a tie has no winner, no loot and no shield;
-        * the winner plunders ``war_loot(loser.total_donated)`` (15%, rounded
-          down): it moves from the loser's ``total_donated`` to the winner's
-          and is recorded in ``looted_apples``;
+        * the winner plunders ``war_loot(loser.total_donated, loser.level)``:
+          15% rounded down, but never more than the loser holds above the
+          floor of its current level, so a lost war cannot demote it. The loot
+          moves from the loser's ``total_donated`` to the winner's and is
+          recorded in ``looted_apples``;
         * only the loser gets the 12 hour peace shield;
         * ``in_war`` is cleared on both castles and the war becomes finished.
         """
@@ -231,16 +256,18 @@ class WarService:
         loser_castle = by_group.get(loser_id)
         loot = 0
         if winner_castle is not None and loser_castle is not None:
-            loot = war_loot(loser_castle.total_donated)
+            # Treasury and level of the loser as they are NOW (read under the locks).
+            loot = war_loot(loser_castle.total_donated, loser_castle.level)
             if loot:
                 loser_castle.total_donated -= loot
                 winner_castle.total_donated += loot
-                # ``level`` is derived from ``total_donated`` and
-                # CastleService.donate keeps the two in step. Do the same here,
-                # so a stored level never disagrees with its own total (a loser
-                # may therefore drop a level; a winner may gain one).
-                loser_castle.level = level_for_total(loser_castle.total_donated)
-                winner_castle.level = level_for_total(winner_castle.total_donated)
+                # The cap leaves the loser at or above the floor of its level,
+                # so its ``level`` is not touched: a war never lowers a
+                # castle's level. The winner may cross a threshold; re-derive
+                # its level the way CastleService.donate does - never lower it.
+                winner_castle.level = max(
+                    winner_castle.level, level_for_total(winner_castle.total_donated)
+                )
 
         for castle in castles:
             castle.in_war = False
