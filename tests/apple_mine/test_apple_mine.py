@@ -471,7 +471,7 @@ def test_no_card_selection_required_for_mine():
     import inspect
 
     kb = mine_handler._main_keyboard().inline_keyboard
-    assert len(kb) == 1 and len(kb[0]) == 2
+    assert len(kb) == 2 and all(len(row) == 1 for row in kb)
     callbacks = {button.callback_data for row in kb for button in row}
     assert callbacks == {"mine:work", "mine:pickaxe"}
 
@@ -530,11 +530,14 @@ async def test_work_performs_shift_directly(monkeypatch):
     edit_args, edit_kwargs = edit_caption.await_args
     assert edit_args[:3] == (bot, -501, 77)
     assert edit_kwargs["reply_markup"].inline_keyboard == []
-    assert edit_kwargs["parse_mode"] is None
+    assert edit_kwargs["parse_mode"] == "Markdown"
     caption = edit_args[3]
-    assert "🍎 +۱۸ سیب معمولی" in caption
-    assert "🔨 کلنگ سطح ۲" in caption
-    assert "⏳ شیفت بعدی: ۳۰ دقیقه و ۰ ثانیه" in caption
+    assert caption == (
+        "چند سیب از دل سنگ بیرون آمد.\n\n"
+        "🍎 **پاداش شما:** +۱۸ سیب معمولی\n"
+        "🔨 **کلنگ:** سطح ۲\n\n"
+        "⏳ شیفت بعدی: **۳۰ دقیقه دیگر**"
+    )
     assert message.photo is photo
 
 
@@ -606,9 +609,9 @@ async def test_pickaxe_screen_swaps_photo_in_place(monkeypatch, tmp_path):
     assert str(getattr(kwargs["photo"], "path", kwargs["photo"])).endswith(
         "pickaxe_2.jpg"
     )
-    assert "📊 سطح فعلی: ۲ از ۵" in kwargs["text"]
-    assert "💰 هزینه ارتقا: ۶۰۰ سیب 🍎" in kwargs["text"]
-    assert kwargs["parse_mode"] is None
+    assert "📊 **سطح فعلی:** ۲ از ۵" in kwargs["text"]
+    assert "💰 هزینه ارتقا: **۶۰۰ سیب**" in kwargs["text"]
+    assert kwargs["parse_mode"] == "Markdown"
     kb = kwargs["reply_markup"].inline_keyboard
     assert {b.callback_data for row in kb for b in row} == {
         "mine:pickaxe:upgrade",
@@ -653,8 +656,11 @@ async def test_upgrade_success_edits_to_new_level(monkeypatch, tmp_path):
     assert str(getattr(kwargs["photo"], "path", kwargs["photo"])).endswith(
         "pickaxe_3.jpg"
     )
-    assert "🎉 کلنگ به سطح ۳ ارتقا یافت!" in kwargs["text"]
-    assert "💰 سیب‌های شما: ۷۵۰" in kwargs["text"]
+    assert "🔨 **ارتقای کلنگ**" in kwargs["text"]
+    assert "📊 **سطح فعلی:** ۳ از ۵" in kwargs["text"]
+    assert "🍎 موجودی شما: **۷۵۰ سیب**" in kwargs["text"]
+    assert "🎉" not in kwargs["text"]
+    assert kwargs["parse_mode"] == "Markdown"
 
 
 @pytest.mark.asyncio
@@ -733,56 +739,99 @@ async def test_upgrade_stale_max_level_renders_max_screen(monkeypatch, tmp_path)
 
 def test_panel_caption_shows_pickaxe_level_and_ready_state():
     caption = mine_handler._panel_caption(_view(level=1, cooldown=0), 7)
-    assert "⛏ معدن سیبی" in caption
-    assert "🔨 کلنگ شما: سطح ۱" in caption
-    assert "⛏ هر شیفت: ۱۰ تا ۱۵ سیب معمولی" in caption
-    assert "🍎 شانس سیب ویژه: ۱۰٪" in caption
-    assert "⏳ معدن آماده‌ی کار است!" in caption
+    assert caption == (
+        "⛏ **معدن سیبی**\n\n"
+        "داخل معدن تاریک است. صدای چکش از دور می‌آید...\n\n"
+        "🔨 **کلنگ شما:** سطح ۱\n"
+        "🎁 **پاداش هر شیفت:** ۱۰ تا ۱۵ سیب\n"
+        "✨ **شانس یافتن سیب افسانه‌ای:** ۱۰٪\n\n"
+        "✨ معدن آماده است! می‌توانی کلنگ بزنی."
+    )
+    assert re.search(r"[0-9]", caption) is None
 
 
 def test_panel_caption_shows_cooldown_line():
     caption = mine_handler._panel_caption(dataclasses.replace(_view(), cooldown=125), 7)
-    assert "۲ دقیقه و ۵ ثانیه" in caption
-    assert "آماده" not in caption
+    assert caption.endswith(
+        "⏳ دیوارهای معدن خاموش‌اند. **۲ دقیقه و ۵ ثانیه** دیگر برگرد تا فانوس‌ها روشن شوند."
+    )
+    assert re.search(r"[0-9]", caption) is None
 
 
 def test_pickaxe_caption_shows_preview_and_cost():
     caption = mine_handler._pickaxe_caption(_view(level=2, balance=350))
-    assert "📊 سطح فعلی: ۲ از ۵" in caption
-    assert "⬆️ با ارتقا به سطح ۳:" in caption
-    assert "💰 هزینه ارتقا: ۶۰۰ سیب 🍎" in caption
-    assert "💰 سیب‌های شما: ۳۵۰" in caption
+    assert caption == (
+        "🔨 **ارتقای کلنگ**\n\n"
+        "📊 **سطح فعلی:** ۲ از ۵\n"
+        "⛏ استخراج: ۱۵ تا ۲۲ سیب\n"
+        "✨ شانس سیب ویژه: ۱۴٪\n\n"
+        "⬆️ **پس از ارتقا به سطح ۳:**\n"
+        "⛏ استخراج: **۲۱ تا ۳۰ سیب**\n"
+        "✨ شانس سیب ویژه: **۱۹٪**\n\n"
+        "💰 هزینه ارتقا: **۶۰۰ سیب**\n"
+        "🍎 موجودی شما: **۳۵۰ سیب**"
+    )
+    assert re.search(r"[0-9]", caption) is None
 
 
 def test_pickaxe_caption_max_level():
     caption = mine_handler._pickaxe_caption(_view(level=5, balance=999))
     assert "🏆 کلنگ شما به بالاترین سطح (۵) رسیده است!" in caption
+    assert "📊 **سطح فعلی:** ۵ از ۵" in caption
+    assert "🍎 موجودی شما: **۹۹۹ سیب**" in caption
     assert "هزینه ارتقا" not in caption
+    assert re.search(r"[0-9]", caption) is None
 
 
-def test_pickaxe_caption_success():
-    caption = mine_handler._pickaxe_caption(_view(level=3, balance=750), success=True)
-    assert "🎉 کلنگ به سطح ۳ ارتقا یافت!" in caption
-    assert "📊 سطح فعلی: ۳ از ۵" in caption
-    assert "💰 سیب‌های شما: ۷۵۰" in caption
+def test_pickaxe_caption_after_upgrade_uses_current_level_format():
+    caption = mine_handler._pickaxe_caption(_view(level=3, balance=750))
+    assert "🔨 **ارتقای کلنگ**" in caption
+    assert "📊 **سطح فعلی:** ۳ از ۵" in caption
+    assert "🍎 موجودی شما: **۷۵۰ سیب**" in caption
+    assert "🎉" not in caption
+    assert re.search(r"[0-9]", caption) is None
+
+
+def test_result_caption_formats_special_reward_with_persian_digits():
+    result = ShiftResult(
+        "golden", "apple_gold", 3, "سیب طلایی از دل سنگ پیدا شد.", pickaxe_level=4
+    )
+    caption = mine_handler._result_caption(result)
+    assert caption == (
+        "سیب طلایی از دل سنگ پیدا شد.\n\n"
+        "🍎 **پاداش شما:** +۳ سیب طلایی\n"
+        "🔨 **کلنگ:** سطح ۴\n\n"
+        "⏳ شیفت بعدی: **۳۰ دقیقه دیگر**"
+    )
+    assert re.search(r"[0-9]", caption) is None
 
 
 def test_main_menu_keyboard_layout():
     kb = mine_handler._main_keyboard().inline_keyboard
-    assert len(kb) == 1 and len(kb[0]) == 2
-    work, pickaxe = kb[0]
+    assert len(kb) == 2 and all(len(row) == 1 for row in kb)
+    work, pickaxe = kb[0][0], kb[1][0]
     assert work.callback_data == "mine:work"
-    assert work.text == "⛏ کار کردن در معدن"
+    if mine_handler.APPLE_MINE_WORK_BUTTON_SUPPORTS_STYLE:
+        assert work.text == "⛏ کار کردن در معدن"
+        assert work.style == "success"
+    else:
+        assert work.text == "🟢 ⛏ کار کردن در معدن"
+        assert work.style is None
     assert pickaxe.callback_data == "mine:pickaxe"
     assert pickaxe.text == "🔨 ارتقا کلنگ"
+    assert pickaxe.style == "primary"
 
 
 def test_pickaxe_keyboard_upgrade_label_and_back():
-    kb = mine_handler._pickaxe_keyboard(_view(level=4)).inline_keyboard
+    view = _view(level=4, balance=0)
+    assert view.balance < view.upgrade_cost
+    kb = mine_handler._pickaxe_keyboard(view).inline_keyboard
     assert len(kb) == 2
     upgrade, back = kb[0][0], kb[1][0]
     assert upgrade.callback_data == "mine:pickaxe:upgrade"
-    assert "۵" in upgrade.text and "۱۵۰۰" in upgrade.text
+    assert upgrade.text == "🍏 ارتقا به سطح ۵"
+    assert upgrade.style == "success"
+    assert "۱۵۰۰" not in upgrade.text
     assert back.callback_data == "mine:pickaxe:back"
     assert back.text == "🔙 بازگشت"
 
@@ -840,7 +889,7 @@ def test_no_english_letters_in_user_text():
         mine_handler._panel_caption(view, 1),
         mine_handler._panel_caption(dataclasses.replace(view, cooldown=25), 1),
         mine_handler._pickaxe_caption(view),
-        mine_handler._pickaxe_caption(view, success=True),
+        mine_handler._pickaxe_caption(view),
         mine_handler._pickaxe_caption(_view(level=5)),
         mine_handler._result_caption(result),
         mine_handler._insufficient_text(
