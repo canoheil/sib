@@ -40,6 +40,7 @@ PLOT_EMOJI = {
     PlotState.GROWING: "🌱",
     PlotState.MATURE: "🌳",
     PlotState.FRUIT_READY: "🍎",
+    PlotState.WITHERED: "🥀",
 }
 
 # Display metadata for the four harvest outcomes (drop table keys).
@@ -113,7 +114,11 @@ async def _render_garden(user_id: int, session) -> tuple[str, InlineKeyboardMark
     for view in views:
         emoji = PLOT_EMOJI.get(view.state, "⬜")
         magic = f" ✨{view.magic_level}" if view.magic_level > 0 else ""
-        if view.state == PlotState.GROWING:
+        if view.state == PlotState.WITHERED:
+            # Corruption hides the magic-level suffix; the plot is locked.
+            magic = ""
+            hint = " — پژمرده؛ برای احیا به کود الهی 🧪 نیاز است"
+        elif view.state == PlotState.GROWING:
             hint = f" — رشد: {format_duration(view.seconds_to_next_stage)}"
         elif view.state == PlotState.MATURE:
             hint = f" — میوه تا: {format_duration(view.seconds_to_next_stage)}"
@@ -124,7 +129,9 @@ async def _render_garden(user_id: int, session) -> tuple[str, InlineKeyboardMark
         lines.append(f"{emoji} قطعه {view.plot_index + 1}{magic}{hint}")
 
         label = f"{emoji} قطعه {view.plot_index + 1}{magic}"
-        if view.state == PlotState.FRUIT_READY:
+        if view.state == PlotState.WITHERED:
+            label = f"{emoji} قطعه {view.plot_index + 1} — پژمرده"
+        elif view.state == PlotState.FRUIT_READY:
             label = f"{emoji} قطعه {view.plot_index + 1}{magic} — برداشت!"
         buttons.append([primary_button(text=label, callback_data=f"garden_tree:{view.plot_index}")])
 
@@ -256,6 +263,36 @@ async def _tree_view(user_id: int, plot_index: int) -> tuple[str, InlineKeyboard
                     inline_keyboard=[[danger_button(text="↩️ بازگشت به باغ", callback_data="garden_refresh")]]
                 ),
             )
+
+        if view.state == PlotState.WITHERED:
+            # Corruption screen: no planting/harvest/magic actions, only the
+            # green Divine Fertilizer restore action plus the red back row.
+            fertilizer = await ItemService.get_total(
+                session, user_id, "divine_fertilizer"
+            )
+            withered_text = "\n".join(
+                [
+                    f"🥀 **قطعهٔ پژمرده** — قطعه {plot_index + 1}",
+                    "",
+                    "در اثر شکست گروه در یورش، این قطعه خشک شده است.",
+                    "تا وقتی پژمرده است، نه می‌توانی نهال بکاری و نه میوه برداشت کنی.",
+                    "",
+                    "🌿 برای احیا، یک «کود الهی» مصرف کن.",
+                    f"🧪 کود الهی موجود: `{fertilizer}`",
+                ]
+            )
+            withered_kb = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        success_button(
+                            text="🧪 استفاده از کود الهی",
+                            callback_data=f"garden_fertilize:{plot_index}",
+                        )
+                    ],
+                    [danger_button(text="↩️ بازگشت به باغ", callback_data="garden_refresh")],
+                ]
+            )
+            return withered_text, withered_kb
 
         max_level = int(await _config(session, "garden_max_magic_level", 5))
         weights = await DropService.weights_for_level(session, view.magic_level)
@@ -407,6 +444,38 @@ async def handle_garden_plant(callback: CallbackQuery, bot: Bot):
         await _rerender_tree(callback, bot, plot_index, answer=error)
         return
     await _rerender_tree(callback, bot, plot_index, answer="نهال کاشته شد! 🌱")
+    await _deliver_xp_notifications(bot, callback)
+
+
+@router.callback_query(F.data.startswith("garden_fertilize:"))
+async def handle_garden_fertilize(callback: CallbackQuery, bot: Bot):
+    """Consume one Divine Fertilizer to restore a withered plot."""
+    plot_index = int(callback.data.split(":")[1])
+    user = callback.from_user
+    if not user:
+        return
+
+    subject_id = await _panel_subject(callback)
+    if subject_id != user.id:
+        return
+
+    error = None
+    async with get_session() as session:
+        try:
+            _capture_xp_notification_chat(session, callback)
+            await GardenService.restore_plot(session, subject_id, plot_index)
+        except ValueError as e:
+            error = str(e)
+
+    if error:
+        await _rerender_tree(callback, bot, plot_index, answer=error)
+        return
+    await _rerender_tree(
+        callback,
+        bot,
+        plot_index,
+        answer="🌿 قطعه با کود الهی احیا شد؛ دوباره سرسبز شد!",
+    )
     await _deliver_xp_notifications(bot, callback)
 
 

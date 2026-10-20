@@ -36,7 +36,10 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     "garden_max_plots": 10,
     # Per-plot unlock prices for plots 6..10 (index 0 = plot 6).
     "garden_plot_prices": [100, 250, 500, 1000, 2000],
-    "garden_growth_seconds": 24 * 60 * 60,
+    # G2 36-hour fix: growth 12h + fruit 12h => the FIRST fruit is ready
+    # exactly 24h after planting (was 24h+12h=36h). Repeating harvest cycles
+    # stay at garden_fruit_seconds (12h), unchanged.
+    "garden_growth_seconds": 12 * 60 * 60,
     "garden_fruit_seconds": 12 * 60 * 60,
     "garden_fruit_amount": 3,
     # Magical tree progression (per-tree, Magic Powder driven).
@@ -146,6 +149,9 @@ CONFIG_DEFAULTS: dict[str, Any] = {
         "wedding_ring": 1000,
         "flower": 30,
         "healing_potion": 150,
+        # G2: restores ONE withered garden plot (buy-only remedy; it is
+        # deliberately absent from item_sell_prices like magic_powder).
+        "divine_fertilizer": 80,
     },
     # Sellable items (shop "Sell Items" section): key -> sell price in Apples.
     # Magic Powder is deliberately absent: it is consumable progression, not a

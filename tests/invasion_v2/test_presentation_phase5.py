@@ -16,7 +16,8 @@ from sqlalchemy import Integer, func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
-from sib.database.models import (Base, Character, Group, Inv2Attack, Inv2GroupState,
+from sib.database.models import (Base, Character, Garden, GardenPlot, GardenWitherEvent,
+    Group, Inv2Attack, Inv2GroupMember, Inv2GroupState,
     Inv2Invasion, Inv2Region, Inv2Reward, PlayerCard, SeedlingAward, SeedlingInventory, SystemConfig, User, UserItem)
 from sib.handlers import inv2_admin, inv2_join
 from sib.services.invasion_v2 import presentation
@@ -35,9 +36,13 @@ async def db(monkeypatch):
     tables = [GroupCastle.__table__, User.__table__, Group.__table__, Character.__table__, PlayerCard.__table__,
               Inv2Region.__table__, Inv2Invasion.__table__, Inv2Attack.__table__,
               Inv2Reward.__table__, Inv2GroupState.__table__, UserItem.__table__, SystemConfig.__table__,
-              SeedlingInventory.__table__, SeedlingAward.__table__]
-    # SQLite needs INTEGER, not BIGINT, to generate UserItem primary keys.
-    columns = [UserItem.__table__.c.id, SeedlingAward.__table__.c.id]
+              SeedlingInventory.__table__, SeedlingAward.__table__,
+              # G2 corruption settlement reads membership and garden tables.
+              Inv2GroupMember.__table__, Garden.__table__, GardenPlot.__table__,
+              GardenWitherEvent.__table__]
+    # SQLite needs INTEGER, not BIGINT, to generate surrogate primary keys.
+    columns = [UserItem.__table__.c.id, SeedlingAward.__table__.c.id,
+               GardenPlot.__table__.c.id, GardenWitherEvent.__table__.c.id]
     original_types = [column.type for column in columns]
     for column in columns:
         column.type = Integer()

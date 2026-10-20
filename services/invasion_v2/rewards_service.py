@@ -47,30 +47,55 @@ async def grant_victory_rewards(session, invasion_id: int) -> None:
         await session.flush()
 
 
-async def settle_outcome(session, invasion_id: int, status: str) -> None:
-    """Derive counters from terminal invasions, never increment on a retry."""
-    if status not in (InvasionStatus.VICTORY.value, InvasionStatus.DEFEAT.value):
-        return
+async def settle_outcome(session, invasion_id: int, status: str) -> list:
+    """Derive counters from terminal invasions, never increment on a retry.
+
+    Returns the list of garden-corruption results (G2) so the post-commit
+    caller can DM the affected players; an empty list means no withering.
+    """
+    if status not in (
+        InvasionStatus.VICTORY.value,
+        InvasionStatus.DEFEAT.value,
+        InvasionStatus.EXPIRED.value,
+    ):
+        return []
     inv = await session.scalar(select(Inv2Invasion).where(
         Inv2Invasion.id == invasion_id).with_for_update().execution_options(populate_existing=True))
     if inv is None or inv.status != status:
-        return
+        return []
+    corruption_results: list = []
     if status == InvasionStatus.VICTORY.value:
         await grant_victory_rewards(session, invasion_id)
-    region = await session.get(Inv2Region, inv.region_code)
-    if region is not None and (region.last_invasion_id is None or region.last_invasion_id <= inv.id):
-        region.is_lost_to_enemy = status == InvasionStatus.DEFEAT.value
-        region.last_invasion_id = inv.id
-    state = await session.scalar(select(Inv2GroupState).where(
-        Inv2GroupState.group_id == inv.group_id).with_for_update())
-    if state is None:
-        state = Inv2GroupState(group_id=inv.group_id)
-        session.add(state)
-    # No new settlement table/column: terminal statuses are the durable source
-    # of truth and count assignment is idempotent even for repeated calls.
-    state.total_victories = int(await session.scalar(select(func.count()).select_from(Inv2Invasion).where(
-        Inv2Invasion.group_id == inv.group_id,
-        Inv2Invasion.status == InvasionStatus.VICTORY.value)))
-    state.total_defeats = int(await session.scalar(select(func.count()).select_from(Inv2Invasion).where(
-        Inv2Invasion.group_id == inv.group_id,
-        Inv2Invasion.status == InvasionStatus.DEFEAT.value)))
+    elif status == InvasionStatus.DEFEAT.value or (
+        # G2: an EXPIRED invasion only corrupts gardens when it was actually
+        # announced — players must have had a join button. Never-announced
+        # PENDING->EXPIRED rows and startup-recovery expirations are exempt.
+        status == InvasionStatus.EXPIRED.value and inv.started_at is not None
+    ):
+        from sib.services.garden import GardenService
+
+        corruption_results = await GardenService.apply_invasion_corruption(
+            session, inv
+        )
+    # Region flag and win/loss counters stay VICTORY/DEFEAT-only, exactly as
+    # before G2: an announced EXPIRED invasion withers gardens but never moves
+    # territory or the group counters.
+    if status in (InvasionStatus.VICTORY.value, InvasionStatus.DEFEAT.value):
+        region = await session.get(Inv2Region, inv.region_code)
+        if region is not None and (region.last_invasion_id is None or region.last_invasion_id <= inv.id):
+            region.is_lost_to_enemy = status == InvasionStatus.DEFEAT.value
+            region.last_invasion_id = inv.id
+        state = await session.scalar(select(Inv2GroupState).where(
+            Inv2GroupState.group_id == inv.group_id).with_for_update())
+        if state is None:
+            state = Inv2GroupState(group_id=inv.group_id)
+            session.add(state)
+        # No new settlement table/column: terminal statuses are the durable source
+        # of truth and count assignment is idempotent even for repeated calls.
+        state.total_victories = int(await session.scalar(select(func.count()).select_from(Inv2Invasion).where(
+            Inv2Invasion.group_id == inv.group_id,
+            Inv2Invasion.status == InvasionStatus.VICTORY.value)))
+        state.total_defeats = int(await session.scalar(select(func.count()).select_from(Inv2Invasion).where(
+            Inv2Invasion.group_id == inv.group_id,
+            Inv2Invasion.status == InvasionStatus.DEFEAT.value)))
+    return corruption_results

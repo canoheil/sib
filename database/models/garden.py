@@ -9,9 +9,19 @@ Plot states are derived from server timestamps so client time can never
 exploit growth.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sib.database.base import Base, TimestampMixin
 
@@ -23,6 +33,11 @@ class PlotState:
     GROWING = "GROWING"
     MATURE = "MATURE"
     FRUIT_READY = "FRUIT_READY"
+    # Corruption state (Invasion v2 defeat/announced-expiry penalty). It is a
+    # stored flag on the plot, not a timestamp-derived state: a withered plot
+    # stays locked (no planting, no harvest, no magic) until Divine Fertilizer
+    # restores it.
+    WITHERED = "WITHERED"
 
 
 class Garden(Base, TimestampMixin):
@@ -70,10 +85,64 @@ class GardenPlot(Base, TimestampMixin):
     # drop chances. Per-tree, never account-global.
     magic_level: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
+    # Invasion corruption (G2): when the player's group loses an Invasion and
+    # the player dealt zero damage, one random plot is withered. A withered
+    # plot cannot be planted, harvested or enchanted until Divine Fertilizer
+    # clears this flag. Defaults to healthy for every existing row.
+    is_withered: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", nullable=False
+    )
+
     garden = relationship("Garden", back_populates="plots")
 
     def __repr__(self) -> str:
         return (
             f"<GardenPlot garden={self.garden_id} idx={self.plot_index} "
-            f"cycles={self.cycle_count} magic={self.magic_level}>"
+            f"cycles={self.cycle_count} magic={self.magic_level} withered={self.is_withered}>"
+        )
+
+
+class GardenWitherEvent(Base, TimestampMixin):
+    """Audit + fairness ledger for Invasion-driven garden corruption.
+
+    One row per withered plot. The two unique constraints are the whole
+    fairness mechanism, enforced at the database level:
+
+    - ``uq_garden_wither_user_day`` — at most ONE wither per player per UTC
+      calendar day, no matter how many groups lose invasions that day
+      (protects players against e.g. a 3 AM invasion they could not attend).
+    - ``uq_garden_wither_user_invasion`` — re-running settlement for the same
+      invasion (retry, admin force-end replay, duplicate maintenance task)
+      can never wither twice.
+
+    ``wither_day`` is a UTC ``DATE`` (the project's daily-boundary convention,
+    matching ``daily_chest_claims.claim_day``).
+    """
+
+    __tablename__ = "garden_wither_events"
+    __table_args__ = (
+        UniqueConstraint("user_id", "wither_day", name="uq_garden_wither_user_day"),
+        UniqueConstraint(
+            "user_id", "invasion_id", name="uq_garden_wither_user_invasion"
+        ),
+        Index("ix_garden_wither_user_id", "user_id"),
+        Index("ix_garden_wither_invasion_id", "invasion_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    invasion_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("inv2_invasions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # UTC calendar day of the withering (YYYY-MM-DD).
+    wither_day: Mapped[date] = mapped_column(Date, nullable=False)
+
+    def __repr__(self) -> str:
+        return (
+            f"<GardenWitherEvent user={self.user_id} invasion={self.invasion_id} "
+            f"day={self.wither_day.isoformat()}>"
         )

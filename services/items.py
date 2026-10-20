@@ -49,6 +49,11 @@ ITEM_CATALOG: Dict[str, Dict[str, str]] = {
         "label": "معجون شفا",
         "description": "با نوشیدن این معجون، ۵۰ واحد از انرژی جنگی خود را در جنگ‌ها بازیابی می‌کنید.",
     },
+    "divine_fertilizer": {
+        "emoji": "🧪",
+        "label": "کود الهی",
+        "description": "با استفاده از این کود، یک قطعه زمین پژمرده دوباره سالم می‌شود.",
+    },
     "wedding_ring": {
         "emoji": "💍",
         "label": "حلقه ازدواج",

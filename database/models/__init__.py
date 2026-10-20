@@ -17,7 +17,12 @@ from sib.database.models.panel import PanelOwner
 from sib.database.models.seedling import SeedlingInventory, SeedlingAward
 from sib.database.models.asset import BotAsset, UserItem
 from sib.database.models.apple import AppleWallet, AppleTransaction
-from sib.database.models.garden import Garden, GardenPlot, PlotState
+from sib.database.models.garden import (
+    Garden,
+    GardenPlot,
+    GardenWitherEvent,
+    PlotState,
+)
 from sib.database.models.system_config import SystemConfig
 from sib.database.models.player_card import PlayerCard, PlayerCardLegacyStats
 from sib.database.models.shop import (
@@ -86,6 +91,7 @@ __all__ = [
     "AppleTransaction",
     "Garden",
     "GardenPlot",
+    "GardenWitherEvent",
     "PlotState",
     "SystemConfig",
     "Faction",
