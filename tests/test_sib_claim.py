@@ -323,7 +323,11 @@ async def test_sibam_shows_apple_balance_with_basket_image(db_session):
     assert "apple_basket" in str(getattr(photo_arg, "path", photo_arg))
     caption = msg.reply_photo.call_args.kwargs.get("caption", "")
     assert "موجودی سیب شما" in caption
-    assert "7" in caption
+    # Persian digits, and the three special apples (0 when never earned).
+    assert "موجودی سیب شما: ۷" in caption
+    assert "سیب طلایی: ۰" in caption
+    assert "سیب الماسی: ۰" in caption
+    assert "سیب ابسیدینی: ۰" in caption
 
     # PRIVATE — same balance, same artwork
     msg2 = _group_message(tg_user, "سیبام")
@@ -332,7 +336,73 @@ async def test_sibam_shows_apple_balance_with_basket_image(db_session):
     assert msg2.reply_photo.called
     caption2 = msg2.reply_photo.call_args.kwargs.get("caption", "")
     assert "موجودی سیب شما" in caption2
-    assert "7" in caption2
+    assert "موجودی سیب شما: ۷" in caption2
+
+
+@pytest.mark.asyncio
+async def test_sibam_caption_lists_all_special_apples(db_session):
+    """'سیبام' shows ALL FOUR lines with their specific emojis.
+
+    🍏 normal balance, 🌕 golden, 💎 diamond, 🌑 obsidian — every number in
+    Persian digits, special apples read from the ``user_items`` inventory.
+    """
+    from sib.handlers.start import handle_sib_balance_word
+    from sib.services.items import ItemService
+
+    tg_user = _tg_user(770103, "سیب‌ویژه‌دار")
+
+    async with get_session() as session:
+        from sib.services.user import UserService
+
+        await UserService.get_or_create_user(session, tg_user)
+        await AppleWalletService.earn(session, tg_user.id, 12, reason="test")
+        await ItemService.grant(session, tg_user.id, "apple_gold", 3)
+        await ItemService.grant(session, tg_user.id, "apple_diamond", 2)
+        await ItemService.grant(session, tg_user.id, "apple_obsidian", 1)
+        await session.commit()
+
+    msg = _group_message(tg_user, "سیبام")
+    await handle_sib_balance_word(msg, MagicMock())
+    assert msg.reply_photo.called
+    caption = msg.reply_photo.call_args.kwargs.get("caption", "")
+
+    # The exact caption: normal line, blank separator, then the three
+    # special apples — in that order, with these exact emojis.
+    assert caption.splitlines() == [
+        "🍏 موجودی سیب شما: ۱۲",
+        "",
+        "🌕 سیب طلایی: ۳",
+        "💎 سیب الماسی: ۲",
+        "🌑 سیب ابسیدینی: ۱",
+    ]
+    # All four lines and all four emojis are present.
+    lines = caption.splitlines()
+    assert len(lines) == 5
+    for emoji, label in (
+        ("🍏", "موجودی سیب شما"),
+        ("🌕", "سیب طلایی"),
+        ("💎", "سیب الماسی"),
+        ("🌑", "سیب ابسیدینی"),
+    ):
+        assert any(line.startswith(f"{emoji} {label}:") for line in lines)
+
+
+def test_format_apple_balance_caption_is_pure_and_persian():
+    """Caption builder: no DB, Latin digits become Persian, zeros default."""
+    from sib.handlers.start import format_apple_balance_caption
+
+    caption = format_apple_balance_caption(
+        5, {"apple_gold": 0, "apple_diamond": 4, "apple_obsidian": 10}
+    )
+    assert caption == (
+        "🍏 موجودی سیب شما: ۵\n"
+        "\n"
+        "🌕 سیب طلایی: ۰\n"
+        "💎 سیب الماسی: ۴\n"
+        "🌑 سیب ابسیدینی: ۱۰"
+    )
+    # Missing keys are treated as zero, never "None".
+    assert "None" not in format_apple_balance_caption(0, {})
 
 
 @pytest.mark.asyncio
