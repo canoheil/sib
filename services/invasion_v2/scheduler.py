@@ -256,6 +256,18 @@ class InvasionScheduler:
                 terminal = await cls._finalize_due(session, current, stats)
                 await cls._deactivate_stale_mutes(session, current)
                 await cls._spawn_if_due(session, current, rng or random.Random(), stats)
+                # IV3 random events ride this same transaction: planning and
+                # instant effects commit with the tick, delivery happens later
+                # in run_once. Isolated so a broken event table can never stop
+                # invasion finalization or spawning.
+                try:
+                    from .event_scheduler import InvasionEventScheduler
+
+                    await InvasionEventScheduler.tick(
+                        session, now=current, rng=rng or random.Random(), stats=stats
+                    )
+                except Exception:
+                    logger.exception("inv2 random-event tick failed")
             stats["finalized"] = len(terminal)
             admin_runtime.last_successful_tick = datetime.now(timezone.utc)
             return terminal

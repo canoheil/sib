@@ -559,7 +559,9 @@ class MaintenanceService:
                 if cls._bot is not None:
                     from sib.services.invasion_v2.presentation import (
                         InvasionPresentation,
+                        close_expired_events,
                         deliver_wither_notifications,
+                        publish_applied_events,
                     )
                     from sib.services.invasion_v2.rewards_service import settle_outcome
                     presenter = InvasionPresentation()
@@ -574,6 +576,11 @@ class MaintenanceService:
                         except Exception:
                             logger.exception("inv2 terminal settlement failed id=%s", inv_id)
                     await presenter.publish_pending(cls._bot)
+                    # IV3 random events: committed by the tick above, delivered
+                    # here, and chest buttons are removed once their window is
+                    # over. Both passes are best-effort and never raise.
+                    await publish_applied_events(cls._bot)
+                    await close_expired_events(cls._bot)
         except Exception as exc:
             from sib.services.invasion_v2 import admin_runtime
             admin_runtime.last_error = str(exc)[:240]

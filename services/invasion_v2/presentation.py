@@ -10,7 +10,10 @@ from sqlalchemy import func, select
 
 from sib.core.logging import logger
 from sib.database.connection import get_session
-from sib.database.models import Character, Inv2Attack, Inv2Invasion, Inv2Region, Inv2Reward, PlayerCard, User
+from sib.database.models import (
+    Character, Inv2Attack, Inv2Invasion, Inv2RandomEvent, Inv2Region, Inv2Reward,
+    PlayerCard, User,
+)
 from sib.keyboards.common import success_button
 from sib.services.character_art import artwork_path
 from sib.services.config_store import ConfigService, DEFAULT_INVASION_JOIN_WINDOW_SECONDS
@@ -500,3 +503,271 @@ class InvasionPresentation:
                 await self.announce(bot, invasion_id)
         except Exception:
             logger.exception("inv2 pending announcements failed")
+
+
+# ---------------------------------------------------------------------------
+# IV3 random events
+# ---------------------------------------------------------------------------
+# Every event is a photo with a short caption; a chest carries one public
+# button. Delivery is post-commit and never raises into the maintenance loop:
+# a failed photo degrades to a text message, and a missing image simply skips
+# the photo for that event (the battle and the other events are unaffected).
+EVENT_CAPTION_LIMIT = 1020
+EVENT_SEND_ATTEMPTS = 3
+
+
+def loot_keyboard(event_id: int) -> InlineKeyboardMarkup:
+    """The chest's single public button (success/green, never owner-scoped)."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        success_button(text="🎁 باز کردن صندوق", callback_data=f"inv2ev:loot:{event_id}")
+    ]])
+
+
+def build_event_caption(event, *, winners=(), closed: bool = False) -> str:
+    """Narrative + effect line (+ chest status) inside the photo caption limit."""
+    from . import event_catalog as catalog
+
+    narrative = event.narrative or ""
+    template = catalog.BY_CODE.get(event.template_code)
+    if template is None:
+        return _caption(narrative)
+    suffix = "\n\n" + catalog.render_effect_line(
+        template,
+        amount=event.applied_amount,
+        loot_amount=event.loot_amount,
+        max_claims=event.loot_max_claims,
+    )
+    if template.category == catalog.LOOT:
+        if closed:
+            suffix += "\n🔒 صندوقچه بسته شد."
+        else:
+            suffix += "\n" + catalog.render_loot_status(
+                event.loot_claimed,
+                event.loot_max_claims or catalog.DEFAULT_LOOT_MAX_CLAIMS,
+                winners,
+            )
+    return _fit_caption(narrative, suffix, limit=EVENT_CAPTION_LIMIT)
+
+
+async def _edit_event_caption(
+    bot, group_id, chat_id, message_id, caption, reply_markup=None
+) -> bool:
+    """One metered caption edit; "not modified" is a no-op, never a failure."""
+    try:
+        await bot.edit_message_caption(
+            chat_id=chat_id, message_id=message_id, caption=caption,
+            reply_markup=reply_markup, parse_mode=None,
+        )
+    except TelegramBadRequest as exc:
+        if _is_not_modified(exc):
+            return True
+        logger.warning("inv2 event caption edit rejected group=%s message=%s: %s",
+                       group_id, message_id, exc.message)
+        await _breaker_failure(group_id)
+        return False
+    except Exception:
+        logger.warning("inv2 event caption edit failed group=%s message=%s",
+                       group_id, message_id, exc_info=True)
+        await _breaker_failure(group_id)
+        return False
+    await _breaker_success(group_id)
+    return True
+
+
+async def publish_event(bot, event_id: int) -> bool:
+    """Send one committed ``APPLIED`` event to its group.
+
+    Two short transactions around the Telegram call (read → send → persist):
+    no database lock is held across a network request. If another worker wins
+    the persist race, the message is still delivered exactly once in practice
+    because only the winner writes ``message_id`` and the loser's row already
+    has one.
+    """
+    if bot is None:
+        return False
+    try:
+        from sib.services.maintenance.service import MaintenanceService
+        from . import event_catalog as catalog
+        from .imaging.templates import event_image_path
+
+        if not await MaintenanceService._invasion_enabled():
+            return False
+
+        async with get_session() as session:
+            event = await session.get(Inv2RandomEvent, event_id)
+            if event is None or event.status != "APPLIED" or event.message_id is not None:
+                return False
+            invasion = await session.get(Inv2Invasion, event.invasion_id)
+            if invasion is None or invasion.status != InvasionStatus.ACTIVE.value:
+                event.status = "SKIPPED"
+                event.resolved_at = datetime.now(timezone.utc)
+                return False
+            if not await is_group_available(event.group_id, session=session):
+                event.status = "SKIPPED"
+                event.resolved_at = datetime.now(timezone.utc)
+                return False
+            template = catalog.BY_CODE.get(event.template_code)
+            caption = build_event_caption(event)
+            keyboard = (loot_keyboard(event.id)
+                        if template is not None and template.category == catalog.LOOT
+                        else None)
+            group_id = event.group_id
+            chat_id = event.message_chat_id or group_id
+            image_path = event_image_path(event.template_code)
+
+        message = None
+        if image_path is not None:
+            message = await _telegram(
+                group_id, bot.send_photo, chat_id=group_id,
+                photo=FSInputFile(image_path), caption=_caption(caption),
+                reply_markup=keyboard, parse_mode=None,
+            )
+        if message is None:
+            # Missing art or a rejected photo: the event still reaches the
+            # group as text. This is the documented graceful fallback.
+            message = await _telegram(
+                group_id, bot.send_message, chat_id=group_id, text=caption,
+                reply_markup=keyboard, parse_mode=None,
+            )
+        now = datetime.now(timezone.utc)
+        async with get_session() as session:
+            event = await session.scalar(
+                select(Inv2RandomEvent).where(Inv2RandomEvent.id == event_id).with_for_update()
+            )
+            if event is None:
+                return message is not None
+            if message is None:
+                event.send_attempts = int(event.send_attempts or 0) + 1
+                if event.send_attempts >= EVENT_SEND_ATTEMPTS:
+                    event.status = "SKIPPED"
+                    event.resolved_at = now
+                logger.warning("inv2 event delivery failed id=%s attempt=%s",
+                               event_id, event.send_attempts)
+                return False
+            if event.status != "APPLIED" or event.message_id is not None:
+                return True  # another worker delivered it first
+            event.message_chat_id = getattr(getattr(message, "chat", None), "id", None) or group_id
+            event.message_id = getattr(message, "message_id", None)
+            event.announced_at = now
+            if event.duration_seconds:
+                event.starts_at = now
+                event.ends_at = now + timedelta(seconds=int(event.duration_seconds))
+                event.status = "ACTIVE"
+            else:
+                event.status = "CLOSED"   # one-shot: shown once, no window
+                event.resolved_at = now
+            invasion_id = event.invasion_id
+            moved_hp = event.applied_amount is not None
+        if moved_hp:
+            # The pinned announcement shows live HP; an event that healed or
+            # damaged the boss must refresh it instead of waiting for a join.
+            schedule_hp_edit(bot, invasion_id)
+        return True
+    except Exception:
+        logger.exception("inv2 event presentation failed id=%s", event_id)
+        return False
+
+
+async def publish_applied_events(bot) -> int:
+    """Deliver every committed event that is waiting for its message."""
+    if bot is None:
+        return 0
+    try:
+        from sib.services.maintenance.service import MaintenanceService
+        if not await MaintenanceService._invasion_enabled():
+            return 0
+        async with get_session() as session:
+            ids = list((await session.scalars(
+                select(Inv2RandomEvent.id).where(
+                    Inv2RandomEvent.status == "APPLIED",
+                    Inv2RandomEvent.message_id.is_(None),
+                ).order_by(Inv2RandomEvent.id).limit(20)
+            )).all())
+        sent = 0
+        for event_id in ids:
+            if await publish_event(bot, event_id):
+                sent += 1
+        return sent
+    except Exception:
+        logger.exception("inv2 event delivery pass failed")
+        return 0
+
+
+async def refresh_loot_caption(bot, event_id: int) -> None:
+    """Rebuild a chest caption after a claim (winners and remaining slots)."""
+    if bot is None:
+        return
+    try:
+        from .event_scheduler import winners_for_event
+        from . import event_catalog as catalog
+        async with get_session() as session:
+            event = await session.get(Inv2RandomEvent, event_id)
+            if event is None or event.message_id is None:
+                return
+            template = catalog.BY_CODE.get(event.template_code)
+            if template is None or template.category != catalog.LOOT:
+                return
+            winners = await winners_for_event(session, event_id)
+            full = int(event.loot_claimed) >= int(
+                event.loot_max_claims or catalog.DEFAULT_LOOT_MAX_CLAIMS
+            )
+            caption = build_event_caption(event, winners=winners[-3:])
+            group_id = event.group_id
+            chat_id = event.message_chat_id or group_id
+            message_id = event.message_id
+        await _edit_event_caption(
+            bot, group_id, chat_id, message_id, _caption(caption),
+            reply_markup=None if full else loot_keyboard(event_id),
+        )
+    except Exception:
+        logger.exception("inv2 chest caption refresh failed id=%s", event_id)
+
+
+async def close_expired_events(bot) -> int:
+    """Remove the chest button once its window (or its battle) is over.
+
+    The durable close happens in the DB-only tick; this pass only finishes the
+    Telegram side: rows whose window ended with a delivered message still have
+    ``resolved_at`` NULL, which is the "caption not finalised" marker.
+    """
+    if bot is None:
+        return 0
+    closed = 0
+    try:
+        from . import event_catalog as catalog
+        if not await _invasion_flag():
+            return 0
+        async with get_session() as session:
+            events = list((await session.scalars(
+                select(Inv2RandomEvent).where(
+                    Inv2RandomEvent.status == "CLOSED",
+                    Inv2RandomEvent.resolved_at.is_(None),
+                    Inv2RandomEvent.message_id.is_not(None),
+                ).order_by(Inv2RandomEvent.id).limit(20)
+            )).all())
+            pending = [
+                (event.id, event.group_id, event.message_chat_id, event.message_id,
+                 build_event_caption(event, closed=True), event.template_code,
+                 event.ends_at)
+                for event in events
+            ]
+        for event_id, group_id, chat_id, message_id, caption, code, ends_at in pending:
+            template = catalog.BY_CODE.get(code)
+            if template is not None and template.category == catalog.LOOT:
+                await _edit_event_caption(
+                    bot, group_id, chat_id or group_id, message_id,
+                    _caption(caption), reply_markup=None,
+                )
+            async with get_session() as session:
+                event = await session.get(Inv2RandomEvent, event_id)
+                if event is not None and event.resolved_at is None:
+                    event.resolved_at = datetime.now(timezone.utc)
+            closed += 1
+    except Exception:
+        logger.exception("inv2 event closing pass failed")
+    return closed
+
+
+async def _invasion_flag() -> bool:
+    from sib.services.maintenance.service import MaintenanceService
+    return await MaintenanceService._invasion_enabled()

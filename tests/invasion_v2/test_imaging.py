@@ -19,10 +19,19 @@ from sib.services.invasion_v2.imaging import cache, compose, templates
 
 ROOT = templates.ASSETS_ROOT
 CARD = ROOT.parent / "characters" / "green_knight.jpg"
+# IV3 event art is optional at runtime (a missing image degrades that event to
+# text), so the manifest contract covers exactly the files that shipped. The
+# catalogue-completeness check lives in test_events.py.
+EVENT_IMAGES = sorted(
+    f"events/{path.name}" for path in (ROOT / "events").glob("*.jpg")
+)
+# Import-time verification only covers art the bot cannot run without; event
+# cards are optional by design (the event falls back to text).
 EXPECTED = (
     [f"backgrounds/{name}.jpg" for name in templates.ENEMY_TYPES]
     + [f"silhouettes/{name}.png" for name in templates.ENEMY_TYPES]
     + [f"layouts/{name}.jpg" for name in templates.LAYOUT_NAMES]
+    + EVENT_IMAGES
 )
 
 
@@ -31,7 +40,7 @@ def test_manifest_matches_files():
     assert manifest["version"] == templates.asset_version()
     assert manifest["generator"] == "manual-ai"
     assert manifest["generated_at"].endswith("Z")
-    assert len(manifest["assets"]) == 14
+    assert len(manifest["assets"]) == len(EXPECTED)
     assert {entry["path"] for entry in manifest["assets"]} == set(EXPECTED)
     for entry in manifest["assets"]:
         path = ROOT / entry["path"]
@@ -54,6 +63,10 @@ def test_dimensions(path):
             assert image.mode == "RGBA" and image.format == "PNG"
             assert image.getchannel("A").getextrema() == (0, 255)
             assert image.crop((0, 500, 400, 560)).getchannel("A").getbbox() is None
+        elif path.startswith("events/"):
+            # IV3 event cards are square, phone-legible and text-free.
+            assert image.size == (1024, 1024)
+            assert image.mode == "RGB" and image.format == "JPEG"
         else:
             assert image.size == (1280, 720)
             assert image.mode == "RGB" and image.format == "JPEG"
@@ -127,7 +140,14 @@ def test_import_lists_all_missing_assets(tmp_path):
     shutil.copyfile(templates.FONT_PATH, font)
     with pytest.raises(FileNotFoundError) as error:
         runpy.run_path(str(module))
-    for path in ["manifest.json", *EXPECTED]:
+    required = [
+        f"backgrounds/{name}.jpg" for name in templates.ENEMY_TYPES
+    ] + [
+        f"silhouettes/{name}.png" for name in templates.ENEMY_TYPES
+    ] + [
+        f"layouts/{name}.jpg" for name in templates.LAYOUT_NAMES
+    ]
+    for path in ["manifest.json", *required]:
         assert path in str(error.value)
 
 

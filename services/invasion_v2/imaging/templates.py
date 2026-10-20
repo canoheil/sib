@@ -44,6 +44,10 @@ def label(draw, xy, text: str, size: int, *, fill="#f3eee1", anchor="ra",
 ASSETS_ROOT = Path(__file__).resolve().parents[3] / "assets" / "invasion_v2"
 ENEMY_TYPES = ["soldier", "shadow", "commander", "brute", "king"]
 LAYOUT_NAMES = ("announcement", "join", "victory", "defeat")
+# IV3 random-event art. Optional by design: a missing image degrades the
+# event message to text instead of failing a battle, so these are NOT part of
+# ``verify_assets`` (which fails the import when required art is absent).
+EVENT_ASSETS = ASSETS_ROOT / "events"
 
 
 def verify_assets() -> None:
@@ -87,6 +91,19 @@ def load_silhouette(enemy_type: str) -> Image.Image:
 
 def load_layout(name: str) -> Image.Image:
     return _load("layouts", name, ".jpg", LAYOUT_NAMES)
+
+
+def event_image_path(code: str) -> Path | None:
+    """Path to one event's art, or ``None`` when it has not been generated.
+
+    Deliberately speculative rather than fatal: the presentation layer falls
+    back to a text message for that event and every other event keeps its
+    image. ``code`` is always a catalogue key, never user input.
+    """
+    if not code or "/" in code or "\\" in code or not code.replace("_", "").isalnum():
+        return None
+    path = EVENT_ASSETS / f"{code}.jpg"
+    return path if path.is_file() and path.stat().st_size else None
 
 
 verify_assets()

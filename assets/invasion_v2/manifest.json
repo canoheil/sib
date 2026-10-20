@@ -1,19 +1,19 @@
 {
-  "version": "2",
-  "generated_at": "2026-10-14T11:47:02.905347Z",
+  "version": "4",
+  "generated_at": "2026-10-20T12:38:05.745974Z",
   "generator": "manual-ai",
   "assets": [
     {
       "path": "backgrounds/brute.jpg",
       "width": 1280,
       "height": 720,
-      "sha256": "9436f541317c97b56557adbfd89b4baf56f184c9814857d8877cb1804b3ec35f"
+      "sha256": "d7734b48a71c753989c90670b46b5695dce72ed6a13f8acb42f15209cf4fe034"
     },
     {
       "path": "backgrounds/commander.jpg",
       "width": 1280,
       "height": 720,
-      "sha256": "f5ed2cef58e0eb0970d7cf6dd317cc1db76b9087fdf3f9e0f432e4e81db72a1a"
+      "sha256": "613d4d1a2a288b85cc0fdb009cd07bd35ac5eb1101643bb1b55e93a21d4418b6"
     },
     {
       "path": "backgrounds/king.jpg",
@@ -25,7 +25,7 @@
       "path": "backgrounds/shadow.jpg",
       "width": 1280,
       "height": 720,
-      "sha256": "e3769f32104b19de8b0a6ac009000f11c9a541a7ff70b5606e7961e40622cffa"
+      "sha256": "12be097c2611732b620470f847939d683f4125e2d10dc3b77c1d361ca494ccbf"
     },
     {
       "path": "backgrounds/soldier.jpg",
@@ -34,22 +34,94 @@
       "sha256": "6fd234aa99c5e66978ab56d7d8dba649b1aad4ba8c21b6c2b7c4c054931bc7f5"
     },
     {
+      "path": "events/blessing_apple.jpg",
+      "width": 1024,
+      "height": 1024,
+      "sha256": "6a5767bb5620be14a9a42513a2cd4d6e2f370913e408bf3726c667e9eb1741e0"
+    },
+    {
+      "path": "events/blessing_dawn.jpg",
+      "width": 1024,
+      "height": 1024,
+      "sha256": "8c242cd0e36e6171a1afada306e9045908ff7fbf7904e11751754dbc62da80f1"
+    },
+    {
+      "path": "events/blessing_hawk.jpg",
+      "width": 1024,
+      "height": 1024,
+      "sha256": "65305f12d2c7c7817d6c389c99d040d9e29d78be6c03cdd0d9abc9dbc22f7de9"
+    },
+    {
+      "path": "events/boss_cold_breath.jpg",
+      "width": 1024,
+      "height": 1024,
+      "sha256": "097806c55a7a715d694c348dcb86e577b6d66d38b3240bbb853f7090e5b5042a"
+    },
+    {
+      "path": "events/boss_obsidian_armor.jpg",
+      "width": 1024,
+      "height": 1024,
+      "sha256": "2ceeee5ca8f3c5fe8072d8e54e267f02f4072bb3e488e163de05a436cad85f1b"
+    },
+    {
+      "path": "events/boss_shadow_heal.jpg",
+      "width": 1024,
+      "height": 1024,
+      "sha256": "965360ce3fccd15e35912cc5dd302e1ee3fa6bebf91cd8949350c4a3cad2dd6c"
+    },
+    {
+      "path": "events/boss_ward.jpg",
+      "width": 1024,
+      "height": 1024,
+      "sha256": "6db17358913de0262907f84d424ec8362c6a1615cc25db073f2694ff83a0572f"
+    },
+    {
+      "path": "events/heavenly_spear.jpg",
+      "width": 1024,
+      "height": 1024,
+      "sha256": "aeb8d8493b19639ebc6d9851ff038e97fa433a58076d7173485debeb9a8d90da"
+    },
+    {
+      "path": "events/loot_apple_sack.jpg",
+      "width": 1024,
+      "height": 1024,
+      "sha256": "caa6f1c5c71ff26958c0e597c49322c07083927bfcbddeb4881b375008c471fb"
+    },
+    {
+      "path": "events/loot_golden_chest.jpg",
+      "width": 1024,
+      "height": 1024,
+      "sha256": "119d023452dbc500a3b7cab82236889741b01fe504c6f17cd2d672d9182b4125"
+    },
+    {
+      "path": "events/loot_magic_chest.jpg",
+      "width": 1024,
+      "height": 1024,
+      "sha256": "7ce1d15b290f0a0da289daaed14d905435c9a70d39d3bf7996d91f835006613f"
+    },
+    {
+      "path": "events/meteor.jpg",
+      "width": 1024,
+      "height": 1024,
+      "sha256": "5c052705ecf0cbe0a1e28579d661f6c142fcf07bbd1a50fccdc7c56d1b12ccfb"
+    },
+    {
       "path": "layouts/announcement.jpg",
       "width": 1280,
       "height": 720,
-      "sha256": "990f68cc047a4730a481952be39c98c46eefe0d58a5ec2d8c3b39a9f2de91b30"
+      "sha256": "a2d52fb374394220d615d37d2d38457789ed5b9c9d61dc14b277b3ad8401a387"
     },
     {
       "path": "layouts/defeat.jpg",
       "width": 1280,
       "height": 720,
-      "sha256": "74fd14f272b3b8691bfac29728d8a61e238a0a31f8761cda29902d8fb4139fd6"
+      "sha256": "5b64d1f4fdec44857414d74d6d52fefb12fe8b715f8647c6a8103165a9d1f6ac"
     },
     {
       "path": "layouts/join.jpg",
       "width": 1280,
       "height": 720,
-      "sha256": "55532566ddd9a53858fad36baf03e20b3bbf8b8fc20183a354a5f64e90db76c4"
+      "sha256": "68a62eefaf7071c7f2d485ec8e6a2de9ba8d83e21a3920118a536df7e25da5ec"
     },
     {
       "path": "layouts/victory.jpg",
@@ -61,31 +133,31 @@
       "path": "silhouettes/brute.png",
       "width": 400,
       "height": 560,
-      "sha256": "c65e65e276a98377956b4e35e8df04d2f03deb34bed136c0f44630dc2fc67bb0"
+      "sha256": "0000b00a69a1795fc2fb24c9153c57e4d1711590c77c75a5a38d774b02b01840"
     },
     {
       "path": "silhouettes/commander.png",
       "width": 400,
       "height": 560,
-      "sha256": "fdecf92793f33c3256f9fa04d73a0a870395b9d61ecf4b9d1a024eb0ac7b0659"
+      "sha256": "3cfcc3ebff518030bb2eb1abab717d691d34e3e08157887d8810abcc1c65dcd9"
     },
     {
       "path": "silhouettes/king.png",
       "width": 400,
       "height": 560,
-      "sha256": "4672519bebdcb62e68b6394f00f2b624330f68eb14e2792ee8e06b34b2d347fb"
+      "sha256": "c53dc5e9eea8767d69b08f4c03613210beb37006656cc314ebf02cf5fd4a54da"
     },
     {
       "path": "silhouettes/shadow.png",
       "width": 400,
       "height": 560,
-      "sha256": "e34af4d6c8cd101fb68f86ccce470054a520bc1769f5b6b90b4f7fcc8fed96f8"
+      "sha256": "0bfa8ee2f3216923d2be0a56abb7a58d9d6d9a5a4b4c05489aaa975ceeeaf345"
     },
     {
       "path": "silhouettes/soldier.png",
       "width": 400,
       "height": 560,
-      "sha256": "a3dcf95f258765495ba524c29f08a2c2f6fe00f2d85828496879be7ffee22b04"
+      "sha256": "9de2ceb2c5dabb3878330f7b21546ec01a4e3abd0327dd5db6145d721d09e990"
     }
   ]
 }
