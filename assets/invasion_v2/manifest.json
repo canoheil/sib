@@ -1,6 +1,6 @@
 {
-  "version": "3",
-  "generated_at": "2026-10-20T11:47:51.211140Z",
+  "version": "4",
+  "generated_at": "2026-10-20T12:38:05.745974Z",
   "generator": "manual-ai",
   "assets": [
     {
@@ -76,10 +76,28 @@
       "sha256": "6db17358913de0262907f84d424ec8362c6a1615cc25db073f2694ff83a0572f"
     },
     {
+      "path": "events/heavenly_spear.jpg",
+      "width": 1024,
+      "height": 1024,
+      "sha256": "aeb8d8493b19639ebc6d9851ff038e97fa433a58076d7173485debeb9a8d90da"
+    },
+    {
+      "path": "events/loot_apple_sack.jpg",
+      "width": 1024,
+      "height": 1024,
+      "sha256": "caa6f1c5c71ff26958c0e597c49322c07083927bfcbddeb4881b375008c471fb"
+    },
+    {
       "path": "events/loot_golden_chest.jpg",
       "width": 1024,
       "height": 1024,
       "sha256": "119d023452dbc500a3b7cab82236889741b01fe504c6f17cd2d672d9182b4125"
+    },
+    {
+      "path": "events/loot_magic_chest.jpg",
+      "width": 1024,
+      "height": 1024,
+      "sha256": "7ce1d15b290f0a0da289daaed14d905435c9a70d39d3bf7996d91f835006613f"
     },
     {
       "path": "events/meteor.jpg",

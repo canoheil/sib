@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock
 import pytest
 from aiogram.types import CallbackQuery, Chat, Message, User as TgUser
 from aiogram.enums import ChatType
+from PIL import Image
 from sqlalchemy import Integer, func, inspect, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
@@ -655,6 +656,24 @@ async def test_loot_callback_handler_claims_and_answers(db, monkeypatch):
     assert answers.await_args.args[1] == "قبلاً از این صندوق برداشته‌اید."
     await inv2_events.handle_inv2_loot(loot_callback(event_id, message_id=778), bot)
     assert answers.await_args.args[1] == "این صندوق به این پیام تعلق ندارد."
+
+
+def test_every_catalogue_event_has_its_art_and_manifest_entry():
+    """Completeness lives here: manifest.json only tracks files that shipped."""
+    from sib.services.invasion_v2.imaging import templates
+
+    manifest = json.loads(
+        (ROOT / "assets/invasion_v2/manifest.json").read_text(encoding="utf-8")
+    )
+    tracked = {entry["path"] for entry in manifest["assets"]}
+    for template in catalog.EVENTS:
+        path = templates.event_image_path(template.code)
+        assert path is not None, f"missing art for {template.code}"
+        assert path.name == template.image_name
+        assert f"events/{template.image_name}" in tracked
+        with Image.open(path) as image:
+            assert image.size == (1024, 1024)
+            assert image.format == "JPEG"
 
 
 def test_event_image_path_rejects_anything_but_catalogue_codes():
