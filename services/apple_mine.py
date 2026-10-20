@@ -2,7 +2,7 @@
 
 The M1 flat reward table is replaced by a per-pickaxe-level table: every
 player owns one pickaxe (``user_pickaxes``, levels 1..5, lazily created). A
-30-minute work shift rolls that level's special-apple chances first (fixed
+15-minute work shift rolls that level's special-apple chances first (fixed
 drop quantities 3 gold / 1 diamond / 1 obsidian) and otherwise grants a
 uniform random amount of normal Apples from the level's range. Upgrading
 costs normal wallet Apples only and is audited in the apple ledger under a
@@ -29,7 +29,7 @@ from sib.services.config_store import ConfigService
 from sib.services.items import ItemService
 from sib.services.lock_order import lock_user_row
 
-WORK_COOLDOWN_SECONDS = 1800
+WORK_COOLDOWN_SECONDS = 900
 
 MIN_PICKAXE_LEVEL = 1
 MAX_PICKAXE_LEVEL = 5

@@ -353,39 +353,69 @@ async def test_upgrade_insufficient_funds_reports_shortfall(db_session):
 
 
 # ---------------------------------------------------------------------------
-# Cooldown (unchanged from M1)
+# Cooldown
 # ---------------------------------------------------------------------------
 
 
+def test_mine_cooldown_is_15_minutes():
+    assert mine_service.WORK_COOLDOWN_SECONDS == 900
+
+
 @pytest.mark.asyncio
-async def test_cooldown_blocks_second_shift_within_30_min(monkeypatch):
+@pytest.mark.parametrize(
+    ("elapsed_seconds", "remaining_seconds"), [(0, 900), (600, 300), (899, 1)]
+)
+async def test_cooldown_blocks_second_shift_within_15_min(
+    monkeypatch, elapsed_seconds, remaining_seconds
+):
     session = _ShiftSession()
     _shift_fixtures(monkeypatch, level=1, roll="normal")
     monkeypatch.setattr(
         mine_service,
         "_last_worked_at",
-        AsyncMock(return_value=NOW - timedelta(seconds=1799)),
+        AsyncMock(return_value=NOW - timedelta(seconds=elapsed_seconds)),
     )
 
     with pytest.raises(CooldownError) as error:
         await mine_service.perform_shift(session, user_id=102, group_id=None)
 
-    assert error.value.remaining_seconds == 1
+    assert error.value.remaining_seconds == remaining_seconds
     assert session.shifts == []
+    session.flush.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_cooldown_expires_after_30_min(monkeypatch):
+@pytest.mark.parametrize("elapsed_seconds", [900, 901])
+async def test_cooldown_expires_after_15_min(elapsed_seconds):
     session = SimpleNamespace(
-        scalar=AsyncMock(side_effect=[NOW, NOW - timedelta(seconds=1801)])
+        scalar=AsyncMock(side_effect=[NOW, NOW - timedelta(seconds=elapsed_seconds)])
     )
     assert await mine_service.remaining_cooldown(session, user_id=103) == 0
 
 
 @pytest.mark.asyncio
-async def test_cooldown_remaining_seconds_round_up(monkeypatch):
+async def test_shift_allowed_at_15_minutes(monkeypatch):
+    session = _ShiftSession()
+    _shift_fixtures(monkeypatch, level=1, roll="normal")
+    monkeypatch.setattr(
+        mine_service,
+        "_last_worked_at",
+        AsyncMock(return_value=NOW - timedelta(minutes=15)),
+    )
+    earn = AsyncMock(return_value=15)
+    monkeypatch.setattr(mine_service.AppleWalletService, "earn", earn)
+
+    result = await mine_service.perform_shift(session, user_id=103, group_id=None)
+
+    assert result.item_code == "apple_normal"
+    assert len(session.shifts) == 1
+    earn.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_cooldown_remaining_seconds_round_up():
     session = SimpleNamespace(
-        scalar=AsyncMock(side_effect=[NOW, NOW - timedelta(seconds=1799.2)])
+        scalar=AsyncMock(side_effect=[NOW, NOW - timedelta(seconds=899.2)])
     )
     assert await mine_service.remaining_cooldown(session, user_id=104) == 1
 
@@ -536,21 +566,34 @@ async def test_work_performs_shift_directly(monkeypatch):
         "چند سیب از دل سنگ بیرون آمد.\n\n"
         "🍎 **پاداش شما:** +۱۸ سیب معمولی\n"
         "🔨 **کلنگ:** سطح ۲\n\n"
-        "⏳ شیفت بعدی: **۳۰ دقیقه دیگر**"
+        "⏳ شیفت بعدی: **۱۵ دقیقه دیگر**"
     )
     assert message.photo is photo
 
 
 @pytest.mark.asyncio
-async def test_work_cooldown_alerts_before_shifting(monkeypatch):
+@pytest.mark.parametrize("cooldown_source", ["precheck", "locked_shift"])
+@pytest.mark.parametrize(
+    ("remaining_seconds", "expected_duration"),
+    [
+        (900, "۱۵ دقیقه و ۰ ثانیه"),
+        (899, "۱۴ دقیقه و ۵۹ ثانیه"),
+        (600, "۱۰ دقیقه و ۰ ثانیه"),
+    ],
+)
+async def test_work_cooldown_alerts(
+    monkeypatch, cooldown_source, remaining_seconds, expected_duration
+):
     monkeypatch.setattr(mine_handler, "get_session", _session_context(object()))
     monkeypatch.setattr(
         mine_handler, "_register_user_and_group", AsyncMock(return_value=None)
     )
     monkeypatch.setattr(
-        mine_handler, "remaining_cooldown", AsyncMock(return_value=600)
+        mine_handler,
+        "remaining_cooldown",
+        AsyncMock(return_value=remaining_seconds if cooldown_source == "precheck" else 0),
     )
-    perform = AsyncMock()
+    perform = AsyncMock(side_effect=CooldownError(remaining_seconds))
     monkeypatch.setattr(mine_handler, "perform_shift", perform)
 
     message = SimpleNamespace(
@@ -565,10 +608,15 @@ async def test_work_cooldown_alerts_before_shifting(monkeypatch):
 
     await mine_handler.handle_mine_work(callback, SimpleNamespace())
 
-    perform.assert_not_awaited()
+    if cooldown_source == "precheck":
+        perform.assert_not_awaited()
+    else:
+        perform.assert_awaited_once()
+    callback.answer.assert_awaited_once()
     args, kwargs = callback.answer.await_args
     assert kwargs.get("show_alert") is True
-    assert "۱۰ دقیقه و ۰ ثانیه" in args[0]
+    assert expected_duration in args[0]
+    assert re.search(r"[0-9a-zA-Z]", args[0]) is None
 
 
 @pytest.mark.asyncio
@@ -750,10 +798,14 @@ def test_panel_caption_shows_pickaxe_level_and_ready_state():
     assert re.search(r"[0-9]", caption) is None
 
 
-def test_panel_caption_shows_cooldown_line():
-    caption = mine_handler._panel_caption(dataclasses.replace(_view(), cooldown=125), 7)
+@pytest.mark.parametrize(
+    ("remaining_seconds", "expected_duration"),
+    [(900, "۱۵ دقیقه و ۰ ثانیه"), (125, "۲ دقیقه و ۵ ثانیه")],
+)
+def test_panel_caption_shows_cooldown_line(remaining_seconds, expected_duration):
+    caption = mine_handler._panel_caption(_view(cooldown=remaining_seconds), 7)
     assert caption.endswith(
-        "⏳ دیوارهای معدن خاموش‌اند. **۲ دقیقه و ۵ ثانیه** دیگر برگرد تا فانوس‌ها روشن شوند."
+        f"⏳ دیوارهای معدن خاموش‌اند. **{expected_duration}** دیگر برگرد تا فانوس‌ها روشن شوند."
     )
     assert re.search(r"[0-9]", caption) is None
 
@@ -801,9 +853,19 @@ def test_result_caption_formats_special_reward_with_persian_digits():
         "سیب طلایی از دل سنگ پیدا شد.\n\n"
         "🍎 **پاداش شما:** +۳ سیب طلایی\n"
         "🔨 **کلنگ:** سطح ۴\n\n"
-        "⏳ شیفت بعدی: **۳۰ دقیقه دیگر**"
+        "⏳ شیفت بعدی: **۱۵ دقیقه دیگر**"
     )
     assert re.search(r"[0-9]", caption) is None
+
+
+def test_result_caption_uses_cooldown_constant(monkeypatch):
+    monkeypatch.setattr(mine_handler, "WORK_COOLDOWN_SECONDS", 7 * 60)
+    result = ShiftResult(
+        "golden", "apple_gold", 3, "سیب طلایی از دل سنگ پیدا شد.", pickaxe_level=4
+    )
+    assert mine_handler._result_caption(result).endswith(
+        "⏳ شیفت بعدی: **۷ دقیقه دیگر**"
+    )
 
 
 def test_main_menu_keyboard_layout():
