@@ -141,6 +141,14 @@ from sib.database.models.invasion_v2_group_member import Inv2GroupMember
 
 __all__ += ["Inv2GroupMember"]
 
+from sib.database.models.invasion_v2_events import (
+    Inv2EventClaim,
+    Inv2EventEffect,
+    Inv2RandomEvent,
+)
+
+__all__ += ["Inv2RandomEvent", "Inv2EventEffect", "Inv2EventClaim"]
+
 from sib.database.models.admin_log import AdminLog
 __all__ += ["AdminLog"]
 

@@ -1,5 +1,6 @@
 """Group-only v2 join: one Main Card, one attack, guarded HP transition."""
 import asyncio
+import math
 import random
 from datetime import datetime, timezone
 
@@ -14,6 +15,7 @@ from sib.services.castle_service import CastleService, apply_castle_buff
 from sib.services.card_progression import MAX_CARD_LEVEL, card_attributes
 from sib.services.invasion_v2.damage import compute_damage
 from sib.services.invasion_v2.enums import InvasionStatus
+from sib.services.invasion_v2.event_scheduler import load_active_modifiers
 from sib.services.invasion_v2.narrative import render_join
 from sib.services.invasion_v2.presentation import InvasionPresentation, _telegram
 from sib.services.maintenance.service import MaintenanceService
@@ -89,13 +91,27 @@ async def handle_inv2_join(callback: CallbackQuery, bot) -> None:
                 await _answer(callback, "نیروی کارت اصلی مشخص نیست؛ یورش ثبت نشد.", alert=True)
                 return
             power = card_attributes(card, character).power
-            damage, crit = compute_damage(power, random.Random())
+            # IV3: random events can shift the crit chance and the damage.
+            # With no active event these are the historical 10% roll, the
+            # castle buff and (optionally) the sib buff, unchanged.
+            modifiers = await load_active_modifiers(session, inv.id, now)
+            damage, crit = compute_damage(
+                power, random.Random(), crit_chance=modifiers.crit_chance()
+            )
             castle_buff = await CastleService.get_invasion_buff(session, inv.group_id)
             damage = apply_castle_buff(damage, castle_buff)
+            if modifiers.damage_multiplier != 1.0:
+                # Applied to the rounded, castle-buffed hit so the order is
+                # deterministic and testable.
+                damage = max(1, int(damage * modifiers.damage_multiplier))
             # Apply to the rounded normal hit, independently of the unchanged
             # 10% critical roll (a critical hit can also receive the buff).
             if use_buff:
                 damage *= 2
+            if modifiers.damage_cap_pct is not None:
+                # The ward is the anti-burst answer, so it is applied last:
+                # it blunts critical + sib-buff spikes but never a normal hit.
+                damage = min(damage, max(1, math.ceil(inv.enemy_hp * modifiers.damage_cap_pct)))
             remaining = max(0, inv.enemy_hp_remaining - damage)
             user = await session.get(User, user_id)
             name = user.display_name if user else callback.from_user.first_name

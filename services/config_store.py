@@ -25,6 +25,27 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     "invasion_difficulty_multiplier": DEFAULT_INVASION_DIFFICULTY_MULTIPLIER,
     "invasion_join_window_seconds": DEFAULT_INVASION_JOIN_WINDOW_SECONDS,
     "invasion_interval_seconds": DEFAULT_INVASION_INTERVAL_SECONDS,
+    # IV3 random events inside an active invasion (docs/invasion-rework/
+    # IV3-RECON.md). Seeded OFF by migration 055: the master
+    # ``invasion_enabled`` flag still gates everything, and an operator turns
+    # this on without a deploy once the staging run is clean.
+    "inv2_events_enabled": False,
+    # Never fire in the first minute after the announcement settles, nor in
+    # the last two minutes before the deadline (a 2-minute buff would be
+    # wasted there).
+    "inv2_event_guard_head_seconds": 60,
+    "inv2_event_guard_tail_seconds": 120,
+    # Cadence guard rails, honoured by the jitter in event_scheduler.
+    "inv2_event_min_gap_seconds": 300,
+    "inv2_event_max_gap_seconds": 420,
+    "inv2_event_min_per_invasion": 3,
+    "inv2_event_max_per_invasion": 7,
+    # Chest window and "first N" limit.
+    "inv2_event_loot_window_seconds": 120,
+    "inv2_event_loot_max_claims": 3,
+    "inv2_event_loot_apples": 40,
+    # Optional per-template weight overrides (code -> weight); 0 disables.
+    "inv2_event_weights": {},
     # Days after which a group member is considered inactive for inv2 power.
     "inv2_member_active_window_days": 30,
     # Minimum number of active group members who must have a main card for an
