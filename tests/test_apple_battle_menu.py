@@ -51,8 +51,8 @@ async def test_apple_battle_menu_has_no_battle_leaderboard_button(
     ] == expected
 
 
-async def test_apple_battle_ready_menu_keeps_battle_leaderboard_button(monkeypatch):
-    """The other menu must retain its separate battle leaderboard entry."""
+async def test_apple_battle_ready_menu_has_no_leaderboard_button(monkeypatch):
+    """Ready menu must no longer contain the removed battle leaderboard."""
     card = SimpleNamespace(character_id=10, level=2)
     session = AsyncMock()
     session.get.side_effect = [card, SimpleNamespace(name_fa="قهرمان")]
@@ -73,5 +73,6 @@ async def test_apple_battle_ready_menu_keeps_battle_leaderboard_button(monkeypat
     assert [
         [button.callback_data for button in row]
         for row in keyboard.inline_keyboard
-    ] == [["ab_find"], ["ab_change:group_games_panel"], ["ab_board"], ["group_games_panel"]]
-    assert keyboard.inline_keyboard[2][0].text == "🏆 لیدربورد نبرد"
+    ] == [["ab_find"], ["ab_change:group_games_panel"], ["group_games_panel"]]
+    assert all(button.callback_data != "ab_board" for row in keyboard.inline_keyboard for button in row)
+    assert all(button.text != "🏆 لیدربورد نبرد" for row in keyboard.inline_keyboard for button in row)
