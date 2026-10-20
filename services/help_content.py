@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional, Tuple
 
 from sib.core.text import escape_markdown
+from sib.services.apple_mine import WORK_COOLDOWN_SECONDS
 from sib.services.sib_claim import fa_digits
 
 #: The official support handle. It is the ONLY Latin string in the help
@@ -96,8 +97,8 @@ APPLE_MINE_PICKAXE_COSTS: Tuple[Tuple[int, int], ...] = (
     (5, 1500),
 )
 
-#: Apple Mine cooldown, in minutes (services/apple_mine.py).
-APPLE_MINE_COOLDOWN_MINUTES = 30
+#: Keep the guide in sync with the service's cooldown.
+APPLE_MINE_COOLDOWN_MINUTES = WORK_COOLDOWN_SECONDS // 60
 
 #: The five shop chests and their price in Apples (data/shop_chests/*.json).
 SHOP_CHESTS: Tuple[Tuple[str, int], ...] = (

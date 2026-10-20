@@ -307,7 +307,7 @@ def test_help_mentions_apple_mine():
     """The Apple Mine is explained: command, cooldown, pickaxe ladder."""
     body = get_section("mine").body_fa
     assert "معدن سیبی" in body
-    assert fa_digits(30) in body  # 30 minutes between shifts
+    assert "۱۵ دقیقه فاصله لازم است." in body
     for label in ("سیب معمولی", "سیب طلایی", "سیب الماسی", "سیب ابسیدینی"):
         assert label in body, label
     # M2-RECON: the pickaxe is the progression; card selection is gone.
