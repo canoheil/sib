@@ -557,23 +557,7 @@ async def test_cannot_enqueue_someone_elses_card(db_session):
         await AppleBattleService.enqueue(db_session, a.id, card_b.id)
 
 
-@pytest.mark.asyncio
-async def test_battle_leaderboard_counts_wins(db_session):
-    a = await create_test_user(db_session, "قهرمان الف")
-    b = await create_test_user(db_session, "قهرمان ب")
-    card_a = await _card(db_session, a, "battle_n")
-    card_b = await _card(db_session, b, "battle_o")
 
-    battle = await _make_battle_row(db_session, a, b, card_a, card_b)
-    battle = await AppleBattleService.compute_and_persist_result(db_session, battle.id)
-    battle = await AppleBattleService.complete(db_session, battle.id)
-    await db_session.commit()
-
-    board = await AppleBattleService.battle_leaderboard(db_session)
-    assert len(board) >= 1
-    winner_id, wins, total = board[0]
-    assert winner_id == battle.winner_id
-    assert wins == 1
 
 
 # ---------------------------------------------------------------------------

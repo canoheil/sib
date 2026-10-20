@@ -170,7 +170,6 @@ async def _ready_view(user_id: int, origin: str | None = None) -> tuple[str, Inl
         [
             [success_button(text="🔍 یافتن حریف", callback_data="ab_find")],
             [danger_button(text="↩️ تغییر کارت", callback_data=with_origin("ab_change", origin))],
-            [primary_button(text="🏆 لیدربورد نبرد", callback_data="ab_board")],
             _back_row(origin),
         ]
     )
@@ -489,31 +488,6 @@ async def handle_ab_status(callback: CallbackQuery, bot: Bot):
         else:
             text, kb = await _select_view(actor)
             await safe_answer_callback(callback, "کارت خود را انتخاب کنید ⚔️")
-    await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
-
-
-# ---------------------------------------------------------------------------
-# Leaderboard
-# ---------------------------------------------------------------------------
-
-
-@router.callback_query(F.data == "ab_board")
-async def handle_ab_board(callback: CallbackQuery, bot: Bot):
-    async with get_session() as session:
-        board = await AppleBattleService.battle_leaderboard(session)
-        names = []
-        for user_id, wins, total in board[:15]:
-            names.append(f"🏆 `{user_id}` — {wins} برد از {total} نبرد")
-
-    text = "🏆 **لیدربورد نبرد سیبی**\n\n"
-    text += "\n".join(names) if names else "هنوز نبردی ثبت نشده."
-    kb = _kb(
-        [
-            [primary_button(text="🔄 بروزرسانی", callback_data="ab_board")],
-            [danger_button(text="↩️ بازگشت به نبرد سیبی", callback_data="apple_battle")],
-        ]
-    )
-    await safe_answer_callback(callback)
     await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
 

@@ -10,15 +10,24 @@ from sib.services.group import GroupService
 from sib.services.user import UserService
 from sib.keyboards.leaderboard import (
     get_leaderboard_keyboard,
+    get_leaderboard_tab_keyboard,
     get_group_stats_keyboard,
     get_player_stats_keyboard,
 )
+from sib.core.text import escape_markdown
 
 router = Router(name="leaderboard")
 
+LEADERBOARD_MAIN_TEXT = (
+    "🏆 **برترین گروه‌های سیب** 🍏\n\n"
+    "یکی از دسته‌ها را برای مشاهده برترین‌ها انتخاب کنید 👇"
+)
+
+LEADERBOARD_EMPTY_TEXT = "هنوز آمار کافی برای این بخش ثبت نشده است."
+
 
 def format_leaderboard_text(top_groups: list) -> str:
-    """Format global leaderboard in Persian."""
+    """Format global leaderboard in Persian (legacy helper kept for compat)."""
     if not top_groups:
         return "🏆 **برترین گروه‌های سیب** 🍏\n\nهنوز مسابقه‌ای ثبت نشده! گروه شما می‌تونه اولین قهرمان باشه!"
 
@@ -37,35 +46,166 @@ def format_leaderboard_text(top_groups: list) -> str:
     return "\n".join(lines)
 
 
+def _format_castles_text(rows: list) -> str:
+    if not rows:
+        return LEADERBOARD_EMPTY_TEXT
+    medals = {1: "🥇", 2: "🥈", 3: "🥉"}
+    lines = ["🏰 **برترین قلعه‌ها** 🏰\n"]
+    for idx, (group, castle) in enumerate(rows, start=1):
+        medal = medals.get(idx, f"**{idx}.**")
+        title = escape_markdown(group.title)
+        lines.append(
+            f"{medal} **{title}**\n"
+            f"🏰 سطح `{castle.level}` | 🍏 اهدا: `{castle.total_donated}`"
+        )
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+def _format_warriors_text(rows: list) -> str:
+    if not rows:
+        return LEADERBOARD_EMPTY_TEXT
+    # Filter out zero-win rows for display? But keep them as per spec — show all 10 with 0
+    # However if all zero, treat as empty? No — show with 0 wins, but tests for empty list show empty text.
+    # If rows exist but all wins==0, it's still considered having data? We'll show list.
+    # But spec says if list empty, show empty text — that's rows==[] case above.
+    # To distinguish "no active groups at all" vs "no wins yet", we keep list.
+    medals = {1: "🥇", 2: "🥈", 3: "🥉"}
+    lines = ["⚔️ **برترین جنگاوران** ⚔️\n"]
+    has_any = any(wins > 0 for _, wins in rows)
+    if not has_any:
+        return LEADERBOARD_EMPTY_TEXT
+    for idx, (group, wins) in enumerate(rows, start=1):
+        medal = medals.get(idx, f"**{idx}.**")
+        title = escape_markdown(group.title)
+        lines.append(
+            f"{medal} **{title}**\n"
+            f"⚔️ برد جنگی: `{wins}`"
+        )
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+def _format_defenders_text(rows: list) -> str:
+    if not rows:
+        return LEADERBOARD_EMPTY_TEXT
+    medals = {1: "🥇", 2: "🥈", 3: "🥉"}
+    lines = ["🛡 **برترین مدافعان** 🛡\n"]
+    has_any = any(v > 0 for _, v in rows)
+    if not has_any:
+        return LEADERBOARD_EMPTY_TEXT
+    for idx, (group, victories) in enumerate(rows, start=1):
+        medal = medals.get(idx, f"**{idx}.**")
+        title = escape_markdown(group.title)
+        lines.append(
+            f"{medal} **{title}**\n"
+            f"🛡 پیروزی‌ها: `{victories}`"
+        )
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+def _format_donors_text(rows: list) -> str:
+    if not rows:
+        return LEADERBOARD_EMPTY_TEXT
+    medals = {1: "🥇", 2: "🥈", 3: "🥉"}
+    lines = ["🍎 **برترین اهداکنندگان** 🍎\n"]
+    has_any = any(total > 0 for _, total in rows)
+    if not has_any:
+        return LEADERBOARD_EMPTY_TEXT
+    for idx, (group, total) in enumerate(rows, start=1):
+        medal = medals.get(idx, f"**{idx}.**")
+        title = escape_markdown(group.title)
+        lines.append(
+            f"{medal} **{title}**\n"
+            f"🍎 مجموع اهدا: `{total}`"
+        )
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
 @router.message(Command("leaderboard", "top"))
 async def cmd_leaderboard(message: Message):
-    """Show global group leaderboard."""
+    """Show main leaderboard menu with 4 tabs."""
     async with get_session() as session:
         from sib.services.banner import send_screen_reply
 
-        top_groups = await LeaderboardService.get_top_groups(session, limit=10)
-        text = format_leaderboard_text(top_groups)
         is_group = message.chat.type in ("group", "supergroup")
         await send_screen_reply(
-            message, "leaderboard", text, get_leaderboard_keyboard(is_group=is_group)
+            message, "leaderboard", LEADERBOARD_MAIN_TEXT, get_leaderboard_keyboard(is_group=is_group)
         )
 
 
 @router.callback_query(F.data == "show_leaderboard")
 async def callback_show_leaderboard(callback: CallbackQuery, bot: Bot):
-    """Callback to display global leaderboard (own banner screen)."""
+    """Callback to display main leaderboard menu (banner screen)."""
     from sib.services.banner import render_banner
 
     async with get_session() as session:
-        top_groups = await LeaderboardService.get_top_groups(session, limit=10)
-        text = format_leaderboard_text(top_groups)
         is_group = bool(callback.message and callback.message.chat.type in ("group", "supergroup"))
         await callback.answer()
         if callback.message:
             await render_banner(
-                callback, bot, "leaderboard", text,
+                callback, bot, "leaderboard", LEADERBOARD_MAIN_TEXT,
                 get_leaderboard_keyboard(is_group=is_group),
             )
+
+
+# ------------------------------------------------------------------
+# LB1 — 4 tab handlers (edit in place via safe_edit_callback_message)
+# ------------------------------------------------------------------
+
+def _is_group_chat(callback: CallbackQuery) -> bool:
+    return bool(callback.message and callback.message.chat.type in ("group", "supergroup"))
+
+
+async def _render_tab(callback: CallbackQuery, bot: Bot, tab: str):
+    """Fetch top rows for tab, format, and edit message in place with leaderboard photo."""
+    from sib.services.banner import banner_photo
+    from sib.services.telegram_ui import safe_edit_callback_message
+
+    is_group = _is_group_chat(callback)
+    async with get_session() as session:
+        if tab == "castles":
+            rows = await LeaderboardService.get_top_castles(session, limit=10)
+            text = _format_castles_text(rows)
+        elif tab == "warriors":
+            rows = await LeaderboardService.get_top_warriors(session, limit=10)
+            text = _format_warriors_text(rows)
+        elif tab == "defenders":
+            rows = await LeaderboardService.get_top_defenders(session, limit=10)
+            text = _format_defenders_text(rows)
+        elif tab == "donors":
+            rows = await LeaderboardService.get_top_donors(session, limit=10)
+            text = _format_donors_text(rows)
+        else:
+            text = LEADERBOARD_EMPTY_TEXT
+
+    kb = get_leaderboard_tab_keyboard(tab, is_group=is_group)
+    photo = banner_photo("leaderboard")
+    await callback.answer()
+    if callback.message:
+        await safe_edit_callback_message(callback, bot, text, reply_markup=kb, photo=photo)
+
+
+@router.callback_query(F.data == "lb:castles")
+async def callback_lb_castles(callback: CallbackQuery, bot: Bot):
+    await _render_tab(callback, bot, "castles")
+
+
+@router.callback_query(F.data == "lb:warriors")
+async def callback_lb_warriors(callback: CallbackQuery, bot: Bot):
+    await _render_tab(callback, bot, "warriors")
+
+
+@router.callback_query(F.data == "lb:defenders")
+async def callback_lb_defenders(callback: CallbackQuery, bot: Bot):
+    await _render_tab(callback, bot, "defenders")
+
+
+@router.callback_query(F.data == "lb:donors")
+async def callback_lb_donors(callback: CallbackQuery, bot: Bot):
+    await _render_tab(callback, bot, "donors")
 
 
 @router.callback_query(F.data.in_(("group_rating_stats", "group_win_stats")))
