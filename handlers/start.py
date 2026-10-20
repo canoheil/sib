@@ -855,12 +855,42 @@ async def handle_sib_games_word(message: Message, bot: Bot):
         await _reply_games_menu(message)
 
 
+# The three rare (inventory) apples shown under the normal balance.
+# Codes are the canonical ``user_items`` keys.
+SPECIAL_APPLE_LINES = (
+    ("apple_gold", "🌕", "سیب طلایی"),
+    ("apple_diamond", "💎", "سیب الماسی"),
+    ("apple_obsidian", "🌑", "سیب ابسیدینی"),
+)
+
+
+def format_apple_balance_caption(
+    balance: int, special_counts: dict[str, int] | None = None
+) -> str:
+    """The 'سیبام' caption: normal balance + the three special apples.
+
+    Pure (no I/O) so it stays trivially testable. Every number is rendered
+    with Persian digits. Special apples are real inventory items
+    (``user_items``); normal apples are the wallet currency.
+    """
+    from sib.services.sib_claim import fa_digits
+
+    counts = special_counts or {}
+    lines = [f"🍏 موجودی سیب شما: {fa_digits(balance)}", ""]
+    lines.extend(
+        f"{emoji} {label}: {fa_digits(int(counts.get(key) or 0))}"
+        for key, emoji, label in SPECIAL_APPLE_LINES
+    )
+    return "\n".join(lines)
+
+
 @router.message(F.text.regexp(r"^\s*سیبام\s*$"))
 async def handle_sib_balance_word(message: Message, bot: Bot):
     """'سیبام' -> show the SENDER's apple balance, with the basket artwork.
 
-    Uses the authoritative AppleWalletService balance (group + private).
-    The artwork is the reusable static asset 'apple_basket'
+    Uses the authoritative AppleWalletService balance (group + private) plus
+    the special-apple inventory counts (Golden / Diamond / Obsidian) from
+    ``ItemService``. The artwork is the reusable static asset 'apple_basket'
     (assets/items/apple_basket.jpg, overridable via /setasset) - no dynamic
     numbers or user info in the image itself. Never falls through to the
     'سیب' claim action.
@@ -872,15 +902,20 @@ async def handle_sib_balance_word(message: Message, bot: Bot):
     from sib.services.apple_wallet import AppleWalletService
     from sib.services.assets import AssetService
     from sib.services.character_art import photo_arg
+    from sib.services.items import ItemService
 
     async with get_session() as session:
         from sib.services.user import UserService
 
         await UserService.get_or_create_user(session, user)
         balance = await AppleWalletService.get_balance(session, user.id)
+        special_counts = {
+            key: await ItemService.get_total(session, user.id, key)
+            for key, _emoji, _label in SPECIAL_APPLE_LINES
+        }
         file_id, fs_path = await AssetService.resolve_photo(session, "apple_basket")
 
-    text = f"🍏 موجودی سیب شما: {balance}"
+    text = format_apple_balance_caption(balance, special_counts)
     photo = photo_arg(file_id, fs_path)
     if photo is not None:
         try:
