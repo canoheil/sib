@@ -90,6 +90,11 @@ class InvasionScheduler:
             # No grants in the DB-only scheduler. Caller settles after commit.
             if invasion.status in (InvasionStatus.VICTORY.value, InvasionStatus.DEFEAT.value):
                 transitions.append((invasion.id, invasion.status))
+            elif (invasion.status == InvasionStatus.EXPIRED.value
+                  and invasion.started_at is not None):
+                # G2: only ANNOUNCED expirations settle (garden corruption).
+                # PENDING->EXPIRED rows were never announced and stay invisible.
+                transitions.append((invasion.id, invasion.status))
         return transitions
 
     @classmethod

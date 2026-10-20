@@ -287,6 +287,39 @@ async def cancel_pending_hp_edits() -> None:
     _pending_edits.clear()
 
 
+# G2 garden-corruption notice (private DM, sent post-commit). Exact product
+# wording; kept here next to the other Invasion v2 Telegram delivery code.
+WITHER_NOTIFICATION_TEXT = (
+    "🥀 باغ تو آسیب دید! ارتش شیاسیب بخشی از باغ را پژمرده کرد چون در یورش "
+    "شرکت نکردی. از فروشگاه «کود الهی» تهیه کن."
+)
+
+
+async def deliver_wither_notifications(bot, results) -> None:
+    """Best-effort private DMs for garden corruption, run AFTER commit.
+
+    The withering itself is already durable; a blocked or never-started
+    private chat is logged and skipped — the 🥀 state remains visible in the
+    player's garden panel. This deliberately bypasses the group circuit
+    breaker because these are one-to-one user chats, not group sends.
+    """
+    if bot is None or not results:
+        return
+    for result in results:
+        try:
+            await bot.send_message(
+                chat_id=result.user_id,
+                text=WITHER_NOTIFICATION_TEXT,
+                parse_mode=None,
+            )
+        except (TelegramBadRequest, TelegramForbiddenError):
+            logger.debug(
+                "inv2 wither DM rejected user=%s", result.user_id, exc_info=True
+            )
+        except Exception:
+            logger.exception("inv2 wither DM failed user=%s", result.user_id)
+
+
 class InvasionPresentation:
     async def announce(self, bot, invasion_id: int) -> None:
         if bot is None:

@@ -557,13 +557,19 @@ class MaintenanceService:
                 # Presentation never runs in the scheduler or on startup recovery.
                 # Terminal IDs come only from a newly committed maintenance tick.
                 if cls._bot is not None:
-                    from sib.services.invasion_v2.presentation import InvasionPresentation
+                    from sib.services.invasion_v2.presentation import (
+                        InvasionPresentation,
+                        deliver_wither_notifications,
+                    )
                     from sib.services.invasion_v2.rewards_service import settle_outcome
                     presenter = InvasionPresentation()
                     for inv_id, status in (terminal or []):
                         try:
+                            # G2: settle returns the corruption results; DMs go
+                            # out only after the transaction has committed.
                             async with get_session() as session:
-                                await settle_outcome(session, inv_id, status)
+                                corrupted = await settle_outcome(session, inv_id, status)
+                            await deliver_wither_notifications(cls._bot, corrupted)
                             await presenter.finalize(cls._bot, inv_id)
                         except Exception:
                             logger.exception("inv2 terminal settlement failed id=%s", inv_id)

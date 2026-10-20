@@ -23,20 +23,37 @@ can never accelerate growth. Uncollected fruit stays available; it does
 not stack beyond one harvest per cycle.
 """
 
+import random
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sib.services.invasion_v2.enums import InvasionStatus
+
 from sib.core.logging import logger, log_event, Events
-from sib.database.models import Garden, GardenPlot, PlotState
+from sib.database.models import (
+    Garden,
+    GardenPlot,
+    GardenWitherEvent,
+    Inv2Attack,
+    Inv2GroupMember,
+    Inv2Invasion,
+    PlotState,
+)
 from sib.services.apple_wallet import AppleWalletService, InsufficientFundsException
 from sib.services.config_store import ConfigService
 from sib.services.lock_order import lock_user_row
 from sib.services.seedling import SeedlingService
+
+# Item key of the consumable that restores a withered plot.
+DIVINE_FERTILIZER_ITEM = "divine_fertilizer"
+
+# Persian refusal shown by every action blocked by corruption.
+WITHERED_REFUSAL = "این قطعه پژمرده است؛ اول با کود الهی احیایش کن. 🥀"
 
 
 # The currency outcome key of the drop table (not an inventory item).
@@ -70,6 +87,7 @@ class PlotView:
     cycle_count: int
     seconds_to_next_stage: int
     magic_level: int = 0
+    is_withered: bool = False
 
     @property
     def has_tree(self) -> bool:
@@ -96,6 +114,15 @@ class HarvestOutcome:
     @property
     def is_special(self) -> bool:
         return self.item_key is not None
+
+
+@dataclass
+class WitherResult:
+    """One corruption outcome, used by the settlement hook to send DMs."""
+
+    user_id: int
+    plot_index: int
+    invasion_id: int
 
 
 class GardenService:
@@ -157,6 +184,9 @@ class GardenService:
 
     @classmethod
     def _derive_state(cls, plot: GardenPlot, now: datetime) -> str:
+        # Corruption overrides every timestamp-derived lifecycle state.
+        if bool(plot.is_withered):
+            return PlotState.WITHERED
         now = cls._as_utc(now) or datetime.now(timezone.utc)
         planted_at = cls._as_utc(plot.planted_at)
         mature_at = cls._as_utc(plot.mature_at)
@@ -181,7 +211,8 @@ class GardenService:
             planted_at = cls._as_utc(plot.planted_at)
             mature_at = cls._as_utc(plot.mature_at)
             fruit_ready_at = cls._as_utc(plot.fruit_ready_at)
-            state = cls._derive_state(plot, now)
+            withered = bool(plot.is_withered)
+            state = PlotState.WITHERED if withered else cls._derive_state(plot, now)
             next_dt: Optional[datetime] = None
             if state == PlotState.GROWING:
                 next_dt = mature_at
@@ -200,6 +231,7 @@ class GardenService:
                     cycle_count=plot.cycle_count,
                     seconds_to_next_stage=seconds,
                     magic_level=plot.magic_level,
+                    is_withered=withered,
                 )
             )
         return views
@@ -231,6 +263,8 @@ class GardenService:
         """Plant one seedling into an empty plot (consumes the seedling)."""
         garden = await cls.get_or_create(session, user_id, for_update=True)
         plot = await cls._get_plot(session, garden, plot_index)
+        if bool(plot.is_withered):
+            raise ValueError(WITHERED_REFUSAL)
         if cls._derive_state(plot, datetime.now(timezone.utc)) != PlotState.EMPTY:
             raise ValueError("این قطعه خالی نیست!")
 
@@ -295,6 +329,8 @@ class GardenService:
         from sib.services.items import DropService, ItemService, item_label
 
         now = datetime.now(timezone.utc)
+        if bool(plot.is_withered):
+            raise ValueError(WITHERED_REFUSAL)
         if cls._derive_state(plot, now) != PlotState.FRUIT_READY:
             raise ValueError("هنوز میوه‌ای برای برداشت آماده نیست! 🍎")
 
@@ -426,6 +462,8 @@ class GardenService:
 
         garden = await cls.get_or_create(session, user_id, for_update=True)
         plot = await cls._get_plot(session, garden, plot_index)
+        if bool(plot.is_withered):
+            raise ValueError(WITHERED_REFUSAL)
         if plot.planted_at is None:
             raise ValueError("در این قطعه درختی نیست که جادویی‌اش کنی! 🌱")
 
@@ -542,3 +580,183 @@ class GardenService:
             },
         )
         return garden.capacity_plots
+
+    # ------------------------------------------------------------------
+    # Invasion corruption (G2): withering + Divine Fertilizer restore
+    # ------------------------------------------------------------------
+    @classmethod
+    async def apply_invasion_corruption(
+        cls,
+        session: AsyncSession,
+        invasion: Inv2Invasion,
+        *,
+        rng: Optional[random.Random] = None,
+    ) -> List[WitherResult]:
+        """Wither one random plot of every zero-damage member of a lost invasion.
+
+        Fairness rules (see docs/games/G2-RECON.md):
+
+        - Only ``DEFEAT`` or an *announced* ``EXPIRED`` (``started_at`` set,
+          i.e. the group really received a join button) corrupt gardens.
+        - A user with ANY ``inv2_attacks`` row participated and is exempt —
+          even when their rolled damage was zero.
+        - At most one wither per user per UTC day and one per invasion; the
+          ``garden_wither_events`` unique constraints are the hard backstop,
+          the pre-check keeps ordinary retries off the integrity error.
+        - Users without a garden, or whose plots are all withered, are no-ops.
+          A garden is never lazily created from this background path.
+
+        Returns one :class:`WitherResult` per affected player so the caller
+        can deliver the private DM after committing.
+        """
+        rng = rng or random.Random()
+        if invasion.status != InvasionStatus.DEFEAT.value and not (
+            invasion.status == InvasionStatus.EXPIRED.value
+            and invasion.started_at is not None
+        ):
+            return []
+
+        now = datetime.now(timezone.utc)
+        window_days = await ConfigService.get_int(
+            session, "inv2_member_active_window_days"
+        )
+        active_member_ids = list(
+            (
+                await session.scalars(
+                    select(Inv2GroupMember.user_id).where(
+                        Inv2GroupMember.group_id == invasion.group_id,
+                        Inv2GroupMember.last_seen_at
+                        >= now - timedelta(days=window_days),
+                    )
+                )
+            ).all()
+        )
+        if not active_member_ids:
+            return []
+
+        attacker_ids = set(
+            (
+                await session.scalars(
+                    select(Inv2Attack.user_id).where(
+                        Inv2Attack.invasion_id == invasion.id
+                    )
+                )
+            ).all()
+        )
+        candidate_ids = sorted(
+            uid for uid in active_member_ids if uid not in attacker_ids
+        )
+
+        today = now.date()
+        results: List[WitherResult] = []
+        for user_id in candidate_ids:
+            # Multi-user settlement takes the per-user mutexes in ascending
+            # id order (docs/lock-order.md), before any garden write.
+            await lock_user_row(session, user_id)
+            garden = await session.scalar(
+                select(Garden)
+                .where(Garden.user_id == user_id)
+                .options(selectinload(Garden.plots))
+                .with_for_update()
+            )
+            if garden is None:
+                continue  # never create a garden from background settlement
+
+            existing_event = await session.scalar(
+                select(GardenWitherEvent.id)
+                .where(
+                    GardenWitherEvent.user_id == user_id,
+                    or_(
+                        GardenWitherEvent.wither_day == today,
+                        GardenWitherEvent.invasion_id == invasion.id,
+                    ),
+                )
+                .limit(1)
+            )
+            if existing_event is not None:
+                continue  # daily cap reached, or this invasion already applied
+
+            healthy_plots = list(
+                (
+                    await session.scalars(
+                        select(GardenPlot)
+                        .where(
+                            GardenPlot.garden_id == user_id,
+                            GardenPlot.is_withered.is_(False),
+                        )
+                        .with_for_update()
+                    )
+                ).all()
+            )
+            if not healthy_plots:
+                continue
+
+            target = rng.choice(healthy_plots)
+            target.is_withered = True
+            session.add(
+                GardenWitherEvent(
+                    user_id=user_id,
+                    invasion_id=invasion.id,
+                    wither_day=today,
+                )
+            )
+            await session.flush()
+            results.append(
+                WitherResult(
+                    user_id=user_id,
+                    plot_index=target.plot_index,
+                    invasion_id=invasion.id,
+                )
+            )
+            log_event(
+                Events.GARDEN_EVENT,
+                {
+                    "user_id": user_id,
+                    "action": "withered",
+                    "plot": target.plot_index,
+                    "invasion_id": invasion.id,
+                },
+            )
+        return results
+
+    @classmethod
+    async def restore_plot(
+        cls,
+        session: AsyncSession,
+        user_id: int,
+        plot_index: int,
+    ) -> GardenPlot:
+        """Consume one Divine Fertilizer to restore a withered plot.
+
+        Check-before-consume (like ``WarService.use_healing_potion``): a
+        healthy plot or an empty inventory refuses before anything is spent.
+        The tree's timestamps, cycle count and magic level are preserved, so
+        the restored plot resumes its exact lifecycle.
+        """
+        from sib.services.items import ItemService
+
+        await lock_user_row(session, user_id)
+        garden = await cls.get_or_create(session, user_id, for_update=True)
+        plot = await cls._get_plot(session, garden, plot_index)
+        if not bool(plot.is_withered):
+            raise ValueError(
+                "این قطعه پژمرده نیست؛ کود الهی فقط برای قطعه‌های پژمرده کاربرد دارد."
+            )
+        owned = await ItemService.get_total(
+            session, user_id, DIVINE_FERTILIZER_ITEM, for_update=True
+        )
+        if owned < 1:
+            raise ValueError("کود الهی نداری! می‌تونی از فروشگاه تهیه‌اش کنی. 🧪")
+
+        await ItemService.consume(session, user_id, DIVINE_FERTILIZER_ITEM, 1)
+        plot.is_withered = False
+        await session.flush()
+        log_event(
+            Events.GARDEN_EVENT,
+            {
+                "user_id": user_id,
+                "action": "restored",
+                "plot": plot_index,
+            },
+        )
+        return plot
