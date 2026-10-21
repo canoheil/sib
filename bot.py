@@ -13,7 +13,6 @@ from sib.middleware.user_ban import UserBanMiddleware
 from sib.middleware.rate_limit import RateLimitMiddleware
 from sib.middleware.panel_guard import PanelGuardMiddleware
 from sib.middleware.group_membership import GroupMembershipMiddleware
-from sib.middleware.referral_reward import ReferralRewardMiddleware
 
 
 async def create_bot_and_dispatcher() -> tuple[Bot, Dispatcher]:
@@ -36,11 +35,9 @@ async def create_bot_and_dispatcher() -> tuple[Bot, Dispatcher]:
     dp.message.outer_middleware(membership)
     dp.callback_query.outer_middleware(membership)
 
-    # REF1: pay a pending referral reward the first time the invitee is
-    # seen acting inside a group (detached, throttled, exactly-once).
-    referral_reward = ReferralRewardMiddleware()
-    dp.message.outer_middleware(referral_reward)
-    dp.callback_query.outer_middleware(referral_reward)
+    # REF2: the referral reward is paid by /start itself (the invitee
+    # only has to press /start in the private chat), so no referral
+    # middleware is needed any more.
 
     # Global anti-spam protection. Dropped updates never reach handlers.
     dp.message.outer_middleware(RateLimitMiddleware())
