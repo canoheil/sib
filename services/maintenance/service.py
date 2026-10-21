@@ -573,6 +573,14 @@ class MaintenanceService:
                                 corrupted = await settle_outcome(session, inv_id, status)
                             await deliver_wither_notifications(cls._bot, corrupted)
                             await presenter.finalize(cls._bot, inv_id)
+                            # G3: group follow-up for withered gardens (after terminal message, only if any).
+                            if corrupted:
+                                try:
+                                    from sib.services.invasion_v2.presentation import announce_withered_in_group
+
+                                    await announce_withered_in_group(cls._bot, corrupted)
+                                except Exception:
+                                    logger.exception("inv2 wither group announcement failed invasion=%s", inv_id)
                         except Exception:
                             logger.exception("inv2 terminal settlement failed id=%s", inv_id)
                     await presenter.publish_pending(cls._bot)
