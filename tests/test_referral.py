@@ -1,15 +1,16 @@
-"""REF1 - friend referral system tests.
+"""REF2 - friend referral system tests (reward paid on /start).
 
 Isolated in-memory SQLite (same pattern as the castle/war suites): the
-deep-link ``/start`` handler, the referral service, the first-group-
-activity middleware, the invite-friends UI and the 051 migration run
-for real; only Telegram I/O is mocked.
+deep-link ``/start`` handler, the referral service, the invite-friends UI
+and the 051 migration run for real; only Telegram I/O is mocked.
+
+REF2 softened the REF1 anti-cheat rule: the inviter is paid as soon as
+the invitee presses ``/start`` in the private chat - no group activity is
+required any more - while the payment stays exactly-once.
 """
 
-import asyncio
 import importlib.util
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 from urllib.parse import quote
@@ -27,15 +28,14 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 import sib.handlers.start as start_module
-import sib.middleware.referral_reward as referral_mw_module
 from sib.core.config import settings
 from sib.database.models import AppleTransaction, User
 from sib.handlers.start import handle_start, handle_start_deep_link
 from sib.keyboards.common import get_profile_keyboard
-from sib.middleware.referral_reward import ReferralRewardMiddleware
 from sib.services.apple_wallet import AppleWalletService
 from sib.services.membership.checker import MembershipService
 from sib.services.referral import (
+    INVITEE_BONUS_TEXT,
     INVITEE_REWARD_APPLES,
     INVITER_NOTIFICATION_TEXT,
     INVITER_REWARD_APPLES,
@@ -44,6 +44,7 @@ from sib.services.referral import (
 
 INVITER_ID = 1001
 INVITEE_ID = 2002
+SECOND_INVITEE_ID = 2003
 GROUP_ID = -1001234567
 
 
@@ -69,7 +70,6 @@ async def ref_db(monkeypatch):
                 raise
 
     monkeypatch.setattr(start_module, "get_session", session_scope)
-    monkeypatch.setattr(referral_mw_module, "get_session", session_scope)
     monkeypatch.setattr(
         MembershipService,
         "check_user_membership",
@@ -117,6 +117,13 @@ def _private_start_message(user_id=INVITEE_ID, payload=None):
     return msg
 
 
+def _referral_command(inviter_id=INVITER_ID):
+    """The ``/start ref_<inviter id>`` payload aiogram would parse."""
+    return CommandObject(
+        prefix="/", command="start", mention=None, args=f"ref_{inviter_id}"
+    )
+
+
 def _group_start_message(user_id=INVITEE_ID):
     msg = MagicMock(spec=Message)
     msg.chat = Chat(id=GROUP_ID, type=ChatType.SUPERGROUP, title="گروه دوستان")
@@ -128,9 +135,7 @@ def _group_start_message(user_id=INVITEE_ID):
 
 
 async def _register_invitee_with_referral(bot):
-    command = CommandObject(
-        prefix="/", command="start", mention=None, args=f"ref_{INVITER_ID}"
-    )
+    command = _referral_command()
     await handle_start_deep_link(_private_start_message(), bot, command)
 
 
@@ -147,11 +152,11 @@ async def test_deep_link_saves_referrer(ref_db):
     invitee = await _load_user(ref_db, INVITEE_ID)
     assert invitee is not None
     assert invitee.referred_by_id == INVITER_ID
-    assert invitee.referral_rewarded is False
-    # Clicking the link alone pays nothing: the reward needs group activity.
-    assert await _balance(ref_db, INVITER_ID) == 0
-    assert await _balance(ref_db, INVITEE_ID) == 0
-    bot.send_message.assert_not_awaited()
+    # REF2: the attribution and the payment land together, right on /start.
+    assert invitee.referral_rewarded is True
+    assert await _balance(ref_db, INVITER_ID) == INVITER_REWARD_APPLES
+    assert await _balance(ref_db, INVITEE_ID) == INVITEE_REWARD_APPLES
+    bot.send_message.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -233,14 +238,12 @@ def test_deep_link_start_is_routed_before_plain_start():
 
 
 @pytest.mark.asyncio
-async def test_reward_given_on_first_group_join(ref_db):
+async def test_reward_given_immediately_on_start(ref_db):
+    """REF2: the invitee's very first /start pays both sides at once."""
     bot = AsyncMock()
     await _register_invitee_with_referral(bot)
 
-    group_msg = _group_start_message()
-    await handle_start(group_msg, bot)
-
-    group_msg.reply.assert_awaited_once()
+    # No group activity, no second message - the wallets are already paid.
     assert await _balance(ref_db, INVITER_ID) == INVITER_REWARD_APPLES == 100
     assert await _balance(ref_db, INVITEE_ID) == INVITEE_REWARD_APPLES == 50
 
@@ -262,12 +265,44 @@ async def test_reward_given_on_first_group_join(ref_db):
 
 
 @pytest.mark.asyncio
+async def test_invitee_is_told_about_the_bonus(ref_db):
+    """The invitee's /start reply mentions the 50-apple bonus (Persian)."""
+    bot = AsyncMock()
+    welcome = _private_start_message(user_id=SECOND_INVITEE_ID)
+    await handle_start_deep_link(welcome, bot, _referral_command())
+
+    text = welcome.answer.await_args.args[0]
+    assert INVITEE_BONUS_TEXT in text
+    assert "۵۰ سیب" in text
+    assert await _balance(ref_db, SECOND_INVITEE_ID) == INVITEE_REWARD_APPLES
+
+
+@pytest.mark.asyncio
+async def test_bonus_is_paid_behind_the_membership_gate(ref_db, monkeypatch):
+    """The channel gate does not delay the referral bonus."""
+    monkeypatch.setattr(
+        MembershipService,
+        "check_user_membership",
+        AsyncMock(return_value=(False, None)),
+    )
+    bot = AsyncMock()
+    gated = _private_start_message(user_id=SECOND_INVITEE_ID)
+    await handle_start_deep_link(gated, bot, _referral_command())
+
+    assert INVITEE_BONUS_TEXT in gated.answer.await_args.args[0]
+    assert await _balance(ref_db, SECOND_INVITEE_ID) == INVITEE_REWARD_APPLES
+    assert await _balance(ref_db, INVITER_ID) == INVITER_REWARD_APPLES
+
+
+@pytest.mark.asyncio
 async def test_reward_given_only_once(ref_db):
+    """Starting the bot again (private or in a group) never pays twice."""
     bot = AsyncMock()
     await _register_invitee_with_referral(bot)
-    await handle_start(_group_start_message(), bot)
 
-    # A later group /start, and even a direct service retry, pay nothing more.
+    # A second /start in private, a /start in a group and even a direct
+    # service retry must not pay a second time.
+    await handle_start(_private_start_message(), bot)
     await handle_start(_group_start_message(), bot)
     async with ref_db.begin() as session:
         assert await ReferralService.grant_reward_if_due(session, INVITEE_ID) is None
@@ -279,61 +314,52 @@ async def test_reward_given_only_once(ref_db):
 
 
 @pytest.mark.asyncio
-async def test_middleware_grants_on_first_group_activity(ref_db):
-    async with ref_db.begin() as session:
-        session.add(
-            User(id=INVITEE_ID, first_name="تازه‌وارد", referred_by_id=INVITER_ID)
-        )
-
+async def test_group_start_alone_also_pays(ref_db):
+    """A referral deep link opened in a group pays the same way."""
     bot = AsyncMock()
-    middleware = ReferralRewardMiddleware()
-    handled = []
+    command = _referral_command()
+    group_msg = _group_start_message()
+    group_msg.text = "/start ref_1001"
+    await handle_start_deep_link(group_msg, bot, command)
 
-    async def handler(event, data):
-        handled.append(event)
-        return "ok"
-
-    now = datetime.now(timezone.utc)
-    message = Message(
-        message_id=1,
-        date=now,
-        chat=Chat(id=GROUP_ID, type=ChatType.SUPERGROUP, title="گروه دوستان"),
-        from_user=TelegramUser(id=INVITEE_ID, is_bot=False, first_name="تازه‌وارد"),
-        text="سیب منو",
-    )
-    assert await middleware(handler, message, {"bot": bot}) == "ok"
-    await asyncio.gather(*list(middleware._tasks))
-
-    assert handled == [message]  # the update itself was never disturbed
+    group_msg.reply.assert_awaited_once()
     assert await _balance(ref_db, INVITER_ID) == 100
     assert await _balance(ref_db, INVITEE_ID) == 50
     bot.send_message.assert_awaited_once()
 
-    # Resolved users are not checked again (and never paid twice).
-    assert INVITEE_ID in middleware._resolved
-    assert await middleware(handler, message, {"bot": bot}) == "ok"
-    assert not middleware._tasks
-    assert await _balance(ref_db, INVITER_ID) == 100
-
 
 @pytest.mark.asyncio
-async def test_middleware_ignores_private_activity(ref_db):
-    async with ref_db.begin() as session:
-        session.add(
-            User(id=INVITEE_ID, first_name="تازه‌وارد", referred_by_id=INVITER_ID)
-        )
-
-    middleware = ReferralRewardMiddleware()
-    message = Message(
-        message_id=1,
-        date=datetime.now(timezone.utc),
-        chat=Chat(id=INVITEE_ID, type=ChatType.PRIVATE),
-        from_user=TelegramUser(id=INVITEE_ID, is_bot=False, first_name="تازه‌وارد"),
-        text="سلام",
+async def test_referral_leaderboard_counts_new_referrals(ref_db):
+    """The contest board counts the referrals that were paid on /start."""
+    bot = AsyncMock()
+    await _register_invitee_with_referral(bot)
+    await handle_start_deep_link(
+        _private_start_message(user_id=SECOND_INVITEE_ID),
+        bot,
+        _referral_command(),
     )
-    assert await middleware(AsyncMock(return_value="ok"), message, {}) == "ok"
-    assert not middleware._tasks
-    assert await _balance(ref_db, INVITER_ID) == 0
+
+    async with ref_db() as session:
+        assert await ReferralService.count_referrals(session, INVITER_ID) == 2
+        board = await ReferralService.leaderboard(session)
+        assert await ReferralService.count_referrals(session, INVITEE_ID) == 0
+
+    assert board == [(INVITER_ID, 2)]
+
+    # Both referrals really paid out (the board counts paid referrals).
+    assert await _balance(ref_db, INVITER_ID) == 2 * INVITER_REWARD_APPLES
+    for invitee_id in (INVITEE_ID, SECOND_INVITEE_ID):
+        invitee = await _load_user(ref_db, invitee_id)
+        assert invitee.referral_rewarded is True
+
+
+def test_group_activity_middleware_is_removed():
+    """REF2 pays on /start - the group-activity middleware is gone."""
+    repo_root = Path(__file__).resolve().parents[1]
+    assert not (repo_root / "middleware" / "referral_reward.py").exists()
+    assert "referral_reward" not in (repo_root / "bot.py").read_text(
+        encoding="utf-8"
+    )
 
 
 # ---------------------------------------------------------------------------

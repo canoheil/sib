@@ -1,4 +1,4 @@
-"""Friend referral system (Phase REF1).
+"""Friend referral system (Phase REF1, softened to REF2).
 
 How a referral flows:
 
@@ -8,15 +8,14 @@ How a referral flows:
 2. When a *brand-new* user opens that link, :func:`parse_referrer_id`
    extracts the inviter id from the ``/start`` payload and
    ``UserService.get_or_create_user`` stores it in ``users.referred_by_id``
-   in the same transaction that creates the account. The referral is only
-   *recorded* at this point - clicking a link alone pays nothing.
-3. The reward is granted once the invitee actually shows up in a group:
-   :meth:`ReferralService.grant_reward_if_due` runs from the group branch
-   of ``/start`` (``sib.handlers.start``) and from the non-blocking
-   ``ReferralRewardMiddleware`` that observes first group activity
-   (``sib.middleware.referral_reward``). The inviter receives 100 apples
-   and the invitee 50 apples, both through the auditable
-   ``AppleWalletService`` ledger with per-invitee idempotency keys.
+   in the same transaction that creates the account.
+3. REF2 (early launch): the reward is paid **immediately** - the invitee
+   only has to press ``/start`` in the private chat, no group activity is
+   needed any more. :meth:`ReferralService.grant_reward_if_due` runs from
+   ``sib.handlers.start`` right after the account is created, so the
+   inviter receives 100 apples and the invitee 50 apples, both through the
+   auditable ``AppleWalletService`` ledger with per-invitee idempotency
+   keys.
 
 Anti-abuse rules (all enforced in this module / ``UserService``):
 
@@ -27,22 +26,22 @@ Anti-abuse rules (all enforced in this module / ``UserService``):
   who opens a referral link keeps ``referred_by_id`` untouched, so an
   existing account can never be (re-)attributed to farm rewards.
 - Bots never participate on either side.
-- The reward requires real group activity - a throwaway account that
-  only presses ``/start`` in private pays nobody.
 - Exactly once: ``users.referral_rewarded`` is claimed with a guarded
   ``UPDATE ... WHERE referral_rewarded = false`` inside the paying
-  transaction, and both ledger credits carry idempotency keys.
+  transaction, and both ledger credits carry idempotency keys. Pressing
+  ``/start`` again (private or in a group) therefore never pays twice.
 
-Telegram shares no device fingerprint with bots, so multi-account abuse
-cannot be made impossible; the group-activity gate plus one-time
-attribution/payment keep the cheapest farming strategies unprofitable.
+REF2 accepts a higher fake-account risk in exchange for growth: the
+group-activity gate is gone. One-time attribution and exactly-once
+payment are kept, so the cheapest farming strategy (pressing ``/start``
+twice) still pays exactly once per invitee.
 """
 
 from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import quote
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sib.core.logging import logger
@@ -61,6 +60,13 @@ _INVITEE_REASON = "referral_invitee"
 #: Sent to the inviter (private chat) once their reward is *committed*.
 INVITER_NOTIFICATION_TEXT = (
     "🎉 یکی از دوستان شما با لینک شما وارد بازی شد! ۱۰۰ سیب هدیه گرفتید."
+)
+
+#: Shown to the INVITEE in their /start welcome, right after the 50-apple
+#: referral bonus landed in their wallet.
+INVITEE_BONUS_TEXT = (
+    "🎁 ۵۰ سیب هدیه خوش‌آمدگویی! بابت اومدن با لینک دعوت دوستت، "
+    "۵۰ سیب به حسابت اضافه شد."
 )
 
 
@@ -158,10 +164,12 @@ class ReferralService:
     async def has_pending_reward(
         session: AsyncSession, invitee_id: int
     ) -> Optional[bool]:
-        """Is a referral reward still awaiting this user's group activity?
+        """Is a referral reward still awaiting payment for this user?
 
         ``None`` means the user is not registered yet (callers should try
         again later); ``False`` is final (no inviter, or already paid).
+        Since REF2 the window is tiny: the reward is paid in the very same
+        transaction that records the attribution.
         """
         row = (
             await session.execute(
@@ -181,13 +189,19 @@ class ReferralService:
     ) -> Optional[ReferralReward]:
         """Pay the referral reward for ``invitee_id`` if it is due.
 
-        Call this when the invitee first acts inside a group. Returns the
+        Call this right after the invitee registered through a
+        ``?start=ref_<inviter id>`` deep link (REF2: the invitee only has
+        to press ``/start`` - no group activity required). Returns the
         paid :class:`ReferralReward`, or ``None`` when there is nothing to
         pay (unknown user, no inviter, already paid, invalid inviter).
         The caller owns the transaction: on rollback the claim and both
-        credits roll back together, so a failed payment can be retried by
-        the next group activity. Notify the inviter only *after* commit,
-        via :meth:`notify_inviter`.
+        credits roll back together, so a failed payment can be retried.
+        Notify the inviter only *after* commit, via :meth:`notify_inviter`.
+
+        Strictly idempotent: the one-time claim is a guarded
+        ``UPDATE ... WHERE referral_rewarded = false`` under the user row
+        lock, and both ledger credits carry per-invitee idempotency keys.
+        Calling it again for the same invitee pays nothing.
         """
         if (
             not isinstance(invitee_id, int)
@@ -280,6 +294,48 @@ class ReferralService:
             "Referral reward paid: inviter=%s invitee=%s", inviter_id, invitee_id
         )
         return ReferralReward(inviter_id=inviter_id, invitee_id=invitee_id)
+
+    # -- leaderboard (the referral contest board) ---------------------------
+
+    @staticmethod
+    async def count_referrals(session: AsyncSession, inviter_id: int) -> int:
+        """How many players this inviter brought in (paid referrals).
+
+        REF2 pays the reward in the very same transaction that records
+        the attribution (``users.referred_by_id`` + ``referral_rewarded``),
+        so every counted row is a referral that really paid out - the
+        contest board can count on this number.
+        """
+        if (
+            not isinstance(inviter_id, int)
+            or isinstance(inviter_id, bool)
+            or inviter_id <= 0
+        ):
+            return 0
+        counted = await session.scalar(
+            select(func.count(User.id)).where(User.referred_by_id == inviter_id)
+        )
+        return int(counted or 0)
+
+    @staticmethod
+    async def leaderboard(
+        session: AsyncSession, limit: int = 20
+    ) -> list[tuple[int, int]]:
+        """``(inviter_id, referral_count)`` rows - the referral contest board.
+
+        Counts every referral attributed to an inviter (see
+        :meth:`count_referrals`), most referrals first. Ties are broken by
+        the smaller inviter id, so the order is stable between runs.
+        """
+        safe_limit = max(1, int(limit))
+        rows = await session.execute(
+            select(User.referred_by_id, func.count(User.id).label("referrals"))
+            .where(User.referred_by_id.is_not(None))
+            .group_by(User.referred_by_id)
+            .order_by(func.count(User.id).desc(), User.referred_by_id.asc())
+            .limit(safe_limit)
+        )
+        return [(int(row[0]), int(row[1])) for row in rows.all()]
 
     # -- notification -------------------------------------------------------
 

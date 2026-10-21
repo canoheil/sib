@@ -39,7 +39,7 @@ from sib.services.help_content import (
 from sib.services.panel import PanelOwnershipService
 from sib.services.telegram_ui import safe_answer_callback, safe_edit_callback_message
 from sib.services.membership.checker import MembershipService
-from sib.services.referral import ReferralService
+from sib.services.referral import INVITEE_BONUS_TEXT, ReferralService
 from sib.services.user import UserService
 from sib.services.group import GroupService
 
@@ -101,12 +101,14 @@ async def handle_start_deep_link(message: Message, bot: Bot, command: CommandObj
 async def handle_start(message: Message, bot: Bot, command: Optional[CommandObject] = None):
     """Handle /start command in private and group chats.
 
-    REF1: a ``ref_<inviter id>`` payload attributes a *brand-new* account
+    REF2: a ``ref_<inviter id>`` payload attributes a *brand-new* account
     to its inviter (validation in ``UserService``/``ReferralService`` -
-    already-registered users and self-referrals are ignored). The apples
-    are not paid yet: the reward fires when the invitee first acts inside
-    a group - right here on a group ``/start``, or via the first-group-
-    activity ``ReferralRewardMiddleware``.
+    already-registered users and self-referrals are ignored) and the
+    reward is paid IMMEDIATELY: the inviter gets 100 apples and the
+    invitee 50 apples in the same transaction that created the account.
+    No group activity is required any more - pressing ``/start`` in the
+    private chat is enough. Paying is strictly idempotent, so a second
+    ``/start`` (private or in a group) never pays twice.
     """
     user = message.from_user
     chat = message.chat
@@ -124,14 +126,16 @@ async def handle_start(message: Message, bot: Bot, command: Optional[CommandObje
             session, user, referred_by_id=referrer_id
         )
 
+        # REF2: the reward is paid RIGHT NOW - the invitee only has to
+        # press /start in the private chat. Idempotent: a later /start
+        # (private or group) pays nothing more.
+        referral_reward = await ReferralService.grant_reward_if_due(
+            session, user.id
+        )
+
         # 1. Group / Supergroup chat
         if chat.type in ("group", "supergroup"):
             group = await GroupService.get_or_create_group(session, chat)
-            # REF1: acting inside a group is what earns the referral
-            # reward (idempotent - a later /start pays nothing more).
-            referral_reward = await ReferralService.grant_reward_if_due(
-                session, user.id
-            )
             # Phase A3: Ovarya-first group welcome; keyboard unchanged.
             # Plain text (no parse mode) so group titles can never break
             # Markdown parsing.
@@ -143,10 +147,12 @@ async def handle_start(message: Message, bot: Bot, command: Optional[CommandObje
                 f"🔧 پشتیبانی: {SUPPORT_HANDLE}"
             )
 
+    # The session is committed here, so the inviter is only ever notified
+    # about apples that really landed in their wallet (REF2: the reward
+    # is paid by this very /start, in private as well as in a group).
+    await ReferralService.notify_inviter(bot, referral_reward)
+
     if group_welcome_text is not None:
-        # The session is committed here, so the inviter is only ever
-        # notified about apples that really landed in their wallet.
-        await ReferralService.notify_inviter(bot, referral_reward)
         await message.reply(
             group_welcome_text,
             reply_markup=get_group_welcome_keyboard(),
@@ -165,6 +171,10 @@ async def handle_start(message: Message, bot: Bot, command: Optional[CommandObje
                 "🍏 **سلام!**\n\n"
                 "برای استفاده از سیب و دریافت اطلاعیه‌ها و بازی با گروه‌ها، عضو کانال رسمی شو 👇"
             )
+            if referral_reward is not None:
+                # REF2: the referral bonus is already in the wallet, even
+                # though the channel gate still has to be passed.
+                membership_text = f"{membership_text}\n\n{INVITEE_BONUS_TEXT}"
             await message.answer(
                 membership_text,
                 reply_markup=get_membership_keyboard(channel_link),
@@ -178,6 +188,10 @@ async def handle_start(message: Message, bot: Bot, command: Optional[CommandObje
         # «سیب منو» / main_menu. Plain text (no parse mode) so injected
         # first names can never break Markdown parsing.
         welcome_text = _private_start_text(user.first_name or "دوست")
+        if referral_reward is not None:
+            # REF2: the 50-apple referral bonus already landed in the
+            # invitee's wallet - say it out loud, in Persian.
+            welcome_text = f"{welcome_text}\n\n{INVITEE_BONUS_TEXT}"
         await message.answer(
             welcome_text,
             reply_markup=get_private_start_keyboard(settings.BOT_USERNAME),
@@ -747,11 +761,14 @@ def _referral_invite_screen(user_id: int) -> tuple:
     everywhere else in Telegram); the button opens the share sheet.
     Plain text only: the link contains ``_`` (``ref_<id>``), which legacy
     Markdown would try to parse as italics.
+
+    REF2: the reward is paid as soon as the friend presses ``/start`` -
+    no group activity is required any more, so the copy says exactly that.
     """
     link = ReferralService.build_referral_link(settings.BOT_USERNAME, user_id)
     text = (
         "👋 دوستانت رو به سیب دعوت کن!\n\n"
-        "با هر دوستی که با لینک تو وارد بازی بشه و توی یه گروه بازی کنه، "
+        "با هر دوستی که با لینک تو وارد بازی بشه، "
         "۱۰۰ سیب هدیه می‌گیری و دوستت هم ۵۰ سیب هدیه می‌گیره.\n\n"
         "لینک اختصاصی شما:\n"
         f"{link}"
