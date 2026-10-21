@@ -68,7 +68,7 @@ async def _withered_count(session, user_id: int) -> int:
 
 @pytest.mark.asyncio
 async def test_offline_users_are_exempt_from_withering(db_session):
-    """Offline >12h must be exempt; only recently active within 12h can be withered."""
+    """Offline >4h must be exempt; only recently active within 4h can be withered."""
     await _make_region(db_session)
     group = await create_test_group(db_session, "گروه گ۴ آفلاین")
 
@@ -78,9 +78,9 @@ async def test_offline_users_are_exempt_from_withering(db_session):
     await GardenService.get_or_create(db_session, offline_user.id)
     await GardenService.get_or_create(db_session, active_user.id)
 
-    # offline: seen 13 hours ago (>12h grace)
-    await _make_member(db_session, offline_user.id, group.id, last_seen_delta=timedelta(hours=13))
-    # active: seen now (within 12h)
+    # offline: seen 5 hours ago (>4h grace)
+    await _make_member(db_session, offline_user.id, group.id, last_seen_delta=timedelta(hours=5))
+    # active: seen now (within 4h)
     await _make_member(db_session, active_user.id, group.id, last_seen_delta=None)
 
     invasion = await _make_invasion(db_session, group.id, status=InvasionStatus.DEFEAT.value, announced=True)
@@ -106,13 +106,13 @@ async def test_offline_users_are_exempt_from_withering(db_session):
     assert results2 == []
     assert await _withered_count(db_session, offline_only.id) == 0
 
-    # Edge: exactly 12h ago should still be considered? Spec says "within last 12 hours" => >= 12h
-    # We test 11h ago is still eligible (active)
+    # Edge: exactly 4h ago should still be considered? Spec says "within last 4 hours" => >= 4h
+    # We test 3h ago is still eligible (active)
     edge_user = await create_test_user(db_session, "لب‌مرز")
     await GardenService.get_or_create(db_session, edge_user.id)
     # Use a new group for edge test to avoid daily cap with previous invasion
     group_edge = await create_test_group(db_session, "گروه لب‌مرز")
-    await _make_member(db_session, edge_user.id, group_edge.id, last_seen_delta=timedelta(hours=11))
+    await _make_member(db_session, edge_user.id, group_edge.id, last_seen_delta=timedelta(hours=3))
     inv_edge = await _make_invasion(db_session, group_edge.id, status=InvasionStatus.DEFEAT.value, announced=True)
     results_edge = await settle_outcome(db_session, inv_edge.id, InvasionStatus.DEFEAT.value)
     await db_session.commit()
@@ -177,7 +177,7 @@ async def test_withering_is_limited_to_two_users_max(db_session):
 
 @pytest.mark.asyncio
 async def test_active_users_with_zero_damage_can_be_withered(db_session):
-    """Active within 12h with zero damage must still be witherable."""
+    """Active within 4h with zero damage must still be witherable."""
     await _make_region(db_session)
     group = await create_test_group(db_session, "گروه فعال گ۴")
 
@@ -237,3 +237,58 @@ async def test_active_users_with_zero_damage_can_be_withered(db_session):
     await db_session.commit()
     assert attacker.id not in [r.user_id for r in results3]
     assert victim.id in [r.user_id for r in results3]
+
+
+@pytest.mark.asyncio
+async def test_withering_grace_period_reads_from_config(db_session):
+    """Grace period must be read from system_config and be tunable (G4.5)."""
+    await _make_region(db_session)
+    from sib.services.config_store import ConfigService
+
+    # Default is 4h: user seen 5h ago should be exempt
+    group_default = await create_test_group(db_session, "گروه پیش‌فرض ۴ساعته")
+    user_5h = await create_test_user(db_session, "۵ساعته پیش‌فرض")
+    await GardenService.get_or_create(db_session, user_5h.id)
+    await _make_member(db_session, user_5h.id, group_default.id, last_seen_delta=timedelta(hours=5))
+    inv_default = await _make_invasion(
+        db_session, group_default.id, status=InvasionStatus.DEFEAT.value, announced=True
+    )
+    results_default = await settle_outcome(db_session, inv_default.id, InvasionStatus.DEFEAT.value)
+    await db_session.commit()
+    assert user_5h.id not in [r.user_id for r in results_default]
+    assert await _withered_count(db_session, user_5h.id) == 0
+
+    # Change config to 8h: same 5h user should now be within grace and be withered
+    await ConfigService.set(db_session, "garden_wither_grace_hours", 8)
+    await db_session.commit()
+
+    group_8h = await create_test_group(db_session, "گروه ۸ساعته")
+    user_5h_8 = await create_test_user(db_session, "۵ساعته ۸ساعته")
+    await GardenService.get_or_create(db_session, user_5h_8.id)
+    await _make_member(db_session, user_5h_8.id, group_8h.id, last_seen_delta=timedelta(hours=5))
+    inv_8h = await _make_invasion(
+        db_session, group_8h.id, status=InvasionStatus.DEFEAT.value, announced=True
+    )
+    results_8h = await settle_outcome(db_session, inv_8h.id, InvasionStatus.DEFEAT.value)
+    await db_session.commit()
+    assert user_5h_8.id in [r.user_id for r in results_8h]
+    assert await _withered_count(db_session, user_5h_8.id) == 1
+
+    # Invalid config should fallback to 4h
+    await ConfigService.set(db_session, "garden_wither_grace_hours", "invalid")
+    await db_session.commit()
+
+    group_invalid = await create_test_group(db_session, "گروه نامعتبر")
+    user_5h_invalid = await create_test_user(db_session, "۵ساعته نامعتبر")
+    await GardenService.get_or_create(db_session, user_5h_invalid.id)
+    await _make_member(
+        db_session, user_5h_invalid.id, group_invalid.id, last_seen_delta=timedelta(hours=5)
+    )
+    inv_invalid = await _make_invasion(
+        db_session, group_invalid.id, status=InvasionStatus.DEFEAT.value, announced=True
+    )
+    results_invalid = await settle_outcome(db_session, inv_invalid.id, InvasionStatus.DEFEAT.value)
+    await db_session.commit()
+    # Should fallback to 4h, so 5h user exempt
+    assert user_5h_invalid.id not in [r.user_id for r in results_invalid]
+    assert await _withered_count(db_session, user_5h_invalid.id) == 0
