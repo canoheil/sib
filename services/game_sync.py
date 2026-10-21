@@ -18,6 +18,7 @@ from sib.database.models import Match, MatchState
 from sib.games.registry import get_game_engine
 from sib.keyboards.common import success_button
 from sib.keyboards.party import get_friendly_rematch_keyboard
+from sib.services.battleship_radar import public_view, supports_private_radar
 from sib.services.friendly import (
     is_friendly,
     shape_friendly_final_text,
@@ -73,6 +74,29 @@ async def sync_match_messages(
     refresh_style = board_refresh_style(engine.game_code)
     match_over = match.state != MatchState.ACTIVE
     players_by_group = {p.group_id: p.user_id for p in match.players}
+
+    if is_friendly(match) and supports_private_radar(engine):
+        # Battleship: out-of-band transitions (bot moves, timeouts, recovery)
+        # only touch the NEUTRAL public group board. Private radar panels are
+        # per-player ephemeral messages that can't be addressed from here -
+        # they self-heal on the player's next tap.
+        msg_id = match.group1_message_id or match.group2_message_id
+        if match.group1_id and msg_id:
+            text, kb = public_view(engine, match.id, state, finished=match_over)
+            if suffix:
+                text = f"{text}\n\n{suffix}"
+            new_msg_id = await safe_edit_screen(
+                bot,
+                chat_id=match.group1_id,
+                message_id=msg_id,
+                text=text,
+                reply_markup=kb,
+            )
+            if new_msg_id and new_msg_id != msg_id:
+                match.group1_message_id = new_msg_id
+                if match.group2_id == match.group1_id:
+                    match.group2_message_id = new_msg_id
+        return
 
     if is_friendly(match):
         # A first RPS choice is a hidden commit. Leave the shared public board

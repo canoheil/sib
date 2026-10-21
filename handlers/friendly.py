@@ -35,6 +35,7 @@ from sib.keyboards.party import (
     get_friendly_rematch_keyboard,
     get_shared_friendly_party_keyboard,
 )
+from sib.services.battleship_radar import public_view, supports_private_radar
 from sib.services.friendly import (
     FriendlyMatchService,
     shared_board_viewer,
@@ -82,6 +83,21 @@ async def render_friendly_board(
 
     engine = get_game_engine(match.game.code)
     refresh_style = board_refresh_style(engine.game_code)
+
+    if supports_private_radar(engine):
+        # Battleship: the shared group message is a NEUTRAL public board (no
+        # radar). Each player opens their own private radar panel, so nothing
+        # here may be rendered from one player's perspective.
+        text, kb = public_view(
+            engine,
+            match.id,
+            state,
+            finished=match.state != MatchState.ACTIVE,
+        )
+        return await safe_edit_callback_message(
+            callback, bot, text, reply_markup=kb, parse_mode="Markdown"
+        )
+
     try:
         # The board is shared by both teams: render it from the perspective of
         # whoever is on turn (the presser when the game has no current player).

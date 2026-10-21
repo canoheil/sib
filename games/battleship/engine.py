@@ -26,6 +26,13 @@ class BattleshipEngine(BaseGameEngine):
     supports_4v4 = True
     turn_timeout_seconds = settings.BATTLESHIP_TIMEOUT
 
+    # Friendly matches ("بازی رفیقانه") share ONE group message between both
+    # teams, so the per-side radar may never be rendered there: the shooting
+    # grid and the guess map are private to one team. This flag tells the
+    # generic dispatcher to present the neutral public board in the group and
+    # deliver the targeting grid as a private (ephemeral/DM) panel instead.
+    friendly_private_radar = True
+
     GRID_SIZE = 8
     SHIP_SIZES = [4, 3, 3, 2, 2]  # Total 14 cells
 
@@ -180,6 +187,7 @@ class BattleshipEngine(BaseGameEngine):
                 hit_ship = ship
                 break
 
+        sunk_size: Optional[int] = None
         if hit_ship is not None:
             hit_ship["hits"].append(coord)
             game_state["teams"][team_code]["shots_taken"][coord_key] = "hit"
@@ -187,16 +195,31 @@ class BattleshipEngine(BaseGameEngine):
 
             if len(hit_ship["hits"]) == hit_ship["size"]:
                 hit_ship["sunk"] = True
+                sunk_size = int(hit_ship["size"])
                 event_msg = f"💥🎯 شلیک {player_info['name']} به هدف خورد و کشتی {hit_ship['size']} خانه‌ای دشمن غرق شد!"
             else:
                 event_msg = f"💥 شلیک {player_info['name']} به یکی از کشتی‌های دشمن اصابت کرد!"
-            game_state["last_shot"] = {"r": r, "c": c, "result": "hit"}
+            game_state["last_shot"] = {"r": r, "c": c, "result": "hit", "by": player_id}
         else:
             game_state["teams"][team_code]["shots_taken"][coord_key] = "miss"
             event_msg = f"🌊 شلیک {player_info['name']} به آب خورد (خطا)!"
-            game_state["last_shot"] = {"r": r, "c": c, "result": "miss"}
+            game_state["last_shot"] = {"r": r, "c": c, "result": "miss", "by": player_id}
 
         game_state["last_event"] = event_msg
+
+        # Ordered, attributed public history. The shared friendly board renders
+        # ONLY this (never a radar), so both teams read the same facts.
+        game_state.setdefault("shot_log", []).append(
+            {
+                "by": player_id,
+                "name": player_info["name"],
+                "team_code": team_code,
+                "r": r,
+                "c": c,
+                "result": game_state["last_shot"]["result"],
+                "sunk_size": sunk_size,
+            }
+        )
 
         if game_state["teams"][opp_team_code]["remaining_cells"] <= 0:
             game_state["finished"] = True
@@ -402,4 +425,344 @@ class BattleshipEngine(BaseGameEngine):
                     row.append(primary_button(text=self.EMPTY, callback_data=cb))
             buttons.append(row)
 
+        return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    # ------------------------------------------------------------------
+    # Friendly-match surfaces
+    #
+    # A friendly match shares ONE group message between both teams, so the
+    # public board must be viewer-NEUTRAL (it may not show any team's radar)
+    # and the targeting grid is delivered as a private panel instead.
+    # ------------------------------------------------------------------
+
+    DEFAULT_TEAM_LABELS = {"A": "🍎 تیم سرخ", "B": "🍏 تیم سبز"}
+    PUBLIC_LOG_LIMIT = 10
+    RADAR_TITLE_YOUR_TURN = "🎯 **رادار شما (نوبت شماست)**"
+    RADAR_TITLE_WAITING = "🎯 **رادار شما**"
+
+    # ---- small pure helpers -------------------------------------------
+
+    @staticmethod
+    def _player_info(
+        game_state: Dict[str, Any], player_id: Optional[int]
+    ) -> Optional[Dict[str, Any]]:
+        if player_id is None:
+            return None
+        return (game_state.get("players") or {}).get(str(player_id))
+
+    def team_code_of(
+        self, game_state: Dict[str, Any], player_id: Optional[int]
+    ) -> Optional[str]:
+        """Team code ('A'/'B') of a player, or None when they are not in it."""
+        info = self._player_info(game_state, player_id)
+        if not info:
+            return None
+        return info.get("team_code", "A")
+
+    def _roster(self, game_state: Dict[str, Any], team_code: str) -> str:
+        names = [
+            p.get("name", "بازیکن")
+            for p in (game_state.get("players") or {}).values()
+            if p.get("team_code", "A") == team_code
+        ]
+        return "، ".join(names) if names else "—"
+
+    def _team_label(self, game_state: Dict[str, Any], team_code: str) -> str:
+        """Friendly team name (🍎 تیم سرخ / 🍏 تیم سبز) for a team code."""
+        fallback = self.DEFAULT_TEAM_LABELS.get(
+            team_code, self.DEFAULT_TEAM_LABELS["A"]
+        )
+        team_numbers = {
+            str(p.get("team"))
+            for p in (game_state.get("players") or {}).values()
+            if p.get("team_code", "A") == team_code
+        }
+        names = game_state.get("team_names") or {}
+        for number in sorted(team_numbers):
+            label = names.get(number)
+            if label:
+                return label
+        return fallback
+
+    def _remaining(self, game_state: Dict[str, Any], team_code: str) -> int:
+        return int(game_state["teams"][team_code].get("remaining_cells", 0))
+
+    def _current_player(self, game_state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return self._player_info(game_state, game_state.get("current_player_id"))
+
+    def _grid_art(self, labels: Dict[str, str]) -> str:
+        col_header = "  " + " ".join(
+            chr(ord("A") + c) for c in range(self.GRID_SIZE)
+        )
+        rows = [col_header]
+        for r in range(self.GRID_SIZE):
+            symbols = [
+                labels.get(f"{r},{c}", self.EMPTY) for c in range(self.GRID_SIZE)
+            ]
+            rows.append(f"{r + 1} " + " ".join(symbols))
+        return "\n".join(rows)
+
+    def shot_result_text(
+        self, result: str, sunk_size: Optional[int] = None
+    ) -> str:
+        """Public wording of one shot result (no side-specific words)."""
+        if result == "hit":
+            if sunk_size:
+                return f"🔥 غرق شد ({sunk_size} خانه)"
+            return "💥 برخورد"
+        return "🌊 آب"
+
+    def _shot_log_entries(self, game_state: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Ordered shot history; legacy states fall back to ``last_shot``."""
+        log = game_state.get("shot_log")
+        if isinstance(log, list):
+            return [entry for entry in log if isinstance(entry, dict)]
+        legacy = game_state.get("last_shot")
+        if legacy:
+            return [
+                {
+                    "by": legacy.get("by"),
+                    "name": "بازیکن",
+                    "r": legacy.get("r"),
+                    "c": legacy.get("c"),
+                    "result": legacy.get("result"),
+                    "sunk_size": None,
+                }
+            ]
+        return []
+
+    def public_log_lines(self, game_state: Dict[str, Any]) -> List[str]:
+        """Rendered public history lines (newest last, capped)."""
+        entries = self._shot_log_entries(game_state)
+        shown = entries[-self.PUBLIC_LOG_LIMIT :]
+        lines = []
+        for entry in shown:
+            r, c = entry.get("r"), entry.get("c")
+            if r is None or c is None:
+                continue
+            who = entry.get("name") or "بازیکن"
+            result = self.shot_result_text(
+                entry.get("result", "miss"), entry.get("sunk_size")
+            )
+            lines.append(
+                f"• {who} به {self._coord_label(int(r), int(c))} شلیک کرد: {result}"
+            )
+        return lines
+
+    def last_shot_of(
+        self, game_state: Dict[str, Any], player_id: int
+    ) -> Optional[Dict[str, Any]]:
+        """The most recent shot played BY this player (private panel use)."""
+        for entry in reversed(self._shot_log_entries(game_state)):
+            if entry.get("by") is not None and int(entry["by"]) == int(player_id):
+                return entry
+        return None
+
+    # ---- surface 1: the neutral public group board ---------------------
+
+    def render_public(
+        self,
+        game_state: Dict[str, Any],
+        *,
+        finished: Optional[bool] = None,
+    ) -> str:
+        """Viewer-neutral group board: rosters, history, turn. NO radar.
+
+        Everything rendered here is public information: both teams' remaining
+        hull cells (derivable from public hits), the ordered shot history and
+        whose turn it is. No grid, no ``شما``/``حریف`` side wording.
+        """
+        is_finished = self.is_finished(game_state) if finished is None else finished
+        team_a = self._team_label(game_state, "A")
+        team_b = self._team_label(game_state, "B")
+
+        lines = [
+            "🚢 **جنگ کشتی‌ها (Battleship) — بازی رفیقانه**",
+            "",
+            f"⚔️ **{team_a}:** {self._roster(game_state, 'A')}",
+            f"🆚 **{team_b}:** {self._roster(game_state, 'B')}",
+            "",
+            (
+                f"📊 **ناوگان:** {team_a} {self._remaining(game_state, 'A')}/14"
+                f" — {team_b} {self._remaining(game_state, 'B')}/14"
+            ),
+            "",
+        ]
+
+        if is_finished:
+            winner = game_state.get("winner_team")
+            if game_state.get("is_draw"):
+                lines.append("🏁 **بازی تمام شد — مساوی!**")
+            else:
+                winner_code = "A" if str(winner) in ("1", "A") else "B"
+                names = game_state.get("team_names") or {}
+                label = names.get(str(winner)) or self._team_label(
+                    game_state, winner_code
+                )
+                lines.append(f"🏁 **بازی تمام شد — برنده: {label}**")
+        else:
+            current = self._current_player(game_state) or {}
+            current_name = current.get("name", "بازیکن")
+            code = current.get("team_code", "A")
+            lines.append(
+                f"🎯 **نوبت: {current_name}** ({self._team_label(game_state, code)})"
+            )
+
+        lines.append("")
+        log_lines = self.public_log_lines(game_state)
+        if log_lines:
+            lines.append("📜 **شلیک‌ها:**")
+            entries = self._shot_log_entries(game_state)
+            hidden = len(entries) - len(log_lines)
+            if hidden > 0:
+                lines.append(f"… و {hidden} شلیک قبلی")
+            lines.extend(log_lines)
+        else:
+            lines.append("📜 **هنوز شلیکی انجام نشده است.**")
+
+        if not is_finished:
+            lines.extend(
+                [
+                    "",
+                    "برای دیدن رادار و شلیک، «🎯 رادار من» را بزن؛ فقط خودت می‌بینی.",
+                ]
+            )
+        return "\n".join(lines)
+
+    def get_public_keyboard(self, match_id: int) -> InlineKeyboardMarkup:
+        """Neutral group keyboard: open the private radar / refresh.
+
+        Deliberately contains NO shot coordinates and NO grid: the group
+        message can be read by both teams.
+        """
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    success_button(
+                        text="🎯 رادار من",
+                        callback_data=f"bs_radar:{match_id}",
+                    )
+                ],
+                [
+                    primary_button(
+                        text="🔄 بروزرسانی",
+                        callback_data=f"game_refresh:{match_id}",
+                    )
+                ],
+            ]
+        )
+
+    # ---- surface 2: the private radar panel ---------------------------
+
+    def render_radar_panel(
+        self,
+        game_state: Dict[str, Any],
+        player_id: int,
+        *,
+        notice: Optional[str] = None,
+    ) -> str:
+        """Private panel for ONE player: radar grid + their own status.
+
+        Only ever delivered to that player (ephemeral message or DM) - never
+        rendered into the shared group message.
+        """
+        team_code = self.team_code_of(game_state, player_id) or "A"
+        opp_code = "B" if team_code == "A" else "A"
+        is_my_turn = (
+            not self.is_finished(game_state)
+            and game_state.get("current_player_id") == player_id
+        )
+        current = self._current_player(game_state) or {}
+        current_name = current.get("name", "بازیکن")
+
+        lines = [
+            self.RADAR_TITLE_YOUR_TURN if is_my_turn else self.RADAR_TITLE_WAITING,
+        ]
+
+        if self.is_finished(game_state):
+            lines.append("🏁 بازی تمام شد.")
+        elif is_my_turn:
+            lines.append("🟢 یک خانه روی رادار زیر را هدف بگیر:")
+        else:
+            lines.append(f"⏳ نوبت {current_name} است؛ رادار فعلاً تماشایی است.")
+
+        lines.extend(
+            [
+                "",
+                "```",
+                self._grid_art(self.radar_labels(game_state, team_code)),
+                "```",
+                "",
+                f"🛡️ ناوگان شما: {self._remaining(game_state, team_code)}/14",
+                f"🎯 ناوگان دشمن: {self._remaining(game_state, opp_code)}/14",
+                "",
+            ]
+        )
+
+        if notice is None:
+            last = self.last_shot_of(game_state, player_id)
+            if last and last.get("r") is not None and last.get("c") is not None:
+                notice = (
+                    f"🎯 شما به {self._coord_label(int(last['r']), int(last['c']))}"
+                    f" زدید: {self.shot_result_text(last.get('result', 'miss'), last.get('sunk_size'))}"
+                )
+        lines.append(notice if notice else "🎯 هنوز شلیکی نکرده‌اید.")
+        return "\n".join(lines)
+
+    def get_radar_panel_keyboard(
+        self,
+        game_state: Dict[str, Any],
+        match_id: int,
+        player_id: int,
+    ) -> InlineKeyboardMarkup:
+        """Shooting grid for ONE player's private panel.
+
+        Cells call ``bs_shot:{match}:{r}:{c}`` only when it is this player's
+        turn; every other state is inert, so a stale panel can never act.
+        """
+        player_info = self._player_info(game_state, player_id)
+        if not player_info:
+            return InlineKeyboardMarkup(inline_keyboard=[])
+
+        team_code = player_info.get("team_code", "A")
+        labels = self.radar_labels(game_state, team_code)
+        is_my_turn = (
+            not self.is_finished(game_state)
+            and game_state.get("current_player_id") == player_id
+        )
+
+        header_row = [danger_button(text=" ", callback_data="noop")]
+        for c in range(self.GRID_SIZE):
+            header_row.append(
+                success_button(text=chr(ord("A") + c), callback_data="noop")
+            )
+        buttons = [header_row]
+
+        for r in range(self.GRID_SIZE):
+            row = [success_button(text=str(r + 1), callback_data="noop")]
+            for c in range(self.GRID_SIZE):
+                key = f"{r},{c}"
+                if key in labels:
+                    row.append(primary_button(text=labels[key], callback_data="noop"))
+                else:
+                    cb = f"bs_shot:{match_id}:{r}:{c}" if is_my_turn else "noop"
+                    row.append(primary_button(text=self.EMPTY, callback_data=cb))
+            buttons.append(row)
+
+        buttons.append(
+            [
+                success_button(
+                    text="🔄 بروزرسانی رادار",
+                    callback_data=f"bs_radar:{match_id}",
+                )
+            ]
+        )
+        buttons.append(
+            [
+                danger_button(
+                    text="✖️ بستن",
+                    callback_data=f"bs_close:{match_id}",
+                )
+            ]
+        )
         return InlineKeyboardMarkup(inline_keyboard=buttons)

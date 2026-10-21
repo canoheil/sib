@@ -25,6 +25,16 @@ from sib.database.connection import get_session
 from sib.database.models import Match, MatchPlayer, MatchState, Group, AdCampaign
 from sib.games.registry import get_game_engine
 from sib.keyboards.party import get_friendly_rematch_keyboard
+from sib.services.battleship_radar import (
+    edit_panel,
+    ephemeral_message_id,
+    is_private_message,
+    is_radar_participant,
+    panel_view,
+    public_view,
+    present_panel,
+    supports_private_radar,
+)
 from sib.services.friendly import (
     FriendlyOutcomeView,
     is_friendly,
@@ -152,6 +162,18 @@ def get_rematch_keyboard(
 
 
 
+STALE_PANEL_NOTICE = "⚠️ این صفحه قدیمی بود؛ وضعیت رسمی بازی بارگذاری شد."
+
+
+def _is_private_surface(message: Any) -> bool:
+    """True when the pressed message is a private panel (ephemeral or DM).
+
+    Ephemeral messages carry ``message_id == 0`` and a DM is a private chat;
+    neither may ever be treated as the shared group board.
+    """
+    return bool(ephemeral_message_id(message)) or is_private_message(message)
+
+
 def _friendly_board_target(
     state: Dict[str, Any],
     players: Any,
@@ -159,6 +181,11 @@ def _friendly_board_target(
     fallback_group_id: Optional[int],
 ) -> Tuple[Optional[int], Optional[int]]:
     """(viewer_player_id, audience_group_id) for a friendly shared board.
+
+    Only used by engines WITHOUT a private radar (RPS / High Card), where the
+    single shared board is genuinely neutral or blind-commit. Battleship never
+    flips the board perspective any more - it renders ``render_public`` in the
+    group and a private panel for each player.
 
     ``players`` is the ``[(user_id, group_id), ...]`` snapshot taken before
     the DB session closed; bot players have ``group_id=None``.
@@ -194,9 +221,18 @@ async def render_board_for(
     chat_id = getattr(chat, "id", None) if chat is not None else None
     group_id = chat_id or match.group1_id or for_player_id
 
+    if is_friendly(match) and supports_private_radar(engine):
+        # Battleship: the group board is neutral and the radar panel is
+        # private, so a rejected/stale tap heals both surfaces without ever
+        # putting a grid in the group message.
+        await _recover_friendly_radar_board(
+            callback, bot, match, state, for_player_id, final=final
+        )
+        return
+
     if is_friendly(match):
-        # Friendly boards are shared by both teams in one group: render from
-        # the current player's team perspective, never from one fixed side.
+        # Friendly boards of other engines are shared by both teams in one
+        # group: render from the current player's team perspective.
         friendly_viewer = state_viewer_id(
             state, {p.user_id for p in match.players if p.group_id is not None}, for_player_id
         )
@@ -248,6 +284,55 @@ async def render_board_for(
         elif group_id == match.group2_id and match.group2_message_id == before_id:
             match.group2_message_id = after_id
         await _persist_board_message_id(match.id, group_id, after_id)
+
+
+async def _recover_friendly_radar_board(
+    callback: CallbackQuery,
+    bot: Bot,
+    match: Match,
+    state: Dict[str, Any],
+    player_id: int,
+    *,
+    final: bool = False,
+    panel_notice: Optional[str] = STALE_PANEL_NOTICE,
+) -> None:
+    """Re-render a private-radar friendly match from the authoritative state.
+
+    Used after a rejected/stale tap and by the 🔄 button. The caller's private
+    panel (when they pressed inside one) is repaired privately; the shared
+    group message always receives the neutral public board.
+    """
+    engine = get_game_engine(match.game.code)
+    tapped = getattr(callback, "message", None)
+    group_id = match.group1_id or match.group2_id
+
+    if _is_private_surface(tapped) and is_radar_participant(engine, state, player_id):
+        panel_text, panel_kb = panel_view(
+            engine, match.id, state, player_id, notice=panel_notice
+        )
+        await edit_panel(
+            bot, tapped, player_id=player_id, text=panel_text, keyboard=panel_kb
+        )
+
+    text, kb = public_view(engine, match.id, state, finished=final)
+    message_id = match.group1_message_id or match.group2_message_id
+    if message_id and group_id:
+        new_msg_id = await _edit_game_screen(
+            bot, chat_id=group_id, message_id=message_id, text=text, reply_markup=kb
+        )
+        if new_msg_id and new_msg_id != message_id:
+            await _persist_board_message_id(match.id, group_id, new_msg_id)
+        elif new_msg_id is None:
+            logger.warning(
+                f"Public friendly board recovery failed for match {match.id} "
+                f"in group {group_id}; refresh button remains available."
+            )
+        return
+
+    if _is_private_surface(tapped):
+        return
+    await _edit_game_callback(callback, bot, text, reply_markup=kb)
+
 
 DUPLICATE_MOVE_MESSAGE = "صفحه‌ی بازی تازه شد؛ حرکت شما قبلاً ثبت شده بود."
 STALE_TURN_MESSAGE = "صفحه‌ی بازی تازه شد؛ اکنون نوبت بازیکن دیگری است."
@@ -732,6 +817,111 @@ async def process_game_action(
     await PlayerXPService.deliver_pending_notifications(bot)
 
 
+async def _present_friendly_public_board(
+    callback: CallbackQuery,
+    bot: Bot,
+    payload: Dict[str, Any],
+    actor_id: int,
+    engine: Any,
+    *,
+    callback_answered: bool = False,
+) -> None:
+    """Friendly match of an engine with a PRIVATE radar (Battleship).
+
+    Order matters: the shooter's ephemeral panel is refreshed FIRST, because
+    an ephemeral message must be sent/edited within 15 seconds of the tap and
+    the group-board edit below can spend seconds in flood-wait retries. The
+    group message then receives the neutral public board - never a radar.
+    """
+    state = payload["state"]
+    finished = payload["finished"]
+    match_id = payload["match_id"]
+    group_id = payload["group1_id"] or payload["group2_id"]
+    is_participant = any(pid == actor_id for pid, _gid in payload["players"])
+
+    panel = None
+    if is_participant:
+        # A tap on the group board opens the panel; a tap INSIDE a panel edits
+        # that same panel in place (see ``present_panel``).
+        panel = await present_panel(
+            bot,
+            callback,
+            chat_id=group_id,
+            player_id=actor_id,
+            engine=engine,
+            match_id=match_id,
+            state=state,
+        )
+
+    if not callback_answered:
+        if panel is not None and not panel.delivered:
+            # No private channel worked: a ≤200-char alert, never board text.
+            await safe_answer_callback(
+                callback,
+                "حرکت ثبت شد، ولی پنل رادار باز نشد. «🔄 بروزرسانی» را بزن.",
+                show_alert=True,
+            )
+        elif finished:
+            await safe_answer_callback(callback, "بازی رفیقانه به پایان رسید! 🍏✨")
+        else:
+            await safe_answer_callback(callback, "حرکت شما ثبت شد! 🍏")
+        callback_answered = True
+
+    await _edit_public_friendly_board(
+        callback,
+        bot,
+        payload,
+        engine,
+        state,
+        finished=finished,
+        group_id=group_id,
+    )
+
+
+async def _edit_public_friendly_board(
+    callback: CallbackQuery,
+    bot: Bot,
+    payload: Dict[str, Any],
+    engine: Any,
+    state: Dict[str, Any],
+    *,
+    finished: bool,
+    group_id: Optional[int],
+) -> None:
+    match_id = payload["match_id"]
+    text, kb = public_view(engine, match_id, state, finished=finished)
+    message_id = payload["group1_message_id"] or payload["group2_message_id"]
+
+    if message_id and group_id:
+        new_msg_id = await _edit_game_screen(
+            bot, chat_id=group_id, message_id=message_id, text=text, reply_markup=kb
+        )
+        if new_msg_id and new_msg_id != message_id:
+            await _persist_board_message_id(match_id, group_id, new_msg_id)
+        elif new_msg_id is None:
+            logger.warning(
+                f"Public friendly board refresh failed for match {match_id} "
+                f"in group {group_id}; refresh button remains available."
+            )
+        return
+
+    if _is_private_surface(getattr(callback, "message", None)):
+        # No stored group board and the tap came from a private panel: never
+        # write the public board into that panel (it would hide the radar and
+        # confuse the owner). The group board is refreshed by 🔄 / next action.
+        logger.warning(
+            f"Public friendly board has no stored message for match {match_id}; "
+            "skipping the render."
+        )
+        return
+
+    if not await _edit_game_callback(callback, bot, text, reply_markup=kb):
+        logger.warning(
+            f"Public friendly board render failed for match {match_id} "
+            "in the callback message; refresh button remains available."
+        )
+
+
 async def _present_friendly_board(
     callback: CallbackQuery,
     bot: Bot,
@@ -741,11 +931,22 @@ async def _present_friendly_board(
     callback_answered: bool = False,
     private_card_delivered: bool = False,
 ) -> None:
-    """Present the single shared board of a friendly match (best effort)."""
+    """Present the shared board of a friendly match (best effort)."""
     state = payload["state"]
     finished = payload["finished"]
     engine = get_game_engine(payload["game_code"])
     refresh_style = board_refresh_style(engine.game_code)
+
+    if supports_private_radar(engine):
+        await _present_friendly_public_board(
+            callback,
+            bot,
+            payload,
+            actor_id,
+            engine,
+            callback_answered=callback_answered,
+        )
+        return
     group_id = payload["group1_id"] or payload["group2_id"]
     viewer, audience = _friendly_board_target(
         state, payload["players"], actor_id, group_id
@@ -815,6 +1016,7 @@ async def handle_game_refresh(callback: CallbackQuery, bot: Bot) -> None:
         await safe_answer_callback(callback, "درخواست نامعتبر است.", show_alert=True)
         return
 
+    radar_refresh = False
     async with get_session() as session:
         match_stmt = (
             select(Match)
@@ -854,7 +1056,13 @@ async def handle_game_refresh(callback: CallbackQuery, bot: Bot) -> None:
 
         group_id = chat_id or user.id
 
-        if is_friendly(match):
+        if is_friendly(match) and supports_private_radar(engine):
+            # Battleship: the group board is public and the radar is private.
+            # Both are re-rendered from the authoritative state after this
+            # session closes (never inside it).
+            radar_refresh = True
+            text = kb = None
+        elif is_friendly(match):
             viewer = state_viewer_id(
                 state, {p.user_id for p in match.players if p.group_id is not None}, user.id
             )
@@ -879,6 +1087,19 @@ async def handle_game_refresh(callback: CallbackQuery, bot: Bot) -> None:
                 )
             else:
                 kb = None
+
+    if radar_refresh:
+        await safe_answer_callback(callback, "صفحه از وضعیت رسمی بازی بروزرسانی شد. 🍏")
+        await _recover_friendly_radar_board(
+            callback,
+            bot,
+            match,
+            state,
+            user.id,
+            final=match.state != MatchState.ACTIVE,
+            panel_notice=None,
+        )
+        return
 
     await safe_answer_callback(callback, "صفحه از وضعیت رسمی بازی بروزرسانی شد. 🍏")
     before_id = getattr(message, "message_id", None)
