@@ -103,6 +103,12 @@ OFFICIAL_NEW_TEXT = {
     "zarush": (ZARUSH_AFFILIATIONS, ZARUSH_STORY, "empire"),
 }
 
+# Event-exclusive cards (`shop_enabled=False`): full roster & wiki members,
+# deliberately excluded from the 300-Apple weekly shop rotation.
+EXCLUSIVE_CARDS: dict[str, dict] = {
+    "amber": {"name_en": "Amber", "power": 15, "speed": 20, "intelligence": 25},
+}
+
 # The four pre-existing cards: pinned so the new delivery cannot have
 # silently rebalanced them.
 AUDITED_CARDS = {
@@ -180,7 +186,7 @@ def test_seed_entries_carry_exactly_the_delivered_stats_and_no_invented_metadata
 @pytest.mark.asyncio
 async def test_seed_registers_all_new_characters_with_unique_ids(db_session):
     characters = await _seeded(db_session)
-    assert len(characters) == 17
+    assert len(characters) == 18
     ids = [character.id for character in characters.values()]
     assert len(ids) == len(set(ids))
 
@@ -819,6 +825,6 @@ async def test_new_cards_appear_after_a_restart_on_an_existing_installation(db_s
     created = await seed_characters(db_session)
     await db_session.commit()
 
-    assert created == len(NEW_CODES)
+    assert created == len(NEW_CODES) + len(EXCLUSIVE_CARDS)
     codes = {row.code for row in (await db_session.scalars(select(Character))).all()}
-    assert codes == set(AUDITED_CARDS) | set(NEW_CODES)
+    assert codes == set(AUDITED_CARDS) | set(NEW_CODES) | set(EXCLUSIVE_CARDS)

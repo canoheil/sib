@@ -101,7 +101,7 @@ async def test_red_apple_wiki_and_shop_share_exact_content(db_session):
 
 async def test_bold_labels_and_card_names_apply_to_all_cards(db_session):
     characters = await _seeded(db_session)
-    assert len(characters) == 17
+    assert len(characters) == 18
     for character in characters.values():
         wiki = await WikiService.wiki_page(db_session, character.id)
         assert wiki.startswith(f"*{escape_markdown(character.name_fa)}*\n")
@@ -126,7 +126,10 @@ async def test_bold_labels_and_card_names_apply_to_all_cards(db_session):
         listing_pages.append(page_text)
     listing = "\n".join(listing_pages)
     for character in characters.values():
-        assert f"*{escape_markdown(character.name_fa)}*" in listing
+        if character.shop_enabled:
+            assert f"*{escape_markdown(character.name_fa)}*" in listing
+        else:
+            assert f"*{escape_markdown(character.name_fa)}*" not in listing
 
 
 async def test_official_sync_preserves_other_cards_and_player_state(db_session):

@@ -186,7 +186,19 @@ CONFIG_DEFAULTS: dict[str, Any] = {
         "apple_obsidian": 200,
         "wedding_ring": 500,
         "flower": 15,
+        "pumpkin_seed": 15,
     },
+    # Halloween global world-boss event («سیبومورتیس» / Sibomortis, HW1-RECON).
+    "halloween_enabled": False,
+    "halloween_default_max_hp": 500_000,
+    "halloween_duration_days": 7,
+    "halloween_claim_grace_hours": 48,
+    "halloween_loot_cooldown_seconds": 14_400,
+    "halloween_day7_hp_retention_ratio": 0.20,
+    "halloween_day7_damage_multiplier": 2.0,
+    "halloween_group_drop_interval_seconds": 10_800,
+    "halloween_group_drop_window_seconds": 300,
+    "halloween_group_drop_max_claims": 3,
     # Friendly matches ("بازی با اعضای گروه"): Apple reward instead of the
     # competitive seedling. ALL THREE values are independent limits:
     #   * at most `friendly_reward_max_matches_per_day` reward-eligible
