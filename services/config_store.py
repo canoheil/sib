@@ -63,6 +63,9 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     "garden_growth_seconds": 12 * 60 * 60,
     "garden_fruit_seconds": 12 * 60 * 60,
     "garden_fruit_amount": 3,
+    # G4.5: offline grace period for garden withering (hours), tunable via
+    # system_config. Default 4h so sleeping/working players are protected.
+    "garden_wither_grace_hours": 4,
     # Magical tree progression (per-tree, Magic Powder driven).
     "garden_max_magic_level": 5,
     # Magic Powder units required for level 1..5 (index = current level).

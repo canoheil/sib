@@ -647,9 +647,16 @@ class GardenService:
             uid for uid in active_member_ids if uid not in attacker_ids
         )
 
-        # G4: 12-hour offline grace — only players seen within last 12h are eligible.
+        # G4.5: configurable offline grace — only players seen within last N hours are eligible (default 4h).
         if candidate_ids:
-            grace_cutoff = now - timedelta(hours=12)
+            raw_grace = await ConfigService.get(session, "garden_wither_grace_hours")
+            try:
+                grace_hours = int(raw_grace or 4)
+            except (TypeError, ValueError):
+                grace_hours = 4
+            if grace_hours <= 0:
+                grace_hours = 4
+            grace_cutoff = now - timedelta(hours=grace_hours)
             grace_ids = set(
                 (
                     await session.scalars(
