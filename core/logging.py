@@ -48,6 +48,9 @@ class Events:
 
     # Friendly matches ("بازی با اعضای گروه") - a match type, not a game mode.
     PARTY_FRIENDLY_ENABLED = "PARTY_FRIENDLY_ENABLED"
+    # Private radar panel delivery of a friendly Battleship match (ephemeral
+    # message / DM fallback / delivery failure).
+    BATTLESHIP_RADAR_EVENT = "BATTLESHIP_RADAR_EVENT"
     PARTY_BOTS_FILLED = "PARTY_BOTS_FILLED"
     FRIENDLY_MATCH_STARTED = "FRIENDLY_MATCH_STARTED"
     FRIENDLY_REMATCH = "FRIENDLY_REMATCH"
