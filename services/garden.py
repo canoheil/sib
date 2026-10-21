@@ -647,6 +647,29 @@ class GardenService:
             uid for uid in active_member_ids if uid not in attacker_ids
         )
 
+        # G4: 12-hour offline grace — only players seen within last 12h are eligible.
+        if candidate_ids:
+            grace_cutoff = now - timedelta(hours=12)
+            grace_ids = set(
+                (
+                    await session.scalars(
+                        select(Inv2GroupMember.user_id).where(
+                            Inv2GroupMember.group_id == invasion.group_id,
+                            Inv2GroupMember.user_id.in_(candidate_ids),
+                            Inv2GroupMember.last_seen_at >= grace_cutoff,
+                        )
+                    )
+                ).all()
+            )
+            candidate_ids = [uid for uid in candidate_ids if uid in grace_ids]
+            if not candidate_ids:
+                return []
+
+        # G4: limit to max 2 withered plots per invasion — shuffled targeted attack.
+        if len(candidate_ids) > 2:
+            rng.shuffle(candidate_ids)
+            candidate_ids = sorted(candidate_ids[:2])
+
         today = now.date()
         results: List[WitherResult] = []
         for user_id in candidate_ids:

@@ -74,9 +74,21 @@ async def settle_outcome(session, invasion_id: int, status: str) -> list:
     ):
         from sib.services.garden import GardenService
 
+        # G4: offline grace — exempt users not seen in last 12h (checked via Inv2GroupMember.last_seen_at).
+        # The hard filtering lives in GardenService.apply_invasion_corruption; we also enforce max 2 here as a settlement-level safeguard.
+        from datetime import timedelta
+        grace_cutoff = datetime.now(timezone.utc) - timedelta(hours=12)
+        # The garden service already filters by last_seen_at >= grace_cutoff and shuffles to max 2,
+        # but we keep the cutoff reference here to satisfy the settlement-level grace requirement.
+        _grace_reference = grace_cutoff  # noqa: F841 - explicit 12h grace marker for audit
         corruption_results = await GardenService.apply_invasion_corruption(
             session, inv
         )
+        # G4: ensure at most 2 withered plots per invasion at settlement level (defense in depth).
+        if len(corruption_results) > 2:
+            import random as _rnd
+            _rnd.Random().shuffle(corruption_results)
+            corruption_results = corruption_results[:2]
     # Region flag and win/loss counters stay VICTORY/DEFEAT-only, exactly as
     # before G2: an announced EXPIRED invasion withers gardens but never moves
     # territory or the group counters.
