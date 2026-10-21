@@ -297,6 +297,70 @@ WITHER_NOTIFICATION_TEXT = (
     "شرکت نکردی. از فروشگاه «کود الهی» تهیه کن."
 )
 
+# G3 — group notification for withered gardens (sent post-commit, after the terminal message).
+WITHER_GROUP_HEADER = "⚠️ توجه! به دلیل عدم شرکت در یورش، باغ این مدافعان پژمرده شد:"
+WITHER_GROUP_FOOTER = "برای ترمیم زمین‌ها، از فروشگاه «کود الهی» تهیه کنید."
+
+
+async def announce_withered_in_group(bot, results) -> None:
+    """Send a follow-up group message listing withered defenders (G3).
+
+    Runs AFTER the terminal invasion message has been delivered to the group.
+    Groups results by invasion (one invasion per maintenance tick, but the
+    helper is safe for batched calls) and sends one message per group.  Uses
+    ``plain_display_name`` so no @handles or IDs are exposed.  No-op when
+    ``results`` is empty or ``bot`` is None.  Never raises into the
+    maintenance cycle.
+    """
+    if not results or bot is None:
+        return
+    try:
+        from collections import defaultdict
+
+        from sib.core.text import plain_display_name
+
+        # Group by invasion_id — one invasion per tick in practice, but safe for batches.
+        by_invasion: dict[int, list] = defaultdict(list)
+        for r in results:
+            by_invasion[getattr(r, "invasion_id", None)].append(r)
+
+        for invasion_id, group_results in by_invasion.items():
+            if invasion_id is None:
+                continue
+            async with get_session() as session:
+                invasion = await session.get(Inv2Invasion, invasion_id)
+                if invasion is None:
+                    continue
+                group_id = invasion.group_id
+                # Collect user_ids in encounter order; de-duplicate preserves first occurrence.
+                seen = set()
+                ordered_ids: list[int] = []
+                for r in group_results:
+                    uid = getattr(r, "user_id", None)
+                    if uid is None or uid in seen:
+                        continue
+                    seen.add(uid)
+                    ordered_ids.append(uid)
+                if not ordered_ids:
+                    continue
+                # Load users for display names.
+                users_by_id: dict[int, User] = {}
+                if ordered_ids:
+                    rows = await session.scalars(select(User).where(User.id.in_(ordered_ids)))
+                    for u in rows.all():
+                        users_by_id[u.id] = u
+                names: list[str] = []
+                for uid in ordered_ids:
+                    u = users_by_id.get(uid)
+                    raw = (u.first_name if u and getattr(u, "first_name", None) else None) or "مدافع"
+                    names.append(plain_display_name(raw, "مدافع"))
+                if not names:
+                    continue
+                text = f"{WITHER_GROUP_HEADER}\n{', '.join(names)}\n{WITHER_GROUP_FOOTER}"
+                await _telegram(group_id, bot.send_message, chat_id=group_id, text=text, parse_mode=None)
+    except Exception:
+        logger.exception("inv2 wither group announcement failed")
+
 
 async def deliver_wither_notifications(bot, results) -> None:
     """Best-effort private DMs for garden corruption, run AFTER commit.

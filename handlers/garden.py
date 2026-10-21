@@ -102,8 +102,12 @@ async def _render_garden(user_id: int, session) -> tuple[str, InlineKeyboardMark
     next_price = await GardenService.next_unlock_price(session, garden)
     max_level = int(await _config(session, "garden_max_magic_level", 5))
     ready_count = sum(1 for v in views if v.state == PlotState.FRUIT_READY)
+    withered_count = sum(1 for v in views if v.state == PlotState.WITHERED)
 
     lines = [f"🌳 **باغ سیبِ {owner_name}** 🍏\n"]
+    if withered_count:
+        lines.append(f"🚨 هشدار: {withered_count} زمین شما پژمرده شده است! برای سالم‌سازی از فروشگاه «کود الهی» استفاده کنید.")
+        lines.append("")
     lines.append(f"🌱 نهال‌ها: `{seedlings}` | 🍎 سیب‌ها: `{apples}`")
     if items:
         summary = " · ".join(f"{item_emoji(k)}×{q}" for k, q in items.items())
