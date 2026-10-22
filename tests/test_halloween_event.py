@@ -752,3 +752,123 @@ async def test_top_3_damage_rewards_are_granted_once(db_session, monkeypatch):
     assert await AppleWalletService.get_balance(db_session, uids[0]) == 1000 + 500
     assert await AppleWalletService.get_balance(db_session, uids[3]) == 0
 
+
+# ---------------------------------------------------------------------------
+# 7. Silent test mode (/hw_start <max_hp> --test & /hw_end --test)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_hw_start_test_mode_skips_broadcast(db_session, monkeypatch):
+    from sib.core.config import settings
+    from sib.handlers.admin import handle_hw_start
+
+    admin_id = 990041
+    monkeypatch.setattr(settings, "ADMIN_IDS", [admin_id])
+
+    db_session.add_all(
+        [
+            Group(id=-1009401, title="گروه عمومی یک", is_active=True),
+            Group(id=-1009402, title="گروه عمومی دو", is_active=True),
+        ]
+    )
+    tester = await create_test_user(db_session, "ادمین تستر")
+    tester_id = tester.id
+    await db_session.commit()
+
+    # Warm flag cache with False before starting in silent test mode.
+    assert await HalloweenService.is_enabled() is False
+
+    admin_msg, admin_bot = _mock_private_command(admin_id, "/hw_start 5000 --test")
+    await handle_hw_start(admin_msg, admin_bot)
+
+    # Event state initialized & feature flag enabled immediately:
+    assert await HalloweenService.is_enabled() is True
+    assert await HalloweenService.is_enabled(db_session) is True
+    state = await db_session.scalar(
+        select(HalloweenEventState).order_by(HalloweenEventState.id.desc()).limit(1)
+    )
+    assert state is not None
+    assert state.boss_hp == 5000
+    assert state.max_hp == 5000
+    assert state.is_active is True
+
+    # ZERO broadcast messages sent to any active group; private confirmation exact:
+    assert admin_bot.send_message.await_count == 0
+    admin_msg.answer.assert_awaited_once_with(
+        "✅ ایونت در حالت تست (بی‌صدا) فعال شد."
+    )
+
+    # Even background maintenance ticks stay completely silent in public groups while menus work in test group!
+    prev_bot = MaintenanceService._bot
+    MaintenanceService._bot = admin_bot
+    try:
+        admin_bot.send_photo = AsyncMock()
+        await MaintenanceService.run_once()
+        assert admin_bot.send_message.await_count == 0
+        assert admin_bot.send_photo.await_count == 0
+    finally:
+        MaintenanceService._bot = prev_bot
+
+    test_group_msg = _mock_group_message(tester_id, "هالووین", chat_id=-1009499)
+    await handle_halloween_command(test_group_msg)
+    assert test_group_msg.answer_photo.await_count == 1
+    assert "5,000 / 5,000" in test_group_msg.answer_photo.await_args.kwargs["caption"]
+
+
+@pytest.mark.asyncio
+async def test_hw_end_test_mode_skips_broadcast(db_session, monkeypatch):
+    from sib.core.config import settings
+    from sib.handlers.admin import handle_hw_end, handle_hw_start
+
+    admin_id = 990051
+    monkeypatch.setattr(settings, "ADMIN_IDS", [admin_id])
+
+    db_session.add(Group(id=-1009501, title="گروه عمومی فعال", is_active=True))
+    p1 = await create_test_user(db_session, "تستر اول")
+    p2 = await create_test_user(db_session, "تستر دوم")
+    uid1, uid2 = p1.id, p2.id
+    await db_session.commit()
+
+    start_msg, start_bot = _mock_private_command(admin_id, "/hw_start 5000 --test")
+    await handle_hw_start(start_msg, start_bot)
+    state = await db_session.scalar(
+        select(HalloweenEventState).order_by(HalloweenEventState.id.desc()).limit(1)
+    )
+    db_session.add_all(
+        [
+            HalloweenAttack(
+                event_id=state.id,
+                user_id=uid1,
+                damage=800,
+                is_crit=False,
+                boss_hp_after=4200,
+            ),
+            HalloweenAttack(
+                event_id=state.id,
+                user_id=uid2,
+                damage=400,
+                is_crit=False,
+                boss_hp_after=3800,
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    end_msg, end_bot = _mock_private_command(admin_id, "/hw_end --test")
+    await handle_hw_end(end_msg, end_bot)
+
+    # Rewards settled, state inactive, flag & cache disabled:
+    assert await HalloweenService.is_enabled() is False
+    assert await HalloweenService.is_enabled(db_session) is False
+    await db_session.refresh(state)
+    assert state.is_active is False
+    assert state.leaderboard_finalized is True
+    assert await AppleWalletService.get_balance(db_session, uid1) == 1000
+    assert await AppleWalletService.get_balance(db_session, uid2) == 700
+
+    # ZERO broadcast messages sent to any group; private confirmation exact:
+    assert end_bot.send_message.await_count == 0
+    end_msg.answer.assert_awaited_once_with("✅ ایونت تستی به پایان رسید.")
+
+

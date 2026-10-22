@@ -78,6 +78,8 @@ START_ANNOUNCEMENT_TEMPLATE = (
     "🎃 ایونت هالووین آغاز شد! سیبومورتیس با {max_hp} جون به اواریا آمد. کلمه «هالووین» را بزنید!"
 )
 END_ANNOUNCEMENT = "🎃 ایونت هالووین به پایان رسید."
+START_TEST_CONFIRMATION = "✅ ایونت در حالت تست (بی‌صدا) فعال شد."
+END_TEST_CONFIRMATION = "✅ ایونت تستی به پایان رسید."
 
 DAY7_WEAKENING_ANNOUNCEMENT = (
     "💀 سیبومورتیس به شدت ضعیف شده است! زمان ضربه نهایی فرا رسیده!"
@@ -286,6 +288,7 @@ class HalloweenService:
         session: AsyncSession,
         max_hp: int,
         *,
+        silent: bool = False,
         now: Optional[datetime] = None,
     ) -> Tuple[HalloweenEventState, Tuple[int, ...]]:
         """Initialize a fresh active 7-day event row and flip ``halloween_enabled`` on."""
@@ -317,6 +320,7 @@ class HalloweenService:
             ends_at=moment + timedelta(days=7),
         )
         session.add(state)
+        await ConfigService.set(session, "halloween_test_mode", bool(silent))
         await ConfigService.set(session, "halloween_enabled", True)
         await session.flush()
 
@@ -438,6 +442,7 @@ class HalloweenService:
         if target is not None:
             target.is_active = False
 
+        await ConfigService.set(session, "halloween_test_mode", False)
         await ConfigService.set(session, "halloween_enabled", False)
         await session.flush()
 
@@ -1006,6 +1011,13 @@ class HalloweenService:
                 await cls.finalize_top_damage_rewards(
                     session, event_id=locked.id, now=moment
                 )
+
+        is_test_mode = bool(
+            await ConfigService.get(session, "halloween_test_mode")
+        )
+        if is_test_mode:
+            await session.flush()
+            return MaintenanceOutcome()
 
         active_group_ids = list(
             (

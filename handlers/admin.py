@@ -17,7 +17,9 @@ from sib.keyboards.common import get_admin_main_keyboard, danger_button, primary
 from sib.services.ad.service import AdService
 from sib.services.halloween import (
     END_ANNOUNCEMENT,
+    END_TEST_CONFIRMATION,
     START_ANNOUNCEMENT_TEMPLATE,
+    START_TEST_CONFIRMATION,
     HalloweenService,
     invalidate_halloween_config_cache,
 )
@@ -279,19 +281,22 @@ async def _broadcast_to_active_groups(
 
 @router.message(Command("hw_start"))
 async def handle_hw_start(message: Message, bot: Optional[Bot] = None) -> None:
-    """Start a new 7-day Halloween event with ``<max_hp>`` and broadcast to groups."""
+    """Start a new 7-day Halloween event with ``<max_hp>`` (optional ``--test`` silent mode)."""
     if not message.from_user or not is_admin(message.from_user.id):
         return
 
-    parts = (message.text or "").split()
-    if len(parts) < 2:
+    raw_args = (message.text or "").split()[1:]
+    test_mode = "--test" in raw_args
+    positional = [arg for arg in raw_args if arg != "--test"]
+
+    if not positional:
         await _reply_admin_message(
             message,
             "⚠️ لطفاً میزان جان سیبومورتیس را وارد کنید. نمونه: /hw_start 500000",
         )
         return
 
-    raw_hp = parts[1].replace(",", "").replace("_", "")
+    raw_hp = positional[0].replace(",", "").replace("_", "")
     if not raw_hp.isdigit() or int(raw_hp) <= 0:
         await _reply_admin_message(
             message,
@@ -301,21 +306,26 @@ async def handle_hw_start(message: Message, bot: Optional[Bot] = None) -> None:
 
     max_hp = int(raw_hp)
     now = datetime.now(timezone.utc)
+    audit_details = f"{max_hp} --test" if test_mode else str(max_hp)
 
     async with get_session() as session:
         session.add(
             AdminLog(
                 admin_id=message.from_user.id,
                 action="hw_start",
-                details=str(max_hp),
+                details=audit_details,
             )
         )
         state, group_ids = await HalloweenService.start_event(
-            session, max_hp, now=now
+            session, max_hp, silent=test_mode, now=now
         )
         event_id = state.id
 
     invalidate_halloween_config_cache()
+
+    if test_mode:
+        await _reply_admin_message(message, START_TEST_CONFIRMATION)
+        return
 
     announcement = START_ANNOUNCEMENT_TEMPLATE.format(max_hp=max_hp)
     notified = await _broadcast_to_active_groups(
@@ -333,9 +343,13 @@ async def handle_hw_start(message: Message, bot: Optional[Bot] = None) -> None:
 
 @router.message(Command("hw_end"))
 async def handle_hw_end(message: Message, bot: Optional[Bot] = None) -> None:
-    """Finalize Top-3 damage rewards, end the Halloween event, and broadcast."""
+    """Finalize Top-3 damage rewards, end the Halloween event, and broadcast unless ``--test``."""
     if not message.from_user or not is_admin(message.from_user.id):
         return
+
+    raw_args = (message.text or "").split()[1:]
+    test_mode = "--test" in raw_args
+    audit_details = "manual_end --test" if test_mode else "manual_end"
 
     now = datetime.now(timezone.utc)
     async with get_session() as session:
@@ -343,12 +357,16 @@ async def handle_hw_end(message: Message, bot: Optional[Bot] = None) -> None:
             AdminLog(
                 admin_id=message.from_user.id,
                 action="hw_end",
-                details="manual_end",
+                details=audit_details,
             )
         )
         outcome = await HalloweenService.end_event(session, now=now)
 
     invalidate_halloween_config_cache()
+
+    if test_mode:
+        await _reply_admin_message(message, END_TEST_CONFIRMATION)
+        return
 
     notified = await _broadcast_to_active_groups(
         bot, message, outcome.group_ids, END_ANNOUNCEMENT
