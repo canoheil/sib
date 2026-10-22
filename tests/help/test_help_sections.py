@@ -13,13 +13,24 @@ These tests pin:
 """
 
 import re
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from aiogram.types import CallbackQuery, Chat as TelegramChat, Message, User as TelegramUser
+from aiogram.types import (
+    CallbackQuery,
+    Chat as TelegramChat,
+    Message,
+    MessageEntity,
+    User as TelegramUser,
+)
 
 from sib.handlers import start as start_module
-from sib.handlers.start import handle_help_menu, handle_help_navigation
+from sib.handlers.start import (
+    handle_help_command,
+    handle_help_menu,
+    handle_help_navigation,
+)
 from sib.services.help_content import (
     HELP_BACK_LABEL,
     HELP_SECTIONS,
@@ -248,6 +259,40 @@ async def test_help_menu_button_opens_the_same_index():
     assert any(
         b.callback_data == "help:section:quick_start" for b in _buttons(kb)
     )
+
+
+@pytest.mark.asyncio
+async def test_help_command_routes_to_the_existing_help_index(monkeypatch):
+    """A Telegram /help command sends the existing Persian Guide index."""
+    message = Message(
+        message_id=1,
+        date=datetime.now(timezone.utc),
+        chat=TelegramChat(id=5, type="private"),
+        from_user=TelegramUser(id=5, is_bot=False, first_name="سارا"),
+        text="/help",
+        entities=[MessageEntity(type="bot_command", offset=0, length=5)],
+    )
+    send_screen = AsyncMock()
+    monkeypatch.setattr("sib.services.banner.send_screen_reply", send_screen)
+
+    # Trigger the real router so the Command("help") filter is exercised as
+    # well as the handler and its shared help-menu renderer.
+    await start_module.router.message.trigger(message, bot=MagicMock())
+
+    send_screen.assert_awaited_once()
+    args = send_screen.await_args.args
+    assert args[0] is message
+    assert args[1] == "help"
+    assert args[2] == render_index_text()
+    keyboard = args[3]
+    assert all(
+        f"help:section:{section.section_key}"
+        in [button.callback_data for button in _buttons(keyboard)]
+        for section in HELP_SECTIONS
+    )
+    assert handle_help_command in [
+        handler.callback for handler in start_module.router.message.handlers
+    ]
 
 
 @pytest.mark.asyncio

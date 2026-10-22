@@ -3,7 +3,7 @@
 from typing import Optional
 
 from aiogram import Router, F, Bot
-from aiogram.filters import CommandObject, CommandStart, Filter
+from aiogram.filters import Command, CommandObject, CommandStart, Filter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from sib.core.config import settings
@@ -1378,6 +1378,12 @@ async def _open_help_menu(message: Message, bot: Bot) -> None:
 
     text, kb = _help_menu_screen()
     await send_screen_reply(message, "help", text, kb)
+
+
+@router.message(Command("help"))
+async def handle_help_command(message: Message, bot: Bot):
+    """Open the existing Persian Guide index for Telegram's ``/help`` command."""
+    await _open_help_menu(message, bot)
 
 
 async def _open_shop_entry(message: Message, bot: Bot) -> None:
