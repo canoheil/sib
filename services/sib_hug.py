@@ -16,6 +16,14 @@ Ledger design (no schema change, see ``database/models/apple.py``):
   the command (``chat_id:message_id``), so processing the same message twice
   can never award either side twice.
 
+Friendship Bonus (SOC1): when the sender and the target already share an
+ACCEPTED ``apple_friendships`` row, BOTH of them receive the base amount plus
+``sib_hug_friend_bonus`` (10 + 10 = 20 by default). The bonus is decided
+inside the same transaction but AFTER the cooldown has already passed, so it
+can never resurrect a blocked attempt: the cooldown, the duplicate check and
+the idempotency keys are all untouched by the bonus and cannot be farmed by
+spamming a friend.
+
 Concurrency: both participant ``User`` rows are locked in ascending id order
 (the repository's global lock order). The duplicate and cooldown checks are
 locking reads, so they see the latest committed hug even under InnoDB
@@ -37,6 +45,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sib.database.models import AppleTransaction, User
 from sib.services.apple_wallet import AppleWalletService
 from sib.services.config_store import ConfigService
+from sib.services.friendship import FriendshipService
 from sib.services.sib_claim import fa_digits
 
 HUG_REASON = "sib_hug"
@@ -46,6 +55,9 @@ HUG_SCENE_KEY = "hug"
 
 HUG_AMOUNT_KEY = "sib_hug_amount"
 HUG_COOLDOWN_KEY = "sib_hug_cooldown_seconds"
+# SOC1 Friendship Bonus: added to HUG_AMOUNT_KEY for BOTH participants when
+# they are accepted apple friends. 10 + 10 == the specified 20 per person.
+HUG_FRIEND_BONUS_KEY = "sib_hug_friend_bonus"
 
 HUG_AWARDED = "awarded"
 HUG_COOLDOWN = "cooldown"
@@ -67,6 +79,19 @@ HUG_MESSAGE_VARIANTS = (
     "🍎 **{a}** به **{b}** یه بغل سیبی هدیه داد! **{n} سیب** به هر کدوم رسید.",
     "🤗 **{b}** از **{a}** یه بغل قشنگ گرفت! **{n} سیب** هم به هر دو رسید.",
     "🫂 **{a}** و **{b}** یه بغل سیبی رد و بدل کردن! هر کدوم **{n} سیب** گرفتن.",
+)
+
+# SOC1 Friendship Bonus pool, used ONLY when the two are accepted apple
+# friends. Same placeholders as above; each variant names the friendship and
+# still prints the real granted amount, so the text can never advertise a
+# reward the ledger did not pay.
+HUG_FRIEND_MESSAGE_VARIANTS = (
+    "🤗 **{a}** **{b}** رو بغل کرد! دوستای سیبی چقدر همدیگه رو دوست دارن! ❤️ هر کدوم **{n} سیب** گرفتن.",
+    "🫂 **{a}** رفیق سیبیش **{b}** رو بغل کرد! پاداش دوستی **{n} سیب** به هر کدوم رسید.",
+    "🍏 یه بغل دوستانه بین **{a}** و **{b}**! ❤️ هر کدوم **{n} سیب** گرفتن.",
+    "🤗 **{a}** و **{b}** که دوستن، همدیگه رو بغل کردن! هر کدوم **{n} سیب** پاداش دوستی گرفتن.",
+    "🍎 بغلِ **{a}** برای دوستش **{b}** شیرین‌تره! ❤️ هر دو **{n} سیب** گرفتن.",
+    "🫂 **{b}** از دوست سیبیش **{a}** یه بغل گرم گرفت! **{n} سیب** به هر کدوم رسید.",
 )
 
 
@@ -91,6 +116,9 @@ class HugResult:
     status: str
     amount: int = 0
     remaining_seconds: int = 0
+    # SOC1: True when this pair are accepted apple friends, so the amount
+    # above already includes the friendship bonus. Drives the narrative pool.
+    friendship_bonus: bool = False
 
 
 def hug_idempotency_keys(message_key: str, sender_id: int, target_id: int) -> tuple:
@@ -119,10 +147,18 @@ def pick_hug_message(
     target_mention: str,
     amount: int,
     rng: Optional[random.Random] = None,
+    *,
+    friends: bool = False,
 ) -> str:
-    """One randomly chosen hug variant, filled with the two mentions."""
+    """One randomly chosen hug variant, filled with the two mentions.
+
+    ``friends=True`` picks from the Friendship Bonus pool, which names the
+    friendship in the sentence. Both pools print ``amount`` in Persian digits,
+    so the narrative always matches what the ledger actually paid.
+    """
     chooser = rng or random
-    template = chooser.choice(HUG_MESSAGE_VARIANTS)
+    pool = HUG_FRIEND_MESSAGE_VARIANTS if friends else HUG_MESSAGE_VARIANTS
+    template = chooser.choice(pool)
     return template.format(
         a=sender_mention,
         b=target_mention,
@@ -147,6 +183,9 @@ class SibHugService:
         Returns ``HUG_AWARDED`` (both rewards staged in ``session``),
         ``HUG_COOLDOWN`` (nothing written), or ``HUG_DUPLICATE`` (this
         message was already processed; nothing written).
+
+        On ``HUG_AWARDED``, ``amount`` is what EACH participant received and
+        ``friendship_bonus`` says whether it includes the Friendship Bonus.
         """
         if sender_id == target_id:
             raise SibHugSelfTargetError("a user cannot hug themselves")
@@ -207,7 +246,19 @@ class SibHugService:
                     remaining_seconds=cooldown - elapsed,
                 )
 
-        # 4) Both rewards in this transaction. Wallet rows are written in
+        # 4) Friendship Bonus (SOC1): size the reward now that the hug is
+        #    known to go through. It runs AFTER the duplicate and cooldown
+        #    gates, so the bonus can never turn a blocked hug into a paying
+        #    one, and it never touches the idempotency keys or the cooldown
+        #    row - a pair of friends is still capped at one hug per window.
+        #    Both sides always get the SAME amount.
+        friends = await FriendshipService.are_friends(session, sender_id, target_id)
+        bonus = (
+            await ConfigService.get_int(session, HUG_FRIEND_BONUS_KEY) if friends else 0
+        )
+        amount = amount + max(0, bonus)
+
+        # 5) Both rewards in this transaction. Wallet rows are written in
         #    ascending user-id order, matching the user-row lock order, so a
         #    concurrent writer that locks the same two wallets cannot invert it.
         #    The earns are keyed, and the checks above ran under the same locks,
@@ -227,7 +278,7 @@ class SibHugService:
                 idempotency_key=key,
             )
 
-        # 5) Verify both expected ledger records exist inside this transaction.
+        # 6) Verify both expected ledger records exist inside this transaction.
         #    The pre-check above proved neither key existed before, so any key
         #    found now was written by this call. A missing key means a reward
         #    was skipped (earn() returns silently on a duplicate key). Raising
@@ -245,4 +296,6 @@ class SibHugService:
             raise SibHugIntegrityError(
                 f"hug reward verification failed: missing {sorted({sender_key, recipient_key} - written)}"
             )
-        return HugResult(status=HUG_AWARDED, amount=amount)
+        return HugResult(
+            status=HUG_AWARDED, amount=amount, friendship_bonus=friends
+        )
