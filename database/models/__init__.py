@@ -160,3 +160,21 @@ __all__ += ["GroupCastle", "CastleDonation", "CastleIncomeClaim"]
 
 from sib.database.models.war import GroupWar, WarParticipant, WarAttack
 __all__ += ["GroupWar", "WarParticipant", "WarAttack"]
+
+from sib.database.models.halloween import (
+    HalloweenAttack,
+    HalloweenEventState,
+    HalloweenLootDrop,
+    HalloweenLootDropClaim,
+    HalloweenRewardClaim,
+    HalloweenSeedCooldown,
+)
+__all__ += [
+    "HalloweenEventState",
+    "HalloweenAttack",
+    "HalloweenRewardClaim",
+    "HalloweenSeedCooldown",
+    "HalloweenLootDrop",
+    "HalloweenLootDropClaim",
+]
+

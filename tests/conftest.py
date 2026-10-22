@@ -93,6 +93,12 @@ async def db_session():
     async with session_factory() as session:
         # Clean transient test data between tests to ensure test isolation
         from sqlalchemy import text
+        await session.execute(text("DELETE FROM halloween_loot_drop_claims"))
+        await session.execute(text("DELETE FROM halloween_loot_drops"))
+        await session.execute(text("DELETE FROM halloween_seed_cooldowns"))
+        await session.execute(text("DELETE FROM halloween_reward_claims"))
+        await session.execute(text("DELETE FROM halloween_attacks"))
+        await session.execute(text("DELETE FROM halloween_event_state"))
         await session.execute(text("DELETE FROM castle_income_claims"))
         await session.execute(text("DELETE FROM castle_donations"))
         await session.execute(text("DELETE FROM group_castles"))
@@ -147,6 +153,9 @@ async def db_session():
         await session.execute(text("DELETE FROM games"))
         await seed_default_data(session, include_sample_ad=False)
         await session.commit()
+        from sib.services.halloween import invalidate_halloween_config_cache
+
+        invalidate_halloween_config_cache()
 
         yield session
         await session.rollback()

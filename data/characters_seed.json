@@ -277,5 +277,20 @@
     "sync_faction": true,
     "release_status": "RELEASED",
     "shop_enabled": true
+  },
+  {
+    "code": "amber",
+    "name_fa": "امبر",
+    "name_en": "Amber",
+    "affiliations_fa": "فرزندان ماه🌙",
+    "lore_fa": "«امبر» جادوگر سرزمین‌های فراموش‌شده است. او که با رعد و برق و ماه کامل پیوند خورده، تنها کسی است که جرأت کرده طلسم‌های ممنوعه را برای مقابله با سیبومورتیس به کار ببرد. جغد بنفش او، دیده‌بان ارتش اواریاست و هیچ سایه‌ای از نگاهش پنهان نمی‌ماند.",
+    "artwork": null,
+    "power": 15,
+    "speed": 20,
+    "intelligence": 25,
+    "faction": "moon_descendants",
+    "sync_faction": true,
+    "release_status": "RELEASED",
+    "shop_enabled": false
   }
 ]

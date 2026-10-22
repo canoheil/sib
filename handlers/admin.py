@@ -1,16 +1,28 @@
 """Admin panel handlers."""
 
-from aiogram import Router, F
+from datetime import datetime, timezone
+import inspect
+from typing import Optional
+
+from aiogram import Bot, Router, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup
 from sqlalchemy import select, func
-from sib.admin.auth import IsAdminFilter
+from sib.admin.auth import IsAdminFilter, is_admin
 from sib.core.logging import log_event, Events
 from sib.database.connection import get_session
-from sib.database.models import User, Group, Game, Match, AdCampaign, SponsorChannel
+from sib.database.models import AdminLog, User, Group, Game, Match, AdCampaign, SponsorChannel
 from sib.keyboards.common import get_admin_main_keyboard, danger_button, primary_button
 from sib.services.ad.service import AdService
+from sib.services.halloween import (
+    END_ANNOUNCEMENT,
+    END_TEST_CONFIRMATION,
+    START_ANNOUNCEMENT_TEMPLATE,
+    START_TEST_CONFIRMATION,
+    HalloweenService,
+    invalidate_halloween_config_cache,
+)
 from sib.services.sponsor.service import SponsorService
 
 router = Router(name="admin")
@@ -230,3 +242,176 @@ async def handle_admin_matches(callback: CallbackQuery):
             reply_markup=kb,
             parse_mode="Markdown",
         )
+
+
+# ---------------------------------------------------------------------------
+# Halloween Global Event Admin Controls (/hw_start, /hw_end, /hw_status)
+# ---------------------------------------------------------------------------
+
+
+async def _reply_admin_message(message: Message, text: str) -> None:
+    answer_fn = getattr(message, "answer", None)
+    reply_fn = getattr(message, "reply", None)
+    if callable(answer_fn) and inspect.iscoroutinefunction(answer_fn):
+        await answer_fn(text)
+    elif callable(reply_fn) and inspect.iscoroutinefunction(reply_fn):
+        await reply_fn(text)
+
+
+async def _broadcast_to_active_groups(
+    bot: Optional[Bot],
+    message: Message,
+    group_ids: tuple[int, ...],
+    text: str,
+) -> int:
+    from sib.services.maintenance.service import MaintenanceService
+
+    target_bot = bot or getattr(message, "bot", None) or MaintenanceService._bot
+    if target_bot is None:
+        return 0
+    sent_count = 0
+    for gid in group_ids:
+        try:
+            await target_bot.send_message(gid, text)
+            sent_count += 1
+        except Exception:
+            continue
+    return sent_count
+
+
+@router.message(Command("hw_start"))
+async def handle_hw_start(message: Message, bot: Optional[Bot] = None) -> None:
+    """Start a new 7-day Halloween event with ``<max_hp>`` (optional ``--test`` silent mode)."""
+    if not message.from_user or not is_admin(message.from_user.id):
+        return
+
+    raw_args = (message.text or "").split()[1:]
+    test_mode = "--test" in raw_args
+    positional = [arg for arg in raw_args if arg != "--test"]
+
+    if not positional:
+        await _reply_admin_message(
+            message,
+            "⚠️ لطفاً میزان جان سیبومورتیس را وارد کنید. نمونه: /hw_start 500000",
+        )
+        return
+
+    raw_hp = positional[0].replace(",", "").replace("_", "")
+    if not raw_hp.isdigit() or int(raw_hp) <= 0:
+        await _reply_admin_message(
+            message,
+            "⚠️ مقدار جان نامعتبر است؛ یک عدد صحیح مثبت وارد کنید.",
+        )
+        return
+
+    max_hp = int(raw_hp)
+    now = datetime.now(timezone.utc)
+    audit_details = f"{max_hp} --test" if test_mode else str(max_hp)
+
+    async with get_session() as session:
+        session.add(
+            AdminLog(
+                admin_id=message.from_user.id,
+                action="hw_start",
+                details=audit_details,
+            )
+        )
+        state, group_ids = await HalloweenService.start_event(
+            session, max_hp, silent=test_mode, now=now
+        )
+        event_id = state.id
+
+    invalidate_halloween_config_cache()
+
+    if test_mode:
+        await _reply_admin_message(message, START_TEST_CONFIRMATION)
+        return
+
+    announcement = START_ANNOUNCEMENT_TEMPLATE.format(max_hp=max_hp)
+    notified = await _broadcast_to_active_groups(
+        bot, message, group_ids, announcement
+    )
+    await _reply_admin_message(
+        message,
+        (
+            f"🎃 ایونت هالووین (شناسه #{event_id}) با موفقیت فعال شد!\n"
+            f"💀 جون سیبومورتیس: {max_hp:,} / {max_hp:,}\n"
+            f"📢 پیام آغاز به {notified} گروه فعال ارسال شد."
+        ),
+    )
+
+
+@router.message(Command("hw_end"))
+async def handle_hw_end(message: Message, bot: Optional[Bot] = None) -> None:
+    """Finalize Top-3 damage rewards, end the Halloween event, and broadcast unless ``--test``."""
+    if not message.from_user or not is_admin(message.from_user.id):
+        return
+
+    raw_args = (message.text or "").split()[1:]
+    test_mode = "--test" in raw_args
+    audit_details = "manual_end --test" if test_mode else "manual_end"
+
+    now = datetime.now(timezone.utc)
+    async with get_session() as session:
+        session.add(
+            AdminLog(
+                admin_id=message.from_user.id,
+                action="hw_end",
+                details=audit_details,
+            )
+        )
+        outcome = await HalloweenService.end_event(session, now=now)
+
+    invalidate_halloween_config_cache()
+
+    if test_mode:
+        await _reply_admin_message(message, END_TEST_CONFIRMATION)
+        return
+
+    notified = await _broadcast_to_active_groups(
+        bot, message, outcome.group_ids, END_ANNOUNCEMENT
+    )
+    lines = [
+        "🎃 ایونت هالووین با موفقیت پایان یافت و پرچم رویداد غیرفعال شد.",
+        f"📢 پیام پایان به {notified} گروه فعال ارسال شد.",
+    ]
+    if outcome.payouts:
+        lines.append("🏆 جوایز برترین آسیب‌زنندگان واریز شد:")
+        for row in outcome.payouts:
+            lines.append(
+                f"#{row.rank} {row.display_name} — {row.damage:,} آسیب (+{row.apples:,} سیب)"
+            )
+    await _reply_admin_message(message, "\n".join(lines))
+
+
+@router.message(Command("hw_status"))
+async def handle_hw_status(message: Message) -> None:
+    """Display live Halloween boss HP, remaining time, and active attackers."""
+    if not message.from_user or not is_admin(message.from_user.id):
+        return
+
+    from sib.handlers.halloween import _format_time_remaining
+
+    now = datetime.now(timezone.utc)
+    async with get_session() as session:
+        summary = await HalloweenService.get_event_status_summary(session)
+        if summary.state is None:
+            status_text = (
+                f"🎃 وضعیت ایونت هالووین: {'فعال 🟢' if summary.enabled else 'غیرفعال 🔴'}\n"
+                "هنوز هیچ دورهٔ فعالی آغاز نشده است.\n"
+                "⚔️ تعداد مهاجمان فعال: 0"
+            )
+        else:
+            st = summary.state
+            rem_fa = _format_time_remaining(st.ends_at, now)
+            status_text = (
+                f"🎃 وضعیت ایونت هالووین: {'فعال 🟢' if (summary.enabled and st.is_active) else 'غیرفعال 🔴'}\n"
+                f"💀 جون فعلی سیبومورتیس: {st.boss_hp:,} / {st.max_hp:,}\n"
+                f"⏳ زمان باقی‌مانده: {rem_fa}\n"
+                f"⚔️ تعداد مهاجمان فعال: {summary.active_attackers}\n"
+                f"🗡 مجموع حملات ثبت‌شده: {summary.total_attacks}\n"
+                f"🏆 تسویه جوایز ۳ نفر برتر: {'انجام شده ✅' if st.leaderboard_finalized else 'انجام نشده ⏳'}"
+            )
+
+    await _reply_admin_message(message, status_text)
+
