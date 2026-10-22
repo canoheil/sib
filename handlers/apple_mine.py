@@ -20,6 +20,7 @@ from aiogram.types import (
 )
 
 from sib.core.logging import logger
+from sib.core.text import format_html, strip_bold
 from sib.database.connection import get_session
 from sib.keyboards.common import danger_button, primary_button, success_button
 from sib.services.apple_mine import (
@@ -252,7 +253,8 @@ async def _register_user_and_group(session, user, chat) -> int | None:
 
 async def _safe_message_reply(message: Message, text: str, *, reply_markup=None) -> None:
     try:
-        await message.answer(text, reply_markup=reply_markup, parse_mode="Markdown")
+        await message.answer(format_html(text), reply_markup=reply_markup,
+                             parse_mode="HTML")
     except Exception:
         logger.exception("Apple Mine could not send a message reply")
 
@@ -287,24 +289,24 @@ async def _edit_screen(
                 chat_id,
                 message_id,
                 photo=FSInputFile(str(image_path)),
-                text=caption,
+                text=format_html(caption),
                 reply_markup=reply_markup,
-                parse_mode="Markdown",
+                parse_mode="HTML",
             )
         return await safe_edit_message_caption(
             bot,
             chat_id,
             message_id,
-            caption,
+            format_html(caption),
             reply_markup=reply_markup,
-            parse_mode="Markdown",
+            parse_mode="HTML",
         )
     return await safe_edit_callback_message(
         callback,
         bot,
-        caption,
+        format_html(caption),
         reply_markup=reply_markup,
-        parse_mode="Markdown",
+        parse_mode="HTML",
     )
 
 
@@ -312,10 +314,10 @@ async def _send_callback_message(callback: CallbackQuery, bot: Bot, text: str) -
     message = callback.message
     try:
         if message is not None and hasattr(message, "answer"):
-            await message.answer(text, parse_mode="Markdown")
+            await message.answer(format_html(text), parse_mode="HTML")
         else:
             await bot.send_message(
-                callback.from_user.id, text, parse_mode="Markdown"
+                callback.from_user.id, format_html(text), parse_mode="HTML"
             )
     except Exception:
         logger.exception("Apple Mine could not send a callback message")
@@ -345,9 +347,9 @@ async def _send_panel(message: Message) -> None:
     try:
         await message.answer_photo(
             photo=FSInputFile(str(MINE_IMAGE_PATH)),
-            caption=caption,
+            caption=format_html(caption),
             reply_markup=keyboard,
-            parse_mode="Markdown",
+            parse_mode="HTML",
         )
     except Exception:
         # Keep the feature usable if a local asset cannot be read or Telegram
@@ -396,7 +398,7 @@ async def handle_mine_work(callback: CallbackQuery, bot: Bot) -> None:
         if cooldown > 0:
             await safe_answer_callback(
                 callback,
-                cooldown_message(cooldown, user.id).replace("**", ""),
+                strip_bold(cooldown_message(cooldown, user.id)),
                 show_alert=True,
             )
             return
@@ -407,7 +409,7 @@ async def handle_mine_work(callback: CallbackQuery, bot: Bot) -> None:
     except CooldownError as error:
         await safe_answer_callback(
             callback,
-            cooldown_message(error.remaining_seconds, user.id).replace("**", ""),
+            strip_bold(cooldown_message(error.remaining_seconds, user.id)),
             show_alert=True,
         )
         return
@@ -477,7 +479,7 @@ async def handle_mine_pickaxe_upgrade(callback: CallbackQuery, bot: Bot) -> None
                 await upgrade_pickaxe(session, user_id=user.id)
             except PickaxeInsufficientFunds as error:
                 await safe_answer_callback(
-                    callback, _insufficient_text(error).replace("**", ""), show_alert=True
+                    callback, strip_bold(_insufficient_text(error)), show_alert=True
                 )
                 return
             except PickaxeMaxLevelError:

@@ -452,6 +452,7 @@ async def test_wither_dm_uses_exact_product_text_and_tolerates_blocks(db_session
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
+    from sib.core.text import format_html
     from sib.services.garden import WitherResult
     from sib.services.invasion_v2.presentation import (
         WITHER_NOTIFICATION_TEXT,
@@ -472,7 +473,9 @@ async def test_wither_dm_uses_exact_product_text_and_tolerates_blocks(db_session
                WitherResult(user_id=42, plot_index=0, invasion_id=11)]
     # Must never raise, even when the player blocked the bot.
     await deliver_wither_notifications(bot, results)
-    assert sent == [(7, WITHER_NOTIFICATION_TEXT)]
+    # The DM is delivered as HTML, so the ** marker reaches the player as <b>.
+    assert sent == [(7, format_html(WITHER_NOTIFICATION_TEXT))]
+    assert "**" not in sent[0][1]
     assert "پژمرده" in WITHER_NOTIFICATION_TEXT and "کود الهی" in WITHER_NOTIFICATION_TEXT
     # No bot / no results are no-ops.
     await deliver_wither_notifications(None, results)

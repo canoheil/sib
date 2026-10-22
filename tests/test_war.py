@@ -19,6 +19,7 @@ from sib.database.models import (
     WarAttack,
     WarParticipant,
 )
+from sib.core.text import format_html
 from sib.handlers.castle import keyboard as castle_keyboard
 from sib.handlers.war import war_keyboard
 from sib.services.apple_wallet import AppleWalletService
@@ -622,7 +623,8 @@ async def test_war_callback_edits_message_in_place(war_session, monkeypatch):
     edit_kwargs = bot.edit_message_media.await_args.kwargs
     assert edit_kwargs["chat_id"] == -1001
     assert edit_kwargs["message_id"] == 10
-    assert "انرژی جنگی شما: **۸۰ از ۱۰۰**" in edit_kwargs["media"].caption
+    assert "انرژی جنگی شما: <b>۸۰ از ۱۰۰</b>" in edit_kwargs["media"].caption
+    assert edit_kwargs["media"].parse_mode == "HTML"
     edit_callbacks = [
         b.callback_data
         for row in edit_kwargs["reply_markup"].inline_keyboard
@@ -1466,6 +1468,11 @@ ZWNJ = "\u200c"
 SHIELD_LINE = "سپر صلح **۲ ساعته** فعال شد."
 
 
+def render(text):
+    """How Telegram receives the caption: ``**bold**`` rendered as HTML."""
+    return format_html(text)
+
+
 def victory_text(loot, *, shield=False):
     """The winner's short caption with the actual loot and optional shield."""
     text = (
@@ -1474,7 +1481,7 @@ def victory_text(loot, *, shield=False):
     )
     if shield:
         text += f"\n🛡 {SHIELD_LINE}"
-    return text
+    return render(text)
 
 
 def defeat_text(loot, *, shield=False):
@@ -1487,7 +1494,7 @@ def defeat_text(loot, *, shield=False):
         text += f"\n🛡 {SHIELD_LINE}"
     else:
         text += f"\n⚔️ مهاجم **سپر صلح** نمی{ZWNJ}گیره."
-    return text
+    return render(text)
 
 
 def _fake_bot():
@@ -1569,6 +1576,9 @@ async def test_war_finish_sends_messages_to_both_groups(war_session, monkeypatch
     for call in sent.values():  # no defeat banner exists: both use the victory image
         assert Path(call.args[1].path).name == "war_bg_victory.jpg"
         assert Path(call.args[1].path).is_file()
+        # HW3: the result is HTML, never a literal "**".
+        assert call.kwargs["parse_mode"] == "HTML"
+        assert "**" not in call.kwargs["caption"]
 
     # What the messages say is what was committed.
     await s.refresh(war)
@@ -1861,11 +1871,13 @@ async def test_winner_text_shows_actual_loot_not_percentage(war_session, monkeyp
     captions = {call.args[0]: call.kwargs["caption"] for call in bot.send_photo.await_args_list}
     winner = captions[DEFENDER]
     assert winner == victory_text("۱۰۰۰", shield=True)  # exactly the specified text
-    assert "غنیمت: **۱۰۰۰ سیب**." in winner
+    assert "غنیمت: <b>۱۰۰۰ سیب</b>." in winner
     # No percentage - not even the uncapped number it would have been.
     for promise in ("٪", "%", "درصد", "۱۵", "۳۱۵۰"):
         assert promise not in winner, promise
-    assert not re.search(r"[A-Za-z0-9]", winner)  # Persian only (Persian digits)
+    # Persian only (Persian digits): judged on what the player READS, so the
+    # <b> tags of the HTML rendering are not counted.
+    assert not re.search(r"[A-Za-z0-9]", re.sub(r"</?b>", "", winner))
     # The amount shown is what the castles really moved.
     loser = await _fresh_castle(s, ATTACKER)
     assert loser.total_donated == 21_000 - 1_000
@@ -1878,8 +1890,8 @@ def test_winner_caption_states_whatever_amount_was_taken(loot):
     from sib.services.war_presentation import victory_caption
 
     text = victory_caption(loot)
-
-    assert text == victory_text(fa_digits(loot))
+    # The caption source keeps the ** markers; Telegram receives the HTML.
+    assert format_html(text) == victory_text(fa_digits(loot))
     assert "٪" not in text and "%" not in text and "درصد" not in text
 
 

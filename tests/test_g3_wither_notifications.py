@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy import select
 from types import SimpleNamespace
 
+from sib.core.text import format_html, plain_display_name
 from sib.database.models import GardenPlot, User, Group, Inv2GroupMember, Inv2Region, Inv2Invasion
 from sib.services.garden import GardenService
 from sib.services.invasion_v2.enums import InvasionStatus
@@ -95,24 +96,24 @@ async def test_withered_users_are_announced_in_group(db_session):
     assert len(sent) == 1
     chat_id, text = sent[0]
     assert chat_id == group.id
-    # Persian header/footer exact
+    # Persian header/footer exact (delivered as HTML: ** is a <b> tag)
     assert WITHER_GROUP_HEADER in text
-    assert WITHER_GROUP_FOOTER in text
+    assert format_html(WITHER_GROUP_FOOTER) in text
+    assert "**" not in text
     assert text.startswith("⚠️ باغ این بازیکن‌ها به‌خاطر شرکت نکردن در یورش پژمرده شد:")
-    assert text.endswith("برای ترمیم زمین‌ها، **کود الهی** بخرید.")
+    assert text.endswith(format_html("برای ترمیم زمین‌ها، **کود الهی** بخرید."))
     # Names are sanitized via plain_display_name: @ should be removed, no IDs exposed
     # user1 first_name is "علی@bad" -> plain_display_name should strip @
     assert "@" not in text
     assert "tg://" not in text
     # Both user names should appear (sanitized)
-    from sib.core.text import plain_display_name
     n1 = plain_display_name(user1.first_name, "مدافع")
     n2 = plain_display_name(user2.first_name, "مدافع")
     assert n1 in text
     assert n2 in text
     # Names use Persian punctuation and one bold list; service result order is not contractual.
     assert "، " in text
-    assert f"**{n1}، {n2}**" in text or f"**{n2}، {n1}**" in text
+    assert format_html(f"**{n1}، {n2}**") in text or format_html(f"**{n2}، {n1}**") in text
 
     # No duplicate when no withering
     sent.clear()

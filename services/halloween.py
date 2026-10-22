@@ -25,6 +25,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sib.core.text import format_html
 from sib.database.models import (
     Character,
     Group,
@@ -1371,9 +1372,9 @@ class HalloweenService:
                         bot,
                         drop.group_id,
                         drop.message_id,
-                        "⏳ **مهلت این صندوق تموم شد.**",
+                        format_html("⏳ **مهلت این صندوق تموم شد.**"),
                         reply_markup=None,
-                        parse_mode="Markdown",
+                        parse_mode="HTML",
                     )
             except Exception:
                 pass

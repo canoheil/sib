@@ -13,6 +13,7 @@ from typing import Optional
 from aiogram.types import FSInputFile
 
 from sib.core.logging import logger
+from sib.core.text import format_html
 from sib.services.sib_claim import fa_digits
 from sib.services.telegram_ui import safe_send_screen
 from sib.services.war_service import PEACE_SHIELD_DURATION, WarOutcome
@@ -87,9 +88,11 @@ async def _deliver(
                 photo = FSInputFile(str(image))
             else:
                 logger.warning("Apple Clash result image is missing: %s", image)
-        # Plain text: the bot's default parse mode is Markdown. A failed photo
-        # upload degrades to the same text instead of losing the message.
-        sent = await safe_send_screen(bot, chat_id, text, photo=photo, parse_mode=None)
+        # HTML, never plain text: the captions are written with ``**bold**``
+        # and a group must never see the raw markers. A failed photo upload
+        # degrades to the same text instead of losing the message.
+        sent = await safe_send_screen(bot, chat_id, format_html(text),
+                                      photo=photo, parse_mode="HTML")
     except Exception:
         logger.exception(
             "Apple Clash war %s: result delivery to group %s crashed", war_id, chat_id

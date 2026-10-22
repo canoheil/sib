@@ -15,6 +15,7 @@ from aiogram import Bot, Router, F
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from sib.core.text import strip_bold
 from sib.database.connection import get_session
 from sib.database.models import PlotState
 from sib.services.apple_wallet import AppleWalletService
@@ -233,7 +234,7 @@ async def _rerender(callback: CallbackQuery, bot: Bot, *, answer: str = "برو�
     subject_id = await _panel_subject(callback)
     async with get_session() as session:
         text, kb = await _render_garden(subject_id, session)
-    await safe_answer_callback(callback, answer.replace("**", ""))
+    await safe_answer_callback(callback, strip_bold(answer))
     if callback.message:
         await render_banner(callback, bot, "garden", text, kb)
         new_msg_id = getattr(callback.message, "message_id", None)
@@ -366,7 +367,7 @@ async def _rerender_tree(
         return
     subject_id = await _panel_subject(callback)
     text, kb = await _tree_view(subject_id, plot_index)
-    await safe_answer_callback(callback, answer.replace("**", ""))
+    await safe_answer_callback(callback, strip_bold(answer))
     await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
 

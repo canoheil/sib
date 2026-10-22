@@ -631,13 +631,19 @@ async def test_publish_applied_events_replies_to_invasion_announcement(db, monke
     assert await presentation.publish_applied_events(bot) == 2
     assert len(photo_calls) == 1
     assert photo_calls[0]["reply_to_message_id"] == 456
-    assert "**" in photo_calls[0]["caption"]
+    # The event narrative is delivered as HTML: bold is a <b> tag, never a
+    # raw "**" the group would read as an asterisk.
+    assert "<b>" in photo_calls[0]["caption"]
+    assert "**" not in photo_calls[0]["caption"]
+    assert photo_calls[0]["parse_mode"] == "HTML"
     assert photo_calls[0]["reply_markup"].inline_keyboard[0][0].callback_data == (
         f"inv2ev:loot:{photo_event_id}"
     )
     assert len(text_calls) == 1
     assert text_calls[0]["reply_to_message_id"] == 456
-    assert "**" in text_calls[0]["text"]
+    assert "<b>" in text_calls[0]["text"]
+    assert "**" not in text_calls[0]["text"]
+    assert text_calls[0]["parse_mode"] == "HTML"
     async with db() as session:
         assert (await session.get(Inv2RandomEvent, photo_event_id)).message_id == 910
         assert (await session.get(Inv2RandomEvent, text_event_id)).message_id == 911

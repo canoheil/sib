@@ -16,6 +16,7 @@ from sqlalchemy import Integer, func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from sib.core.text import format_html, format_html_caption
 from sib.database.models import (Base, Character, Garden, GardenPlot, GardenWitherEvent,
     Group, Inv2Attack, Inv2GroupMember, Inv2GroupState,
     Inv2Invasion, Inv2Region, Inv2Reward, PlayerCard, SeedlingAward, SeedlingInventory, SystemConfig, User, UserItem)
@@ -24,6 +25,11 @@ from sib.services.invasion_v2 import presentation
 from sib.services.invasion_v2.imaging import cache, compose, backgrounds, templates
 from sib.services.invasion_v2.rewards_service import grant_victory_rewards, settle_outcome
 from sib.services.maintenance.service import MaintenanceService
+
+def _source(caption: str) -> str:
+    """Undo the HTML rendering of a delivered caption (no raw HTML in it)."""
+    return caption.replace("<b>", "**").replace("</b>", "**")
+
 
 NOW = datetime.now(timezone.utc)
 ART = Path(__file__).resolve().parents[2] / "assets/characters/sib_sabz.jpg"
@@ -299,7 +305,8 @@ async def test_on_join_renders_new_photo_and_meters_success(db):
     kwargs = bot.send_photo.await_args.kwargs
     assert kwargs["reply_to_message_id"] == 123
     # Phase 8D: the crit marker moved to the explicit damage line.
-    assert kwargs["caption"] == "ضربهٔ سنگین بر زره\n\n💥 آسیب وارده به دشمن: **۴۱**"
+    assert kwargs["caption"] == format_html(
+        "ضربهٔ سنگین بر زره\n\n💥 آسیب وارده به دشمن: **۴۱**")
     presentation.record_send_success.assert_awaited_once_with(-100)
     await presentation.InvasionPresentation().on_join(bot, inv_id, 2, 31)  # mismatched identity
     bot.send_photo.assert_awaited_once()
@@ -473,7 +480,7 @@ async def test_phase8a_join_delivers_card_hp_and_critical_style(rendered_deliver
     spy.assert_called_once_with("soldier", ART.read_bytes(), "داریوش", 41, critical, 159)
     kwargs = bot.send_photo.await_args.kwargs
     marker = "💥 آسیب وارده به دشمن: **۴۱**" if critical else "🔥 آسیب وارده به دشمن: **۴۱**"
-    assert kwargs["caption"] == "ضربهٔ سنگین بر زره\n\n" + marker
+    assert kwargs["caption"] == format_html("ضربهٔ سنگین بر زره\n\n" + marker)
     assert kwargs["reply_to_message_id"] == 123
     assert Path(kwargs["photo"].path).read_bytes() == compose.compose_join_image(*spy.call_args.args)
     # Presentation does not apply damage a second time or grant rewards.
@@ -501,11 +508,14 @@ async def test_phase8a_result_uses_aggregated_rewards_only_for_victory(rendered_
     spy.assert_called_once_with(status.lower(), "درّه ماه", "soldier", lines)
     kwargs = bot.send_photo.await_args.kwargs
     assert Path(kwargs["photo"].path).read_bytes() == compose.compose_result_image(*spy.call_args.args)
-    original_caption = bot.edit_message_caption.await_args.kwargs["caption"]
+    # The delivered caption is HTML; ``_source`` restores the ** markers so
+    # the caption builders can be re-run on the un-rendered text.
+    original_caption = _source(bot.edit_message_caption.await_args.kwargs["caption"])
     # Phase 2: the reward block keeps a blank line and is fitted, not appended,
     # so the reward line itself survives a long narrative.
     suffix = "\n\n🎁 پاداش مدافعان: **" + "، ".join(lines) + "**" if lines else ""
-    assert kwargs["caption"] == presentation._fit_caption(original_caption, suffix, limit=1020)
+    assert kwargs["caption"] == format_html_caption(
+        presentation._fit_caption(original_caption, suffix, limit=1020))
     async with delivery.factory() as session:
         assert await session.scalar(select(func.count()).select_from(Inv2Reward)) == 4
         assert await session.scalar(select(func.count()).select_from(UserItem)) == 0

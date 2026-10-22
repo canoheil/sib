@@ -23,6 +23,7 @@ from aiogram.types import CallbackQuery, FSInputFile, Message
 import pytest
 from sqlalchemy import select
 
+from sib.core.text import format_html
 from sib.database.connection import get_session, seed_characters
 from sib.database.models import (
     Character,
@@ -274,15 +275,17 @@ async def test_halloween_menu_requires_flag(db_session):
     assert isinstance(kwargs["photo"], FSInputFile)
     assert kwargs["photo"].path.endswith("sibomortis.jpg")
     caption = kwargs["caption"]
-    assert caption.startswith(BOSS_MENU_TITLE)
-    assert "💀 جون: **۵۰۰۰۰۰ از ۵۰۰۰۰۰** (**۱۰۰٪**)" in caption
-    assert "🎃 دونه کدو: **۵**" in caption
+    # The Boss Menu is delivered as HTML, so the ** markers are <b> tags.
+    assert kwargs["parse_mode"] == "HTML"
+    assert caption.startswith(format_html(BOSS_MENU_TITLE))
+    assert format_html("💀 جون: **۵۰۰۰۰۰ از ۵۰۰۰۰۰** (**۱۰۰٪**)") in caption
+    assert format_html("🎃 دونه کدو: **۵**") in caption
     assert f"⌛ پایان: {fa_digits(6)} روز و {fa_digits(4)} ساعت" in caption
     # TASK 4: damage basis hint (Main Card power + 10% crit).
-    assert "💥 آسیب بر پایهٔ **قدرت کارت اصلی**" in caption
-    assert f"{fa_digits(10)}٪ شانس **ضربهٔ حیاتی**" in caption
+    assert format_html("💥 آسیب بر پایهٔ **قدرت کارت اصلی**") in caption
+    assert f"{fa_digits(10)}٪ شانس {format_html('**ضربهٔ حیاتی**')}" in caption
     # TASK 4: Top-3 damage dealers section (nobody has attacked yet).
-    assert "🏆 **برترین آسیب‌زنندگان**" in caption
+    assert format_html("🏆 **برترین آسیب‌زنندگان**") in caption
     assert "هنوز کسی ضربه نزده" in caption
     # TASK 1: the reply instruction replaces the button.
     assert ATTACK_INSTRUCTION in caption
@@ -420,16 +423,23 @@ async def test_attack_by_replying_to_menu_consumes_seed_and_hits(db_session):
     hits = [line for line in sent if "به سیبومورتیس" in line]
     assert len(hits) == 1
     assert hits[0].startswith(
-        f"⚔️ **شکارچی** به سیبومورتیس **{fa_digits(damage)} آسیب** زد!"
+        format_html(f"⚔️ **شکارچی** به سیبومورتیس **{fa_digits(damage)} آسیب** زد!")
     )
-    assert "**" in hits[0]  # Markdown bold survives on a public message
+    # The public line is HTML: bold is a <b> tag, never a raw "**".
+    assert "**" not in hits[0]
+    assert "<b>" in hits[0]
     assert not any(digit in hits[0] for digit in "0123456789")
     # The attacker's own menu is refreshed in place (no extra spam message).
     assert bot.edit_message_media.await_count == 1
     edited = bot.edit_message_media.await_args
     assert edited.kwargs["chat_id"] == GROUP_ID
     assert edited.kwargs["message_id"] == MENU_MESSAGE_ID
-    assert f"🎃 دونه کدو: **{fa_digits(2)}**" in edited.kwargs["media"].caption
+    # The refreshed menu is HTML too: bold arrives as a <b> tag.
+    assert (
+        format_html(f"🎃 دونه کدو: **{fa_digits(2)}**")
+        in edited.kwargs["media"].caption
+    )
+    assert edited.kwargs["media"].parse_mode == "HTML"
 
 
 @pytest.mark.asyncio
@@ -733,9 +743,10 @@ async def test_attack_reports_phase_evolution_and_announces_it(db_session):
     bot = _mock_bot()
     await handle_halloween_attack_trigger(_mock_attack_reply(uid), bot)
     public = bot.send_message.await_args.args[1]
-    assert public.startswith("⚔️ **شکارچی** به سیبومورتیس **")
-    assert ATTACK_DEFEAT_LINE in public
-    assert "🏆 **سیبومورتیس سقوط کرد!**" in public
+    assert public.startswith(format_html("⚔️ **شکارچی** به سیبومورتیس **"))
+    assert format_html(ATTACK_DEFEAT_LINE) in public
+    assert format_html("🏆 **سیبومورتیس سقوط کرد!**") in public
+    assert "**" not in public
     # …and the refreshed menu shows the collapsed-boss artwork.
     assert bot.edit_message_media.await_args.kwargs["media"].media.path.endswith(
         "sibomortis_25.jpg"
@@ -1148,8 +1159,8 @@ async def test_hw_start_hype_broadcast_and_enables_flag(db_session, monkeypatch)
     ]
     assert len(sent_calls) == 2
     assert set(sent_calls) == {
-        (-1009101, START_ANNOUNCEMENT),
-        (-1009102, START_ANNOUNCEMENT),
+        (-1009101, format_html(START_ANNOUNCEMENT)),
+        (-1009102, format_html(START_ANNOUNCEMENT)),
     }
 
 
@@ -1191,7 +1202,7 @@ async def test_hw_end_disables_flag(db_session, monkeypatch):
     sent_calls = [
         (call.args[0], call.args[1]) for call in end_bot.send_message.await_args_list
     ]
-    assert sent_calls == [(-1009201, END_ANNOUNCEMENT)]
+    assert sent_calls == [(-1009201, format_html(END_ANNOUNCEMENT))]
 
 
 @pytest.mark.asyncio
