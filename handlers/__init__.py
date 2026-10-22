@@ -41,6 +41,7 @@ from sib.handlers.castle import router as castle_router
 from sib.handlers.war import router as war_router
 from sib.handlers.daily_chest import router as daily_chest_router
 from sib.handlers.apple_mine import router as apple_mine_router
+from sib.handlers.halloween import router as halloween_router
 
 
 def register_all_handlers(dp: Dispatcher) -> None:
@@ -78,6 +79,7 @@ def register_all_handlers(dp: Dispatcher) -> None:
     dp.include_router(sib_kiss_router)
     dp.include_router(daily_chest_router)
     dp.include_router(apple_mine_router)
+    dp.include_router(halloween_router)
     dp.include_router(inv2_controls_router)
     dp.include_router(inv2_dashboard_router)
     dp.include_router(inv2_admin_router)

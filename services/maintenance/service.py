@@ -533,6 +533,23 @@ class MaintenanceService:
         except Exception:  # pragma: no cover - background recovery
             logger.exception("Could not retry pending match XP awards")
 
+        # Global Halloween event («سیبومورتیس»): Day-7 weakening, defeat
+        # detection, and random group loot chest drops. Gated behind
+        # ``halloween_enabled``; DB commits strictly precede bot-turn
+        # scheduling and Telegram delivery below.
+        halloween_outcome = None
+        try:
+            from sib.services.halloween import HalloweenService
+
+            if await HalloweenService.is_enabled():
+                async with get_session() as session:
+                    halloween_outcome = await HalloweenService.run_maintenance_tick(
+                        session
+                    )
+        except Exception:
+            halloween_outcome = None
+            logger.exception("Halloween maintenance DB tick failed")
+
         # Marriage & Love DB work (proposal expiration + daily Love decay).
         # It runs as its own isolated transaction, still BEFORE the bot-turn
         # scheduling below, so every DB work of the cycle is committed first
@@ -622,6 +639,15 @@ class MaintenanceService:
                 await cls._announce_war_results(cls._bot, war_outcomes)
             except Exception:
                 logger.exception("Could not announce Apple Clash war results")
+        if halloween_outcome is not None and cls._bot is not None:
+            try:
+                from sib.services.halloween import HalloweenService
+
+                await HalloweenService.publish_maintenance_notifications(
+                    cls._bot, halloween_outcome
+                )
+            except Exception:
+                logger.exception("Halloween maintenance presentation failed")
         if resolved_ids and cls._bot is not None:
             try:
                 await cls._sync_resolved_matches(resolved_ids)

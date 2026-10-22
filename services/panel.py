@@ -101,6 +101,7 @@ PERSONAL_PANEL_TYPES = frozenset(
         "card_panel",
         "apple_battle",
         "chest",
+        "halloween",
         "panel_guard_personal",
     }
 )
