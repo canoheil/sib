@@ -51,7 +51,7 @@ from sib.services.daily_chest import (
     validate_chest_config,
 )
 from sib.services.items import ITEM_CATALOG
-from sib.services.sib_claim import SibClaimService
+from sib.services.sib_claim import MAX_CLAIM_AMOUNT, MIN_CLAIM_AMOUNT, SibClaimService
 
 # ---------------------------------------------------------------------------
 # Deterministic RNG (injectable; makes the rarest slice hittable without
@@ -714,10 +714,12 @@ async def test_existing_daily_reward_paths_stay_untouched(db_session):
     await db_session.commit()
 
     # The «سیب» wake-word claim keeps its own cooldown and ledger reason.
+    # (N7: its reward is a random 5–10, not a fixed 5.)
     _msg, awarded = await SibClaimService.claim(db_session, user.id)
     await db_session.commit()
     assert awarded is True
-    assert await AppleWalletService.get_balance(db_session, user.id) == 5
+    balance = await AppleWalletService.get_balance(db_session, user.id)
+    assert MIN_CLAIM_AMOUNT <= balance <= MAX_CLAIM_AMOUNT
     reasons = {
         row.reason
         for row in (await db_session.scalars(select(AppleTransaction))).all()

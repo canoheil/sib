@@ -1,16 +1,19 @@
 """Sib claim: the "سیب" group wake word is a REAL daily action.
 
 Saying the exact word "سیب" in a group adds apples to the user's wallet
-(fixed reward, per-user cooldown). The cooldown is derived from the
-AppleTransaction ledger (reason='sib_claim'), so no schema change is
-needed and every award stays auditable. All clock math uses the MariaDB
-clock (SQL NOW()) on BOTH sides, so naive DATETIME values never mix with
-Python local time.
+(random 5–10 reward, per-user cooldown — Phase N7). The cooldown is
+derived from the AppleTransaction ledger (reason='sib_claim'), so no
+schema change is needed and every award stays auditable. All clock math
+uses the MariaDB clock (SQL NOW()) on BOTH sides, so naive DATETIME
+values never mix with Python local time.
 
-Messages are short, friendly and in the Sib character voice (task spec #5).
+Messages are short, friendly and in the Sib character voice (task spec #5);
+the success line is drawn at random from the N7 narrative pool
+(``sib_claim_narrative``).
 """
 
 import math
+import random
 from typing import Optional, Tuple
 
 from sqlalchemy import func, select
@@ -21,8 +24,19 @@ from sib.core.logging import Events, log_event, logger
 from sib.database.models import AppleTransaction, User
 from sib.services.apple_wallet import AppleWalletService
 from sib.services.config_store import ConfigService
+from sib.services.sib_claim_narrative import pick_claim_narrative
 
 CLAIM_REASON = "sib_claim"
+
+#: N7: each claim pays a RANDOM amount in this range (inclusive). The
+#: cooldown stays fixed (see ``sib_claim_cooldown_seconds`` in config).
+MIN_CLAIM_AMOUNT = 5
+MAX_CLAIM_AMOUNT = 10
+
+
+def roll_claim_amount() -> int:
+    """Random reward for one claim (N7: 5–10 apples)."""
+    return random.randint(MIN_CLAIM_AMOUNT, MAX_CLAIM_AMOUNT)
 
 _FA_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
 _NUM_WORDS = {
@@ -49,8 +63,12 @@ def fa_count(value: int) -> str:
     return _NUM_WORDS.get(value, fa_digits(value))
 
 
-def format_cooldown_message(remaining_seconds: int, amount: int) -> str:
-    """Dynamic, friendly cooldown text (see task spec #5 for tone)."""
+def format_cooldown_message(remaining_seconds: int) -> str:
+    """Dynamic, friendly cooldown text (see task spec #5 for tone).
+
+    The next claim pays a RANDOM 5–10, so the wait line advertises the
+    range instead of a fixed count.
+    """
     remaining = max(1, int(math.ceil(remaining_seconds)))
 
     if remaining <= 15:
@@ -71,15 +89,16 @@ def format_cooldown_message(remaining_seconds: int, amount: int) -> str:
         wait = f"{fa_digits(minutes)} دقیقه و {fa_digits(seconds)} ثانیه"
     return (
         f"🍎 هنوز زوده 😄\n\n"
-        f"{wait} دیگه دوباره می‌تونی {fa_digits(amount)} تا سیب بگیری."
+        f"{wait} دیگه دوباره می‌تونی از {fa_digits(MIN_CLAIM_AMOUNT)} "
+        f"تا {fa_digits(MAX_CLAIM_AMOUNT)} سیب بگیری."
     )
 
 
 def format_claim_success(amount: int, cooldown_seconds: int) -> str:
-    """Friendly success text in the Sib voice."""
+    """Friendly success text in the Sib voice (N7: random narrative line)."""
     minutes = max(1, int(round(cooldown_seconds / 60)))
     return (
-        f"🍎 {fa_digits(amount)} تا سیب مال تو شد!\n\n"
+        f"{pick_claim_narrative(amount)}\n\n"
         f"{fa_count(minutes)} دقیقه دیگه دوباره می‌تونی بیای سراغم. 😌"
     )
 
@@ -106,7 +125,9 @@ class SibClaimService:
         Concurrent claims are safe: a per-user row lock serializes them and
         a ledger-unique key gates the award; lock races are retried once.
         """
-        amount = await ConfigService.get_int(session, "sib_claim_amount") or 5
+        # N7: the reward is a fresh random roll per claim (5–10). The
+        # cooldown stays config-driven and untouched.
+        amount = roll_claim_amount()
         cooldown = (
             await ConfigService.get_int(session, "sib_claim_cooldown_seconds") or 300
         )
@@ -120,7 +141,7 @@ class SibClaimService:
                 # answers with the cooldown message.
                 logger.warning(f"sib claim race for user {user_id} (attempt {attempt}): {exc}")
                 await session.rollback()
-        return format_cooldown_message(cooldown - 1, amount), False
+        return format_cooldown_message(cooldown - 1), False
 
     @classmethod
     async def _claim_once(
@@ -137,7 +158,7 @@ class SibClaimService:
         if last_at is not None:
             elapsed = (db_now - last_at).total_seconds()
             if elapsed < cooldown:
-                return format_cooldown_message(cooldown - elapsed, amount), False
+                return format_cooldown_message(cooldown - elapsed), False
 
         # Atomic award gate: the idempotency key names the PREVIOUS claim
         # (its ledger id). Two concurrent claims compute the same key and
