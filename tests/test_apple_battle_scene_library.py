@@ -546,6 +546,7 @@ async def test_restart_during_narration_reuses_the_same_plates(db_session):
                 chat_id=chat_id,
                 cast_keys=("crimson", "green"),
                 seed=ctx["seed"],
+                plan=plan,
             )
         return plates
 

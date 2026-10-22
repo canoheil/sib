@@ -228,10 +228,7 @@ DIVORCE_ANSWER = "طلاق ثبت شد."
 
 DIVORCE_CANCEL_ANSWER = "از طلاق منصرف شدی 🍏"
 
-DIVORCE_CANCEL_CARD = (
-    "💔 **درخواست طلاق لغو شد** 🍏\n\n"
-    "ازدواجت دست‌نخورده موند؛ هر وقت خواستی می‌تونی دوباره امتحان کنی."
-)
+DIVORCE_CANCEL_CARD = "💔 **طلاق لغو شد** 🍏\n\nازدواجت سر جاشه."
 
 # A divorce card is stale once the marriage behind it is gone or already
 # over - the buttons must not survive a settled marriage.
@@ -474,9 +471,8 @@ def _proposal_text(proposer, target, timeout_seconds: int) -> str:
     expiry = _format_duration(timeout_seconds)
     return (
         "💍 **پیشنهاد ازدواج** 🍏\n\n"
-        f"{who} از {whom} خواستگاری کرده!\n\n"
-        f"{whom} جان، اگه موافقی دکمه‌ی «قبول» رو بزن و اگه نه «رد» رو.\n"
-        f"⏳ این پیشنهاد فقط {expiry} اعتبار داره و بعدش خودبه‌خود منقضی می‌شه."
+        f"**{who}** به **{whom}** پیشنهاد ازدواج داد!\n"
+        f"**{whom}** جان، «قبول» یا «رد» رو بزن؛ فقط **{expiry}** وقت داری."
     )
 
 
@@ -559,7 +555,7 @@ async def _clear_proposal_buttons(callback: CallbackQuery, bot: Optional[Bot]) -
     """Strip the «قبول / رد» pair from a stale card, leaving its text alone.
 
     The text is deliberately NOT rewritten: an already-ACCEPTED proposal
-    must keep showing «ازدواج انجام شد!», so only the dead buttons go.
+    must keep showing «عشق برنده شد», so only the dead buttons go.
     """
     if bot is None or callback.message is None:
         return
@@ -595,16 +591,15 @@ async def _notify_group(
 
 def _accept_card(snapshot: dict) -> str:
     lines = [
-        "💍 **ازدواج انجام شد!** 🎉",
+        "💍 **عشق برنده شد** 🎉",
         "",
-        f"{snapshot['proposer_name']} و {snapshot['accepter_name']} "
-        "از امروز زن و شوهر سیبی‌ان! 🍏",
-        f"❤️ عشق سیبی: {fa_digits(snapshot['love_score'])}",
+        f"**{snapshot['proposer_name']}** و **{snapshot['accepter_name']}** "
+        "از امروز همسرن! 🍏",
+        f"❤️ عشق سیبی: **{fa_digits(snapshot['love_score'])}**",
     ]
     if snapshot["invalidated_count"]:
         lines.append(
-            f"\n(پیشنهادهای دیگه‌ی این دو نفر باطل شد: "
-            f"{fa_digits(snapshot['invalidated_count'])})"
+            f"**{fa_digits(snapshot['invalidated_count'])}** پیشنهاد دیگه باطل شد."
         )
     return "\n".join(lines)
 
@@ -612,8 +607,8 @@ def _accept_card(snapshot: dict) -> str:
 def _reject_card(snapshot: dict) -> str:
     return (
         "💍 **پیشنهاد رد شد** 🍏\n\n"
-        f"{snapshot['target_name']} پیشنهاد {snapshot['proposer_name']} رو رد کرد.\n"
-        f"💍 حلقه‌ی {snapshot['proposer_name']} دست‌نخورده موند."
+        f"**{snapshot['target_name']}** پیشنهاد **{snapshot['proposer_name']}** "
+        "رو رد کرد؛ حلقه سر جاش موند."
     )
 
 
@@ -710,8 +705,8 @@ async def _resolve_proposal_callback(
         )
         await _notify_group(
             callback,
-            f"🔔 {snapshot['proposer_name']} و {snapshot['accepter_name']} "
-            "ازدواج کردن! 🎉💍",
+            f"🎉 **{snapshot['proposer_name']}** و **{snapshot['accepter_name']}** "
+            "ازدواج کردن!",
             scene="wedding",
         )
         await PlayerXPService.deliver_pending_notifications(
@@ -735,8 +730,8 @@ async def _resolve_proposal_callback(
     )
     await _notify_group(
         callback,
-        f"🔔 {snapshot['proposer_name']} جان، "
-        f"{snapshot['target_name']} پیشنهاد ازدواجت رو رد کرد. 🍏",
+        f"🔔 **{snapshot['proposer_name']}**، **{snapshot['target_name']}** "
+        "پیشنهادت رو رد کرد.",
     )
     log_event(
         Events.MARRIAGE_PROPOSAL_EVENT,
@@ -892,14 +887,16 @@ def _as_configured_int(value: object, key: str) -> int:
 def _divorce_card(snapshot: dict) -> str:
     """The resolved confirmation card."""
     lines = [
-        "💔 **طلاق انجام شد**",
+        "💔 **طلاق ثبت شد**",
         "",
-        f"{snapshot['actor_name']} و {snapshot['spouse_name']} "
+        f"**{snapshot['actor_name']}** و **{snapshot['spouse_name']}** "
         "دیگه همسر نیستن. 🍏",
-        f"❤️ عشق سیبی صفر شد: {fa_digits(snapshot['love_score'])}",
+        f"❤️ عشق سیبی: **{fa_digits(snapshot['love_score'])}**",
     ]
     if snapshot["cooldown_until"] is not None:
-        lines.append(f"⏳ تا {snapshot['cooldown_text']} دیگه نمی‌تونی دوباره ازدواج کنی.")
+        lines.append(
+            f"⏳ **{snapshot['cooldown_text']}** دیگه می‌تونی دوباره ازدواج کنی."
+        )
     return "\n".join(lines)
 
 
@@ -1003,10 +1000,10 @@ async def handle_marriage_divorce_request(message: Message) -> None:
 
     text = (
         "💔 **درخواست طلاق**\n\n"
-        f"{safe_name(actor.first_name)} می‌خواد ازدواجش با "
-        f"{safe_name(getattr(target, 'first_name', None))} رو به پایان برسونه.\n\n"
-        "عشق سیبی صفر می‌شه و هر دو نفر تا مدتی نمی‌تونن دوباره ازدواج کنن.\n"
-        "اگه مطمئنی «بله، طلاق» رو بزن؛ در غیر این صورت «انصراف»."
+        f"**{safe_name(actor.first_name)}** می‌خواد از "
+        f"**{safe_name(getattr(target, 'first_name', None))}** جدا بشه؛ "
+        "عشق صفر می‌شه و ازدواج بعدی موقتاً قفل می‌شه.\n"
+        "اگه مطمئنی «بله، طلاق» رو بزن، وگرنه «انصراف»."
     )
     keyboard = get_divorce_confirmation_keyboard(snapshot["marriage_id"])
 
@@ -1115,8 +1112,8 @@ async def handle_marriage_divorce_confirm(callback: CallbackQuery, bot: Bot) -> 
     )
     await _notify_group(
         callback,
-        f"🔔 {snapshot['actor_name']} و {snapshot['spouse_name']} "
-        "از هم جدا شدن. 💔🍏",
+        f"💔 **{snapshot['actor_name']}** و **{snapshot['spouse_name']}** "
+        "از هم جدا شدن.",
     )
     log_event(
         Events.MARRIAGE_EVENT,
@@ -1341,21 +1338,19 @@ def _should_clear_flower_buttons(error: Exception) -> bool:
 def _flower_offer_card(snapshot: dict) -> str:
     """The group card announcing a pending Flower."""
     return (
-        "💐 **هدیه‌ی گل سیبی** 🍏\n\n"
-        f"{snapshot['sender_name']} برای {snapshot['receiver_name']} "
-        "یک گل فرستاده!\n\n"
-        f"{snapshot['receiver_name']} جان، اگه می‌خوای «قبول گل» رو بزن "
-        "و اگه نه «رد گل»."
+        "💐 **یه گل برای همسر!** 🍏\n\n"
+        f"**{snapshot['sender_name']}** به **{snapshot['receiver_name']}** گل داد!\n"
+        f"**{snapshot['receiver_name']}** جان، «قبول گل» یا «رد گل» رو بزن."
     )
 
 
 def _love_line(previous: int, new: int, percent: Optional[int]) -> str:
     """The Love row of a resolved Flower card (numbers from the domain)."""
     if percent is None:
-        return f"❤️ عشق سیبی: {fa_digits(previous)} → {fa_digits(new)}"
+        return f"❤️ عشق سیبی: **{fa_digits(previous)}** → **{fa_digits(new)}**"
     return (
-        f"❤️ عشق سیبی: {love_progress_bar(percent)} {fa_digits(new)}\n"
-        f"({fa_digits(previous)} → {fa_digits(new)})"
+        f"❤️ عشق سیبی: {love_progress_bar(percent)} **{fa_digits(new)}**\n"
+        f"(**{fa_digits(previous)}** → **{fa_digits(new)}**)"
     )
 
 
@@ -1364,7 +1359,7 @@ def _flower_accept_card(snapshot: dict) -> str:
         [
             "💐 **گل قبول شد!** 🎉",
             "",
-            f"{snapshot['receiver_name']} گل {snapshot['sender_name']} رو قبول کرد.",
+            f"**{snapshot['receiver_name']}** گل **{snapshot['sender_name']}** رو قبول کرد.",
             _love_line(
                 snapshot["previous_love"], snapshot["new_love"], snapshot["love_percent"]
             ),
@@ -1376,10 +1371,10 @@ def _flower_reject_card(snapshot: dict) -> str:
     lines = [
         "💐 **گل رد شد** 🍏",
         "",
-        f"{snapshot['receiver_name']} گل {snapshot['sender_name']} رو رد کرد.",
+        f"**{snapshot['receiver_name']}** گل **{snapshot['sender_name']}** رو رد کرد.",
     ]
     if snapshot["refunded"]:
-        lines.append(f"💐 گل به {snapshot['sender_name']} برگشت.")
+        lines.append(f"💐 گل به **{snapshot['sender_name']}** برگشت.")
     lines.append(
         _love_line(
             snapshot["previous_love"], snapshot["new_love"], snapshot["love_percent"]
@@ -1674,15 +1669,14 @@ async def _resolve_flower_callback(
     if is_accept:
         await _notify_group(
             callback,
-            f"🔔 {snapshot['sender_name']} جان، "
-            f"{snapshot['receiver_name']} گل سیبی تو رو قبول کرد! 💐🎉",
+            f"🔔 **{snapshot['sender_name']}**، **{snapshot['receiver_name']}** "
+            "گلت رو قبول کرد! 💐",
         )
     else:
         await _notify_group(
             callback,
-            f"🔔 {snapshot['sender_name']} جان، "
-            f"{snapshot['receiver_name']} گل سیبی تو رو رد کرد؛ "
-            "گلت بهت برگشت. 🍏",
+            f"🔔 **{snapshot['sender_name']}**، **{snapshot['receiver_name']}** "
+            "گلت رو رد کرد؛ گل بهت برگشت.",
         )
 
     log_event(

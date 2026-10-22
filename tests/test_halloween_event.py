@@ -149,9 +149,9 @@ async def test_halloween_menu_requires_flag(db_session):
     assert isinstance(kwargs["photo"], FSInputFile)
     assert kwargs["photo"].path.endswith("sibomortis.jpg")
     caption = kwargs["caption"]
-    assert "💀 جون سیبومورتیس: 500,000 / 500,000" in caption
-    assert "🎃 دونه کدوی شما: 5" in caption
-    assert "⏳ ۶ روز و ۴ ساعت باقی مانده" in caption
+    assert "💀 جون: **۵۰۰۰۰۰ از ۵۰۰۰۰۰**" in caption
+    assert "🎃 دونه کدو: **۵**" in caption
+    assert "⏳ **۶ روز و ۴ ساعت** باقی‌مانده" in caption
 
     kb = kwargs["reply_markup"]
     buttons = [b for row in kb.inline_keyboard for b in row]
@@ -235,8 +235,10 @@ async def test_attack_requires_seeds_and_deducts_hp(db_session):
     cb_hit, bot_hit = _mock_callback(uid, "hw:attack")
     await handle_halloween_attack(cb_hit, bot_hit)
     alert_sent = cb_hit.answer.await_args.args[0]
-    assert alert_sent.startswith("⚔️ شما ")
-    assert "آسیب وارد کردید! (کریتیکال:" in alert_sent
+    assert alert_sent.startswith(("⚔️ ", "⚡ ضربهٔ حیاتی!"))
+    assert "آسیب به سیبومورتیس زدی!" in alert_sent
+    assert "**" not in alert_sent  # callback alerts are plain text
+    assert not any(digit in alert_sent for digit in "0123456789")
     assert bot_hit.edit_message_media.await_count == 1
 
     async with __import__(
@@ -369,6 +371,7 @@ async def test_reward_track_claims_correct_milestones(db_session):
     # Claiming 75% via button callback works and updates screen cleanly.
     cb_c75, bot_c75 = _mock_callback(ids[3], "hw:claim:75")
     await handle_halloween_claim_milestone(cb_c75, bot_c75)
+    assert "**" not in cb_c75.answer.await_args.args[0]
     assert await AppleWalletService.get_balance(db_session, ids[3]) == 500 + 150
 
 
@@ -494,6 +497,7 @@ async def test_random_loot_drop_gives_seeds(db_session):
     cb_dup, bot_dup = _mock_callback(uids[0], f"hw_drop:{drop_id}", chat_id=-1009002, message_id=777)
     await handle_halloween_group_drop_claim(cb_dup, bot_dup)
     seeds_u0 = await ItemService.get_total(db_session, uids[0], "pumpkin_seed")
+    assert "**" not in cb_dup.answer.await_args.args[0]
     assert 1 <= seeds_u0 <= 3
 
     # Duplicate click by player 0 does not grant extra seeds.
@@ -589,7 +593,7 @@ async def test_hw_start_requires_admin_and_initializes_state(db_session, monkeyp
     await handle_hw_status(status_msg)
     status_reply = status_msg.answer.await_args.args[0]
     assert "250,000" in status_reply
-    assert "باقی مانده" in status_reply
+    assert "باقی‌مانده" in status_reply
     assert "تعداد مهاجمان فعال: 1" in status_reply
 
 
@@ -618,7 +622,8 @@ async def test_hw_start_broadcasts_and_enables_flag(db_session, monkeypatch):
     assert await HalloweenService.is_enabled(db_session) is True
 
     expected_broadcast = (
-        "🎃 ایونت هالووین آغاز شد! سیبومورتیس با 500000 جون به اواریا آمد. کلمه «هالووین» را بزنید!"
+        "🎃 **هالووین شروع شد!**\n"
+        "سیبومورتیس با **۵۰۰۰۰۰ جون** رسید؛ برای نبرد «هالووین» رو بفرست."
     )
     sent_calls = [(call.args[0], call.args[1]) for call in admin_bot.send_message.await_args_list]
     assert len(sent_calls) == 2
@@ -663,7 +668,7 @@ async def test_hw_end_disables_flag(db_session, monkeypatch):
     assert state.is_active is False
 
     sent_calls = [(call.args[0], call.args[1]) for call in end_bot.send_message.await_args_list]
-    assert sent_calls == [(-1009201, "🎃 ایونت هالووین به پایان رسید.")]
+    assert sent_calls == [(-1009201, "🎃 **هالووین تموم شد!**")]
 
 
 @pytest.mark.asyncio
@@ -813,7 +818,7 @@ async def test_hw_start_test_mode_skips_broadcast(db_session, monkeypatch):
     test_group_msg = _mock_group_message(tester_id, "هالووین", chat_id=-1009499)
     await handle_halloween_command(test_group_msg)
     assert test_group_msg.answer_photo.await_count == 1
-    assert "5,000 / 5,000" in test_group_msg.answer_photo.await_args.kwargs["caption"]
+    assert "۵۰۰۰ از ۵۰۰۰" in test_group_msg.answer_photo.await_args.kwargs["caption"]
 
 
 @pytest.mark.asyncio

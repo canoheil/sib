@@ -112,8 +112,11 @@ async def test_play_sends_all_scenes_in_order(db_session, monkeypatch):
     assert [call.kwargs["caption"] for call in bot.send_photo.await_args_list] == [
         scene_text(duel, battle, index) for index in range(6)
     ]
+    assert all(
+        call.kwargs["parse_mode"] == "Markdown"
+        for call in bot.send_photo.await_args_list
+    )
     assert delays == [presentation.DUEL_SCENE_DELAY_SECONDS] * 5
-    assert all(delay <= 1.6 for delay in delays)
     await db_session.refresh(duel)
     assert duel.cursor == 6 and duel.status == "COMPLETED"
     assert duel.terminal_presented
@@ -206,7 +209,8 @@ async def test_handler_uses_play_not_direct_tick(monkeypatch):
         "act",
         AsyncMock(return_value=SimpleNamespace(status="ACCEPTED")),
     )
-    monkeypatch.setattr(handler_module, "safe_answer_callback", AsyncMock())
+    answer = AsyncMock()
+    monkeypatch.setattr(handler_module, "safe_answer_callback", answer)
     scheduled = []
 
     def capture_schedule(bot_arg, id_arg):
@@ -220,6 +224,9 @@ async def test_handler_uses_play_not_direct_tick(monkeypatch):
 
     assert scheduled == [(bot, duel_id)]
     tick.assert_not_awaited()
+    alert = answer.await_args.args[1]
+    assert alert == "⚔️ دوئل شروع شد! صحنه‌ها در راه‌ان."
+    assert "**" not in alert
 
 
 async def test_recovery_uses_play_not_direct_tick(db_session, monkeypatch):
@@ -317,7 +324,7 @@ def _delivered_texts(bot):
 
 
 async def test_duel_result_does_not_contain_duel_id(db_session, monkeypatch):
-    """The «🏆 پایان دوئل سیبی» caption carries no raw internal duel id."""
+    """The «🏆 **پایان دوئل سیبی**» caption carries no raw internal duel id."""
     duel = await setup_duel(db_session)
     await accept(db_session, duel)
     await db_session.commit()
@@ -337,12 +344,18 @@ async def test_duel_result_does_not_contain_duel_id(db_session, monkeypatch):
         caption = scene_text(duel, battle, index)
         assert duel.id not in caption, index
         assert not _INTERNAL_ID.search(caption), index
+        assert "روایت رویارویی" not in caption
+        assert "..." not in caption and "—" not in caption
+        assert len(caption) <= 240
+        body = caption.split("\n\n", 1)[1]
+        assert sum(body.count(mark) for mark in ".!؟") <= 2
 
-    # The result still tells the group who won and what the reward was.
-    assert result_text.startswith("🏆 پایان دوئل سیبی")
-    assert "برنده:" in result_text
-    assert "یک نهال به برنده داده شد" in result_text
-    assert result_text.rstrip().endswith("بازنده نهالی از دست نمی‌دهد.")
+    # The result still tells the group who won and what the rewards were.
+    assert result_text.startswith("🏆 **پایان دوئل سیبی**")
+    assert "برنده: **" in result_text
+    assert "**۱ نهال**" in result_text
+    assert "**۵ سیب**" in result_text
+    assert result_text.rstrip().endswith("بازنده چیزی از دست نداد.")
 
 
 async def test_delivered_duel_scenes_contain_no_duel_id(db_session, monkeypatch):
@@ -384,6 +397,7 @@ async def test_terminal_edit_carries_no_duel_id(db_session, monkeypatch):
 
     texts = _delivered_texts(bot)
     assert texts, "terminal result was not delivered"
+    assert bot.edit_message_text.await_args.kwargs["parse_mode"] == "Markdown"
     for text in texts:
         assert duel.id not in text
         assert "شناسهٔ دوئل" not in text

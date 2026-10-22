@@ -31,18 +31,17 @@ GROUPS = {"group", "supergroup"}
 # C2-6: shown before a shielded group may browse war targets. Confirming it
 # breaks the shield at once; cancelling keeps the castle protected.
 WAR_SHIELD_WARNING = (
-    "⚠️ شما در حال حاضر سپر صلح فعال دارید. اگر به گروهی حمله کنید، "
-    "سپر شما فوراً شکسته می‌شود و در معرض حمله قرار می‌گیرید."
+    "⚠️ **سپر صلح فعاله!**\n"
+    "حمله کنی، سپر می‌شکنه و قلعه‌ات بدون محافظ می‌مونه."
 )
 
 WAR_TARGET_PROMPT = (
-    "⚔️ انتخاب هدف برای نبرد (جدال سیبی)\n\n"
-    "🎯 گروه‌های زیر با اختلاف سطح حداکثر ±۳ و بدون سپر صلح در دسترس هستند:\n"
-    "یکی از قلعه‌ها را برای تهاجم انتخاب کنید:"
+    "⚔️ **هدف جنگ رو انتخاب کن**\n"
+    "🎯 اختلاف سطح تا **۳**؛ فقط قلعه‌های **بدون سپر**."
 )
 
 WAR_NO_TARGETS = (
-    "هیچ گروه دشمن مناسبی (اختلاف سطح حداکثر ۳ یا بدون سپر صلح) در دسترس نیست."
+    "هدف مناسبی پیدا نشد؛ اختلاف سطح باید تا ۳ باشه و هدف سپر نداشته باشه."
 )
 
 
@@ -101,19 +100,19 @@ def format_castle_caption(level, total_donated, shield_seconds=None):
     buff_percent = round(level * INVASION_BUFF_PER_LEVEL * 100)
     income = level * DAILY_INCOME_PER_LEVEL
     shield_line = (
-        f"🛡 سپر صلح: فعال (تا {format_remaining_time(shield_seconds)} دیگر)\n\n"
+        f"🛡 سپر صلح: **{format_remaining_time(shield_seconds)} دیگر**\n"
         if shield_seconds is not None
         else ""
     )
     return (
-        "🏰 قلعه سیبی\n\n"
-        f"📊 سطح قلعه: {fa_digits(level)} از ۱۰\n\n"
+        "🏰 **قلعه سیبی**\n"
+        f"📊 سطح: **{fa_digits(level)} از ۱۰**\n"
         f"{shield_line}"
-        f"🍏 سیب اهدا شده: {fa_digits(total_donated)} / {fa_digits(next_threshold)}\n\n"
-        f"⚔️ قدرت حمله در یورش: +{fa_digits(buff_percent)}٪\n\n"
-        f"🎁 درآمد روزانه: {fa_digits(income)} سیب\n\n"
-        "⚠️ سقف اهدا: روزانه ۵۰۰ سیب (برای هر بازیکن)\n\n"
-        "ℹ️ اهدای سیب بازگشت‌پذیر نیست. درآمد روزانه فقط از یک قلعه دریافت می‌شود."
+        f"🍏 اهدا: **{fa_digits(total_donated)} از {fa_digits(next_threshold)}**\n"
+        f"⚔️ قدرت یورش: **+{fa_digits(buff_percent)}٪**\n"
+        f"🎁 درآمد روزانه: **{fa_digits(income)} سیب**\n"
+        "⚠️ سقف اهدا: **۵۰۰ سیب در روز** (هر بازیکن)\n"
+        "ℹ️ اهدا برنمی‌گرده؛ درآمد روزانه فقط از **یک قلعه**."
     )
 
 
@@ -254,7 +253,7 @@ async def castle_callback(callback: CallbackQuery):
                     inline_keyboard=[
                         [
                             success_button(
-                                "✅ بله، سپر را بشکن و ادامه بده",
+                                "✅ بشکن و ادامه بده",
                                 f"castle:war_break_shield_confirm:{group_id}",
                             )
                         ],
@@ -298,13 +297,12 @@ async def castle_callback(callback: CallbackQuery):
                 await safe_answer_callback(callback, "قلعهٔ هدف یافت نشد.", show_alert=True)
                 return
             text = (
-                f"⚠️ تایید اعلان جنگ {WAR_HOURS_ADJECTIVE}\n\n"
-                f"🎯 قلعهٔ هدف: {target_group.title}\n"
-                f"📊 سطح قلعه حریف: {fa_digits(target_castle.level)} از ۱۰\n\n"
-                f"⏳ مدت زمان نبرد: {WAR_HOURS_TEXT} تمام\n"
-                "💰 پاداش فتح: بخشی از پیشرفت قلعه‌ی دشمن را غنیمت می‌گیرید (مقدار دقیق پس از پیروزی مشخص می‌شود).\n"
-                f"🛡 قانون صلح: گروه مدافع پس از پایان نبرد (برد، باخت یا تساوی) {SHIELD_HOURS_TEXT} ساعت سپر صلح می‌گیرد و گروه مهاجم سپری ندارد.\n\n"
-                "آیا از شروع حمله به این قلعه اطمینان دارید؟"
+                f"⚠️ **اعلام جنگ {WAR_HOURS_ADJECTIVE}**\n"
+                f"🎯 هدف: **{target_group.title}**؛ سطح: **{fa_digits(target_castle.level)} از ۱۰**\n"
+                f"⏳ نبرد: **{WAR_HOURS_TEXT}**\n"
+                "🍏 غنیمت: بخشی از پیشرفت قلعهٔ دشمن؛ مقدار دقیق بعد از پیروزی مشخص میشه.\n"
+                f"🛡 بعد از نبرد، مدافع **{SHIELD_HOURS_TEXT} ساعت سپر** می‌گیره؛ مهاجم **سپر نداره**.\n"
+                "**حمله شروع بشه؟**"
             )
             markup = InlineKeyboardMarkup(
                 inline_keyboard=[
@@ -337,11 +335,11 @@ async def castle_callback(callback: CallbackQuery):
             )
 
             declaration_text = (
-                "🚨 طبل جنگ در اواریا به صدا درآمد! 🚨\n\n"
-                f"⚔️ گروه «{attacker_title}» رسماً به قلعهٔ «{defender_title}» اعلان جنگ داد!\n"
-                f"⏳ مهلت نبرد: {WAR_HOURS_TEXT} تمام\n"
-                "🍏 غنیمت فتح: تاراج بخشی از پیشرفت اهدای قلعهٔ مغلوب\n\n"
-                "💥 دلاوران دو قبیله! کارت‌های اصلی خود را بردارید و با ارسال دستور «وضعیت جنگ» در گروه خود، به میدان نبرد بشتابید!"
+                "🚨 **جنگ شروع شد!**\n"
+                f"⚔️ **{attacker_title}** به **{defender_title}** اعلام جنگ کرد.\n"
+                f"⏳ مهلت: **{WAR_HOURS_TEXT}**\n"
+                "🍏 غنیمت پیروزی: بخشی از پیشرفت قلعهٔ بازنده.\n"
+                "«وضعیت جنگ» رو بفرست و وارد نبرد شو."
             )
             war_banner_path = Path("assets/apple_clash/war_bg_declaration.jpg")
             atk_markup = InlineKeyboardMarkup(
@@ -406,12 +404,12 @@ async def castle_callback(callback: CallbackQuery):
                         amount,
                         request_key=f"castle:cb:{callback.id}",
                     )
-                    receipt = f"{fa_digits(paid)} سیب به قلعه اهدا شد!"
+                    receipt = f"🍏 {fa_digits(paid)} سیب به قلعه رفت!"
                 elif action == "income":
                     paid = await CastleService.claim_daily_income(
                         session, actor.id, group_id
                     )
-                    receipt = f"{fa_digits(paid)} سیب درآمد روزانه دریافت شد!"
+                    receipt = f"🎁 {fa_digits(paid)} سیب درآمد روزانه گرفتی!"
                 else:
                     total = func.sum(CastleDonation.amount)
                     leaders = (

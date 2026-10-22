@@ -27,6 +27,7 @@ from sib.services.panel import (
     resolve_personal_actor,
 )
 from sib.services.seedling import SeedlingService
+from sib.services.sib_claim import fa_digits
 from sib.keyboards.common import danger_button, primary_button, success_button
 from sib.services.telegram_ui import (
     safe_answer_callback,
@@ -58,15 +59,17 @@ def format_duration(seconds: int) -> str:
     hours, rem = divmod(seconds, 3600)
     minutes = rem // 60
     if hours:
-        return f"{hours} ساعت و {minutes} دقیقه"
-    return f"{minutes} دقیقه"
+        return f"{fa_digits(hours)} ساعت و {fa_digits(minutes)} دقیقه"
+    return f"{fa_digits(minutes)} دقیقه"
 
 
 def format_percent(weight: float, total: float) -> str:
     if total <= 0:
-        return "0%"
+        return "۰٪"
     value = weight / total * 100
-    return f"{round(value)}%" if abs(value - round(value)) < 0.05 else f"{value:.1f}%"
+    if abs(value - round(value)) < 0.05:
+        return f"{fa_digits(round(value))}٪"
+    return f"{fa_digits(f'{value:.1f}').replace('.', '٫')}٪"
 
 
 def _capture_xp_notification_chat(session, callback: CallbackQuery) -> None:
@@ -106,52 +109,53 @@ async def _render_garden(user_id: int, session) -> tuple[str, InlineKeyboardMark
 
     lines = [f"🌳 **باغ سیبِ {owner_name}** 🍏\n"]
     if withered_count:
-        lines.append(f"🚨 هشدار: {withered_count} زمین شما پژمرده شده است! برای سالم‌سازی از فروشگاه «کود الهی» استفاده کنید.")
+        lines.append(f"🥀 **{fa_digits(withered_count)} زمین پژمرده شده!** برای ترمیم، **کود الهی** لازمه.")
         lines.append("")
-    lines.append(f"🌱 نهال‌ها: `{seedlings}` | 🍎 سیب‌ها: `{apples}`")
+    lines.append(f"🌱 نهال: **{fa_digits(seedlings)}** | 🍎 سیب: **{fa_digits(apples)}**")
     if items:
-        summary = " · ".join(f"{item_emoji(k)}×{q}" for k, q in items.items())
-        lines.append(f"🎁 ذخیره‌ی برداشت‌ها: {summary}")
+        summary = " · ".join(f"{item_emoji(k)}×**{fa_digits(q)}**" for k, q in items.items())
+        lines.append(f"🎁 ذخیرهٔ برداشت: {summary}")
     lines.append("")
 
     buttons: list[list[InlineKeyboardButton]] = []
     for view in views:
         emoji = PLOT_EMOJI.get(view.state, "⬜")
-        magic = f" ✨{view.magic_level}" if view.magic_level > 0 else ""
+        magic = f" ✨{fa_digits(view.magic_level)}" if view.magic_level > 0 else ""
         if view.state == PlotState.WITHERED:
             # Corruption hides the magic-level suffix; the plot is locked.
             magic = ""
-            hint = " — پژمرده؛ برای احیا به کود الهی 🧪 نیاز است"
+            hint = "؛ پژمرده، **کود الهی** لازمه"
         elif view.state == PlotState.GROWING:
-            hint = f" — رشد: {format_duration(view.seconds_to_next_stage)}"
+            hint = f"؛ رشد: **{format_duration(view.seconds_to_next_stage)}**"
         elif view.state == PlotState.MATURE:
-            hint = f" — میوه تا: {format_duration(view.seconds_to_next_stage)}"
+            hint = f"؛ میوه تا **{format_duration(view.seconds_to_next_stage)} دیگه**"
         elif view.state == PlotState.FRUIT_READY:
-            hint = " — **آماده برداشت!**"
+            hint = "؛ **آماده برداشت!**"
         else:
-            hint = " — خالی"
-        lines.append(f"{emoji} قطعه {view.plot_index + 1}{magic}{hint}")
+            hint = "؛ خالی"
+        plot_number = fa_digits(view.plot_index + 1)
+        lines.append(f"{emoji} قطعه {plot_number}{magic}{hint}")
 
-        label = f"{emoji} قطعه {view.plot_index + 1}{magic}"
+        label = f"{emoji} قطعه {plot_number}{magic}"
         if view.state == PlotState.WITHERED:
-            label = f"{emoji} قطعه {view.plot_index + 1} — پژمرده"
+            label = f"{emoji} قطعه {plot_number}، پژمرده"
         elif view.state == PlotState.FRUIT_READY:
-            label = f"{emoji} قطعه {view.plot_index + 1}{magic} — برداشت!"
+            label = f"{emoji} قطعه {plot_number}{magic}، برداشت!"
         buttons.append([primary_button(text=label, callback_data=f"garden_tree:{view.plot_index}")])
 
     lines.append("")
-    lines.append(f"✨ برای جزئیات، جادوی درخت و شانس سیب‌ها، قطعه را انتخاب کن. (حداکثر سطح جادویی: {max_level})")
+    lines.append(f"✨ جزئیات هر قطعه رو باز کن. بیشترین سطح جادو: **{fa_digits(max_level)}**.")
 
     if next_price is not None:
         buttons.append(
             [success_button(
-                text=f"➕ باز کردن قطعه بعدی — 🍎 {next_price} سیب",
+                text=f"➕ باز کردن قطعه بعدی، 🍎 {fa_digits(next_price)} سیب",
                 callback_data="garden_unlock",
             )]
         )
     if ready_count > 1:
         buttons.append(
-            [success_button(text=f"🍇 برداشت همه ({ready_count} قطعه)", callback_data="garden_harvest_all")]
+            [success_button(text=f"🍇 برداشت همه ({fa_digits(ready_count)} قطعه)", callback_data="garden_harvest_all")]
         )
     buttons.append([primary_button(text="🔄 بروزرسانی", callback_data="garden_refresh")])
     buttons.append([danger_button(text="↩️ بازگشت به منوی اصلی", callback_data="main_menu")])
@@ -229,7 +233,7 @@ async def _rerender(callback: CallbackQuery, bot: Bot, *, answer: str = "برو�
     subject_id = await _panel_subject(callback)
     async with get_session() as session:
         text, kb = await _render_garden(subject_id, session)
-    await safe_answer_callback(callback, answer)
+    await safe_answer_callback(callback, answer.replace("**", ""))
     if callback.message:
         await render_banner(callback, bot, "garden", text, kb)
         new_msg_id = getattr(callback.message, "message_id", None)
@@ -276,13 +280,10 @@ async def _tree_view(user_id: int, plot_index: int) -> tuple[str, InlineKeyboard
             )
             withered_text = "\n".join(
                 [
-                    f"🥀 **قطعهٔ پژمرده** — قطعه {plot_index + 1}",
+                    f"🥀 **قطعهٔ {fa_digits(plot_index + 1)} پژمرده شده!**",
                     "",
-                    "در اثر شکست گروه در یورش، این قطعه خشک شده است.",
-                    "تا وقتی پژمرده است، نه می‌توانی نهال بکاری و نه میوه برداشت کنی.",
-                    "",
-                    "🌿 برای احیا، یک «کود الهی» مصرف کن.",
-                    f"🧪 کود الهی موجود: `{fertilizer}`",
+                    "با **کود الهی** درستش کن؛ کاشت و برداشت فعلاً قفله.",
+                    f"🧪 کود الهی: **{fa_digits(fertilizer)}**",
                 ]
             )
             withered_kb = InlineKeyboardMarkup(
@@ -307,37 +308,37 @@ async def _tree_view(user_id: int, plot_index: int) -> tuple[str, InlineKeyboard
     total_weight = sum(weights.values()) or 1.0
     title = "🌳 **درخت جادویی سیب**" if view.has_tree else "⬜ **قطعه خالی**"
     lines = [
-        f"{title} — قطعه {plot_index + 1}",
+        f"{title}؛ قطعه {fa_digits(plot_index + 1)}",
         "",
     ]
 
     if not view.has_tree:
-        lines.append("این قطعه خالی است. با کاشت یک نهال 🌱 شروع کن.")
-        lines.append(f"🌱 نهال‌های شما: `{seedlings}`")
+        lines.append("🌱 یک نهال بکار و درختت رو بزرگ کن.")
+        lines.append(f"🌱 نهال: **{fa_digits(seedlings)}**")
     else:
         if view.state == PlotState.GROWING:
-            lines.append(f"🌱 در حال رشد — تا درخت شدن: {format_duration(view.seconds_to_next_stage)}")
+            lines.append(f"🌱 رشد درخت: **{format_duration(view.seconds_to_next_stage)}**")
         elif view.state == PlotState.MATURE:
-            lines.append(f"🌳 درخت بالغ — میوه تا: {format_duration(view.seconds_to_next_stage)}")
+            lines.append(f"🌳 میوه تا **{format_duration(view.seconds_to_next_stage)} دیگه**")
         else:
-            lines.append("🍎 **میوه آماده برداشت است!**")
+            lines.append("🍎 **میوه آماده‌ست! برداشتش کن.**")
         lines.append("")
-        lines.append(f"✨ سطح جادویی: `{view.magic_level} / {max_level}`")
+        lines.append(f"✨ سطح جادو: **{fa_digits(view.magic_level)} از {fa_digits(max_level)}**")
         lines.append(f"📏 ارتفاع: **{magic_height_label(view.magic_level, max_level)}**")
-        lines.append(f"🔄 دوره‌های برداشت: `{view.cycle_count}`")
+        lines.append(f"🔄 برداشت‌ها: **{fa_digits(view.cycle_count)}**")
         lines.append("")
         lines.append("**شانس برداشت این درخت:**")
         for key, emoji, label in DROP_DISPLAY:
             weight = weights.get(key, 0.0)
-            lines.append(f"{emoji} {label}: `{format_percent(weight, total_weight)}`")
+            lines.append(f"{emoji} {label}: **{format_percent(weight, total_weight)}**")
         lines.append("")
-        lines.append(f"✨ پودر جادویی شما: `{powder}`")
+        lines.append(f"✨ پودر جادویی: **{fa_digits(powder)}**")
         if view.magic_level >= max_level:
-            lines.append("🏆 این درخت به بالاترین سطح جادویی رسیده است!")
+            lines.append("🏆 **درخت به بالاترین سطح جادو رسید!**")
         elif cost is not None:
             lines.append(
-                f"ارتقا به سطح {view.magic_level + 1}: `{cost}` پودر جادویی "
-                f"(شانس سیب‌های ویژه بیشتر می‌شه!)"
+                f"✨ ارتقا به سطح **{fa_digits(view.magic_level + 1)}** با "
+                f"**{fa_digits(cost)} پودر**؛ شانس سیب ویژه بیشتر میشه."
             )
 
     buttons: list[list[InlineKeyboardButton]] = []
@@ -348,7 +349,7 @@ async def _tree_view(user_id: int, plot_index: int) -> tuple[str, InlineKeyboard
     if view.has_tree and view.magic_level < max_level and cost is not None:
         buttons.append(
             [success_button(
-                text=f"✨ جادویی‌سازی ({cost} پودر)",
+                text=f"✨ جادویی‌سازی ({fa_digits(cost)} پودر)",
                 callback_data=f"garden_magic:{plot_index}",
             )]
         )
@@ -365,7 +366,7 @@ async def _rerender_tree(
         return
     subject_id = await _panel_subject(callback)
     text, kb = await _tree_view(subject_id, plot_index)
-    await safe_answer_callback(callback, answer)
+    await safe_answer_callback(callback, answer.replace("**", ""))
     await safe_edit_callback_message(callback, bot, text, reply_markup=kb)
 
 
@@ -407,7 +408,7 @@ async def handle_garden_magic(callback: CallbackQuery, bot: Bot):
         return
     await _rerender_tree(
         callback, bot, plot_index,
-        answer=f"درخت جادویی‌تر شد! سطح جدید: {level} ✨",
+        answer=f"✨ درخت به سطح **{fa_digits(level)}** رسید!",
     )
     await _deliver_xp_notifications(bot, callback)
 
@@ -447,7 +448,7 @@ async def handle_garden_plant(callback: CallbackQuery, bot: Bot):
     if error:
         await _rerender_tree(callback, bot, plot_index, answer=error)
         return
-    await _rerender_tree(callback, bot, plot_index, answer="نهال کاشته شد! 🌱")
+    await _rerender_tree(callback, bot, plot_index, answer="🌱 **نهال کاشته شد!**")
     await _deliver_xp_notifications(bot, callback)
 
 
@@ -478,7 +479,7 @@ async def handle_garden_fertilize(callback: CallbackQuery, bot: Bot):
         callback,
         bot,
         plot_index,
-        answer="🌿 قطعه با کود الهی احیا شد؛ دوباره سرسبز شد!",
+        answer="🌿 **کود الهی** زمین رو نجات داد! دوباره سرسبز شد.",
     )
     await _deliver_xp_notifications(bot, callback)
 
@@ -486,9 +487,9 @@ async def handle_garden_fertilize(callback: CallbackQuery, bot: Bot):
 def _harvest_answer(outcome) -> str:
     """Toast text for one harvest outcome."""
     if outcome.is_special:
-        base = f"{item_emoji(outcome.item_key)} {outcome.item_label or ''} برداشت شد!"
+        base = f"{item_emoji(outcome.item_key)} **{outcome.item_label or ''}** گیرت اومد!"
     else:
-        base = f"{outcome.apples} سیب برداشت شد! 🍎"
+        base = f"🍎 **{fa_digits(outcome.apples)} سیب** برداشت کردی!"
     message = (outcome.message or "").strip()
     return f"{base}\n{message}" if message else base
 
@@ -577,9 +578,9 @@ async def handle_garden_harvest_all(callback: CallbackQuery, bot: Bot):
     for o in outcomes:
         if o.item_key:
             items[o.item_key] = items.get(o.item_key, 0) + 1
-    parts = [f"{apples} سیب 🍎"] if apples else []
-    parts += [f"{item_emoji(k)}×{q}" for k, q in items.items()]
-    answer = "برداشت همه: " + " + ".join(parts)
+    parts = [f"🍎 **{fa_digits(apples)} سیب**"] if apples else []
+    parts += [f"{item_emoji(k)}×**{fa_digits(q)}**" for k, q in items.items()]
+    answer = "🍇 برداشت همه: " + " + ".join(parts)
     await _rerender(callback, bot, answer=answer)
     await _deliver_xp_notifications(bot, callback)
 
@@ -624,6 +625,6 @@ async def handle_garden_unlock(callback: CallbackQuery, bot: Bot):
         await _rerender(callback, bot, answer=error)
         return
     await _rerender(
-        callback, bot, answer=f"قطعه جدید باز شد! ظرفیت باغ: {capacity} قطعه 🌳"
+        callback, bot, answer=f"➕ قطعه جدید باز شد! ظرفیت باغ: **{fa_digits(capacity)} قطعه**"
     )
     await _deliver_xp_notifications(bot, callback)

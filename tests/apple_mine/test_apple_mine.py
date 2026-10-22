@@ -422,8 +422,7 @@ async def test_cooldown_remaining_seconds_round_up():
 
 def test_cooldown_message_uses_persian_digits():
     message = narrative.cooldown_message(125, user_id=105)
-    assert message.startswith("⛏ دیوارهای معدن هنوز خاموش‌اند.")
-    assert "۲ دقیقه و ۵ ثانیه" in message
+    assert "**۲ دقیقه و ۵ ثانیه**" in message
     assert re.search(r"[0-9]", message) is None
 
 
@@ -526,7 +525,7 @@ async def test_work_performs_shift_directly(monkeypatch):
         outcome_code="normal",
         item_code="apple_normal",
         amount=18,
-        narrative="چند سیب از دل سنگ بیرون آمد.",
+        narrative="⛏ **رگهٔ سیب** رو پیدا کردی.",
         pickaxe_level=2,
     )
     perform = AsyncMock(return_value=result)
@@ -563,10 +562,9 @@ async def test_work_performs_shift_directly(monkeypatch):
     assert edit_kwargs["parse_mode"] == "Markdown"
     caption = edit_args[3]
     assert caption == (
-        "چند سیب از دل سنگ بیرون آمد.\n\n"
-        "🍎 **پاداش شما:** +۱۸ سیب معمولی\n"
-        "🔨 **کلنگ:** سطح ۲\n\n"
-        "⏳ شیفت بعدی: **۱۵ دقیقه دیگر**"
+        "⛏ **رگهٔ سیب** رو پیدا کردی.\n"
+        "⛏ **۱۸ سیب معمولی** گیرت اومد!\n"
+        "🔨 سطح کلنگ: **۲**؛ شیفت بعدی: **۱۵ دقیقه دیگه**"
     )
     assert message.photo is photo
 
@@ -657,7 +655,7 @@ async def test_pickaxe_screen_swaps_photo_in_place(monkeypatch, tmp_path):
     assert str(getattr(kwargs["photo"], "path", kwargs["photo"])).endswith(
         "pickaxe_2.jpg"
     )
-    assert "📊 **سطح فعلی:** ۲ از ۵" in kwargs["text"]
+    assert "📊 سطح فعلی: **۲ از ۵**" in kwargs["text"]
     assert "💰 هزینه ارتقا: **۶۰۰ سیب**" in kwargs["text"]
     assert kwargs["parse_mode"] == "Markdown"
     kb = kwargs["reply_markup"].inline_keyboard
@@ -705,7 +703,7 @@ async def test_upgrade_success_edits_to_new_level(monkeypatch, tmp_path):
         "pickaxe_3.jpg"
     )
     assert "🔨 **ارتقای کلنگ**" in kwargs["text"]
-    assert "📊 **سطح فعلی:** ۳ از ۵" in kwargs["text"]
+    assert "📊 سطح فعلی: **۳ از ۵**" in kwargs["text"]
     assert "🍎 موجودی شما: **۷۵۰ سیب**" in kwargs["text"]
     assert "🎉" not in kwargs["text"]
     assert kwargs["parse_mode"] == "Markdown"
@@ -774,7 +772,7 @@ async def test_upgrade_stale_max_level_renders_max_screen(monkeypatch, tmp_path)
     assert str(getattr(kwargs["photo"], "path", kwargs["photo"])).endswith(
         "pickaxe_5.jpg"
     )
-    assert "🏆 کلنگ شما به بالاترین سطح (۵) رسیده است!" in kwargs["text"]
+    assert "🏆 **کلنگ به سطح ۵ رسید!**" in kwargs["text"]
     assert "🎉" not in kwargs["text"]
     kb = kwargs["reply_markup"].inline_keyboard
     assert {b.callback_data for row in kb for b in row} == {"mine:pickaxe:back"}
@@ -788,12 +786,11 @@ async def test_upgrade_stale_max_level_renders_max_screen(monkeypatch, tmp_path)
 def test_panel_caption_shows_pickaxe_level_and_ready_state():
     caption = mine_handler._panel_caption(_view(level=1, cooldown=0), 7)
     assert caption == (
-        "⛏ **معدن سیبی**\n\n"
-        "داخل معدن تاریک است. صدای چکش از دور می‌آید...\n\n"
-        "🔨 **کلنگ شما:** سطح ۱\n"
-        "🎁 **پاداش هر شیفت:** ۱۰ تا ۱۵ سیب\n"
-        "✨ **شانس یافتن سیب افسانه‌ای:** ۱۰٪\n\n"
-        "✨ معدن آماده است! می‌توانی کلنگ بزنی."
+        "⛏ **معدن سیبی**\n"
+        "🔨 کلنگ: **سطح ۱**\n"
+        "🎁 هر شیفت: **۱۰ تا ۱۵ سیب**\n"
+        "✨ شانس سیب ویژه: **۱۰٪**\n\n"
+        "✅ **معدن آماده‌ست! کلنگ بزن.**"
     )
     assert re.search(r"[0-9]", caption) is None
 
@@ -804,9 +801,7 @@ def test_panel_caption_shows_pickaxe_level_and_ready_state():
 )
 def test_panel_caption_shows_cooldown_line(remaining_seconds, expected_duration):
     caption = mine_handler._panel_caption(_view(cooldown=remaining_seconds), 7)
-    assert caption.endswith(
-        f"⏳ دیوارهای معدن خاموش‌اند. **{expected_duration}** دیگر برگرد تا فانوس‌ها روشن شوند."
-    )
+    assert caption.endswith(f"⏳ شیفت بعدی: **{expected_duration} دیگه**.")
     assert re.search(r"[0-9]", caption) is None
 
 
@@ -814,10 +809,10 @@ def test_pickaxe_caption_shows_preview_and_cost():
     caption = mine_handler._pickaxe_caption(_view(level=2, balance=350))
     assert caption == (
         "🔨 **ارتقای کلنگ**\n\n"
-        "📊 **سطح فعلی:** ۲ از ۵\n"
-        "⛏ استخراج: ۱۵ تا ۲۲ سیب\n"
-        "✨ شانس سیب ویژه: ۱۴٪\n\n"
-        "⬆️ **پس از ارتقا به سطح ۳:**\n"
+        "📊 سطح فعلی: **۲ از ۵**\n"
+        "⛏ استخراج: **۱۵ تا ۲۲ سیب**\n"
+        "✨ شانس سیب ویژه: **۱۴٪**\n\n"
+        "⬆️ **سطح ۳:**\n"
         "⛏ استخراج: **۲۱ تا ۳۰ سیب**\n"
         "✨ شانس سیب ویژه: **۱۹٪**\n\n"
         "💰 هزینه ارتقا: **۶۰۰ سیب**\n"
@@ -828,8 +823,8 @@ def test_pickaxe_caption_shows_preview_and_cost():
 
 def test_pickaxe_caption_max_level():
     caption = mine_handler._pickaxe_caption(_view(level=5, balance=999))
-    assert "🏆 کلنگ شما به بالاترین سطح (۵) رسیده است!" in caption
-    assert "📊 **سطح فعلی:** ۵ از ۵" in caption
+    assert "🏆 **کلنگ به سطح ۵ رسید!**" in caption
+    assert "📊 سطح فعلی: **۵ از ۵**" in caption
     assert "🍎 موجودی شما: **۹۹۹ سیب**" in caption
     assert "هزینه ارتقا" not in caption
     assert re.search(r"[0-9]", caption) is None
@@ -838,7 +833,7 @@ def test_pickaxe_caption_max_level():
 def test_pickaxe_caption_after_upgrade_uses_current_level_format():
     caption = mine_handler._pickaxe_caption(_view(level=3, balance=750))
     assert "🔨 **ارتقای کلنگ**" in caption
-    assert "📊 **سطح فعلی:** ۳ از ۵" in caption
+    assert "📊 سطح فعلی: **۳ از ۵**" in caption
     assert "🍎 موجودی شما: **۷۵۰ سیب**" in caption
     assert "🎉" not in caption
     assert re.search(r"[0-9]", caption) is None
@@ -846,14 +841,13 @@ def test_pickaxe_caption_after_upgrade_uses_current_level_format():
 
 def test_result_caption_formats_special_reward_with_persian_digits():
     result = ShiftResult(
-        "golden", "apple_gold", 3, "سیب طلایی از دل سنگ پیدا شد.", pickaxe_level=4
+        "golden", "apple_gold", 3, "🌕 **سیب طلایی** زیر دستت درخشید.", pickaxe_level=4
     )
     caption = mine_handler._result_caption(result)
     assert caption == (
-        "سیب طلایی از دل سنگ پیدا شد.\n\n"
-        "🍎 **پاداش شما:** +۳ سیب طلایی\n"
-        "🔨 **کلنگ:** سطح ۴\n\n"
-        "⏳ شیفت بعدی: **۱۵ دقیقه دیگر**"
+        "🌕 **سیب طلایی** زیر دستت درخشید.\n"
+        "⛏ **۳ سیب طلایی** گیرت اومد!\n"
+        "🔨 سطح کلنگ: **۴**؛ شیفت بعدی: **۱۵ دقیقه دیگه**"
     )
     assert re.search(r"[0-9]", caption) is None
 
@@ -864,7 +858,7 @@ def test_result_caption_uses_cooldown_constant(monkeypatch):
         "golden", "apple_gold", 3, "سیب طلایی از دل سنگ پیدا شد.", pickaxe_level=4
     )
     assert mine_handler._result_caption(result).endswith(
-        "⏳ شیفت بعدی: **۷ دقیقه دیگر**"
+        "شیفت بعدی: **۷ دقیقه دیگه**"
     )
 
 
@@ -969,6 +963,22 @@ def test_no_english_letters_in_user_text():
     ]
     for text in user_texts:
         assert re.search(r"[A-Za-z]", text) is None, text
+
+
+def test_narrative_pools_are_short_modern_and_bold():
+    from string import Formatter
+
+    for pool in (narrative.NORMAL, narrative.GOLDEN, narrative.DIAMOND, narrative.OBSIDIAN, narrative.COOLDOWN):
+        assert len(pool) == 6 and len(set(pool)) == 6
+        for text in pool:
+            assert 0 < len(text) <= 120
+            assert 1 <= len(re.findall(r"[.!؟]", text)) <= 2
+            assert text.count("**") >= 2 and text.count("**") % 2 == 0
+            assert not any(mark in text for mark in ("—", "–", "...", "\n"))
+            assert not any(char in text for char in "\u064a\u0643\u0664\u0665\u0666")
+    for text in narrative.COOLDOWN:
+        fields = {field for _, field, _, _ in Formatter().parse(text) if field}
+        assert fields == {"mm", "ss"}
 
 
 def test_narratives_avoid_repeating_last_five_for_one_user():

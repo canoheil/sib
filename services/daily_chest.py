@@ -337,7 +337,7 @@ def format_remaining(until: datetime, now: datetime) -> str:
 
 def format_next_reset(next_reset: datetime, now: datetime) -> str:
     return (
-        f"باز شدن بعدی: فردا {fa_digits('00:00')} به‌وقت گرینویچ "
+        f"⏳ صندوق بعدی: فردا {fa_digits('00:00')} گرینویچ "
         f"({format_remaining(next_reset, now)} دیگه)"
     )
 
@@ -348,8 +348,9 @@ def format_card_line(character: Character, card: PlayerCard) -> str:
 
     stats = card_attributes(card, character)
     return (
-        f"**{character.name_fa}** — سطح {fa_digits(card.level)} "
-        f"| 💪{stats.power} ⚡{stats.speed} 🧠{stats.intelligence}"
+        f"🎴 **{character.name_fa}** | سطح **{fa_digits(card.level)}** "
+        f"| 💪**{fa_digits(stats.power)}** ⚡**{fa_digits(stats.speed)}** "
+        f"🧠**{fa_digits(stats.intelligence)}**"
     )
 
 
@@ -365,23 +366,14 @@ def format_reward_line(
     """One-line (or card block) Persian description of the granted reward."""
     emoji = REWARD_EMOJI.get(reward_type, "🎁")
     if reward_type == REWARD_CARD and character is not None and card is not None:
-        return (
-            f"{emoji} جکپات! کارت شخصیت مال تو شد! 🎉\n\n"
-            f"{format_card_line(character, card)}"
-        )
+        return f"{emoji} **جکپات!** کارت شخصیت گیرت اومد!\n{format_card_line(character, card)}"
     label = REWARD_LABEL.get(reward_type, reward_type)
-    count = fa_count(quantity) if quantity <= 10 else fa_digits(quantity)
-    line = f"{emoji} {count} تا {label} مال تو شد!"
-    if reward_type == REWARD_GOLD:
-        line += " ✨"
-    elif reward_type == REWARD_DIAMOND:
-        line += " درخشان... ✨"
-    elif reward_type == REWARD_OBSIDIAN:
-        line += " 🤯"
+    count = fa_digits(quantity)
+    line = f"{emoji} **{count} {label}** گیرت اومد!"
     if level_bonus > 0 and player_level is not None:
         line += (
-            f"\n🎖 پاداش سطح {fa_digits(player_level)}: "
-            f"+{fa_digits(level_bonus)} سیب!"
+            f"\n🎖 پاداش سطح **{fa_digits(player_level)}**: "
+            f"**{fa_digits(level_bonus)} سیب** اضافه!"
         )
     return line
 
@@ -397,8 +389,7 @@ def format_open_result(result: ChestClaimResult, now: datetime) -> str:
         card=result.card,
     )
     return (
-        "🎁 صندوقچه گنج روزانه سیب\n\n"
-        "صندوقچه باز شد و این چیزی بود که توش بود:\n"
+        "🎁 **صندوقچه گنج روزانه سیب**\n\n"
         f"{reward_line}\n\n"
         f"{format_next_reset(result.next_reset, now)}"
     )
@@ -409,9 +400,8 @@ def format_claimed_line(claim: DailyChestClaim) -> str:
     emoji = REWARD_EMOJI.get(claim.reward_type, "🎁")
     label = REWARD_LABEL.get(claim.reward_type, claim.reward_type)
     if claim.reward_type == REWARD_CARD:
-        return f"{emoji} {label}"
-    count = fa_count(claim.quantity) if claim.quantity <= 10 else fa_digits(claim.quantity)
-    return f"{emoji} {count} تا {label}"
+        return f"{emoji} **{label}**"
+    return f"{emoji} **{fa_digits(claim.quantity)} {label}**"
 
 
 # ---------------------------------------------------------------------------
@@ -566,7 +556,7 @@ class DailyChestService:
         now = now or datetime.now(timezone.utc)
         config = await cls.load_config(session)
         if not config.enabled:
-            raise ChestDisabledError("صندوقچه گنج روزانه فعال نیست. 🎁")
+            raise ChestDisabledError("🎁 صندوقچه‌ی امروز فعلاً بسته‌ست!")
 
         for attempt in range(2):
             try:
@@ -677,7 +667,7 @@ class DailyChestService:
             # The rarity moment: pick one unowned eligible character and
             # grant real ownership through the canonical card service.
             if not eligible_characters:  # pragma: no cover - pool already excluded it
-                raise DailyChestError("کارت قابل اهدایی پیدا نشد؛ بعداً دوباره تلاش کن. 🎴")
+                raise DailyChestError("🎴 کارتی برای هدیه پیدا نشد؛ بعداً دوباره تلاش کن.")
             character = eligible_characters[
                 int(rng.randint(0, len(eligible_characters) - 1))
             ]
@@ -691,7 +681,7 @@ class DailyChestService:
                 # rolls back with it. Never swap the rare reward for a
                 # common one while reporting the card as granted.
                 raise DailyChestError(
-                    "این کارت همزمان جای دیگه‌ای ثبت شد؛ صندوقچه باز نشد و سهمیه‌ات محفوظه. 🎴"
+                    "🎴 کارت ثبت نشد؛ سهمیه‌ات محفوظه، دوباره تلاش کن."
                 ) from exc
             claim.ref_id = character.id
             await session.flush()

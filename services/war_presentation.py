@@ -23,7 +23,7 @@ VICTORY_IMAGE = (
 
 
 def _shield_hours_text(hours: int) -> str:
-    return f"{fa_digits(hours)} ساعت سپر صلح فعال شد."
+    return f"سپر صلح **{fa_digits(hours)} ساعته** فعال شد."
 
 
 def victory_caption(loot: int, *, shield_hours: Optional[int] = None) -> str:
@@ -36,9 +36,8 @@ def victory_caption(loot: int, *, shield_hours: Optional[int] = None) -> str:
     defender is always shielded, the attacker never is).
     """
     text = (
-        "🏆 پیروزی در جدال سیبی!\n"
-        "دشمن را در هم کوبیدیم. "
-        f"🎁 غنیمت تصرف‌شده: {fa_digits(loot)} سیب به خزانه‌ی قلعه اضافه شد."
+        "🏆 **پیروزی در جدال!**\n"
+        f"دشمن رو شکست دادیم. غنیمت: **{fa_digits(loot)} سیب**."
     )
     if shield_hours:
         text += f"\n🛡 {_shield_hours_text(shield_hours)}"
@@ -53,26 +52,26 @@ def defeat_caption(loot: int, *, shield_hours: Optional[int] = None) -> str:
     none (it can be attacked again immediately).
     """
     text = (
-        "💔 شکست در جدال سیبی...\n"
-        f"دشمن {fa_digits(loot)} سیب از خزانه‌ی ما غارت کرد."
+        "💔 **شکست در جدال.**\n"
+        f"دشمن **{fa_digits(loot)} سیب** از خزانه ما برداشت."
     )
     if shield_hours:
-        text += f"\n🛡 اما ناامید نشوید، {_shield_hours_text(shield_hours)}"
+        text += f"\n🛡 {_shield_hours_text(shield_hours)}"
     else:
-        text += "\n⚔️ گروه مهاجم پس از پایان نبرد سپر صلح دریافت نمی‌کند."
+        text += "\n⚔️ مهاجم **سپر صلح** نمی‌گیره."
     return text
 
 
 def draw_caption(*, shield_hours: Optional[int] = None) -> str:
     """Final message of a tie: no loot, but the defender is still shielded."""
     text = (
-        "🤝 جدال سیبی مساوی شد!\n"
-        "هیچ‌کدام از دو قلعه پیروز نشد؛ غنیمتی جابه‌جا نشد."
+        "🤝 **جدال مساوی شد!**\n"
+        "غنیمتی جابه‌جا نشد."
     )
     if shield_hours:
-        text += f" 🛡 {_shield_hours_text(shield_hours)}"
+        text += f"\n🛡 {_shield_hours_text(shield_hours)}"
     else:
-        text += " گروه مهاجم سپر صلحی دریافت نمی‌کند."
+        text += "\n⚔️ مهاجم **سپر صلح** نمی‌گیره."
     return text
 
 

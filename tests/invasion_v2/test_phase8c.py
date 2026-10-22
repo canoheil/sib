@@ -293,18 +293,24 @@ async def test_join_passes_invasion_id_without_changing_damage_flow(db, monkeypa
         assert spy.call_args.kwargs["enemy_hp_remaining"] == 500 - attack.damage
 
 
-# Phase 8B pool fingerprints: existing prose must remain byte-for-byte intact.
-# Refreshed twice by the Persian copy audit: phase 1 (ANNOUNCEMENT, «چشم‌به‌راه»)
-# and phases 4-5 (every pool: grammar of the plural defender subjects,
-# «سردار شیاسیب», «۱۲۳ ضربه», the «می‌گردد» register, and the «هٔ» style) —
-# the wording changed on purpose; these hashes are the new contract.
-ORIGINAL_POOLS = {'ANNOUNCEMENT': (12, '42ba587da7f3252bbdd20f875a3a224795c41a536bded3ca7ba4c39e249208e1'), 'JOIN_NORMAL': (22, 'd8d7c6cb9bc7f5fe4ad3ab22086e06d96a821a01bc6a0702d4fbf437967e87d8'), 'JOIN_CRIT': (16, '7ab7da9057315614756cf145469722bdc1e56570eba9620097609a2bd2da63d7'), 'JOIN_KILL': (10, '58eeb44fb1a36cb1b77ef5f02bfbb9b4bb8c55963ef1f990df6535f6ff693e13'), 'VICTORY': (12, '4be138d58cf41098afd69248b4d7aaca26991306aa0f9a751648767034bb1055'), 'DEFEAT': (12, 'ff92a50dadd7f9e0ed5047de2e26f608ce8175f39024fc4bad970da34b2ad6e3'), 'EXPIRED': (8, '7a4dd2cc053d1d28dcf69b906da2b2b7da7313d3088b3303c66708ddf3913185')}
+# N2 pool fingerprints: the short, modern copy is the new frozen reference.
+MODERN_POOLS = {
+    "ANNOUNCEMENT": (12, "ab1143a462e8dc3a4da3c333e056c6f6fc4c0b06b7336adf76a64296c0b8c04a"),
+    "JOIN_NORMAL": (22, "71adf9ee16fdb70f9287dcae7744f2e674f3bd08c4bab23218a5b2c47e87207a"),
+    "JOIN_CRIT": (16, "155a0e5bce9c593310a0848ae31399f976619296ddf36ede5008498a1669766e"),
+    "JOIN_BUFF": (6, "585330e5c2c4b1944211170ea4551adf28db78ad420a24a07277329e5ff2087b"),
+    "JOIN_KILL": (10, "af339871d68253187ae695e39980fd1dd2bb143685af64d1f06571209f9a1946"),
+    "VICTORY": (12, "429f5c3574465c9d43cfd81afb37a4daf0671a27d7aa6d750722c1d48d6cd1c5"),
+    "DEFEAT": (12, "d2529f66379ae659eeb3dbc048acf711eb286ae6eff82b0d06f5e3c6c8cf03d9"),
+    "EXPIRED": (8, "edefed76bee46dfca0c1c06862a3eabdea0064ff65867eef1b1490253c188459"),
+}
 
-@pytest.mark.parametrize("name", ORIGINAL_POOLS)
-def test_existing_narrative_variants_unchanged(name):
+
+@pytest.mark.parametrize("name", MODERN_POOLS)
+def test_modern_narrative_variants_frozen(name):
     import hashlib
     import json
-    count, expected_hash = ORIGINAL_POOLS[name]
+    count, expected_hash = MODERN_POOLS[name]
     items = getattr(pool, name)
     if name == "VICTORY":
         assert len(items) == 18

@@ -131,22 +131,17 @@ def _stats_lines(row: RewardRow, *, bold_values: bool = False) -> list[str]:
 def _panel_caption(view: MineView, user_id: int) -> str:
     lines = [
         "⛏ **معدن سیبی**",
-        "",
-        "داخل معدن تاریک است. صدای چکش از دور می‌آید...",
-        "",
-        f"🔨 **کلنگ شما:** سطح {fa_digits(view.level)}",
-        f"🎁 **پاداش هر شیفت:** {_range_text(view.reward)} سیب",
-        f"✨ **شانس یافتن سیب افسانه‌ای:** {_pct_text(view.reward.special_pct)}",
+        f"🔨 کلنگ: **سطح {fa_digits(view.level)}**",
+        f"🎁 هر شیفت: **{_range_text(view.reward)} سیب**",
+        f"✨ شانس سیب ویژه: **{_pct_text(view.reward.special_pct)}**",
         "",
     ]
     if view.cooldown > 0:
         minutes, seconds = divmod(max(0, int(view.cooldown)), 60)
         cooldown = f"{fa_digits(minutes)} دقیقه و {fa_digits(seconds)} ثانیه"
-        lines.append(
-            f"⏳ دیوارهای معدن خاموش‌اند. **{cooldown}** دیگر برگرد تا فانوس‌ها روشن شوند."
-        )
+        lines.append(f"⏳ شیفت بعدی: **{cooldown} دیگه**.")
     else:
-        lines.append("✨ معدن آماده است! می‌توانی کلنگ بزنی.")
+        lines.append("✅ **معدن آماده‌ست! کلنگ بزن.**")
     return "\n".join(lines)
 
 
@@ -155,22 +150,22 @@ def _pickaxe_caption(view: MineView) -> str:
     if view.level >= MAX_PICKAXE_LEVEL:
         lines.extend(
             [
-                f"🏆 کلنگ شما به بالاترین سطح ({fa_digits(MAX_PICKAXE_LEVEL)}) رسیده است!",
+                f"🏆 **کلنگ به سطح {fa_digits(MAX_PICKAXE_LEVEL)} رسید!**",
                 "",
             ]
         )
 
     lines.extend(
         [
-            f"📊 **سطح فعلی:** {fa_digits(view.level)} از {fa_digits(MAX_PICKAXE_LEVEL)}",
-            *_stats_lines(view.reward),
+            f"📊 سطح فعلی: **{fa_digits(view.level)} از {fa_digits(MAX_PICKAXE_LEVEL)}**",
+            *_stats_lines(view.reward, bold_values=True),
         ]
     )
     if view.level < MAX_PICKAXE_LEVEL and view.next_reward is not None:
         lines.extend(
             [
                 "",
-                f"⬆️ **پس از ارتقا به سطح {fa_digits(view.level + 1)}:**",
+                f"⬆️ **سطح {fa_digits(view.level + 1)}:**",
                 *_stats_lines(view.next_reward, bold_values=True),
                 "",
                 f"💰 هزینه ارتقا: **{fa_digits(view.upgrade_cost)} سیب**",
@@ -192,15 +187,15 @@ def _result_caption(result: ShiftResult) -> str:
     reward_type = reward_types.get(result.item_code, "ویژه")
     minutes = WORK_COOLDOWN_SECONDS // 60
     return (
-        f"{result.narrative}\n\n"
-        f"🍎 **پاداش شما:** +{fa_digits(result.amount)} سیب {reward_type}\n"
-        f"🔨 **کلنگ:** سطح {fa_digits(result.pickaxe_level)}\n\n"
-        f"⏳ شیفت بعدی: **{fa_digits(minutes)} دقیقه دیگر**"
+        f"{result.narrative}\n"
+        f"⛏ **{fa_digits(result.amount)} سیب {reward_type}** گیرت اومد!\n"
+        f"🔨 سطح کلنگ: **{fa_digits(result.pickaxe_level)}**؛ "
+        f"شیفت بعدی: **{fa_digits(minutes)} دقیقه دیگه**"
     )
 
 
 def _insufficient_text(error: PickaxeInsufficientFunds) -> str:
-    return f"سیب کافی نداری 🍎 به {fa_digits(error.missing)} سیب دیگر نیاز داری."
+    return f"🍎 سیب کافی نداری؛ **{fa_digits(error.missing)} سیب** دیگه لازم داری."
 
 
 # ---------------------------------------------------------------------------
@@ -401,7 +396,7 @@ async def handle_mine_work(callback: CallbackQuery, bot: Bot) -> None:
         if cooldown > 0:
             await safe_answer_callback(
                 callback,
-                cooldown_message(cooldown, user.id),
+                cooldown_message(cooldown, user.id).replace("**", ""),
                 show_alert=True,
             )
             return
@@ -412,7 +407,7 @@ async def handle_mine_work(callback: CallbackQuery, bot: Bot) -> None:
     except CooldownError as error:
         await safe_answer_callback(
             callback,
-            cooldown_message(error.remaining_seconds, user.id),
+            cooldown_message(error.remaining_seconds, user.id).replace("**", ""),
             show_alert=True,
         )
         return
@@ -482,7 +477,7 @@ async def handle_mine_pickaxe_upgrade(callback: CallbackQuery, bot: Bot) -> None
                 await upgrade_pickaxe(session, user_id=user.id)
             except PickaxeInsufficientFunds as error:
                 await safe_answer_callback(
-                    callback, _insufficient_text(error), show_alert=True
+                    callback, _insufficient_text(error).replace("**", ""), show_alert=True
                 )
                 return
             except PickaxeMaxLevelError:

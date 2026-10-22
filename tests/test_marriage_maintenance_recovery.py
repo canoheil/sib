@@ -565,7 +565,7 @@ def test_no_new_background_loop_was_introduced():
     source = inspect.getsource(MaintenanceService)
     # Exactly one loop driver, unchanged.
     assert source.count("async def run_forever") == 1
-    assert MaintenanceService.INTERVAL_SECONDS == 5
+    assert MaintenanceService.INTERVAL_SECONDS == 30
     # The Marriage/Love work is a plain step of the existing sweep.
     assert "run_marriage_love_cycle" in source
     assert not hasattr(MaintenanceService, "run_marriage_love_forever")

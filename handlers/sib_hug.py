@@ -110,7 +110,9 @@ async def handle_sib_hug(message: Message) -> None:
         # This Telegram message was already processed; say nothing again.
         return
     if result.status == HUG_COOLDOWN:
-        await message.reply(format_hug_cooldown_message(result.remaining_seconds))
+        await message.reply(
+            format_hug_cooldown_message(result.remaining_seconds), parse_mode="Markdown"
+        )
         return
     if result.status != HUG_AWARDED:  # pragma: no cover - defensive
         await message.reply(HUG_GENERIC_FAILURE_TEXT)

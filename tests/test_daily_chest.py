@@ -267,6 +267,7 @@ def test_result_messages_distinguish_all_six_categories():
                        REWARD_DIAMOND, REWARD_OBSIDIAN, REWARD_CARD)
     }
     assert len(set(lines.values())) == 6
+    assert lines[REWARD_APPLES] == "🍎 **۲ سیب معمولی** گیرت اومد!"
     assert "سیب معمولی" in lines[REWARD_APPLES]
     assert "نهال" in lines[REWARD_SEEDLINGS]
     assert "سیب طلایی" in lines[REWARD_GOLD]
@@ -363,7 +364,7 @@ async def test_disabled_chest_refuses_without_writes(db_session):
     await ConfigService.set(db_session, "daily_chest_enabled", False)
     await db_session.commit()
 
-    with pytest.raises(Exception, match="فعال نیست"):
+    with pytest.raises(Exception, match="فعلاً بسته‌ست"):
         await DailyChestService.claim(db_session, user.id, rng=StubRng(REWARD_APPLES))
     rows = (await db_session.scalars(select(DailyChestClaim))).all()
     assert rows == []

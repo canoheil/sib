@@ -23,6 +23,7 @@ from sib.services.halloween import (
     HalloweenService,
     invalidate_halloween_config_cache,
 )
+from sib.services.sib_claim import fa_digits
 from sib.services.sponsor.service import SponsorService
 
 router = Router(name="admin")
@@ -272,7 +273,7 @@ async def _broadcast_to_active_groups(
     sent_count = 0
     for gid in group_ids:
         try:
-            await target_bot.send_message(gid, text)
+            await target_bot.send_message(gid, text, parse_mode="Markdown")
             sent_count += 1
         except Exception:
             continue
@@ -327,7 +328,7 @@ async def handle_hw_start(message: Message, bot: Optional[Bot] = None) -> None:
         await _reply_admin_message(message, START_TEST_CONFIRMATION)
         return
 
-    announcement = START_ANNOUNCEMENT_TEMPLATE.format(max_hp=max_hp)
+    announcement = START_ANNOUNCEMENT_TEMPLATE.format(max_hp=fa_digits(max_hp))
     notified = await _broadcast_to_active_groups(
         bot, message, group_ids, announcement
     )

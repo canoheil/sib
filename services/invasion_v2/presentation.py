@@ -148,7 +148,7 @@ def _fit_caption(narrative_text: str, suffix: str, limit: int = 1024) -> str:
 
 def announcement_hp_line(current_hp: int, total_hp: int) -> str:
     """Live enemy HP block appended after the announcement narrative."""
-    return f"\n\n⚔️ جان شیاسیب: {fa_digits(max(0, current_hp))} / {fa_digits(total_hp)}"
+    return f"\n\n⚔️ جان شیاسیب: **{fa_digits(max(0, current_hp))}** / **{fa_digits(total_hp)}**"
 
 
 def build_announcement_caption(narrative_text: str, current_hp: int, total_hp: int) -> str:
@@ -163,7 +163,7 @@ def build_join_caption(narrative_text: str, damage: int, *, is_crit: bool, is_ki
     (the kill marker wins when a critical lands the finishing hit).
     """
     emoji = "🏆" if is_kill else "💥" if is_crit else "🔥"
-    return _fit_caption(narrative_text, f"\n\n{emoji} آسیب وارده به دشمن: {fa_digits(damage)}")
+    return _fit_caption(narrative_text, f"\n\n{emoji} آسیب وارده به دشمن: **{fa_digits(damage)}**")
 
 
 def join_keyboard(invasion_id: int) -> InlineKeyboardMarkup:
@@ -293,13 +293,13 @@ async def cancel_pending_hp_edits() -> None:
 # G2 garden-corruption notice (private DM, sent post-commit). Exact product
 # wording; kept here next to the other Invasion v2 Telegram delivery code.
 WITHER_NOTIFICATION_TEXT = (
-    "🥀 باغ تو آسیب دید! ارتش شیاسیب بخشی از باغ را پژمرده کرد چون در یورش "
-    "شرکت نکردی. از فروشگاه «کود الهی» تهیه کن."
+    "🥀 چون توی یورش شرکت نکردی، بخشی از باغت پژمرده شد! "
+    "برای ترمیمش **کود الهی** بخر."
 )
 
 # G3 — group notification for withered gardens (sent post-commit, after the terminal message).
-WITHER_GROUP_HEADER = "⚠️ توجه! به دلیل عدم شرکت در یورش، باغ این مدافعان پژمرده شد:"
-WITHER_GROUP_FOOTER = "برای ترمیم زمین‌ها، از فروشگاه «کود الهی» تهیه کنید."
+WITHER_GROUP_HEADER = "⚠️ باغ این بازیکن‌ها به‌خاطر شرکت نکردن در یورش پژمرده شد:"
+WITHER_GROUP_FOOTER = "برای ترمیم زمین‌ها، **کود الهی** بخرید."
 
 
 async def announce_withered_in_group(bot, results) -> None:
@@ -356,7 +356,7 @@ async def announce_withered_in_group(bot, results) -> None:
                     names.append(plain_display_name(raw, "مدافع"))
                 if not names:
                     continue
-                text = f"{WITHER_GROUP_HEADER}\n{', '.join(names)}\n{WITHER_GROUP_FOOTER}"
+                text = f"{WITHER_GROUP_HEADER}\n**{'، '.join(names)}**\n{WITHER_GROUP_FOOTER}"
                 await _telegram(group_id, bot.send_message, chat_id=group_id, text=text, parse_mode=None)
     except Exception:
         logger.exception("inv2 wither group announcement failed")
@@ -533,7 +533,7 @@ class InvasionPresentation:
                         # damage lines. Fitting the narrative instead of appending
                         # keeps the reward line itself from being cut by Telegram.
                         caption = _fit_caption(narrative_text,
-                                               "\n\n🎁 پاداش مدافعان: " + summary, limit=1020)
+                                               "\n\n🎁 پاداش مدافعان: **" + summary + "**", limit=1020)
                 image_args = (inv.status.lower(), region.name_fa, inv.enemy_type, reward_lines)
                 path = await asyncio.to_thread(cached_image,
                     ("compose-v4", "result", inv.id, *image_args),

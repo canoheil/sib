@@ -364,6 +364,23 @@ def test_chest_post_caption_fits_one_telegram_caption():
     assert caption_length(chest.GROUP_CHEST_TEXT) <= CAPTION_LIMIT
 
 
+def test_plain_text_chest_messages_do_not_expose_markdown():
+    plain_texts = (
+        chest.GROUP_CHEST_TEXT,
+        chest.CHEST_DISABLED_TEXT,
+        chest.CHEST_CONFIG_ERROR_TEXT,
+        chest.CHEST_FAILURE_TEXT,
+        chest.OPEN_TOAST,
+        chest.ALREADY_TOAST,
+        chest.GROUP_ONLY_TEXT,
+        chest.GROUP_INVALID_TEXT,
+        chest.GROUP_EXPIRED_TEXT,
+        chest._group_cooldown_text(30),
+        chest.format_next_reset(chest.next_reset_at(FIXED_NOW), FIXED_NOW),
+    )
+    assert all("**" not in text for text in plain_texts)
+
+
 # ---------------------------------------------------------------------------
 # 3. The presser receives the reward (not the user who opened the post)
 # ---------------------------------------------------------------------------
@@ -387,7 +404,7 @@ async def test_presser_receives_the_reward_and_the_opener_gets_nothing(db_sessio
     assert len(notices) == 1
     assert f"tg://user?id={presser.id}" in notices[0]  # the group sees who won
     assert f"tg://user?id={opener.id}" not in notices[0]
-    assert "۱۵ تا سیب معمولی" in notices[0]
+    assert "**۱۵ سیب معمولی**" in notices[0]
 
 
 @pytest.mark.asyncio
@@ -421,7 +438,7 @@ async def test_already_claimed_member_is_refused_privately_with_the_next_reset(d
     text, show_alert = _alert(cb)
     assert show_alert is True
     assert text.startswith(chest.ALREADY_TOAST)
-    assert "باز شدن بعدی" in text
+    assert "صندوق بعدی" in text
     assert len(text) <= 200  # Telegram's alert limit
     assert not bot.send_message.called  # a refusal is never announced in the group
     assert await _apples(db_session, member.id) == 15
@@ -569,7 +586,7 @@ async def test_disabled_chest_posts_nothing_and_refuses_opens(db_session, fixed_
     assert not bot.send_photo.called and not bot.send_message.called
 
     open_cb = await _open(bot, member, OPEN_DATA)
-    assert _alert(open_cb) == ("صندوقچه گنج روزانه فعال نیست. 🎁", True)
+    assert _alert(open_cb) == ("🎁 صندوقچه‌ی امروز فعلاً بسته‌ست!", True)
     assert await _claims(db_session) == []
 
 
@@ -681,7 +698,7 @@ def test_group_notice_names_the_presser_and_escapes_the_display_name():
     notice = chest._group_reward_notice(presser, result)
 
     assert notice.startswith("🎁 [ali\\_\\*x](tg://user?id=4242)")
-    assert "۱۵ تا سیب معمولی" in notice
+    assert "**۱۵ سیب معمولی**" in notice
 
 
 def test_jackpot_notice_shows_the_granted_card_for_the_group():
@@ -700,6 +717,8 @@ def test_jackpot_notice_shows_the_granted_card_for_the_group():
 
     assert "جکپات" in notice
     assert "**سیب سبز**" in notice
+    assert "سطح **۲**" in notice
+    assert "—" not in notice
 
 
 # ---------------------------------------------------------------------------
