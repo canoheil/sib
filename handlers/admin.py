@@ -18,12 +18,11 @@ from sib.services.ad.service import AdService
 from sib.services.halloween import (
     END_ANNOUNCEMENT,
     END_TEST_CONFIRMATION,
-    START_ANNOUNCEMENT_TEMPLATE,
+    START_ANNOUNCEMENT,
     START_TEST_CONFIRMATION,
     HalloweenService,
     invalidate_halloween_config_cache,
 )
-from sib.services.sib_claim import fa_digits
 from sib.services.sponsor.service import SponsorService
 
 router = Router(name="admin")
@@ -328,7 +327,7 @@ async def handle_hw_start(message: Message, bot: Optional[Bot] = None) -> None:
         await _reply_admin_message(message, START_TEST_CONFIRMATION)
         return
 
-    announcement = START_ANNOUNCEMENT_TEMPLATE.format(max_hp=fa_digits(max_hp))
+    announcement = START_ANNOUNCEMENT
     notified = await _broadcast_to_active_groups(
         bot, message, group_ids, announcement
     )

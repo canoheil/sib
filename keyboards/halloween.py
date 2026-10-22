@@ -14,10 +14,16 @@ from sib.services.sib_claim import fa_digits
 
 
 def get_halloween_main_keyboard() -> InlineKeyboardMarkup:
-    """Main Boss Menu keyboard with the 3 core event actions."""
+    """Main Boss Menu keyboard (HW2: attacking is a TEXT action, not a button).
+
+    The ⚔️ attack button was deliberately removed: players attack by
+    replying to the Boss Menu message with the word «حمله» (see
+    ``handlers.halloween.handle_halloween_attack_trigger``), which makes the
+    raid a live group action instead of a private button tap. The remaining
+    two rows are the read-only/utility screens.
+    """
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [success_button("⚔️ حمله به سیبومورتیس", "hw:attack")],
             [primary_button("🎁 مسیر جوایز", "hw:rewards")],
             [primary_button("🎃 دریافت غنیمت (دونه کدو)", "hw:loot")],
         ]
