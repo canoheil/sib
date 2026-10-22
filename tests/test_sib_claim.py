@@ -1,12 +1,14 @@
-"""Sib claim tests (task spec #3/#4/#5).
+"""Sib claim tests (task spec #3/#4/#5, Phase N7).
 
-"سیب" in a group is a real action: +5 apples with a 5-minute per-user
-cooldown, persisted to the wallet. "سیب بازی" opens the games menu and
-"سیب" alone no longer opens any menu. Messages are friendly Persian in
-the Sib voice with dynamic remaining time.
+"سیب" in a group is a real action: +5..10 RANDOM apples with a 5-minute
+per-user cooldown, persisted to the wallet. "سیب بازی" opens the games
+menu and "سیب" alone no longer opens any menu. The success message is a
+random line from the N7 narrative pool (bolded, Persian-digit amount)
+plus the cooldown reminder; the cooldown text advertises the 5–10 range.
 """
 
 import asyncio
+import random
 import re
 
 import pytest
@@ -20,11 +22,15 @@ from sib.database.models import AppleTransaction, AppleWallet
 from sib.services.apple_wallet import AppleWalletService
 from sib.services.sib_claim import (
     CLAIM_REASON,
+    MAX_CLAIM_AMOUNT,
+    MIN_CLAIM_AMOUNT,
     SibClaimService,
     fa_digits,
     format_claim_success,
     format_cooldown_message,
+    roll_claim_amount,
 )
+from sib.services.sib_claim_narrative import CLAIMS, pick_claim_narrative
 from sqlalchemy import select
 
 # ---------------------------------------------------------------------------
@@ -37,37 +43,63 @@ def test_fa_digits_translates_latin_digits():
     assert fa_digits("2m 37s") == "۲m ۳۷s"
 
 
-def test_success_message_is_friendly_persian():
+def test_claim_reward_rolls_inside_the_random_range():
+    # 300 draws cover the whole 5–10 range (miss probability ~1e-22).
+    seen = {roll_claim_amount() for _ in range(300)}
+    assert seen == set(range(MIN_CLAIM_AMOUNT, MAX_CLAIM_AMOUNT + 1))
+
+
+def test_claim_narrative_pool_shape():
+    # N7: at least 10 short, bolded, modern Persian variants.
+    assert len(CLAIMS) >= 10
+    for template in CLAIMS:
+        assert "{amount}" in template
+        assert "**" in template  # the amount is bolded
+        assert len(template) <= 80  # short line
+        # every line is Persian (Persian letters present).
+        assert any("\u0600" <= ch <= "\u06FF" for ch in template)
+
+
+def test_pick_claim_narrative_substitutes_persian_digits(monkeypatch):
+    for template in CLAIMS:
+        monkeypatch.setattr(random, "choice", lambda pool, _t=template: _t)
+        assert pick_claim_narrative(7) == template.format(amount=fa_digits(7))
+
+
+def test_success_message_uses_narrative_pool():
     msg = format_claim_success(5, 300)
-    assert "مال تو شد" in msg
-    assert "پنج دقیقه دیگه" in msg
-    assert "۵" in msg
+    # New structure: ONE pool line + the cooldown reminder line.
+    narrative_line, sep, cooldown_line = msg.partition("\n\n")
+    assert sep == "\n\n"
+    assert narrative_line in {t.format(amount=fa_digits(5)) for t in CLAIMS}
+    assert "پنج دقیقه دیگه" in cooldown_line
     # short and readable: two lines
     assert len(msg.splitlines()) <= 3
 
 
 def test_cooldown_message_variants_are_dynamic():
     # Almost ready -> seconds-away wording.
-    almost = format_cooldown_message(10, 5)
+    almost = format_cooldown_message(10)
     assert "چند ثانیه" in almost
 
     # Under a minute -> exact seconds in Persian digits.
-    secs = format_cooldown_message(42, 5)
+    secs = format_cooldown_message(42)
     assert "۴۲ ثانیه" in secs
     assert "یه کم صبر کن" in secs
 
-    # Minutes + seconds -> both units.
-    both = format_cooldown_message(157, 5)  # 2:37
+    # Minutes + seconds -> both units, and the 5–10 range (the next claim
+    # pays a random amount, never a fixed count).
+    both = format_cooldown_message(157)  # 2:37
     assert "۲ دقیقه و ۳۷ ثانیه" in both
-    assert "۵ تا سیب" in both
+    assert "از ۵ تا ۱۰ سیب" in both
 
     # Whole minutes -> no "و ۰ ثانیه".
-    whole = format_cooldown_message(180, 5)
+    whole = format_cooldown_message(180)
     assert "۳ دقیقه" in whole
     assert "۰ ثانیه" not in whole
 
     # Never advertises a zero/negative wait.
-    assert "۰ ثانیه دیگه" not in format_cooldown_message(0, 5)
+    assert "۰ ثانیه دیگه" not in format_cooldown_message(0)
 
 
 # ---------------------------------------------------------------------------
@@ -76,7 +108,7 @@ def test_cooldown_message_variants_are_dynamic():
 
 
 @pytest.mark.asyncio
-async def test_claim_awards_five_apples_and_persists(db_session):
+async def test_claim_awards_random_amount_and_persists(db_session):
     from sib.tests.test_parties import create_test_user
 
     user = await create_test_user(db_session, "سیب‌گیر اول")
@@ -86,9 +118,8 @@ async def test_claim_awards_five_apples_and_persists(db_session):
     await db_session.commit()
 
     assert awarded is True
-    assert "مال تو شد" in msg
     balance = await AppleWalletService.get_balance(db_session, user.id)
-    assert balance == 5
+    assert MIN_CLAIM_AMOUNT <= balance <= MAX_CLAIM_AMOUNT
 
     row = await db_session.scalar(
         select(AppleTransaction)
@@ -96,8 +127,15 @@ async def test_claim_awards_five_apples_and_persists(db_session):
         .where(AppleTransaction.reason == CLAIM_REASON)
     )
     assert row is not None
-    assert row.amount == 5
-    assert row.balance_after == 5
+    # The ledger records the ACTUAL random amount (not a fixed default).
+    assert row.amount == balance
+    assert row.balance_after == balance
+
+    # New narrative structure: a pool line with the real amount (Persian
+    # digits), then the cooldown reminder.
+    narrative_line, sep, cooldown_line = msg.partition("\n\n")
+    assert narrative_line in {t.format(amount=fa_digits(balance)) for t in CLAIMS}
+    assert "دقیقه دیگه دوباره" in cooldown_line
 
 
 @pytest.mark.asyncio
@@ -110,14 +148,17 @@ async def test_second_claim_within_cooldown_is_rejected(db_session):
     msg1, awarded1 = await SibClaimService.claim(db_session, user.id)
     await db_session.commit()
     assert awarded1 is True
+    balance = await AppleWalletService.get_balance(db_session, user.id)
+    assert MIN_CLAIM_AMOUNT <= balance <= MAX_CLAIM_AMOUNT
 
+    # Spam: a second «سیب» inside the cooldown is still blocked.
     msg2, awarded2 = await SibClaimService.claim(db_session, user.id)
     await db_session.commit()
     assert awarded2 is False
     # Cooldown text shows remaining time (Persian digits) and gives no apples.
     assert re.search(r"[۰-۹]+ (ثانیه|دقیقه)", msg2) or "چند ثانیه" in msg2
-    assert "مال تو شد" not in msg2
-    assert await AppleWalletService.get_balance(db_session, user.id) == 5
+    assert "بیای سراغم" not in msg2  # that line belongs to a real award
+    assert await AppleWalletService.get_balance(db_session, user.id) == balance
 
 
 @pytest.mark.asyncio
@@ -153,7 +194,9 @@ async def test_claim_available_again_after_cooldown(db_session):
     msg2, awarded2 = await SibClaimService.claim(db_session, user.id)
     await db_session.commit()
     assert awarded2 is True
-    assert await AppleWalletService.get_balance(db_session, user.id) == 10
+    # Two random claims: each within the 5–10 range.
+    total = await AppleWalletService.get_balance(db_session, user.id)
+    assert 2 * MIN_CLAIM_AMOUNT <= total <= 2 * MAX_CLAIM_AMOUNT
 
 
 @pytest.mark.asyncio
@@ -201,7 +244,7 @@ async def test_concurrent_claims_award_exactly_once():
 
     async with get_session() as session:
         balance = await AppleWalletService.get_balance(session, user_id)
-    assert balance == 5
+    assert MIN_CLAIM_AMOUNT <= balance <= MAX_CLAIM_AMOUNT
 
 
 # ---------------------------------------------------------------------------
@@ -243,20 +286,33 @@ async def test_wake_word_claims_instead_of_opening_menu(db_session):
 
     assert msg.reply.called
     reply_text = msg.reply.call_args[0][0]
-    assert "سیب مال تو شد" in reply_text or "سیب گرفتی" in reply_text
     # No keyboard menu is opened by the claim action.
     assert msg.reply.call_args.kwargs.get("reply_markup") is None
+
+    async with get_session() as session:
+        row = await session.scalar(
+            select(AppleTransaction)
+            .where(AppleTransaction.user_id == tg_user.id)
+            .where(AppleTransaction.reason == CLAIM_REASON)
+        )
+        balance = await AppleWalletService.get_balance(session, tg_user.id)
+    assert row is not None
+    assert MIN_CLAIM_AMOUNT <= balance <= MAX_CLAIM_AMOUNT
+    # New narrative structure: a pool line (bolded, Persian-digit amount
+    # matching the real award) + the cooldown reminder line.
+    narrative_line, sep, cooldown_line = reply_text.partition("\n\n")
+    assert narrative_line in {t.format(amount=fa_digits(balance)) for t in CLAIMS}
+    assert "دقیقه دیگه دوباره" in cooldown_line
 
     # Second call inside the cooldown: no reward, explains the wait.
     msg2 = _group_message(tg_user, "سیب")
     await handle_sib_wake_word(msg2, bot)
     reply2 = msg2.reply.call_args[0][0]
-    assert "مال تو شد" not in reply2
+    assert "بیای سراغم" not in reply2
     assert ("صبر" in reply2) or ("زوده" in reply2) or ("ثانیه" in reply2)
 
     async with get_session() as session:
-        balance = await AppleWalletService.get_balance(session, tg_user.id)
-    assert balance == 5
+        assert await AppleWalletService.get_balance(session, tg_user.id) == balance
 
 
 @pytest.mark.asyncio

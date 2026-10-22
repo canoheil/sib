@@ -331,7 +331,10 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     # lifetime is derived from `created_at` at sweep time, so rebalancing it
     # never needs a migration and never rewrites offers already in flight.
     "flower_gift_pending_timeout_seconds": 300,
-    # "سیب" group wake-word claim (spec: 5 apples every 5 minutes)
+    # "سیب" group wake-word claim (N7 spec: a RANDOM 5–10 apples every 5
+    # minutes). The reward is no longer a fixed configured value - see
+    # sib_claim.roll_claim_amount; `sib_claim_amount` is kept for stored-
+    # config compatibility and is no longer read. The cooldown is fixed.
     "sib_claim_amount": 5,
     "sib_claim_cooldown_seconds": 5 * 60,
     # "بغل سیبی" (Sib Hug): both participants receive the amount; only the
