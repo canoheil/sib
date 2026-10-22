@@ -10,6 +10,7 @@ from aiogram.types import (
     Message,
 )
 from sib.core.logging import logger
+from sib.core.text import safe_name
 from sib.database.connection import get_session
 from sib.database.models import AppleDuel
 from sib.keyboards.common import danger_button, primary_button, success_button
@@ -85,11 +86,11 @@ async def command_duel(message: Message, bot: Bot):
     # Commit invitation BEFORE transport; failed send remains expirable in DB.
     try:
         sent = await message.reply(
-            f"⚔️ {inviter.full_name[:80]}، {recipient.full_name[:80]} را به دوئل سیبی دعوت کرده است!\n\n"
-            "کارت اصلی‌ات را بررسی کن و اگر آماده‌ای، مبارزه را آغاز کن.\n"
-            "برای بازگشت پس از انتخاب کارت، همین پیام دعوت را باز کن.",
+            f"⚔️ **{safe_name(inviter.full_name[:80])}** با "
+            f"**{safe_name(recipient.full_name[:80])}** دوئل می‌خواد!\n"
+            "کارتت رو انتخاب کن و «قبول» رو بزن.",
             reply_markup=invitation_keyboard(duel.id),
-            parse_mode=None,
+            parse_mode="Markdown",
         )
         async with get_session() as session:
             stored = await session.get(AppleDuel, duel.id)
@@ -127,11 +128,11 @@ async def callback_duel(callback: CallbackQuery, bot: Bot):
         await safe_answer_callback(
             callback,
             {
-                "ACCEPTED": "دوئل شروع شد؛ نتیجه ثبت شده و روایت در راه است ⚔️",
-                "COMPLETED": "این دوئل قبلاً تمام شده است.",
-                "REJECTED": "دعوت رد شد.",
-                "EXPIRED": "دعوت منقضی شده است.",
-            }.get(duel.status, "دعوت در انتظار پاسخ است."),
+                "ACCEPTED": "⚔️ دوئل شروع شد! صحنه‌ها در راه‌ان.",
+                "COMPLETED": "🏆 این دوئل قبلاً تموم شده.",
+                "REJECTED": "❌ دعوت رد شد.",
+                "EXPIRED": "⌛ وقت دعوت تموم شده.",
+            }.get(duel.status, "⏳ دعوت هنوز منتظر پاسخه."),
         )
         from sib.services.apple_duel_presentation import schedule_play
 
@@ -152,7 +153,7 @@ async def open_existing_cards(callback, bot):
 
     sent = await bot.send_message(
         callback.message.chat.id,
-        "🔄 کارت اصلی را از کارت‌های خودت انتخاب کن؛ سپس به پیام دعوت برگرد.",
+        "🔄 کارت اصلی‌ت رو انتخاب کن و به دعوت برگرد.",
         parse_mode=None,
     )
     async with get_session() as session:

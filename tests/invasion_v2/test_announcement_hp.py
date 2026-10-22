@@ -58,7 +58,7 @@ async def test_announcement_caption_contains_hp(db):
     kwargs = bot.send_photo.await_args.kwargs
     caption = kwargs["caption"]
     assert HP in caption
-    assert caption.endswith(f"\n\n{HP}: {fa_digits(200)} / {fa_digits(200)}")
+    assert caption.endswith(f"\n\n{HP}: **{fa_digits(200)}** / **{fa_digits(200)}**")
     assert len(caption) <= 1024
     # The narrative is stored so later HP edits rebuild the same prose.
     async with factory() as s:
@@ -89,7 +89,7 @@ async def test_join_edits_announcement_to_new_hp(db, monkeypatch):
     assert bot.edit_message_caption.await_count == 1
     kwargs = bot.edit_message_caption.await_args.kwargs
     assert kwargs["chat_id"] == -100 and kwargs["message_id"] == 123
-    assert kwargs["caption"].endswith(f"\n\n{HP}: {fa_digits(159)} / {fa_digits(200)}")
+    assert kwargs["caption"].endswith(f"\n\n{HP}: **{fa_digits(159)}** / **{fa_digits(200)}**")
     # The edit is a metered send: photo + successful edit.
     assert presentation.record_send_success.await_count == 2
 
@@ -145,7 +145,7 @@ async def test_kill_edits_announcement_to_zero(db):
     assert bot.edit_message_caption.await_count == 1
     assert inv_id not in presentation._pending_edits
     kwargs = bot.edit_message_caption.await_args.kwargs
-    assert kwargs["caption"].endswith(f"\n\n{HP}: {fa_digits(0)} / {fa_digits(1)}")
+    assert kwargs["caption"].endswith(f"\n\n{HP}: **{fa_digits(0)}** / **{fa_digits(1)}**")
 
 
 @pytest.mark.asyncio
@@ -201,7 +201,7 @@ async def test_throttle_coalesces_edits(db, monkeypatch):
     assert bot.edit_message_caption.await_count == 1  # one coalesced edit
     # The single edit reflects the latest committed HP, not the stale one.
     caption = bot.edit_message_caption.await_args.kwargs["caption"]
-    assert caption.endswith(f"\n\n{HP}: {fa_digits(170)} / {fa_digits(200)}")
+    assert caption.endswith(f"\n\n{HP}: **{fa_digits(170)}** / **{fa_digits(200)}**")
     assert inv_id not in presentation._pending_edits
 
 
@@ -238,7 +238,7 @@ async def test_join_caption_contains_damage_line(db, monkeypatch):
     bot = _join_bot()
     await presentation.InvasionPresentation().on_join(bot, inv_id, 1, attack_id)
     caption = bot.send_photo.await_args.kwargs["caption"]
-    assert caption == f"ضربهٔ سنگین بر زره\n\n🔥 {DAMAGE}: {fa_digits(67)}"
+    assert caption == f"ضربهٔ سنگین بر زره\n\n🔥 {DAMAGE}: **{fa_digits(67)}**"
     assert len(caption) <= 1024
 
 
@@ -252,7 +252,7 @@ async def test_crit_uses_bomb_emoji(db, monkeypatch):
     bot = _join_bot()
     await presentation.InvasionPresentation().on_join(bot, inv_id, 1, attack_id)
     caption = bot.send_photo.await_args.kwargs["caption"]
-    assert caption.endswith(f"\n\n💥 {DAMAGE}: {fa_digits(41)}")
+    assert caption.endswith(f"\n\n💥 {DAMAGE}: **{fa_digits(41)}**")
     assert "🔥" not in caption
 
 
@@ -267,7 +267,7 @@ async def test_kill_uses_win_emoji(db, monkeypatch):
     bot = _join_bot()
     await presentation.InvasionPresentation().on_join(bot, inv_id, 1, attack_id)
     caption = bot.send_photo.await_args.kwargs["caption"]
-    assert caption.endswith(f"\n\n🏆 {DAMAGE}: {fa_digits(41)}")
+    assert caption.endswith(f"\n\n🏆 {DAMAGE}: **{fa_digits(41)}**")
     assert "💥" not in caption
 
 
@@ -277,7 +277,7 @@ def test_join_caption_stays_under_1024_chars(crit, kill):
     for damage in (9, 67, 999999):
         caption = presentation.build_join_caption(narrative, damage, is_crit=crit, is_kill=kill)
         assert len(caption) <= 1024
-        assert caption.endswith(f"{DAMAGE}: {fa_digits(damage)}")
+        assert caption.endswith(f"{DAMAGE}: **{fa_digits(damage)}**")
         assert "\n\n" in caption
 
 
@@ -286,7 +286,7 @@ def test_join_caption_truncates_narrative_if_needed():
     caption = presentation.build_join_caption(narrative, 67, is_crit=False, is_kill=False)
     assert len(caption) <= 1024
     body, sep, damage_line = caption.rpartition("\n\n")
-    assert sep and damage_line == f"🔥 {DAMAGE}: {fa_digits(67)}"
+    assert sep and damage_line == f"🔥 {DAMAGE}: **{fa_digits(67)}**"
     assert body.endswith("…")
     truncated = body[:-1]
     # Truncation stops at a word boundary: the kept text is a whole-word prefix.
@@ -295,4 +295,4 @@ def test_join_caption_truncates_narrative_if_needed():
     # A short narrative is never touched.
     short = "پای پله‌های برج، داریوش با سیب سرخ راه بالا را گرفت."
     assert presentation.build_join_caption(short, 67, is_crit=False, is_kill=False) == \
-        f"{short}\n\n🔥 {DAMAGE}: {fa_digits(67)}"
+        f"{short}\n\n🔥 {DAMAGE}: **{fa_digits(67)}**"

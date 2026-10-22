@@ -231,7 +231,7 @@ async def test_target_successfully_accepts(db_session):
 
     # The card is rewritten with the outcome and its buttons removed.
     text, markup = _edited(bot)
-    assert text is not None and "ازدواج انجام شد" in text
+    assert text is not None and "عشق برنده شد" in text
     assert f"کاربر{PROPOSER_ID}" in text and f"کاربر{TARGET_ID}" in text
     assert markup is None
 

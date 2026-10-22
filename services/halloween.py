@@ -52,15 +52,15 @@ AMBER_CARD_IMAGE_PATH = REPO_ROOT / "assets" / "characters" / "amber.jpg"
 
 LOOT_DROP_VARIANTS: Dict[str, Tuple[str, Path]] = {
     "pumpkin_chest": (
-        "🎃 یک **صندوقچهٔ کدوی افسانه‌ای** در گروه ظاهر شد! ۳ نفر اولی که دکمه را بزنند ۱ تا ۳ دونه کدو می‌گیرند!",
+        "🎃 **صندوق کدو رسید!** **۳ نفر اول** هرکدوم **۱ تا ۳ دونه کدو** می‌گیرن.",
         ASSETS_HALLOWEEN_DIR / "loot_pumpkin_chest.jpg",
     ),
     "lantern_crate": (
-        "🕯 **فانوس شکستهٔ شکارچی سایه** وسط گروه پیدا شد! ۳ نفر اول ۱ تا ۳ دونه کدو غنیمت می‌گیرند!",
+        "🕯 **فانوس سایه پیدا شد!** **۳ نفر اول** هرکدوم **۱ تا ۳ دونه کدو** می‌گیرن.",
         ASSETS_HALLOWEEN_DIR / "loot_lantern_crate.jpg",
     ),
     "autumn_hollow": (
-        "🍂 در **کندهٔ جادویی باغ خزان** چند دونه کدوی نورانی می‌درخشد! ۳ نفر اول سهمیه می‌گیرند!",
+        "🍂 **کدوی باغ خزان رسید!** **۳ نفر اول** هرکدوم **۱ تا ۳ دونه کدو** می‌گیرن.",
         ASSETS_HALLOWEEN_DIR / "loot_autumn_hollow.jpg",
     ),
 }
@@ -75,16 +75,15 @@ TOP3_DAMAGE_REWARDS: Dict[int, int] = {
 }
 
 START_ANNOUNCEMENT_TEMPLATE = (
-    "🎃 ایونت هالووین آغاز شد! سیبومورتیس با {max_hp} جون به اواریا آمد. کلمه «هالووین» را بزنید!"
+    "🎃 **هالووین شروع شد!**\n"
+    "سیبومورتیس با **{max_hp} جون** رسید؛ برای نبرد «هالووین» رو بفرست."
 )
-END_ANNOUNCEMENT = "🎃 ایونت هالووین به پایان رسید."
+END_ANNOUNCEMENT = "🎃 **هالووین تموم شد!**"
 START_TEST_CONFIRMATION = "✅ ایونت در حالت تست (بی‌صدا) فعال شد."
 END_TEST_CONFIRMATION = "✅ ایونت تستی به پایان رسید."
 
-DAY7_WEAKENING_ANNOUNCEMENT = (
-    "💀 سیبومورتیس به شدت ضعیف شده است! زمان ضربه نهایی فرا رسیده!"
-)
-DEFEAT_ANNOUNCEMENT = "🎉 سیبومورتیس شکست خورد!"
+DAY7_WEAKENING_ANNOUNCEMENT = "⚡ **طلسم سیبومورتیس شکست!** وقت ضربه آخره."
+DEFEAT_ANNOUNCEMENT = "🏆 **سیبومورتیس سقوط کرد!** اواریا پیروز شد."
 
 LOOT_COOLDOWN_ALERT = (
     "⏳ شما به تازگی غنیمت گرفته‌اید. لطفاً بعداً تلاش کنید."
@@ -1119,7 +1118,7 @@ class HalloweenService:
             for gid in outcome.group_ids:
                 try:
                     await safe_send_screen(
-                        bot, gid, DAY7_WEAKENING_ANNOUNCEMENT, parse_mode=None
+                        bot, gid, DAY7_WEAKENING_ANNOUNCEMENT, parse_mode="Markdown"
                     )
                 except Exception:
                     pass
@@ -1128,7 +1127,7 @@ class HalloweenService:
             for gid in outcome.group_ids:
                 try:
                     await safe_send_screen(
-                        bot, gid, DEFEAT_ANNOUNCEMENT, parse_mode=None
+                        bot, gid, DEFEAT_ANNOUNCEMENT, parse_mode="Markdown"
                     )
                 except Exception:
                     pass
@@ -1177,9 +1176,9 @@ class HalloweenService:
                         bot,
                         drop.group_id,
                         drop.message_id,
-                        "⏳ مهلت این صندوقچهٔ هالووین به پایان رسید.",
+                        "⏳ **مهلت این صندوق تموم شد.**",
                         reply_markup=None,
-                        parse_mode=None,
+                        parse_mode="Markdown",
                     )
             except Exception:
                 pass

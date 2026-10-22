@@ -81,7 +81,7 @@ def _format_time_remaining(ends_at: datetime, now: datetime) -> str:
     seconds = max(0, int((_utc(ends_at) - _utc(now)).total_seconds()))
     days, rem = divmod(seconds, 86_400)
     hours = rem // 3600
-    return f"⏳ {fa_digits(days)} روز و {fa_digits(hours)} ساعت باقی مانده"
+    return f"⏳ **{fa_digits(days)} روز و {fa_digits(hours)} ساعت**"
 
 
 def format_boss_menu_caption(
@@ -98,25 +98,25 @@ def format_boss_menu_caption(
     bar = "█" * filled + "░" * (10 - filled)
 
     lines = [
-        "🎃 **رویداد جهانی هالووین: سیبومورتیس**",
+        "🎃 **هالووین: سیبومورتیس**",
         "",
-        f"💀 جون سیبومورتیس: {hp:,} / {max_hp:,}",
+        f"💀 جون: **{fa_digits(hp)} از {fa_digits(max_hp)}**",
         f"`{bar}`",
-        f"🎃 دونه کدوی شما: {int(seeds)}",
-        _format_time_remaining(state.ends_at, moment),
+        f"🎃 دونه کدو: **{fa_digits(int(seeds))}**",
+        f"{_format_time_remaining(state.ends_at, moment)} باقی‌مانده",
     ]
     if state.last_day_weakened and hp > 0:
         lines.extend(
             [
                 "",
-                "⚡ **طلسم سیبومورتیس شکسته شد! زمان ضربه نهایی فرا رسیده!**",
+                "⚡ **طلسم شکست! وقت ضربه آخره.**",
             ]
         )
     elif hp == 0:
         lines.extend(
             [
                 "",
-                "🎉 **سیبومورتیس شکست خورد! از بخش «مسیر جوایز» پاداش خود را بگیرید.**",
+                "🏆 **سیبومورتیس شکست خورد!** جایزه‌ت رو از «مسیر جوایز» بگیر.",
             ]
         )
     return "\n".join(lines)
@@ -132,10 +132,10 @@ def format_reward_track_caption(
     pct = max(0, min(100, (hp * 100) // max_hp))
 
     reward_descriptions = {
-        75: "۱۵۰ سیب معمولی 🍎 + ۲ دونه کدو 🎃",
-        50: "۳ پودر جادویی ✨ + ۲ سیب طلایی 🌕",
-        25: "کارت انحصاری «امبر» 🎴 + ۱ سیب الماسی 💎",
-        0: "۵۰۰ سیب معمولی 🍎 + ۱ سیب ابسیدینی 🌑 (+۱۰۰۰ سیب ویژهٔ ۳ نفر اول 🏆)",
+        75: "**۱۵۰ سیب** 🍎 + **۲ دونه کدو** 🎃",
+        50: "**۳ پودر جادویی** ✨ + **۲ سیب طلایی** 🌕",
+        25: "**کارت امبر** 🎴 + **۱ سیب الماسی** 💎",
+        0: "**۵۰۰ سیب** 🍎 + **۱ سیب ابسیدینی** 🌑 (+**۱۰۰۰ سیب ویژهٔ ۳ نفر اول** 🏆)",
     }
     badge_for = {
         "claimed": "✅ دریافت شد",
@@ -144,16 +144,16 @@ def format_reward_track_caption(
     }
 
     lines = [
-        "🎁 **مسیر جوایز جهانی هالووین**",
+        "🎁 **مسیر جوایز هالووین**",
         "",
-        f"💀 جون سیبومورتیس: {hp:,} / {max_hp:,} ({fa_digits(pct)}٪)",
+        f"💀 جون: **{fa_digits(hp)} از {fa_digits(max_hp)}** (**{fa_digits(pct)}٪**)",
         "",
     ]
     for item in statuses:
         pct_fa = fa_digits(item.milestone_pct)
         badge = badge_for.get(item.state, "🔒 قفل")
         desc = reward_descriptions[item.milestone_pct]
-        lines.append(f"**{pct_fa}٪** ({badge}): {desc}")
+        lines.append(f"**{pct_fa}٪** {badge}؛ {desc}")
     return "\n".join(lines)
 
 
@@ -271,7 +271,7 @@ async def handle_halloween_loot(callback: CallbackQuery, bot: Bot) -> None:
 
     await safe_answer_callback(
         callback,
-        f"🎃 شما {outcome.seeds_granted} دونه کدو دریافت کردید!",
+        f"🎃 **{fa_digits(outcome.seeds_granted)} دونه کدو** گرفتی!".replace("**", ""),
         show_alert=True,
     )
     if callback.message is not None:
@@ -313,12 +313,12 @@ async def handle_halloween_attack(callback: CallbackQuery, bot: Bot) -> None:
         await safe_answer_callback(callback, str(err), show_alert=True)
         return
 
-    crit_fa = "بله" if outcome.is_crit else "خیر"
-    await safe_answer_callback(
-        callback,
-        f"⚔️ شما {outcome.damage} آسیب وارد کردید! (کریتیکال: {crit_fa})",
-        show_alert=True,
+    attack_text = (
+        f"⚡ ضربهٔ حیاتی! **{fa_digits(outcome.damage)} آسیب** به **سیبومورتیس** زدی!"
+        if outcome.is_crit
+        else f"⚔️ **{fa_digits(outcome.damage)} آسیب** به **سیبومورتیس** زدی!"
     )
+    await safe_answer_callback(callback, attack_text.replace("**", ""), show_alert=True)
     if callback.message is not None:
         await safe_edit_callback_message(
             callback,
@@ -395,12 +395,18 @@ async def handle_halloween_claim_milestone(
         await safe_answer_callback(callback, str(err), show_alert=True)
         return
 
-    alert_text = (
-        "🎉 تبریک! کارت انحصاری «امبر» و ۱ سیب الماسی دریافت شد!"
-        if outcome.unlocked_amber
-        else f"🎁 جایزهٔ مرحلهٔ {fa_digits(milestone_pct)}٪ با موفقیت دریافت شد!"
-    )
-    await safe_answer_callback(callback, alert_text, show_alert=True)
+    reward_text = {
+        75: "**۱۵۰ سیب** و **۲ دونه کدو**",
+        50: "**۳ پودر جادویی** و **۲ سیب طلایی**",
+        25: "**۱ سیب الماسی**",
+        0: "**۵۰۰ سیب** و **۱ سیب ابسیدینی**",
+    }[milestone_pct]
+    if outcome.unlocked_amber:
+        reward_text = f"**کارت امبر** و {reward_text}"
+    alert_text = f"🎁 جایزه **{fa_digits(milestone_pct)}٪**: {reward_text}!"
+    if outcome.summary.get("top3_bonus_apples"):
+        alert_text += "\n🏆 جایزهٔ سه نفر اول: **۱۰۰۰ سیب**!"
+    await safe_answer_callback(callback, alert_text.replace("**", ""), show_alert=True)
     if callback.message is not None:
         await safe_edit_callback_message(
             callback,
@@ -446,7 +452,7 @@ async def handle_halloween_group_drop_claim(
 
     await safe_answer_callback(
         callback,
-        f"🎃 تبریک! {outcome.seeds_granted} دونه کدو دریافت کردید!",
+        f"🎃 **{fa_digits(outcome.seeds_granted)} دونه کدو** گرفتی!".replace("**", ""),
         show_alert=True,
     )
     if callback.message is not None:
@@ -455,9 +461,9 @@ async def handle_halloween_group_drop_claim(
         )
         photo = FSInputFile(str(image_path)) if image_path.is_file() else None
         status_line = (
-            "\n\n✅ تمام ظرفیت این صندوق برداشت شد!"
+            "\n✅ **صندوق خالی شد!**"
             if outcome.depleted
-            else f"\n\n📦 برداشت‌شده: {fa_digits(outcome.claimed_count)} از {fa_digits(outcome.max_claims)}"
+            else f"\n📦 برداشت: **{fa_digits(outcome.claimed_count)} از {fa_digits(outcome.max_claims)}**"
         )
         await safe_edit_callback_message(
             callback,

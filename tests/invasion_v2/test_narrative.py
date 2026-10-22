@@ -61,8 +61,8 @@ def test_narrative_has_no_placeholders_repetitions_or_english(event):
     assert "{" not in text and "}" not in text
     assert not re.search(r"[A-Za-z]", text)
     assert re.search(r"[\u0600-\u06ff]", text)
-    # Supplied reference paragraphs sometimes omit names or combat numbers.
-    # Values must be injected exactly when their selected template asks for them.
+    # Templates may omit names or combat numbers. Values must be injected
+    # exactly when their selected template asks for them.
     pools = {"announcement": pool.ANNOUNCEMENT, "join_normal": pool.JOIN_NORMAL,
              "join_critical": pool.JOIN_CRIT, "join_high": pool.JOIN_CRIT,
              "finisher": pool.JOIN_KILL, "victory": [text for text in pool.VICTORY if "{n}" not in text],
@@ -93,7 +93,7 @@ def test_twenty_picks_in_one_context_avoid_recent_repeats(event):
 
 
 @pytest.mark.parametrize("event", EVENTS)
-def test_same_inputs_have_multiple_cinematic_alternatives(event):
+def test_same_inputs_have_multiple_modern_alternatives(event):
     outputs = {render_event(event, 1, seed) for seed in range(20)}
     assert len(outputs) >= 3
 

@@ -187,7 +187,9 @@ async def test_garden_price_displayed_matches_purchase_cost(db_session):
 
     text, kb = await _render_garden(1, db_session)
     unlock_btn = [b for b in _all_buttons(kb) if b.callback_data == "garden_unlock"][0]
-    assert f"🍎 {cost} سیب" in unlock_btn.text
+    from sib.services.sib_claim import fa_digits
+
+    assert f"🍎 {fa_digits(cost)} سیب" in unlock_btn.text
     assert "باز کردن قطعه بعدی" in unlock_btn.text
 
     # And the purchase charges exactly that config value for ONE plot.

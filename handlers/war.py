@@ -72,18 +72,16 @@ def format_war_caption(
     time_str = f"{fa_digits(hours)} ساعت و {fa_digits(minutes)} دقیقه"
 
     return (
-        "⚔️ جدال سیبی — میدان نبرد 🏰\n\n"
-        f"🔴 قبیلهٔ مهاجم: {attacker_title}\n"
-        f"💥 مجموع خسارت مهاجم: {fa_digits(attacker_damage)}\n\n"
-        f"🔵 قبیلهٔ مدافع: {defender_title}\n"
-        f"💥 مجموع خسارت مدافع: {fa_digits(defender_damage)}\n\n"
-        f"⏳ زمان باقی‌مانده: {time_str}\n"
-        f"⚡️ انرژی جنگی شما: {fa_digits(player_energy)} از ۱۰۰\n\n"
-        "ℹ️ هر ضربه ۲۰ انرژی مصرف می‌کند (فاصله بین ضربات: ۳۰ ثانیه)."
+        "⚔️ **جدال سیبی**\n"
+        f"🔴 مهاجم: **{attacker_title}**؛ آسیب: **{fa_digits(attacker_damage)}**\n"
+        f"🔵 مدافع: **{defender_title}**؛ آسیب: **{fa_digits(defender_damage)}**\n"
+        f"⏳ زمان باقی‌مانده: **{time_str}**\n"
+        f"⚡️ انرژی جنگی شما: **{fa_digits(player_energy)} از ۱۰۰**\n"
+        "ℹ️ هر ضربه **۲۰ انرژی**؛ فاصله: **۳۰ ثانیه**."
     )
 
 
-NO_WAR_TEXT = "🏰 این گروه در حال حاضر در هیچ نبردی شرکت ندارد. مدیران می‌توانند از منوی «قلعه سیبی» اعلان جنگ کنند."
+NO_WAR_TEXT = "⚔️ جنگ فعالی نداریم.\nمدیران می‌تونن از منوی «قلعه سیبی» اعلام جنگ کنن."
 
 
 async def build_war_status_screen(group_id: int, user_id: int):
@@ -283,9 +281,9 @@ async def war_attack_callback(callback: CallbackQuery):
 
         # Notify clicking user
         alert_msg = (
-            f"💥 با سیب باف ضربه زدی! {fa_digits(damage)} آسیب وارد شد! (انرژی باقی‌مانده: {fa_digits(energy)})"
+            f"💥 سیب باف! {fa_digits(damage)} آسیب.\nانرژی باقی‌مانده: {fa_digits(energy)}"
             if mode == "buff"
-            else f"⚔️ ضربه ثبت شد! {fa_digits(damage)} آسیب وارد شد! (انرژی باقی‌مانده: {fa_digits(energy)})"
+            else f"⚔️ {fa_digits(damage)} آسیب ثبت شد!\nانرژی باقی‌مانده: {fa_digits(energy)}"
         )
         await safe_answer_callback(callback, alert_msg, show_alert=True)
 
@@ -391,7 +389,7 @@ async def war_potion_callback(callback: CallbackQuery):
 
         await safe_answer_callback(
             callback,
-            f"🧪 معجون شفا نوشیده شد! ۵۰ واحد انرژی بازیابی شد. (انرژی کنونی: {fa_digits(new_energy)})",
+            f"🧪 معجون شفا: ۵۰ انرژی برگشت!\nانرژی فعلی: {fa_digits(new_energy)}",
             show_alert=True,
         )
 

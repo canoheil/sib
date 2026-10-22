@@ -108,7 +108,9 @@ async def handle_sib_kiss(message: Message) -> None:
         # This Telegram message was already processed; say nothing again.
         return
     if result.status == KISS_COOLDOWN:
-        await message.reply(format_kiss_cooldown_message(result.remaining_seconds))
+        await message.reply(
+            format_kiss_cooldown_message(result.remaining_seconds), parse_mode="Markdown"
+        )
         return
     if result.status != KISS_AWARDED:  # pragma: no cover - defensive
         await message.reply(KISS_GENERIC_FAILURE_TEXT)

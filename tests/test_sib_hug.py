@@ -105,15 +105,18 @@ def test_at_least_ten_distinct_hug_variants():
     assert len(HUG_MESSAGE_VARIANTS) >= 10
     assert len(set(HUG_MESSAGE_VARIANTS)) == len(HUG_MESSAGE_VARIANTS)
     for template in HUG_MESSAGE_VARIANTS:
-        assert "{a}" in template and "{b}" in template and "{n}" in template
+        assert "**{a}**" in template and "**{b}**" in template
+        assert "**{n} سیب**" in template
+        assert sum(template.count(mark) for mark in ".!؟") <= 2
+        assert "..." not in template and "—" not in template
 
 
 def test_pick_hug_message_mentions_both_users_and_amount():
     text = pick_hug_message("[آلیس](tg://user?id=1)", "[باب](tg://user?id=2)", 10)
-    assert "[آلیس](tg://user?id=1)" in text
-    assert "[باب](tg://user?id=2)" in text
+    assert "**[آلیس](tg://user?id=1)**" in text
+    assert "**[باب](tg://user?id=2)**" in text
     # Persian digits for the amount, never Latin.
-    assert "۱۰" in text
+    assert "**۱۰ سیب**" in text
     assert "10" not in text
 
 
@@ -126,8 +129,8 @@ def test_pick_hug_message_varies_across_variants():
 
 
 def test_cooldown_message_exact_text():
-    prefix = "🤗 هنوز زوده! "
-    suffix = " دیگه می\u200cتونی دوباره بغل سیبی بدی. 🍎"
+    prefix = "🤗 فقط **"
+    suffix = "** صبر کن؛ بعدش می‌تونی دوباره بغل سیبی بدی!"
     assert format_hug_cooldown_message(600) == prefix + "۱۰ دقیقه" + suffix
     assert format_hug_cooldown_message(42) == prefix + "۴۲ ثانیه" + suffix
     assert format_hug_cooldown_message(157) == prefix + "۲ دقیقه و ۳۷ ثانیه" + suffix
@@ -623,9 +626,8 @@ async def test_handler_second_hug_within_cooldown_replies_wait_without_reward(db
     await handle_sib_hug(msg2)
 
     reply2 = msg2.reply.call_args[0][0]
-    assert reply2 == (
-        "🤗 هنوز زوده! ۸ دقیقه دیگه می\u200cتونی دوباره بغل سیبی بدی. 🍎"
-    )
+    assert reply2 == "🤗 فقط **۸ دقیقه** صبر کن؛ بعدش می‌تونی دوباره بغل سیبی بدی!"
+    assert msg2.reply.call_args.kwargs["parse_mode"] == "Markdown"
     async with get_session() as session:
         assert await _balance(session, 820003) == 0
         assert await _balance(session, 820001) == HUG_AMOUNT

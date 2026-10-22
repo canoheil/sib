@@ -107,14 +107,17 @@ def test_at_least_ten_distinct_kiss_variants():
     assert len(KISS_MESSAGE_VARIANTS) >= 10
     assert len(set(KISS_MESSAGE_VARIANTS)) == len(KISS_MESSAGE_VARIANTS)
     for template in KISS_MESSAGE_VARIANTS:
-        assert "{a}" in template and "{b}" in template and "{n}" in template
+        assert "**{a}**" in template and "**{b}**" in template
+        assert "**{n} سیب**" in template
+        assert sum(template.count(mark) for mark in ".!؟") <= 2
+        assert "..." not in template and "—" not in template
 
 
 def test_pick_kiss_message_mentions_both_users_and_amount():
     text = pick_kiss_message("[آلیس](tg://user?id=1)", "[باب](tg://user?id=2)", 10)
-    assert "[آلیس](tg://user?id=1)" in text
-    assert "[باب](tg://user?id=2)" in text
-    assert "۱۰" in text
+    assert "**[آلیس](tg://user?id=1)**" in text
+    assert "**[باب](tg://user?id=2)**" in text
+    assert "**۱۰ سیب**" in text
     assert "10" not in text
 
 
@@ -125,8 +128,8 @@ def test_pick_kiss_message_varies_across_variants():
 
 
 def test_kiss_cooldown_message_exact_text():
-    prefix = "😘 هنوز زوده! "
-    suffix = " دیگه می\u200cتونی دوباره بوس سیبی بدی. 🍎"
+    prefix = "😘 فقط **"
+    suffix = "** صبر کن؛ بعدش می‌تونی دوباره بوس سیبی بدی!"
     assert format_kiss_cooldown_message(600) == prefix + "۱۰ دقیقه" + suffix
     assert format_kiss_cooldown_message(42) == prefix + "۴۲ ثانیه" + suffix
     assert format_kiss_cooldown_message(157) == prefix + "۲ دقیقه و ۳۷ ثانیه" + suffix
@@ -566,9 +569,11 @@ async def test_handler_second_kiss_within_cooldown_replies_exact_wait(db_session
     msg2 = _group_kiss_message(sender, "بوس سیبی", target=second_target, message_id=2)
     await handle_sib_kiss(msg2)
 
-    assert msg2.reply.call_args[0][0] == (
-        "😘 هنوز زوده! ۸ دقیقه دیگه می\u200cتونی دوباره بوس سیبی بدی. 🍎"
-    )
+    cooldown_text = msg2.reply.call_args[0][0]
+    assert cooldown_text.startswith("😘 فقط **")
+    assert "دقیقه" in cooldown_text
+    assert cooldown_text.endswith("** صبر کن؛ بعدش می‌تونی دوباره بوس سیبی بدی!")
+    assert msg2.reply.call_args.kwargs["parse_mode"] == "Markdown"
     async with get_session() as session:
         assert await _balance(session, 920003) == 0
         assert await _balance(session, 920001) == KISS_AMOUNT

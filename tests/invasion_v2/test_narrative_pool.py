@@ -10,8 +10,9 @@ import pytest
 from sib.services.invasion_v2 import narrative as narrative
 from sib.services.invasion_v2 import narrative_pool as pool
 
-MINIMUMS = {"ANNOUNCEMENT": 12, "JOIN_NORMAL": 20, "JOIN_CRIT": 15,
-            "JOIN_KILL": 8, "VICTORY": 10, "DEFEAT": 10, "EXPIRED": 6}
+MINIMUMS = {"ANNOUNCEMENT": 12, "JOIN_NORMAL": 22, "JOIN_CRIT": 16,
+            "JOIN_BUFF": 6, "JOIN_KILL": 10, "VICTORY": 18,
+            "DEFEAT": 12, "EXPIRED": 8}
 POOLS = {name: getattr(pool, name) for name in MINIMUMS}
 ALLOWED = {"user", "card", "region", "enemy_name", "damage", "hp_remaining", "n"}
 TEMPLATES = [(name, i, text) for name, items in POOLS.items() for i, text in enumerate(items)]
@@ -34,7 +35,8 @@ def _render_category(category, **overrides):
     if category.startswith("JOIN_"):
         return narrative.render_join(username=values["username"], card_name=values["card_name"],
             damage=123, is_crit=category == "JOIN_CRIT",
-            enemy_hp_remaining=0 if category == "JOIN_KILL" else 456, rng=rng)
+            enemy_hp_remaining=0 if category == "JOIN_KILL" else 456, rng=rng,
+            is_buffed=category == "JOIN_BUFF")
     if category == "VICTORY":
         return narrative.render_victory(**values, rng=rng, participant_count=participant_count)
     return getattr(narrative, "render_" + category.lower())(**values, rng=rng)
@@ -63,22 +65,23 @@ def test_only_allowed_placeholders(category):
                 if field == "n":
                     assert category == "VICTORY"
         # Never invent data that cannot be provided by the frozen APIs.
-        if category in ("JOIN_NORMAL", "JOIN_CRIT"):
+        if category in ("JOIN_NORMAL", "JOIN_CRIT", "JOIN_BUFF"):
             assert "{region}" not in text and "{enemy_name}" not in text
         if category == "JOIN_KILL":
             assert {f for _, f, _, _ in Formatter().parse(text) if f} <= {"user", "card"}
 
 
 @pytest.mark.parametrize("category", POOLS)
-def test_rhythm_and_added_openings(category):
+def test_short_modern_copy_and_opening_variety(category):
     texts = POOLS[category]
-    assert sum(len(t) < 100 for t in texts) >= 2
-    assert sum(100 <= len(t) < 180 for t in texts) >= 2
-    assert sum(180 <= len(t) < 900 for t in texts) >= 2
-    # Mandatory reference text has repeated openings; assess original additions.
-    openings = [" ".join(t.split()[:2]) for t in texts[3:]]
-    assert len(openings) == len(set(openings))
-    assert all("\n" not in t for t in texts)
+    assert all(0 < len(text) <= 140 for text in texts)
+    assert all(1 <= len(re.findall(r"[.!؟]", text)) <= 2 for text in texts)
+    assert all(text.count("**") >= 2 and text.count("**") % 2 == 0 for text in texts)
+    assert all("\n" not in text and "—" not in text and "–" not in text for text in texts)
+    assert not any(word in text for text in texts
+                   for word in ("در هم کوبید", "نبرد عظیم", "دلاور", "پیش تاخت"))
+    openings = [" ".join(text.split()[:3]) for text in texts]
+    assert max(openings.count(opening) for opening in openings) <= 2
 
 
 def test_pick_avoids_recent_repeats():
@@ -267,47 +270,11 @@ def test_added_copy_is_protective_not_graphic_or_tabular():
             assert "{user}" in text and "{card}" in text
 
 
-# Supplied samples are frozen, including spelling, punctuation, perspective and
-# missing placeholders. Only the prompt's presentation line wrapping is removed.
-REFERENCE_FIRST_THREE = {
-    "ANNOUNCEMENT": [
-        "ای مدافعان اواریا! سایهٔ شیاسیب روی {region} افتاده و باد، بوی یورش می‌دهد. اگر امروز نایستید، فردا در خانه‌های خودتان خواهند ایستاد. برخیزید.",
-        "صدای طبل از دور می‌آید. سایه‌ها بلندتر شده‌اند و زمین زیر قدم‌های سنگین می‌لرزد. شیاسیب به {region} رسیده است. این یورش باید همین امروز متوقف شود.",
-        "آسمان {region} سنگین شد. گرد و خاک از دوردست بلند می‌شود و هر قدمی که نزدیک‌تر می‌آید، هوای شهر تیره‌تر می‌شود. کسانی که دستشان به سلاح می‌رسد، اکنون زمانش است.",
-    ],
-    "JOIN_NORMAL": [
-        "{user} پیش رفت. یک قدم، دو قدم. {card} بالا آمد و روی زرهٔ شیاسیب نشست. صدای برخورد پیچید و دشمن برای لحظه‌ای از پا بازماند.",
-        "{card} در دست {user} سوت کشید و به پهلوی دشمن نشست. {damage} آسیب بر پیکر شیاسیب وارد شد و برای لحظه‌ای، یورشش کُند شد.",
-        "{user} از میان گرد و خاک بیرون آمد و {card} را بر سینهٔ مهاجم کوبید. شیاسیب یک قدم عقب کشید و نفسش را حبس کرد.",
-    ],
-    "JOIN_CRIT": [
-        "آسمان ترکید! {user} با {card} چنان ضربه‌ای زد که پیکر شیاسیب به لرزه افتاد. گردان‌های دشمن از جای خود پرت شدند و زمین زیر پایشان دهان باز کرد.",
-        "{user}، {card} را چرخاند و ضربه‌ای زد که پیکر مهاجم به عقب خم شد. لحظه‌ای سکوت شد — بعد گردان دشمن لرزید.",
-        "یک انفجار از برخورد {card} در دست {user} با زرهٔ شیاسیب بلند شد. شعله‌های سبز از شکاف زره بیرون زد و دشمن به عقب پرتاب شد. زمین تا چند قدم سوخت.",
-    ],
-    "JOIN_KILL": [
-        "{user} ضربهٔ آخر را زد. {card} در هوا چرخید و بر شانهٔ شیاسیب نشست. دشمن نفسش را در سینه حبس کرد و در تاریکی محو شد.",
-        "آخرین ضربه از {user} بود. چشمان شیاسیب برای لحظه‌ای درخشید، بعد خاموش شد — و میدان ساکت. زمین زیر پایشان، با آرامشی غریب، نفس کشید.",
-        "{user} پیش رفت، {card} را دو دستی گرفت و بر سینهٔ شیاسیب کوبید. دشمن مثل سنگ به زمین افتاد و پیکرش در گرد و خاک گم شد.",
-    ],
-    "VICTORY": [
-        "شیاسیب عقب نشست. {region} نفس کشید. باد پرچم‌های ما را در کوچه‌ها چرخاند و هر دیوار، نام قهرمانانش را زیر لب تکرار می‌کند.",
-        "آخرین سایه محو شد. {region} از زیر خاکستر بیرون آمد، زخمی اما ایستاده. امشب در خانه‌ها نان می‌پزند و در میدان، سرود پیروزی خوانده می‌شود.",
-        "دشمن گریخت. ما ماندیم. {region} هنوز ایستاده و آسمانش دوباره آبی شده. اما یادتان باشد: این پایان نیست — این فقط یک نفس کوتاه است.",
-    ],
-    "DEFEAT": [
-        "دیگر صدایی از {region} نمی‌آید. شیاسیب در آن نشسته و تاریکی از هر خانه بیرون می‌زند. اواریا یک تکه از خودش را از دست داد.",
-        "{region} سقوط کرد. دودی از آن بلند می‌شود که تا هفت آسمان می‌رود. هنوز می‌توان بازگشت، اما این بار گران تمام خواهد شد.",
-        "شیاسیب بر {region} مسلط شد. کسانی که جان به در بردند، به کوه‌ها گریختند. دشمن ایستاده — اما ما هنوز زنده‌ایم و باز خواهیم گشت.",
-    ],
-    "EXPIRED": [
-        "نبرد بی‌نتیجه ماند. سایه‌ها آرام آرام عقب کشیدند و در تاریکی گم شدند — گویی هیچ‌وقت آنجا نبودند.",
-        "غبار فرو نشست و میدان خالی ماند. شیاسیب ناپدید شد، بدون آنکه کسی بداند کجا رفت. {region} هنوز ایستاده، اما زخم خورده.",
-        "هیچ ضربه‌ای به هدف نرسید. دشمن در تاریکی غیب شد. اما این یک پیروزی نیست — فقط وقفه‌ای پیش از یورش بعدی.",
-    ],
-}
-
-
-@pytest.mark.parametrize("category", POOLS)
-def test_supplied_first_three_are_verbatim(category):
-    assert POOLS[category][:3] == REFERENCE_FIRST_THREE[category]
+# N2 reference samples: concise, conversational and bold by default.
+def test_n2_announcement_and_join_samples():
+    assert pool.ANNOUNCEMENT[0] == (
+        "**{region}** زیر حمله‌ست! شیاسیب رسیده؛ برای دفاع آماده‌اید؟"
+    )
+    assert pool.JOIN_NORMAL[0] == (
+        "**{user}** با **{card}** ضربه زد! شیاسیب یه قدم عقب رفت."
+    )

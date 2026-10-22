@@ -16,6 +16,7 @@ import json
 
 import pytest
 
+from sib.core.text import safe_name
 from sib.services.card_progression import card_attributes
 from sqlalchemy import select
 
@@ -249,7 +250,9 @@ async def test_battle_plan_is_precomputed_with_formula_and_staged_beats(db_sessi
     assert battle["result"]["scores"]["player1"] == expected
 
     # Intro beat names both cards (Persian narrative).
-    assert "قهرمان battle_d" in state["plan"][0]["text"] or "قهرمان battle_e" in state["plan"][0]["text"]
+    assert safe_name("قهرمان battle_d") in state["plan"][0]["text"] or safe_name(
+        "قهرمان battle_e"
+    ) in state["plan"][0]["text"]
 
 
 @pytest.mark.asyncio
@@ -303,6 +306,57 @@ async def test_same_seed_same_inputs_give_same_result(db_session):
     story1 = await AppleBattleService.narrate(db_session, battle.id)
     story2 = await AppleBattleService.narrate(db_session, battle.id)
     assert story1 == story2
+    assert "..." not in story1 and "—" not in story1
+    assert "**" in story1 and "📊 **" in story1
+    for line in filter(None, story1.splitlines()):
+        assert sum(line.count(mark) for mark in ".!؟") <= 2
+
+
+def test_staged_narrative_is_short_bold_and_markdown_safe():
+    for seed in range(24):
+        plan = AppleBattleService._compose_plan(
+            player1_id=1,
+            player2_id=2,
+            name1="آرین",
+            name2="سارا",
+            card_name1="شمشیر",
+            card_name2="سپر",
+            winner_id=1,
+            seed=str(seed),
+            level1=4,
+            level2=2,
+        )
+        assert [beat["phase"] for beat in plan] == [
+            "intro",
+            "round",
+            "round",
+            "round",
+            "finale",
+        ]
+        for beat in plan:
+            text = beat["text"]
+            assert "..." not in text and "—" not in text
+            if beat["phase"] == "round":
+                assert len(text) <= 120
+                assert sum(text.count(mark) for mark in ".!؟") <= 2
+        assert "**آرین**" in plan[0]["text"]
+        assert "(سطح **۴**)" in plan[0]["text"]
+        assert "برنده: **آرین**" in plan[-1]["text"]
+        assert "**۱ نهال**" in plan[-1]["text"]
+        assert "**۵ سیب**" in plan[-1]["text"]
+
+    escaped = AppleBattleService._compose_plan(
+        player1_id=1,
+        player2_id=2,
+        name1="آرین_الف",
+        name2="سارا",
+        card_name1="کارت[ویژه",
+        card_name2="سپر",
+        winner_id=1,
+        seed="escaped",
+    )
+    assert "**آرین\\_الف**" in escaped[0]["text"]
+    assert "**کارت\\[ویژه**" in escaped[0]["text"]
 
 
 # ---------------------------------------------------------------------------
@@ -369,7 +423,9 @@ async def test_engine_advances_stages_and_finishes_with_precomputed_winner(db_se
     # Finale mentions the winner; both stages rendered for both groups.
     final_text = engine.render_for_group(state, -4001, a.id)
     assert "برنده" in final_text
-    assert "قهرمان engine_a" in final_text or "قهرمان engine_b" in final_text
+    assert safe_name("قهرمان engine_a") in final_text or safe_name(
+        "قهرمان engine_b"
+    ) in final_text
 
 
 @pytest.mark.asyncio
@@ -1394,13 +1450,13 @@ async def test_different_card_levels_display_accurately_and_help_copy_is_truthfu
         db_session, "diff_levels", cursor=1, level1=4, level2=2
     )
     intro_text = state["plan"][0]["text"]
-    assert f"{u1.display_name} با" in intro_text
-    assert "(سطح 4)" in intro_text
-    assert "(سطح 2)" in intro_text
+    assert f"**{safe_name(u1.display_name)}** با" in intro_text
+    assert "(سطح **۴**)" in intro_text
+    assert "(سطح **۲**)" in intro_text
 
     rendered = AppleBattleEngine().render_for_group(state, match.group1_id, u1.id)
-    assert "(سطح 4)" in rendered
-    assert "(سطح 2)" in rendered
+    assert "(سطح **۴**)" in rendered
+    assert "(سطح **۲**)" in rendered
 
     # Help copy must not promise guaranteed same-level opponents.
     apple_help_body = get_section("games").body_fa
@@ -1422,8 +1478,8 @@ async def test_bot_vs_pvp_reward_text_matches_actual_reward_logic(db_session):
     pvp_finale = pvp_state["plan"][-1]["text"]
     bot_finale = bot_state["plan"][-1]["text"]
 
-    assert "🎁 پاداش پیروزی: ۱ نهال 🌱 + ۵ سیب 🍏" in pvp_finale
-    assert "🎁 پاداش پیروزی: ۵ سیب 🍏" in bot_finale
+    assert "🎁 پاداش پیروزی: **۱ نهال** 🌱 + **۵ سیب** 🍏" in pvp_finale
+    assert "🎁 پاداش پیروزی: **۵ سیب** 🍏" in bot_finale
     assert "نهال" not in bot_finale
 
     # Finalize bot match and verify actual reward settlement matches the text.

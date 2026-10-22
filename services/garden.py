@@ -53,7 +53,7 @@ from sib.services.seedling import SeedlingService
 DIVINE_FERTILIZER_ITEM = "divine_fertilizer"
 
 # Persian refusal shown by every action blocked by corruption.
-WITHERED_REFUSAL = "این قطعه پژمرده است؛ اول با کود الهی احیایش کن. 🥀"
+WITHERED_REFUSAL = "🥀 این قطعه پژمرده‌ست! اول با **کود الهی** درستش کن."
 
 
 # The currency outcome key of the drop table (not an inventory item).
@@ -266,11 +266,11 @@ class GardenService:
         if bool(plot.is_withered):
             raise ValueError(WITHERED_REFUSAL)
         if cls._derive_state(plot, datetime.now(timezone.utc)) != PlotState.EMPTY:
-            raise ValueError("این قطعه خالی نیست!")
+            raise ValueError("🌱 این قطعه قبلاً کاشته شده!")
 
         seedlings = await SeedlingService.get_total(session, user_id)
         if seedlings < 1:
-            raise ValueError("نهال کافی نداری! 🌱")
+            raise ValueError("🌱 نهال کافی نداری!")
 
         now = datetime.now(timezone.utc)
         growth = await ConfigService.get_int(session, "garden_growth_seconds")
@@ -289,7 +289,7 @@ class GardenService:
             .with_for_update()
         )
         if inv is None or inv.total < 1:
-            raise ValueError("نهال کافی نداری! 🌱")
+            raise ValueError("🌱 نهال کافی نداری!")
         inv.total -= 1
         await session.flush()
 
@@ -332,7 +332,7 @@ class GardenService:
         if bool(plot.is_withered):
             raise ValueError(WITHERED_REFUSAL)
         if cls._derive_state(plot, now) != PlotState.FRUIT_READY:
-            raise ValueError("هنوز میوه‌ای برای برداشت آماده نیست! 🍎")
+            raise ValueError("🍎 هنوز میوه آماده نیست!")
 
         amount = await ConfigService.get_int(session, "garden_fruit_amount")
         fruit = await ConfigService.get_int(session, "garden_fruit_seconds")
@@ -423,7 +423,7 @@ class GardenService:
             key=lambda p: p.plot_index,
         )
         if not ready:
-            raise ValueError("هنوز میوه‌ای برای برداشت آماده نیست! 🍎")
+            raise ValueError("🍎 هنوز میوه آماده نیست!")
         outcomes: List[HarvestOutcome] = []
         for plot in ready:
             plot = await cls._get_plot(session, garden, plot.plot_index)
@@ -769,14 +769,12 @@ class GardenService:
         garden = await cls.get_or_create(session, user_id, for_update=True)
         plot = await cls._get_plot(session, garden, plot_index)
         if not bool(plot.is_withered):
-            raise ValueError(
-                "این قطعه پژمرده نیست؛ کود الهی فقط برای قطعه‌های پژمرده کاربرد دارد."
-            )
+            raise ValueError("این قطعه پژمرده نیست؛ **کود الهی** لازم نداره.")
         owned = await ItemService.get_total(
             session, user_id, DIVINE_FERTILIZER_ITEM, for_update=True
         )
         if owned < 1:
-            raise ValueError("کود الهی نداری! می‌تونی از فروشگاه تهیه‌اش کنی. 🧪")
+            raise ValueError("🧪 **کود الهی** نداری! از فروشگاه بگیر.")
 
         await ItemService.consume(session, user_id, DIVINE_FERTILIZER_ITEM, 1)
         plot.is_withered = False

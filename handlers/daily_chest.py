@@ -89,15 +89,15 @@ CHEST_POOL_LINE = (
 )
 CHEST_AVAILABLE_TEXT = (
     f"{CHEST_TITLE}\n\n"
-    "هر روز یک بار بازش کن؛ یک جایزه‌ی تصادفی مال توئه! 🍏\n"
+    "هر روز یه جایزه‌ی تصادفی بردار!\n"
     f"{CHEST_POOL_LINE}\n\n"
-    "صندوقچه‌ی امروز آماده‌ست. 👇"
+    "صندوق امروز آماده‌ست. 👇"
 )
-CHEST_DISABLED_TEXT = f"{CHEST_TITLE}\n\nصندوقچه‌ی گنج فعلاً بسته‌ست. بعداً دوباره سر بزن! 🍏"
-CHEST_CONFIG_ERROR_TEXT = "پیکربندی صندوقچه موقتاً مشکل داره؛ بعداً دوباره تلاش کن. 🍏"
-CHEST_FAILURE_TEXT = "صندوقچه باز نشد. یه لحظه‌ی دیگه دوباره امتحان کن. 🍏"
-OPEN_TOAST = "صندوقچه باز شد! 🎁"
-ALREADY_TOAST = "این یکی رو امروز باز کردی! ⏳"
+CHEST_DISABLED_TEXT = f"{CHEST_TITLE}\n\nفعلاً بسته‌ست؛ بعداً سر بزن!"
+CHEST_CONFIG_ERROR_TEXT = "🎁 تنظیمات صندوقچه مشکل داره؛ بعداً دوباره تلاش کن."
+CHEST_FAILURE_TEXT = "🎁 صندوقچه باز نشد؛ دوباره امتحان کن."
+OPEN_TOAST = "🎁 صندوقچه باز شد!"
+ALREADY_TOAST = "⏳ صندوق امروز رو باز کردی!"
 OPEN_BUTTON_TEXT = "🎁 باز کردن صندوقچه"
 BACK_BUTTON_TEXT = "🏠 منوی اصلی"
 
@@ -111,23 +111,19 @@ _GROUP_DAY_PATTERN = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")  # ASCII digits o
 
 GROUP_CHEST_TEXT = (
     f"{CHEST_TITLE}\n\n"
-    "هر عضو گروه می‌تونه امروز یک بار صندوقچه رو باز کنه؛ جایزه‌ی هر نفر مال خودشه! 🍏\n"
+    "هر عضو می‌تونه یه بار بازش کنه؛ جایزه‌اش مال خودشه!\n"
     f"{CHEST_POOL_LINE}\n\n"
-    "صندوقچه‌ی امروز آماده‌ست و تا نیمه‌شب گرینویچ معتبره. 👇"
+    "صندوق امروز تا نیمه‌شب گرینویچ بازه. 👇"
 )
-GROUP_ONLY_TEXT = "این صندوقچه فقط داخل گروه‌ها باز می‌شه. 🍏"
-GROUP_INVALID_TEXT = "این دکمه معتبر نیست؛ صندوقچه‌ی تازه رو از منوی گروه باز کن. 🍏"
-GROUP_EXPIRED_TEXT = (
-    "این صندوقچه مال روز قبله و منقضی شده؛ از منوی گروه یه صندوقچه‌ی تازه بگیر. 🍏"
-)
+GROUP_ONLY_TEXT = "🎁 این صندوقچه فقط توی گروه باز میشه."
+GROUP_INVALID_TEXT = "🎁 این دکمه معتبر نیست؛ یه صندوق تازه از منوی گروه بگیر."
+GROUP_EXPIRED_TEXT = "⏳ این صندوقچه منقضی شده! یه صندوق تازه از منوی گروه بگیر."
 
 
 # «سیب صندوق» (text shortcut). Persian «ی» and Arabic «ي» both match.
 _YEH = "[\\u06cc\\u064a]"
 GROUP_SHORTCUT_PATTERN = r"^\s*س" + _YEH + r"ب\s+صندوق\s*$"
-GROUP_COOLDOWN_TEXT = (
-    "⏳ صندوقچه‌ی این گروه همین الان پست شده؛ {seconds} ثانیه‌ی دیگه دوباره امتحان کن. 🍏"
-)
+GROUP_COOLDOWN_TEXT = "⏳ صندوق تازه پست شده؛ {seconds} ثانیه‌ی دیگه دوباره امتحان کن."
 # A slot race is re-read in a fresh transaction. A request that keeps losing
 # fails safely (no post, no reward) instead of waiting.
 GROUP_SLOT_ATTEMPTS = 5
@@ -149,8 +145,7 @@ def _keyboard(*, can_open: bool) -> InlineKeyboardMarkup:
 def _claimed_screen(claim: DailyChestClaim, now: datetime) -> str:
     return (
         f"{CHEST_TITLE}\n\n"
-        "صندوقچه‌ی امروز رو باز کردی! ✅\n"
-        f"جایزه‌ی امروز: {format_claimed_line(claim)}\n\n"
+        f"✅ امروز {format_claimed_line(claim)} گرفتی.\n\n"
         f"{format_next_reset(next_reset_at(now), now)}"
     )
 
@@ -378,7 +373,7 @@ def _group_reward_notice(user, result: ChestClaimResult) -> str:
         character=result.character,
         card=result.card,
     )
-    return f"🎁 {_mention(user.id, user.first_name)}، صندوقچه‌ی امروزت باز شد!\n{reward}"
+    return f"🎁 {_mention(user.id, user.first_name)} صندوقچه رو باز کرد!\n{reward}"
 
 
 @dataclass(frozen=True)

@@ -42,6 +42,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from sib.core.logging import Events, log_event, logger
+from sib.core.text import safe_name
 from sib.database.models import (
     AppleBattle,
     AppleBattleQueueEntry,
@@ -63,6 +64,7 @@ from sib.services.card_progression import (
     attributes_at_level,
     card_attributes,
 )
+from sib.services.sib_claim import fa_digits
 
 
 class BattleError(ValueError):
@@ -180,6 +182,8 @@ class AppleBattleService:
     ) -> List[Dict[str, Any]]:
         """Deterministic staged narrative beats (seeded, never changes outcome)."""
         rng = random.Random(f"plan:{seed}")
+        name1, name2 = safe_name(name1), safe_name(name2)
+        card_name1, card_name2 = safe_name(card_name1), safe_name(card_name2)
         winner_name = name1 if winner_id == player1_id else name2
         winner_card = card_name1 if winner_id == player1_id else card_name2
         loser_name = name2 if winner_id == player1_id else name1
@@ -187,45 +191,45 @@ class AppleBattleService:
         lvl2 = level2 if level2 is not None else level
 
         intros = [
-            "در دل باغ‌های افسانه‌ای سیب، دو جنگجو رودرروی هم ایستادند...",
-            "هوا سنگین بود و برگ‌ها در سکوت به تماشا ایستاده بودند...",
-            "شیپور نبرد نواخته شد و زمین لرزید...",
+            "⚡ میدان آماده‌ست؛ ضربه‌ها شروع میشن!",
+            "🔥 دو مبارز مستقیم میرن وسط قاب!",
+            "🍃 باغ ساکته؛ این سکوت زیاد دوام نداره!",
         ]
         rounds_a = [
-            f"{name1} با تمام قدرت حمله کرد و {name2} با هوشمندی ضربه را دفع کرد؛ اما طوفان ادامه یافت.",
-            f"ضربه‌ای مهیب میان {name1} و {name2} رد و بدل شد؛ شکوفه‌های سیب در هوا پرپر شدند.",
-            f"لحظه‌ای نفس‌گیر فرا رسید؛ {name1} و {name2} هیچ‌کدام کوتاه نیامدند...",
+            f"⚔️ **{name1}** ضربه زد؛ **{name2}** سریع دفاع کرد!",
+            f"💥 **{name1}** و **{name2}** وسط قاب برخورد کردن!",
+            f"⚡ **{name1}** حمله کرد، ولی **{name2}** جا خالی داد!",
         ]
         rounds_b = [
-            f"{name2} موضع گرفت و {name1} با چرخشی سریع از کنار ضربه گذشت؛ تماشاگران میخکوب شدند.",
-            f"صدای برخورد دو کارت پیچید؛ {name1} و {name2} همچنان ایستاده بودند.",
-            f"نفس‌ها در سینه حبس شد؛ {name1} و {name2} برای آخرین فرصت آماده می‌شدند...",
+            f"🔥 **{name2}** ضدحمله زد؛ **{name1}** عقب رفت!",
+            f"💫 **{name1}** و **{name2}** هنوز سرپان؛ نبرد برابره!",
+            f"👊 **{name2}** فشار آورد؛ **{name1}** جواب داد!",
         ]
         rounds_c = [
-            f"زمین نبرد لرزید؛ {name1} و {name2} آخرین نیروی خود را جمع کردند.",
-            f"برگ‌های سیب باران شد؛ {name1} و {name2} در میان طوفان جنگیدند.",
-            f"لحظه‌ی سرنوشت نزدیک می‌شد؛ {name1} در برابر {name2}...",
+            f"💥 **{name1}** و **{name2}** برای ضربهٔ آخر آماده شدن!",
+            f"🍃 **{name1}** حمله کرد؛ **{name2}** هنوز وایساده!",
+            f"⚡ **{name1}** و **{name2}** همه‌چیز رو به ضربهٔ آخر رسوندن!",
         ]
         endings = [
-            f"و سرانجام، {winner_name} با یک ضربه‌ی نهایی، پیروز میدان شد! 🍎",
-            f"در آخرین ثانیه، {winner_name} بر {loser_name} غلبه کرد و کلاه‌پیروزی را بر سر گذاشت! 🏆",
-            f"پیروزی از آنِ {winner_name} شد؛ تماشاگران با شور و شادی فریاد زدند! 🎉",
+            f"💥 **{winner_name}** ضربهٔ آخر رو زد!",
+            f"⚡ **{winner_name}** از سد **{loser_name}** گذشت!",
+            f"🎉 **{winner_name}** میدان رو گرفت!",
         ]
 
         intro_text = (
             "🍎 **نبرد سیبی آغاز شد!** 🍎\n\n"
-            f"⚔️ {name1} با **{card_name1}** (سطح {lvl1})\n"
-            f"⚔️ {name2} با **{card_name2}** (سطح {lvl2})\n\n"
+            f"⚔️ **{name1}** با **{card_name1}** (سطح **{fa_digits(lvl1)}**)\n"
+            f"⚔️ **{name2}** با **{card_name2}** (سطح **{fa_digits(lvl2)}**)\n\n"
             f"{rng.choice(intros)}"
         )
         reward_line = (
-            "🎁 پاداش پیروزی: ۵ سیب 🍏"
+            "🎁 پاداش پیروزی: **۵ سیب** 🍏"
             if is_bot_match
-            else "🎁 پاداش پیروزی: ۱ نهال 🌱 + ۵ سیب 🍏"
+            else "🎁 پاداش پیروزی: **۱ نهال** 🌱 + **۵ سیب** 🍏"
         )
         finale_text = (
             f"{rng.choice(endings)}\n\n"
-            f"🏆 **برنده: {winner_name}** با **{winner_card}**\n"
+            f"🏆 برنده: **{winner_name}** با **{winner_card}**\n"
             f"{reward_line}"
         )
         return [
@@ -353,7 +357,7 @@ class AppleBattleService:
                 "win_probability": round(p1_win, 4),
                 "seed": seed,
                 "balance_version": balance_version,
-                "summary": f"نبرد سیبی با پیروزی {players_map[str(winner_id)]['name']} پایان یافت.",
+                "summary": f"🏆 **{safe_name(players_map[str(winner_id)]['name'])}** نبرد سیبی رو برد.",
                 "result": result,
             },
             "plan": plan,
@@ -571,7 +575,7 @@ class AppleBattleService:
             "balance_version": balance_version,
             "summary": battle_block.get(
                 "summary",
-                f"نبرد سیبی با پیروزی {winner_name} پایان یافت.",
+                f"🏆 **{safe_name(winner_name)}** نبرد سیبی رو برد.",
             ),
             "result": result_payload,
         }
@@ -1326,6 +1330,7 @@ class AppleBattleService:
         char2 = await session.get(Character, card2.character_id) if card2 else None
         name1 = char1.name_fa if char1 else "جنگجوی ناشناس"
         name2 = char2.name_fa if char2 else "جنگجوی ناشناس"
+        name1, name2 = safe_name(name1), safe_name(name2)
 
         winner_id = result["winner_id"]
         winner_name = name1 if winner_id == battle.player1_id else name2
@@ -1333,26 +1338,26 @@ class AppleBattleService:
 
         rng = random.Random(f"narrative:{battle.rng_seed}")
         openings = [
-            "در دل باغ‌های افسانه‌ای سیب، دو جنگجو رودرروی هم ایستادند...",
-            "هوا سنگین بود و برگ‌ها در سکوت به تماشا ایستاده بودند...",
-            "شیپور نبرد نواخته شد و زمین لرزید...",
+            "⚔️ نبرد سیبی شروع شد!",
+            "🔥 دو کارت وارد میدان شدن!",
+            "🍃 همه‌چیز برای یه برخورد سریع آماده‌ست!",
         ]
         middles = [
-            f"{name1} با تمام قدرت حمله کرد و {name2} با هوشمندی ضربه را دفع کرد؛ اما طوفان ادامه یافت.",
-            f"ضربه‌ای مهیب میان {name1} و {name2} رد و بدل شد؛ شکوفه‌های سیب در هوا پرپر شدند.",
-            f"لحظه‌ای نفس‌گیر فرا رسید؛ {name1} و {name2} هیچ‌کدام کوتاه نیامدند...",
+            f"⚔️ **{name1}** ضربه زد؛ **{name2}** جواب داد!",
+            f"💥 **{name1}** و **{name2}** وسط قاب برخورد کردن!",
+            f"⚡ **{name1}** فشار آورد؛ **{name2}** عقب نکشید!",
         ]
         endings = [
-            f"و سرانجام، {winner_name} با یک ضربه‌ی نهایی، پیروز میدان شد! 🍎",
-            f"در آخرین ثانیه، {winner_name} بر {loser_name} غلبه کرد و کلاه‌پیروزی را بر سر گذاشت! 🏆",
-            f"پیروزی از آنِ {winner_name} شد؛ تماشاگران با شور و شادی فریاد زدند! 🎉",
+            f"💥 **{winner_name}** ضربهٔ آخر رو زد!",
+            f"⚡ **{winner_name}** از سد **{loser_name}** گذشت!",
+            f"🎉 **{winner_name}** میدان رو گرفت!",
         ]
-        story = " ".join(
+        story = "\n".join(
             [rng.choice(openings), rng.choice(middles), rng.choice(endings)]
         )
         stats_line = (
-            f"\n\n📊 امتیاز نبرد: {name1} «{result['scores']['player1']}» — "
-            f"{name2} «{result['scores']['player2']}»"
+            f"\n\n📊 **{name1}**: **{fa_digits(result['scores']['player1']).replace('.', '٫')}** | "
+            f"**{name2}**: **{fa_digits(result['scores']['player2']).replace('.', '٫')}**"
         )
         return story + stats_line
 

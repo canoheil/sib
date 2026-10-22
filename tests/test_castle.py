@@ -297,7 +297,7 @@ async def test_castle_callback_edits_message_in_place(castle_session, monkeypatc
     media_kwargs = bot.edit_message_media.await_args.kwargs
     assert media_kwargs["chat_id"] == -1
     assert media_kwargs["message_id"] == 7
-    assert "سیب اهدا شده: ۱۰۰" in media_kwargs["media"].caption
+    assert "اهدا: **۱۰۰ از" in media_kwargs["media"].caption
     main_callbacks = [
         b.callback_data
         for row in media_kwargs["reply_markup"].inline_keyboard
@@ -305,7 +305,7 @@ async def test_castle_callback_edits_message_in_place(castle_session, monkeypatc
     ]
     assert "castle:income:-1" in main_callbacks
     assert await AppleWalletService.get_balance(castle_session, 1) == 9900
-    assert "سیب به قلعه اهدا شد" in str(answer.await_args)
+    assert "۱۰۰ سیب به قلعه رفت" in str(answer.await_args)
 
     # The whole flow sent nothing new into the group.
     bot.send_photo.assert_not_awaited()
@@ -422,15 +422,15 @@ def test_castle_caption_is_localized_and_uses_persian_digits():
 
     caption = format_castle_caption(level=2, total_donated=12_345)
     assert caption == (
-        "🏰 قلعه سیبی\n\n"
-        "📊 سطح قلعه: ۲ از ۱۰\n\n"
-        "🍏 سیب اهدا شده: ۱۲۳۴۵ / ۲۰۰۰۰\n\n"
-        "⚔️ قدرت حمله در یورش: +۱۰٪\n\n"
-        "🎁 درآمد روزانه: ۲۰۰ سیب\n\n"
-        "⚠️ سقف اهدا: روزانه ۵۰۰ سیب (برای هر بازیکن)\n\n"
-        "ℹ️ اهدای سیب بازگشت‌پذیر نیست. درآمد روزانه فقط از یک قلعه دریافت می‌شود."
+        "🏰 **قلعه سیبی**\n"
+        "📊 سطح: **۲ از ۱۰**\n"
+        "🍏 اهدا: **۱۲۳۴۵ از ۲۰۰۰۰**\n"
+        "⚔️ قدرت یورش: **+۱۰٪**\n"
+        "🎁 درآمد روزانه: **۲۰۰ سیب**\n"
+        "⚠️ سقف اهدا: **۵۰۰ سیب در روز** (هر بازیکن)\n"
+        "ℹ️ اهدا برنمی‌گرده؛ درآمد روزانه فقط از **یک قلعه**."
     )
-    assert "سطح قلعه" in caption
+    assert "سطح:" in caption
     for unwanted in ("Invasion", "دمیج", "لول", "UTC"):
         assert unwanted not in caption
     assert not any(digit in caption for digit in "0123456789")
@@ -623,9 +623,9 @@ def test_castle_caption_shows_an_active_peace_shield():
     active = format_castle_caption(
         level=2, total_donated=12_345, shield_seconds=4 * 3600 + 12 * 60
     )
-    assert "🛡 سپر صلح: فعال (تا ۴ ساعت و ۱۲ دقیقه دیگر)" in active
+    assert "🛡 سپر صلح: **۴ ساعت و ۱۲ دقیقه دیگر**" in active
     # Only the shield line was added: the rest is the unchanged menu.
-    assert active.replace("🛡 سپر صلح: فعال (تا ۴ ساعت و ۱۲ دقیقه دیگر)\n\n", "") == (
+    assert active.replace("🛡 سپر صلح: **۴ ساعت و ۱۲ دقیقه دیگر**\n", "") == (
         format_castle_caption(level=2, total_donated=12_345)
     )
     assert not any(digit in active for digit in "0123456789")

@@ -98,8 +98,8 @@ async def test_withered_users_are_announced_in_group(db_session):
     # Persian header/footer exact
     assert WITHER_GROUP_HEADER in text
     assert WITHER_GROUP_FOOTER in text
-    assert text.startswith("⚠️ توجه! به دلیل عدم شرکت در یورش، باغ این مدافعان پژمرده شد:")
-    assert text.endswith("برای ترمیم زمین‌ها، از فروشگاه «کود الهی» تهیه کنید.")
+    assert text.startswith("⚠️ باغ این بازیکن‌ها به‌خاطر شرکت نکردن در یورش پژمرده شد:")
+    assert text.endswith("برای ترمیم زمین‌ها، **کود الهی** بخرید.")
     # Names are sanitized via plain_display_name: @ should be removed, no IDs exposed
     # user1 first_name is "علی@bad" -> plain_display_name should strip @
     assert "@" not in text
@@ -110,8 +110,9 @@ async def test_withered_users_are_announced_in_group(db_session):
     n2 = plain_display_name(user2.first_name, "مدافع")
     assert n1 in text
     assert n2 in text
-    # Names joined by ", "
-    assert ", " in text
+    # Names use Persian punctuation and one bold list; service result order is not contractual.
+    assert "، " in text
+    assert f"**{n1}، {n2}**" in text or f"**{n2}، {n1}**" in text
 
     # No duplicate when no withering
     sent.clear()
@@ -150,19 +151,16 @@ async def test_garden_menu_shows_wither_alert_if_present(db_session):
     # Must keep 🥀 on withered plots
     assert "🥀" in text
     assert "پژمرده" in text
-    # Must add prominent warning at TOP
-    assert "🚨 هشدار:" in text
-    assert "زمین شما پژمرده شده است! برای سالم‌سازی از فروشگاه «کود الهی» استفاده کنید." in text
-    # Count-specific check: should mention "1 زمین شما پژمرده" (user has 1 withered from 5 plots; garden has 5 initial plots)
-    assert "1 زمین شما پژمرده شده است" in text
-    # Warning should be near top, before seedlings line and before plot list
-    # Ensure warning appears before the plot lines
-    idx_warning = text.index("🚨 هشدار:")
-    idx_seedlings = text.index("نهال‌ها")
+    # Must add a short, prominent warning at the top with a Persian count.
+    assert "🥀 **۱ زمین پژمرده شده!**" in text
+    assert "برای ترمیم، **کود الهی** لازمه." in text
+    # Warning should be near top, before seedlings line and before plot list.
+    idx_warning = text.index("🥀 **۱ زمین")
+    idx_seedlings = text.index("🌱 نهال:")
     assert idx_warning < idx_seedlings
     # Also ensure rest of garden menu still renders normally (has باغ سیب, buttons)
     assert "باغ سیبِ" in text
-    assert "برای جزئیات، جادوی درخت" in text
+    assert "جزئیات هر قطعه" in text
     # Buttons still include withered plot with correct label
     from sib.database.models import PlotState
     # Verify kb contains garden_tree buttons
@@ -177,11 +175,10 @@ async def test_garden_menu_does_not_show_alert_if_no_wither(db_session):
     await GardenService.get_or_create(db_session, user.id)
     # No withering applied
     text, kb = await _render_garden(user.id, db_session)
-    assert "🚨 هشدار:" not in text
-    assert "پژمرده شده است" not in text
+    assert "زمین پژمرده شده!" not in text
     # Still contains normal garden content
     assert "باغ سیبِ" in text
-    assert "نهال‌ها" in text
+    assert "🌱 نهال:" in text
     # Ensure no 🥀 appears when no wither (or at least not required)
     # The user has no withered plots, so 🥀 should not be in text
     # (but we check that alert line is absent is primary)

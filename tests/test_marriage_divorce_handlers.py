@@ -433,7 +433,7 @@ async def test_authorized_confirm_succeeds(db_session):
 
     # The card says the divorce happened and drops the buttons.
     text, markup = _edited(bot)
-    assert text is not None and "طلاق انجام شد" in text
+    assert text is not None and "طلاق ثبت شد" in text
     assert f"کاربر{ACTOR_ID}" in text and f"کاربر{SPOUSE_ID}" in text
     assert markup is None
 

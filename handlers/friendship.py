@@ -41,10 +41,13 @@ PAGE_SIZE = 10
 
 
 def _card_text(sender_name: str, target_name: str, target_id: int) -> str:
+    sender = safe_name(sender_name, "یک سیبی")
+    target = safe_name(target_name, "یک سیبی")
+    mention = f"[{target}](tg://user?id={int(target_id)})"
     return (
-        "🍏 <b>درخواست دوستی سیبی</b>\n\n"
-        f"{html.escape(sender_name)} برای {html.escape(target_name)} درخواست دوستی فرستاده!\n\n"
-        f"<a href=\"tg://user?id={int(target_id)}\">{html.escape(target_name)}</a> عزیز، اگه موافقی دکمهٔ قبول رو بزن."
+        "🤝 **درخواست دوستی سیبی**\n\n"
+        f"**{sender}** به **{target}** درخواست رفاقت داد!\n"
+        f"**{mention}**، برای رفیق شدن «قبول» رو بزن."
     )
 
 
@@ -94,18 +97,25 @@ async def handle_friend_request(message: Message) -> None:
     if _ASSET.is_file():
         try:
             sent = await message.reply_photo(
-                FSInputFile(_ASSET), caption=caption, reply_markup=keyboard, parse_mode="HTML"
+                FSInputFile(_ASSET),
+                caption=caption,
+                reply_markup=keyboard,
+                parse_mode="Markdown",
             )
         except Exception as error:
             logger.warning(f"Friend request image delivery failed; falling back to text: {error}")
             try:
-                sent = await message.reply(caption, reply_markup=keyboard, parse_mode="HTML")
+                sent = await message.reply(
+                    caption, reply_markup=keyboard, parse_mode="Markdown"
+                )
             except Exception as fallback_error:
                 logger.warning(f"Friend request card delivery failed: {fallback_error}")
                 sent = None
     else:
         try:
-            sent = await message.reply(caption, reply_markup=keyboard, parse_mode="HTML")
+            sent = await message.reply(
+                caption, reply_markup=keyboard, parse_mode="Markdown"
+            )
         except Exception as error:
             logger.warning(f"Friend request card delivery failed: {error}")
             sent = None
@@ -146,7 +156,9 @@ async def handle_unfriend(message: Message) -> None:
         return
     first = safe_name(sender.first_name, "یک سیبی")
     second = safe_name(target.first_name, "یک سیبی")
-    await message.reply(f"💔 {first} و {second} از هم قهر کردند.")
+    await message.reply(
+        f"💔 **{first}** و **{second}** دیگه رفیق نیستن!", parse_mode="Markdown"
+    )
 
 
 async def _resolve_friend_callback(callback: CallbackQuery, action: str) -> None:
@@ -182,12 +194,14 @@ async def _resolve_friend_callback(callback: CallbackQuery, action: str) -> None
         return
 
     if action == FRIEND_ACCEPT:
-        text = f"🍏 {sender_name} و {recipient_name} حالا دوست سیبی هم هستند!"
-        await safe_answer_callback(callback, "درخواست دوستی قبول شد! 🍏")
+        text = f"🤝 **{sender_name}** و **{recipient_name}** با هم رفیق شدن!"
+        await safe_answer_callback(callback, "رفیق شدیم! 🤝")
     else:
-        text = "درخواست دوستی رد شد."
-        await safe_answer_callback(callback, "درخواست رد شد.")
-    await safe_edit_callback_message(callback, callback.bot, text, reply_markup=None, parse_mode=None)
+        text = "🍏 درخواست رفاقت رد شد."
+        await safe_answer_callback(callback, "درخواست رفاقت رد شد.")
+    await safe_edit_callback_message(
+        callback, callback.bot, text, reply_markup=None, parse_mode="Markdown"
+    )
 
 
 @router.callback_query(F.data.startswith(f"{FRIEND_ACCEPT}:"))

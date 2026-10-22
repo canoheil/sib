@@ -9,6 +9,7 @@ counter and the two unique constraints on ``inv2_event_claims``.
 import asyncio
 import importlib.util
 import json
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -746,11 +747,16 @@ def test_catalogue_has_twelve_events_with_three_variants_and_persian_digits():
     for template in catalog.EVENTS:
         assert len(template.narratives) == 3
         assert template.narratives[0] != template.narratives[1]
+        for narrative in template.narratives:
+            assert 0 < len(narrative) <= 120
+            assert 1 <= len(re.findall(r"[.!؟]", narrative)) <= 2
+            assert narrative.count("**") >= 2 and narrative.count("**") % 2 == 0
+            assert "—" not in narrative and "–" not in narrative
         line = catalog.render_effect_line(
             template, amount=154, loot_amount=template.loot.default_amount
             if template.loot else None, max_claims=3,
         )
-        assert line.strip()
+        assert line.strip() and "**" in line
         # No Latin digits anywhere in Persian player-facing copy.
         assert not any(char.isascii() and char.isdigit() for char in line)
         assert line.endswith(".")
@@ -758,5 +764,6 @@ def test_catalogue_has_twelve_events_with_three_variants_and_persian_digits():
 
 def test_loot_status_line_reports_winners_and_closure():
     assert "۲ از ۳" in catalog.render_loot_status(2, 3, ["آرش", "نیلوفر"])
-    assert "آرش" in catalog.render_loot_status(1, 3, ["آرش"])
+    assert "**آرش، نیلوفر**" in catalog.render_loot_status(2, 3, ["آرش", "نیلوفر"])
+    assert "**آرش**" in catalog.render_loot_status(1, 3, ["آرش"])
     assert "خالی شد" in catalog.render_loot_status(3, 3)

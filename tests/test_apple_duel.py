@@ -776,6 +776,9 @@ async def test_real_command_creates_persisted_invitation(db_session, monkeypatch
     duel = await db_session.scalar(select(AppleDuel))
     assert duel.status == "PENDING" and duel.message_id == 90
     assert len(transport.call_args.kwargs["reply_markup"].inline_keyboard) == 3
+    invitation = transport.call_args.args[0]
+    assert "**مریم**" in invitation and "**علی**" in invitation
+    assert transport.call_args.kwargs["parse_mode"] == "Markdown"
     assert await db_session.scalar(select(func.count()).select_from(AppleDuelSlot)) == 2
 
 

@@ -10,10 +10,12 @@ from types import SimpleNamespace
 from aiogram.types import BufferedInputFile
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
 from sib.core.logging import logger
+from sib.core.text import safe_name
 from sib.database.connection import get_session
 from sib.database.models import AppleBattle, AppleDuel
 from sib.services.apple_duel import AppleDuelService, now_utc
 from sib.services.character_art import resolve_character_photo
+from sib.services.sib_claim import fa_digits
 from sqlalchemy import select, update
 
 DUEL_SCENE_DELAY_SECONDS = 3.0
@@ -60,23 +62,26 @@ def scene_text(duel, battle, index):
 
     Player-facing narration only: internal identifiers (the duel UUID,
     the battle row id, the RNG seed) are never rendered into the group
-    message. Scene 5 is the terminal result - winner plus the seedling
-    reward line, and nothing else.
+    message. Scene 5 is the terminal result - winner plus the reward lines,
+    and nothing else.
     """
     cards = json.loads(duel.snapshot_json)["cards"]
+    for card in cards:
+        card["player_name"] = safe_name(card["player_name"])
+        card["name"] = safe_name(card["name"])
     a, b = cards
     winner = next(c for c in cards if c["user_id"] == battle.winner_id)
     scenes = [
-        f"⚔️ دوئل سیبی\n\n{a['player_name']} با «{a['name']}» (سطح {a['level']})\n"
-        f"در برابر {b['player_name']} با «{b['name']}» (سطح {b['level']})\n\n"
-        "دو مبارز وارد میدان می‌شوند؛ میانشان سکوتی کوتاه و سنگین نشسته است.",
-        "🌘 سنجش حریف\n\nفاصله هنوز پابرجاست. نگاه‌ها به سوی حریف می‌چرخند؛ میدان آرام است و لحظهٔ رویارویی نزدیک‌تر می‌شود.",
-        "⚔️ برخورد نخست\n\nرویارویی شکل می‌گیرد. نور از میان دو کارت می‌گذرد و سکوت میدان جای خود را به انتظار می‌دهد.\n"
-        "این قاب، روایت رویارویی است؛ جزئیات ضربه‌ها در موتور ثبت نمی‌شود.",
-        "🍃 تغییر جریان\n\nمیدان زیر نور تازه‌ای نمایان می‌شود. هر دو کارت هنوز در قاب‌اند؛ نگاه‌ها منتظر پایان این رویارویی می‌مانند.",
-        f"✨ لحظهٔ تعیین‌کننده\n\nانتظار به پایان نزدیک است؛ در نتیجهٔ ثبت‌شدهٔ نبرد، «{winner['name']}» پیش افتاده است. میدان آمادهٔ اعلام پیروز می‌شود.",
-        f"🏆 پایان دوئل سیبی\n\nبرنده: {winner['player_name']} با «{winner['name']}»\n"
-        "🌱 یک نهال به برنده داده شد. بازنده نهالی از دست نمی‌دهد.",
+        f"⚔️ **دوئل سیبی**\n\n"
+        f"**{a['player_name']}** با **{a['name']}** (سطح **{fa_digits(a['level'])}**)\n"
+        f"**{b['player_name']}** با **{b['name']}** (سطح **{fa_digits(b['level'])}**)\n\n"
+        "🔥 دو کارت، یه میدان. نبرد شروع شد!",
+        "👀 **سنجش حریف**\n\nدو نگاه قفل شد؛ هیچ‌کدوم کوتاه نمیان!",
+        f"⚔️ **برخورد اول**\n\n**{a['player_name']}** جلو رفت؛ **{b['player_name']}** محکم وایساد!",
+        f"💥 **تغییر جریان**\n\n**{a['name']}** و **{b['name']}** برگشتن وسط قاب! هنوز همه‌چیز بازه!",
+        f"⚡ **ضربهٔ آخر**\n\n**{winner['name']}** جلو افتاد! حالا وقت اعلام برنده‌ست!",
+        f"🏆 **پایان دوئل سیبی**\n\nبرنده: **{winner['player_name']}** با **{winner['name']}**\n"
+        "🎁 **۱ نهال** و **۵ سیب** برای برنده! بازنده چیزی از دست نداد.",
     ]
     return scenes[index]
 
@@ -201,12 +206,14 @@ class AppleDuelPresentation:
                 if photo:
                     try:
                         await bot.send_photo(
-                            duel.group_id, photo, caption=text, parse_mode=None
+                            duel.group_id, photo, caption=text, parse_mode="Markdown"
                         )
                     except Exception:
-                        await bot.send_message(duel.group_id, text, parse_mode=None)
+                        await bot.send_message(
+                            duel.group_id, text, parse_mode="Markdown"
+                        )
                 else:
-                    await bot.send_message(duel.group_id, text, parse_mode=None)
+                    await bot.send_message(duel.group_id, text, parse_mode="Markdown")
             except Exception:
                 logger.exception(
                     "Apple Duel scene delivery failed %s/%s", duel_id, index
@@ -311,9 +318,9 @@ class AppleDuelPresentation:
         text = (
             scene_text(duel, battle, 5)
             if battle
-            else "❌ دعوت دوئل سیبی رد شد."
+            else "❌ دعوت دوئل رد شد."
             if duel.status == "REJECTED"
-            else "⌛ دعوت دوئل سیبی منقضی شد."
+            else "⌛ وقت دعوت دوئل تموم شد."
         )
         try:
             if duel.message_id:
@@ -323,15 +330,17 @@ class AppleDuelPresentation:
                         chat_id=duel.group_id,
                         message_id=duel.message_id,
                         reply_markup=None,
-                        parse_mode=None,
+                        parse_mode="Markdown",
                     )
                 except TelegramBadRequest as exc:
                     if "message is not modified" not in str(exc).lower():
-                        await bot.send_message(duel.group_id, text, parse_mode=None)
+                        await bot.send_message(
+                            duel.group_id, text, parse_mode="Markdown"
+                        )
                 except Exception:
-                    await bot.send_message(duel.group_id, text, parse_mode=None)
+                    await bot.send_message(duel.group_id, text, parse_mode="Markdown")
             elif battle:
-                await bot.send_message(duel.group_id, text, parse_mode=None)
+                await bot.send_message(duel.group_id, text, parse_mode="Markdown")
             async with get_session() as session:
                 stored = await session.get(AppleDuel, duel.id)
                 stored.terminal_presented = True

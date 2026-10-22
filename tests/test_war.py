@@ -410,8 +410,10 @@ def test_war_narrative_pools_have_variants():
         render_defender_narrative,
     )
 
-    assert len(WAR_ATTACK_ATTACKER) >= 5
-    assert len(WAR_ATTACK_DEFENDER) >= 5
+    assert len(WAR_ATTACK_ATTACKER) == 6
+    assert len(WAR_ATTACK_DEFENDER) == 6
+    assert len(set(WAR_ATTACK_ATTACKER)) == 6
+    assert len(set(WAR_ATTACK_DEFENDER)) == 6
 
     text_atk = render_attacker_narrative(
         player="سهراب",
@@ -420,10 +422,11 @@ def test_war_narrative_pools_have_variants():
         damage=1250,
         is_buff=True,
     )
-    assert "سهراب" in text_atk
-    assert "شوالیه سیب" in text_atk
-    assert "شیرها" in text_atk
-    assert "سیب باف" in text_atk
+    assert "**سهراب**" in text_atk
+    assert "**شوالیه سیب**" in text_atk
+    assert "**شیرها**" in text_atk
+    assert "**۱۲۵۰ آسیب**" in text_atk
+    assert "💥 **سیب باف**" in text_atk
 
     text_def = render_defender_narrative(
         player="رستم",
@@ -432,10 +435,42 @@ def test_war_narrative_pools_have_variants():
         damage=800,
         is_buff=False,
     )
-    assert "رستم" in text_def
-    assert "سایه ایگریس" in text_def
-    assert "عقاب‌ها" in text_def
+    assert "**رستم**" in text_def
+    assert "**سایه ایگریس**" in text_def
+    assert "**عقاب‌ها**" in text_def
+    assert "**۸۰۰ آسیب**" in text_def
     assert "سیب باف" not in text_def
+
+
+def test_war_narrative_templates_are_short_modern_and_complete():
+    import re
+    from string import Formatter
+
+    from sib.services.war.narrative import WAR_ATTACK_ATTACKER, WAR_ATTACK_DEFENDER
+
+    pools = (
+        (WAR_ATTACK_ATTACKER, "target_group"),
+        (WAR_ATTACK_DEFENDER, "source_group"),
+    )
+    for templates, group_field in pools:
+        expected_fields = {"player", "card", "damage", "buff_label", group_field}
+        for template in templates:
+            fields = {
+                field
+                for _, field, spec, conversion in Formatter().parse(template)
+                if field is not None
+            }
+            assert fields == expected_fields
+            assert template.endswith("{buff_label}")
+            assert 0 < len(template) <= 140
+            assert 1 <= len(re.findall(r"[.!؟]", template)) <= 2
+            assert template.count("**") == 8
+            assert "\n" not in template and "—" not in template and "–" not in template
+            for field in expected_fields - {"buff_label"}:
+                assert re.search(rf"\*\*[^*]*\{{{field}\}}[^*]*\*\*", template)
+            visible_text = re.sub(r"\{[^}]+\}", "", template)
+            assert not re.search(r"[A-Za-z0-9]", visible_text)
+            assert not any(char in visible_text for char in "\u064a\u0643\u0664\u0665\u0666")
 
 
 def test_compose_war_attack_image_returns_jpeg():
@@ -554,7 +589,7 @@ async def test_war_callback_edits_message_in_place(war_session, monkeypatch):
         date=now,
         chat=Chat(id=-1001, type="supergroup"),
         photo=[PhotoSize(file_id="war-bg", file_unique_id="war-bg", width=1280, height=720)],
-        caption="⚔️ جدال سیبی — میدان نبرد 🏰",
+        caption="⚔️ **جدال سیبی**",
     )
     bot = SimpleNamespace(
         get_chat_member=AsyncMock(return_value=SimpleNamespace(status="member")),
@@ -575,8 +610,8 @@ async def test_war_callback_edits_message_in_place(war_session, monkeypatch):
 
     await war_handler.war_attack_callback(cb)
 
-    # The receipt alert is unchanged...
-    assert "ضربه ثبت شد" in str(answer.await_args)
+    # The receipt alert is short and reports the actual damage.
+    assert "آسیب ثبت شد" in str(answer.await_args)
     # ...the two cross-group battle dispatches are still new photo messages...
     assert bot.send_photo.await_count == 2
     assert {c.kwargs["chat_id"] for c in bot.send_photo.await_args_list} == {-1001, -1002}
@@ -587,7 +622,7 @@ async def test_war_callback_edits_message_in_place(war_session, monkeypatch):
     edit_kwargs = bot.edit_message_media.await_args.kwargs
     assert edit_kwargs["chat_id"] == -1001
     assert edit_kwargs["message_id"] == 10
-    assert "انرژی جنگی شما: ۸۰" in edit_kwargs["media"].caption
+    assert "انرژی جنگی شما: **۸۰ از ۱۰۰**" in edit_kwargs["media"].caption
     edit_callbacks = [
         b.callback_data
         for row in edit_kwargs["reply_markup"].inline_keyboard
@@ -794,8 +829,8 @@ def test_war_menu_shows_remaining_time_in_persian(seconds, expected):
     from sib.handlers.war import format_war_caption
 
     caption = format_war_caption("مهاجم", 120, "مدافع", 200, seconds, 80)
-    assert f"⏳ زمان باقی‌مانده: {expected}" in caption
-    assert "هر ضربه ۲۰ انرژی" in caption and "۳۰ ثانیه" in caption
+    assert f"⏳ زمان باقی‌مانده: **{expected}**" in caption
+    assert "هر ضربه **۲۰ انرژی**" in caption and "**۳۰ ثانیه**" in caption
     assert not any(digit in caption for digit in "0123456789")
 
 
@@ -1428,18 +1463,14 @@ async def test_war_never_lowers_the_level_of_a_winner_either(war_session):
 ZWNJ = "\u200c"
 
 
-SHIELD_LINE = "۲ ساعت سپر صلح فعال شد."
+SHIELD_LINE = "سپر صلح **۲ ساعته** فعال شد."
 
 
 def victory_text(loot, *, shield=False):
-    """The winner's caption exactly as specified.
-
-    C2-5.6: it states the loot actually taken; there is no percentage in it.
-    C2-6: only a winning DEFENDER is told about its 5 hour peace shield.
-    """
+    """The winner's short caption with the actual loot and optional shield."""
     text = (
-        "🏆 پیروزی در جدال سیبی!\n"
-        f"دشمن را در هم کوبیدیم. 🎁 غنیمت تصرف{ZWNJ}شده: {loot} سیب به خزانه{ZWNJ}ی قلعه اضافه شد."
+        "🏆 **پیروزی در جدال!**\n"
+        f"دشمن رو شکست دادیم. غنیمت: **{loot} سیب**."
     )
     if shield:
         text += f"\n🛡 {SHIELD_LINE}"
@@ -1447,19 +1478,15 @@ def victory_text(loot, *, shield=False):
 
 
 def defeat_text(loot, *, shield=False):
-    """The loser's caption.
-
-    C2-6: a losing DEFENDER keeps its 5 hour shield; a losing ATTACKER gets
-    none and is told so.
-    """
+    """The loser's short caption; only a defender receives a shield."""
     text = (
-        "💔 شکست در جدال سیبی...\n"
-        f"دشمن {loot} سیب از خزانه{ZWNJ}ی ما غارت کرد."
+        "💔 **شکست در جدال.**\n"
+        f"دشمن **{loot} سیب** از خزانه ما برداشت."
     )
     if shield:
-        text += f"\n🛡 اما ناامید نشوید، {SHIELD_LINE}"
+        text += f"\n🛡 {SHIELD_LINE}"
     else:
-        text += f"\n⚔️ گروه مهاجم پس از پایان نبرد سپر صلح دریافت نمی{ZWNJ}کند."
+        text += f"\n⚔️ مهاجم **سپر صلح** نمی{ZWNJ}گیره."
     return text
 
 
@@ -1834,7 +1861,7 @@ async def test_winner_text_shows_actual_loot_not_percentage(war_session, monkeyp
     captions = {call.args[0]: call.kwargs["caption"] for call in bot.send_photo.await_args_list}
     winner = captions[DEFENDER]
     assert winner == victory_text("۱۰۰۰", shield=True)  # exactly the specified text
-    assert f"🎁 غنیمت تصرف{ZWNJ}شده: ۱۰۰۰ سیب به خزانه{ZWNJ}ی قلعه اضافه شد." in winner
+    assert "غنیمت: **۱۰۰۰ سیب**." in winner
     # No percentage - not even the uncapped number it would have been.
     for promise in ("٪", "%", "درصد", "۱۵", "۳۱۵۰"):
         assert promise not in winner, promise
@@ -1900,8 +1927,7 @@ async def test_declaration_text_does_not_promise_15_percent(war_session, monkeyp
     prompt.assert_awaited_once()
     confirmation = prompt.await_args.args[0]
     assert (
-        f"💰 پاداش فتح: بخشی از پیشرفت قلعه{ZWNJ}ی دشمن را غنیمت می{ZWNJ}گیرید "
-        f"(مقدار دقیق پس از پیروزی مشخص می{ZWNJ}شود)."
+        "🍏 غنیمت: بخشی از پیشرفت قلعهٔ دشمن؛ مقدار دقیق بعد از پیروزی مشخص میشه."
     ) in confirmation
 
     # 2. The declaration both groups receive once the war starts.
@@ -2089,8 +2115,8 @@ async def test_attacking_while_shielded_triggers_warning(war_session, monkeypatc
     prompt.assert_awaited_once()
     text = prompt.await_args.args[0]
     assert text == (
-        "⚠️ شما در حال حاضر سپر صلح فعال دارید. اگر به گروهی حمله کنید، "
-        "سپر شما فوراً شکسته می‌شود و در معرض حمله قرار می‌گیرید."
+        "⚠️ **سپر صلح فعاله!**\n"
+        "حمله کنی، سپر می‌شکنه و قلعه‌ات بدون محافظ می‌مونه."
     )
     assert not any(digit in text for digit in "0123456789")
 
@@ -2099,7 +2125,7 @@ async def test_attacking_while_shielded_triggers_warning(war_session, monkeypatc
         f"castle:war_break_shield_confirm:{ATTACKER}",
         f"castle:view:{ATTACKER}",
     ]
-    assert buttons[0].text == "✅ بله، سپر را بشکن و ادامه بده"
+    assert buttons[0].text == "✅ بشکن و ادامه بده"
     assert buttons[1].text == "🔙 انصراف"
 
     # Nothing was changed yet: the shield still protects the castle.
