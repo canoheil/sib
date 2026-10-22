@@ -53,23 +53,48 @@ EXPECTED_SECTION_KEYS = (
     "social",
     "games",
     "shortcuts",
+    "shortcut_sections",
     "support",
 )
 
-#: The wake words the guide must document (the «سیب <target>» family plus
-#: the bare «سیب» claim and the two other group wake words).
+#: Every documented menu alias and general wake phrase.
 EXPECTED_SHORTCUTS = (
     "سیب منو",
     "سیب بازی",
     "سیب باغ",
+    "باغ من",
+    "باغ سیبی",
+    "ویکی سیبی",
+    "سیب ویکی",
+    "قلعه سیبی",
+    "پارتی سیبی",
     "سیب کارت",
+    "کارت سیبی",
     "سیب اسکین",
     "سیب شاپ",
+    "شاپ سیبی",
     "سیب لیدربرد",
+    "سیب لیدربورد",
+    "لیدربرد سیبی",
     "سیب راهنما",
     "سیب صندوق",
+    "صندوق سیبی",
     "معدن سیبی",
+    "سیبام",
+    "سیب پروفایل",
+    "سیب من",
+    "سیب",
+    "لیست دوستان",
+    "دوستام",
     "پروفایلش",
+    "دوستی سیبی",
+    "رفاقت سیبی",
+    "قهر سیبی",
+    "ازدواج سیبی",
+    "طلاق سیبی",
+    "گل سیبی",
+    "بغل سیبی",
+    "بوس سیبی",
 )
 
 #: The five shop chests (data/shop_chests/*.json).
@@ -321,12 +346,20 @@ async def test_sib_raahnamaa_opens_help_index(db_session):
 
 
 def test_help_mentions_all_text_shortcuts():
-    """Every wake word of the bot is documented in the shortcuts section."""
-    body = get_section("shortcuts").body_fa
+    """Every wake word of the bot is documented in the shortcut sections."""
+    body = "\n".join(
+        get_section(key).body_fa for key in ("shortcuts", "shortcut_sections")
+    )
     for phrase in EXPECTED_SHORTCUTS:
         assert phrase in body, phrase
     # The bare «سیب» claim is a group action, and it is documented as one.
     assert "سیب" in body
+
+
+def test_help_splits_general_and_section_shortcuts():
+    """The growing shortcut guide is split into two concise Persian pages."""
+    assert get_section("shortcuts").title_fa == "⌨️ میان‌برهای عمومی"
+    assert get_section("shortcut_sections").title_fa == "⌨️ میان‌برهای بخش‌ها"
 
 
 def test_help_contains_profile_reply_shortcut():

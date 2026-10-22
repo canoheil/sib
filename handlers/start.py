@@ -1,5 +1,6 @@
 """Start command and basic navigation handlers."""
 
+import re
 from typing import Optional
 
 from aiogram import Router, F, Bot
@@ -1316,6 +1317,61 @@ def sib_shortcut_target(text: Optional[str]) -> Optional[str]:
     return SIB_SHORTCUT_TARGETS.get(parts[1])
 
 
+#: New exact menu phrases, mapped to existing menu entry paths. The two
+#: spellings of the Wiki shortcut intentionally share one destination.
+MENU_ALIAS_TARGETS = {
+    "ویکی سیبی": "wiki",
+    "سیب ویکی": "wiki",
+    "باغ سیبی": "garden",
+    "پارتی سیبی": "party",
+    "کارت سیبی": "cards",
+    "شاپ سیبی": "shop",
+    "لیدربرد سیبی": "leaderboard",
+    "صندوق سیبی": "daily_chest",
+}
+
+# The regex remains anchored to the whole message like the existing
+# shortcuts. It admits the same Arabic/Persian Yeh and Kaf variants as the
+# normalizer, plus ZWNJ and bidi marks that the normalizer discards.
+_MENU_ALIAS_VARIANT_CHARS = {
+    "ی": r"[\u06cc\u064a]",
+    "ک": r"[\u06a9\u0643]",
+}
+_MENU_ALIAS_IGNORABLE_MARKS = r"[\u200c\u200e\u200f]*"
+
+
+def _menu_alias_phrase_pattern(phrase: str) -> str:
+    """Regex for one canonical phrase with typed-Persian character folding."""
+    return r"\s+".join(
+        "".join(
+            _MENU_ALIAS_IGNORABLE_MARKS
+            + _MENU_ALIAS_VARIANT_CHARS.get(char, re.escape(char))
+            + _MENU_ALIAS_IGNORABLE_MARKS
+            for char in word
+        )
+        for word in phrase.split()
+    )
+
+
+MENU_ALIAS_PATTERN = (
+    r"^[\s\u200c\u200e\u200f]*(?:"
+    + "|".join(_menu_alias_phrase_pattern(phrase) for phrase in MENU_ALIAS_TARGETS)
+    + r")[\s\u200c\u200e\u200f]*$"
+)
+
+
+def menu_alias_target(text: Optional[str]) -> Optional[str]:
+    """Return the destination of an exact new menu alias, or ``None``.
+
+    Arabic Yeh/Kaf, ZWNJ and bidi marks are folded exactly like the A4
+    shortcut helper. Whitespace is normalized, but extra words never match.
+    """
+    normalized = " ".join((text or "").translate(_SHORTCUT_FOLD).split())
+    if normalized.startswith("/"):
+        return None
+    return MENU_ALIAS_TARGETS.get(normalized)
+
+
 async def _open_sender_cards(message: Message, bot: Bot) -> None:
     """«سیب کارت» -> the SENDER's «کارت‌های من» panel (profile button).
 
@@ -1427,6 +1483,64 @@ async def handle_sib_shortcut_word(message: Message, bot: Bot):
         return
     opener = _SIB_SHORTCUT_OPENERS.get(target)
     if opener is None:  # pragma: no cover - map and pattern stay in sync
+        return
+    await opener(message, bot)
+
+
+async def _open_wiki_menu_alias(message: Message, bot: Bot) -> None:
+    from sib.handlers.wiki import cmd_wiki
+
+    await cmd_wiki(message, bot)
+
+
+async def _open_garden_menu_alias(message: Message, bot: Bot) -> None:
+    await _open_sender_garden(message)
+
+
+async def _open_party_menu_alias(message: Message, bot: Bot) -> None:
+    from sib.handlers.party.handlers import cmd_group_games
+
+    await cmd_group_games(message)
+
+
+async def _open_cards_menu_alias(message: Message, bot: Bot) -> None:
+    await _open_sender_cards(message, bot)
+
+
+async def _open_shop_menu_alias(message: Message, bot: Bot) -> None:
+    await _open_shop_entry(message, bot)
+
+
+async def _open_leaderboard_menu_alias(message: Message, bot: Bot) -> None:
+    await _open_leaderboard_entry(message, bot)
+
+
+async def _open_daily_chest_menu_alias(message: Message, bot: Bot) -> None:
+    from sib.handlers.daily_chest import handle_chest_shortcut
+
+    await handle_chest_shortcut(message, bot)
+
+
+#: Every alias reuses the pre-existing entry point for its destination.
+MENU_ALIAS_OPENERS = {
+    "wiki": _open_wiki_menu_alias,
+    "garden": _open_garden_menu_alias,
+    "party": _open_party_menu_alias,
+    "cards": _open_cards_menu_alias,
+    "shop": _open_shop_menu_alias,
+    "leaderboard": _open_leaderboard_menu_alias,
+    "daily_chest": _open_daily_chest_menu_alias,
+}
+
+
+@router.message(F.text.regexp(MENU_ALIAS_PATTERN))
+async def handle_menu_alias_word(message: Message, bot: Bot):
+    """Open the existing menu for one of the newly added exact aliases."""
+    target = menu_alias_target(message.text)
+    if target is None:
+        return
+    opener = MENU_ALIAS_OPENERS.get(target)
+    if opener is None:  # pragma: no cover - alias map and opener table stay in sync
         return
     await opener(message, bot)
 

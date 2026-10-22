@@ -34,13 +34,17 @@ from sib.handlers.marriage import (
 from sib.handlers.sib_hug import HUG_TRIGGER_PATTERN
 from sib.handlers.sib_kiss import KISS_TRIGGER_PATTERN
 from sib.handlers.start import (
+    MENU_ALIAS_PATTERN,
+    MENU_ALIAS_TARGETS,
     SIB_SHORTCUT_PATTERN,
     SIB_SHORTCUT_TARGETS,
     handle_apple_cards,
+    handle_menu_alias_word,
     handle_profile_skin,
     handle_sib_games_word,
     handle_sib_garden_word,
     handle_sib_shortcut_word,
+    menu_alias_target,
     sib_shortcut_target,
 )
 from sib.middleware.panel_guard import PanelGuardMiddleware
@@ -56,6 +60,17 @@ SHORTCUTS = {
     "سیب اسکین": "skin",
     "سیب لیدربرد": "leaderboard",
     "سیب راهنما": "help",
+}
+
+NEW_MENU_ALIASES = {
+    "ویکی سیبی": "wiki",
+    "سیب ویکی": "wiki",
+    "باغ سیبی": "garden",
+    "پارتی سیبی": "party",
+    "کارت سیبی": "cards",
+    "شاپ سیبی": "shop",
+    "لیدربرد سیبی": "leaderboard",
+    "صندوق سیبی": "daily_chest",
 }
 
 #: Every OTHER exact-match text trigger registered in the bot (wake words
@@ -281,6 +296,121 @@ async def test_shortcut_sib_raahnamaa_opens_help(db_session):
 
 
 # ---------------------------------------------------------------------------
+# Newly added menu aliases
+# ---------------------------------------------------------------------------
+
+
+def _patch_menu_alias_entry(monkeypatch, target, message, bot):
+    """Spy on the existing menu entry that a new alias must reuse."""
+    spy = AsyncMock()
+    if target == "wiki":
+        from sib.handlers import wiki as wiki_module
+
+        monkeypatch.setattr(wiki_module, "cmd_wiki", spy)
+        expected_args = (message, bot)
+    elif target == "garden":
+        monkeypatch.setattr(start_module, "_open_sender_garden", spy)
+        expected_args = (message,)
+    elif target == "party":
+        from sib.handlers.party import handlers as party_module
+
+        monkeypatch.setattr(party_module, "cmd_group_games", spy)
+        expected_args = (message,)
+    elif target == "cards":
+        monkeypatch.setattr(start_module, "_open_sender_cards", spy)
+        expected_args = (message, bot)
+    elif target == "shop":
+        from sib.handlers import shop as shop_module
+
+        monkeypatch.setattr(shop_module, "cmd_shop", spy)
+        expected_args = (message, bot)
+    elif target == "leaderboard":
+        from sib.handlers import leaderboard as leaderboard_module
+
+        monkeypatch.setattr(leaderboard_module, "cmd_leaderboard", spy)
+        expected_args = (message,)
+    elif target == "daily_chest":
+        from sib.handlers import daily_chest as chest_module
+
+        monkeypatch.setattr(chest_module, "handle_chest_shortcut", spy)
+        expected_args = (message, bot)
+    else:  # pragma: no cover - test table must cover every destination
+        raise AssertionError(f"unhandled menu alias target: {target}")
+    return spy, expected_args
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("phrase", "target"), NEW_MENU_ALIASES.items())
+async def test_new_menu_alias_opens_its_existing_entry(monkeypatch, phrase, target):
+    """Every new phrase reaches the existing entry for its intended menu."""
+    assert MENU_ALIAS_TARGETS[phrase] == target
+    assert menu_alias_target(phrase) == target
+    assert re.compile(MENU_ALIAS_PATTERN).match(phrase)
+
+    msg = _msg(phrase)
+    bot = MagicMock()
+    entry, expected_args = _patch_menu_alias_entry(monkeypatch, target, msg, bot)
+
+    await handle_menu_alias_word(msg, bot)
+
+    entry.assert_awaited_once_with(*expected_args)
+
+
+@pytest.mark.parametrize(
+    ("phrase", "target"),
+    [
+        ("ویکی سیبی".translate(str.maketrans({"ی": "ي", "ک": "ك"})), "wiki"),
+        ("کارت سیبی".translate(str.maketrans({"ی": "ي", "ک": "ك"})), "cards"),
+        ("وی\u200cکی سیبی", "wiki"),
+        ("\u200c ویکی\u200c سیبی", "wiki"),
+        ("  صندوق سیبی\u200c  ", "daily_chest"),
+    ],
+)
+def test_menu_alias_matching_folds_typed_persian_variants(phrase, target):
+    """Arabic Yeh/Kaf, ZWNJ, and surrounding whitespace do not change a match."""
+    assert re.compile(MENU_ALIAS_PATTERN).match(phrase)
+    assert menu_alias_target(phrase) == target
+
+
+def test_menu_aliases_are_exact_and_do_not_collide():
+    """Aliases have unique spellings and match no other existing wake route."""
+    pattern = re.compile(MENU_ALIAS_PATTERN)
+    canonical = [" ".join(phrase.translate(str.maketrans({"ي": "ی", "ك": "ک"})).split())
+                 for phrase in NEW_MENU_ALIASES]
+    assert len(canonical) == len(set(canonical)) == len(NEW_MENU_ALIASES)
+    assert set(MENU_ALIAS_TARGETS.values()) == {
+        "wiki", "garden", "party", "cards", "shop", "leaderboard", "daily_chest"
+    }
+    assert MENU_ALIAS_TARGETS["ویکی سیبی"] == MENU_ALIAS_TARGETS["سیب ویکی"] == "wiki"
+
+    existing = [(source, re.compile(source)) for source in EXISTING_EXACT_PATTERNS]
+    existing.extend(
+        [
+            ("SIB_SHORTCUT_PATTERN", re.compile(SIB_SHORTCUT_PATTERN)),
+            ("castle entry", re.compile(r"^\s*قلعه\s+سیبی\s*$")),
+        ]
+    )
+    for phrase, target in NEW_MENU_ALIASES.items():
+        assert pattern.fullmatch(phrase), phrase
+        assert menu_alias_target(phrase) == target
+        conflicts = [source for source, trigger in existing if trigger.match(phrase)]
+        assert not conflicts, f"{phrase!r} collides with {conflicts}"
+
+    for existing_phrase in (
+        "سیب", "سیب منو", "سیب بازی", "سیبام", "سیب پروفایل", "سیب باغ",
+        "باغ من", "سیب شاپ", "سیب کارت", "سیب اسکین", "سیب لیدربرد",
+        "سیب راهنما", "سیب صندوق", "معدن سیبی", "قلعه سیبی",
+    ):
+        assert not pattern.match(existing_phrase), existing_phrase
+
+    for sentence in (
+        "سلام ویکی سیبی", "باغ سیبی لطفاً", "صندوق سیبی را باز کن", "/شاپ سیبی"
+    ):
+        assert not pattern.match(sentence), sentence
+        assert menu_alias_target(sentence) is None
+
+
+# ---------------------------------------------------------------------------
 # Exact matching only
 # ---------------------------------------------------------------------------
 
@@ -359,9 +489,10 @@ def test_shortcut_no_collision_with_existing():
 
 
 def test_shortcuts_registered_on_the_start_router():
-    """Task 3: same router as «سیب منو» / «سیب باغ», no new router."""
+    """All text aliases share the existing start router; no new router."""
     callbacks = [h.callback for h in start_module.router.message.handlers]
     assert callbacks.count(handle_sib_shortcut_word) == 1
+    assert callbacks.count(handle_menu_alias_word) == 1
     assert handle_sib_games_word in callbacks
     assert handle_sib_garden_word in callbacks
 
