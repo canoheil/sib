@@ -90,7 +90,9 @@ async def db(monkeypatch):
         await engine.dispose()
 
 
-async def create_inv(factory, *, status="ACTIVE", hp=1000, started_ago=0, window=1800):
+async def create_inv(
+    factory, *, status="ACTIVE", hp=1000, started_ago=0, window=1800, message_id=123
+):
     started = NOW - timedelta(seconds=started_ago)
     async with factory.begin() as session:
         inv = Inv2Invasion(
@@ -99,8 +101,9 @@ async def create_inv(factory, *, status="ACTIVE", hp=1000, started_ago=0, window
             difficulty_multiplier=2.0, status=status, scheduled_at=started,
             started_at=started if status == "ACTIVE" else None,
             ends_at=started + timedelta(seconds=window) if status == "ACTIVE" else None,
-            message_id=123, message_chat_id=-100,
-            occurrence_key=f"events:{status}:{hp}:{started_ago}:{window}",
+            message_id=message_id,
+            message_chat_id=-100 if message_id is not None else None,
+            occurrence_key=f"events:{status}:{hp}:{started_ago}:{window}:{message_id}",
         )
         session.add(inv)
         await session.flush()
@@ -543,7 +546,9 @@ async def test_missing_image_falls_back_to_text(db, monkeypatch):
     assert await presentation.publish_event(bot, event_id) is True
     bot.send_photo.assert_not_awaited()
     bot.send_message.assert_awaited_once()
-    text = bot.send_message.await_args.kwargs["text"]
+    kwargs = bot.send_message.await_args.kwargs
+    assert kwargs["reply_to_message_id"] == 123
+    text = kwargs["text"]
     assert "شهاب‌سنگ" in text and "۸۰" in text
     async with db() as session:
         event = await session.get(Inv2RandomEvent, event_id)
@@ -563,6 +568,7 @@ async def test_loot_photo_carries_the_green_button_and_opens_a_window(db, monkey
     bot = fake_bot()
     assert await presentation.publish_event(bot, event_id) is True
     kwargs = bot.send_photo.await_args.kwargs
+    assert kwargs["reply_to_message_id"] == 123
     button = kwargs["reply_markup"].inline_keyboard[0][0]
     assert button.text == "🎁 باز کردن صندوق"
     assert button.callback_data == f"inv2ev:loot:{event_id}"
@@ -572,6 +578,171 @@ async def test_loot_photo_carries_the_green_button_and_opens_a_window(db, monkey
         event = await session.get(Inv2RandomEvent, event_id)
         assert event.status == "ACTIVE"
         assert event.ends_at - event.starts_at == timedelta(seconds=120)
+
+
+@pytest.mark.asyncio
+async def test_publish_applied_events_replies_to_invasion_announcement(db, monkeypatch):
+    inv_id = await create_inv(db, message_id=456)
+    photo_event_id = await add_event(
+        db, inv_id, "loot_golden_chest", status=APPLIED, message_id=None
+    )
+    text_event_id = await add_event(
+        db, inv_id, "meteor", status=APPLIED, applied_amount=80, message_id=None
+    )
+    monkeypatch.setattr(presentation, "get_session", _session_provider(db))
+    monkeypatch.setattr(
+        "sib.services.invasion_v2.imaging.templates.event_image_path",
+        lambda code: Path(__file__) if code == "loot_golden_chest" else None,
+    )
+
+    photo_calls = []
+    text_calls = []
+
+    async def strict_send_photo(
+        *, chat_id, photo, caption, reply_markup=None, reply_to_message_id, parse_mode=None
+    ):
+        photo_calls.append({
+            "chat_id": chat_id,
+            "photo": photo,
+            "caption": caption,
+            "reply_markup": reply_markup,
+            "reply_to_message_id": reply_to_message_id,
+            "parse_mode": parse_mode,
+        })
+        return SimpleNamespace(chat=SimpleNamespace(id=chat_id), message_id=910)
+
+    async def strict_send_message(
+        *, chat_id, text, reply_markup=None, reply_to_message_id, parse_mode=None
+    ):
+        text_calls.append({
+            "chat_id": chat_id,
+            "text": text,
+            "reply_markup": reply_markup,
+            "reply_to_message_id": reply_to_message_id,
+            "parse_mode": parse_mode,
+        })
+        return SimpleNamespace(chat=SimpleNamespace(id=chat_id), message_id=911)
+
+    bot = SimpleNamespace(
+        send_photo=AsyncMock(side_effect=strict_send_photo),
+        send_message=AsyncMock(side_effect=strict_send_message),
+        edit_message_caption=AsyncMock(return_value=True),
+    )
+    assert await presentation.publish_applied_events(bot) == 2
+    assert len(photo_calls) == 1
+    assert photo_calls[0]["reply_to_message_id"] == 456
+    assert "**" in photo_calls[0]["caption"]
+    assert photo_calls[0]["reply_markup"].inline_keyboard[0][0].callback_data == (
+        f"inv2ev:loot:{photo_event_id}"
+    )
+    assert len(text_calls) == 1
+    assert text_calls[0]["reply_to_message_id"] == 456
+    assert "**" in text_calls[0]["text"]
+    async with db() as session:
+        assert (await session.get(Inv2RandomEvent, photo_event_id)).message_id == 910
+        assert (await session.get(Inv2RandomEvent, text_event_id)).message_id == 911
+
+
+@pytest.mark.asyncio
+async def test_publish_event_falls_back_cleanly_when_invasion_message_id_is_none(db, monkeypatch):
+    inv_id = await create_inv(db, message_id=None)
+    photo_event_id = await add_event(
+        db, inv_id, "blessing_dawn", status=APPLIED, message_id=None
+    )
+    text_event_id = await add_event(
+        db, inv_id, "meteor", status=APPLIED, applied_amount=80, message_id=None
+    )
+    monkeypatch.setattr(presentation, "get_session", _session_provider(db))
+    monkeypatch.setattr(
+        "sib.services.invasion_v2.imaging.templates.event_image_path",
+        lambda code: Path(__file__) if code == "blessing_dawn" else None,
+    )
+    bot = fake_bot()
+    assert await presentation.publish_event(bot, photo_event_id) is True
+    assert await presentation.publish_event(bot, text_event_id) is True
+    assert bot.send_photo.await_args.kwargs["reply_to_message_id"] is None
+    assert bot.send_message.await_args.kwargs["reply_to_message_id"] is None
+    presentation.record_send_failure.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_publish_event_with_real_aiogram_bot_handles_reply_and_none(db, monkeypatch):
+    from aiogram import Bot
+
+    inv_with_msg = await create_inv(db, message_id=321)
+    inv_without_msg = await create_inv(db, message_id=None)
+    ev_photo_reply = await add_event(
+        db, inv_with_msg, "loot_golden_chest", status=APPLIED, message_id=None
+    )
+    ev_photo_plain = await add_event(
+        db, inv_without_msg, "blessing_dawn", status=APPLIED, message_id=None
+    )
+    ev_text_plain = await add_event(
+        db, inv_without_msg, "meteor", status=APPLIED, applied_amount=80, message_id=None
+    )
+    monkeypatch.setattr(presentation, "get_session", _session_provider(db))
+    monkeypatch.setattr(
+        "sib.services.invasion_v2.imaging.templates.event_image_path",
+        lambda code: None if code == "meteor" else Path(__file__),
+    )
+
+    sent_methods = []
+    bot = Bot(token="42:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi")
+
+    async def capture_request(_bot, method, timeout=None):
+        sent_methods.append(method)
+        return Message(
+            message_id=950 + len(sent_methods),
+            date=NOW,
+            chat=Chat(id=-100, type=ChatType.GROUP),
+        )
+
+    monkeypatch.setattr(bot.session, "make_request", capture_request)
+    try:
+        assert await presentation.publish_event(bot, ev_photo_reply) is True
+        assert await presentation.publish_event(bot, ev_photo_plain) is True
+        assert await presentation.publish_event(bot, ev_text_plain) is True
+    finally:
+        await bot.session.close()
+
+    assert sent_methods[0].reply_to_message_id == 321
+    assert sent_methods[1].reply_to_message_id is None
+    assert sent_methods[2].reply_to_message_id is None
+    assert "reply_to_message_id" not in sent_methods[1].model_dump(exclude_none=True)
+    assert "reply_to_message_id" not in sent_methods[2].model_dump(exclude_none=True)
+
+
+@pytest.mark.asyncio
+async def test_publish_event_falls_back_when_reply_target_deleted_in_telegram(db, monkeypatch):
+    from aiogram.exceptions import TelegramBadRequest
+    from aiogram.methods import SendPhoto
+
+    inv_id = await create_inv(db, message_id=123)
+    event_id = await add_event(
+        db, inv_id, "blessing_dawn", status=APPLIED, message_id=None
+    )
+    monkeypatch.setattr(presentation, "get_session", _session_provider(db))
+    monkeypatch.setattr(
+        "sib.services.invasion_v2.imaging.templates.event_image_path",
+        lambda code: Path(__file__),
+    )
+    bot = SimpleNamespace(
+        send_photo=AsyncMock(side_effect=[
+            TelegramBadRequest(
+                method=SendPhoto(chat_id=-100, photo="file"),
+                message="Bad Request: message to be replied not found",
+            ),
+            SimpleNamespace(chat=SimpleNamespace(id=-100), message_id=920),
+        ]),
+        send_message=AsyncMock(),
+        edit_message_caption=AsyncMock(return_value=True),
+    )
+    assert await presentation.publish_event(bot, event_id) is True
+    assert bot.send_photo.await_count == 2
+    assert bot.send_photo.await_args_list[0].kwargs["reply_to_message_id"] == 123
+    assert bot.send_photo.await_args_list[1].kwargs["reply_to_message_id"] is None
+    bot.send_message.assert_not_awaited()
+    presentation.record_send_failure.assert_not_awaited()
 
 
 @pytest.mark.asyncio

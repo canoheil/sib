@@ -46,7 +46,14 @@ async def _telegram(group_id, method, **kwargs):
     """One metered Telegram operation; never raise into gameplay/maintenance."""
     try:
         result = await method(**kwargs)
-    except (TelegramBadRequest, TelegramForbiddenError):
+    except TelegramBadRequest as exc:
+        if kwargs.get("reply_to_message_id") is not None and _is_missing_reply(exc):
+            logger.debug("inv2 reply target gone, retrying standalone group=%s", group_id)
+            return await _telegram(group_id, method, **{**kwargs, "reply_to_message_id": None})
+        logger.debug("inv2 Telegram send rejected group=%s", group_id, exc_info=True)
+        await _breaker_failure(group_id)
+        return None
+    except TelegramForbiddenError:
         logger.debug("inv2 Telegram send rejected group=%s", group_id, exc_info=True)
         await _breaker_failure(group_id)
         return None
@@ -130,6 +137,12 @@ async def pin_announcement(bot, invasion_id: int) -> None:
 def _is_not_modified(error: TelegramBadRequest) -> bool:
     """Telegram refuses edits whose caption is byte-identical."""
     return "not modified" in (error.message or "").lower()
+
+
+def _is_missing_reply(error: TelegramBadRequest) -> bool:
+    """Telegram refuses a reply when an admin deleted the target message."""
+    msg = (error.message or "").lower()
+    return "message to be replied not found" in msg or "reply message not found" in msg
 
 
 def _caption(text: str) -> str:
@@ -677,6 +690,7 @@ async def publish_event(bot, event_id: int) -> bool:
                         else None)
             group_id = event.group_id
             chat_id = event.message_chat_id or group_id
+            reply_to_message_id = invasion.message_id
             image_path = event_image_path(event.template_code)
 
         message = None
@@ -684,14 +698,16 @@ async def publish_event(bot, event_id: int) -> bool:
             message = await _telegram(
                 group_id, bot.send_photo, chat_id=group_id,
                 photo=FSInputFile(image_path), caption=_caption(caption),
-                reply_markup=keyboard, parse_mode=None,
+                reply_markup=keyboard, reply_to_message_id=reply_to_message_id,
+                parse_mode=None,
             )
         if message is None:
             # Missing art or a rejected photo: the event still reaches the
             # group as text. This is the documented graceful fallback.
             message = await _telegram(
                 group_id, bot.send_message, chat_id=group_id, text=caption,
-                reply_markup=keyboard, parse_mode=None,
+                reply_markup=keyboard, reply_to_message_id=reply_to_message_id,
+                parse_mode=None,
             )
         now = datetime.now(timezone.utc)
         async with get_session() as session:
