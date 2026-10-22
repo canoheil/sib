@@ -12,11 +12,13 @@ Lock hierarchy (extending ``services/lock_order.py`` with zero cycles):
     Rank  8  halloween_event_state   (global boss HP update — ALWAYS LAST in attack!)
 """
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import random
+import time
 from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy import func, select
@@ -66,6 +68,16 @@ LOOT_DROP_VARIANTS: Dict[str, Tuple[str, Path]] = {
 MILESTONES: Tuple[int, ...] = (75, 50, 25, 0)
 BASE_UNARMED_POWER = 10
 TOP3_VICTORY_BONUS_APPLES = 1000
+TOP3_DAMAGE_REWARDS: Dict[int, int] = {
+    1: 1000,
+    2: 700,
+    3: 500,
+}
+
+START_ANNOUNCEMENT_TEMPLATE = (
+    "🎃 ایونت هالووین آغاز شد! سیبومورتیس با {max_hp} جون به اواریا آمد. کلمه «هالووین» را بزنید!"
+)
+END_ANNOUNCEMENT = "🎃 ایونت هالووین به پایان رسید."
 
 DAY7_WEAKENING_ANNOUNCEMENT = (
     "💀 سیبومورتیس به شدت ضعیف شده است! زمان ضربه نهایی فرا رسیده!"
@@ -77,6 +89,20 @@ LOOT_COOLDOWN_ALERT = (
 )
 NO_SEEDS_ALERT = "🎃 شما دونه کدو ندارید! ابتدا غنیمت بگیرید."
 EVENT_DISABLED_ALERT = "🎃 رویداد هالووین در حال حاضر فعال نیست."
+
+_HALLOWEEN_FLAG_TTL_SECONDS = 60
+_halloween_flag_value = False
+_halloween_flag_expires_at = 0.0
+_halloween_flag_lock = asyncio.Lock()
+_halloween_flag_generation = 0
+
+
+def invalidate_halloween_config_cache() -> None:
+    """After a committed admin config write, force the next flag read to DB."""
+    global _halloween_flag_value, _halloween_flag_expires_at, _halloween_flag_generation
+    _halloween_flag_generation += 1
+    _halloween_flag_value = False
+    _halloween_flag_expires_at = 0.0
 
 
 def _utc(dt: datetime) -> datetime:
@@ -189,12 +215,39 @@ class MaintenanceOutcome:
     group_ids: Tuple[int, ...] = ()
 
 
+@dataclass(frozen=True)
+class TopDamageReward:
+    rank: int
+    user_id: int
+    display_name: str
+    damage: int
+    apples: int
+
+
+@dataclass(frozen=True)
+class EndEventOutcome:
+    event_id: Optional[int]
+    payouts: Tuple[TopDamageReward, ...]
+    group_ids: Tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class EventStatusSummary:
+    enabled: bool
+    state: Optional[HalloweenEventState]
+    active_attackers: int
+    total_attacks: int
+    top3: Tuple[Tuple[int, str, int], ...]
+
+
 class HalloweenService:
     """Authoritative business logic for the 7-day Sibomortis event."""
 
     @staticmethod
     async def is_enabled(session: Optional[AsyncSession] = None) -> bool:
         """True strictly when ``halloween_enabled`` is truthy in config."""
+        global _halloween_flag_value, _halloween_flag_expires_at
+
         async def _read(s: AsyncSession) -> bool:
             val = await ConfigService.get(s, "halloween_enabled")
             if isinstance(val, bool):
@@ -208,12 +261,249 @@ class HalloweenService:
         try:
             if session is not None:
                 return await _read(session)
-            from sib.database.connection import get_session
+            if time.monotonic() < _halloween_flag_expires_at:
+                return _halloween_flag_value
+            async with _halloween_flag_lock:
+                generation = _halloween_flag_generation
+                if time.monotonic() < _halloween_flag_expires_at:
+                    return _halloween_flag_value
+                from sib.database.connection import get_session
 
-            async with get_session() as own:
-                return await _read(own)
+                async with get_session() as own:
+                    enabled = await _read(own)
+                if generation == _halloween_flag_generation:
+                    _halloween_flag_value = enabled
+                    _halloween_flag_expires_at = (
+                        time.monotonic() + _HALLOWEEN_FLAG_TTL_SECONDS
+                    )
+                return enabled
         except Exception:
             return False
+
+    @classmethod
+    async def start_event(
+        cls,
+        session: AsyncSession,
+        max_hp: int,
+        *,
+        now: Optional[datetime] = None,
+    ) -> Tuple[HalloweenEventState, Tuple[int, ...]]:
+        """Initialize a fresh active 7-day event row and flip ``halloween_enabled`` on."""
+        if int(max_hp) <= 0:
+            raise ValueError("max_hp must be > 0")
+        moment = _utc(now or datetime.now(timezone.utc))
+        hp_val = int(max_hp)
+
+        prev_active = list(
+            (
+                await session.scalars(
+                    select(HalloweenEventState).where(
+                        HalloweenEventState.is_active == True  # noqa: E712
+                    )
+                )
+            ).all()
+        )
+        for prev in prev_active:
+            prev.is_active = False
+
+        state = HalloweenEventState(
+            boss_hp=hp_val,
+            max_hp=hp_val,
+            current_phase=1,
+            is_active=True,
+            last_day_weakened=False,
+            leaderboard_finalized=False,
+            started_at=moment,
+            ends_at=moment + timedelta(days=7),
+        )
+        session.add(state)
+        await ConfigService.set(session, "halloween_enabled", True)
+        await session.flush()
+
+        group_ids = tuple(
+            int(gid)
+            for gid in (
+                await session.scalars(
+                    select(Group.id)
+                    .where(Group.is_active == True)  # noqa: E712
+                    .order_by(Group.id.asc())
+                )
+            ).all()
+        )
+        return state, group_ids
+
+    @classmethod
+    async def finalize_top_damage_rewards(
+        cls,
+        session: AsyncSession,
+        event_id: Optional[int] = None,
+        *,
+        now: Optional[datetime] = None,
+    ) -> Tuple[TopDamageReward, ...]:
+        """Grant #1=1000, #2=700, #3=500 Normal Apples strictly once per event."""
+        moment = _utc(now or datetime.now(timezone.utc))
+        if event_id is None:
+            latest_id = await session.scalar(
+                select(HalloweenEventState.id)
+                .order_by(
+                    HalloweenEventState.is_active.desc(),
+                    HalloweenEventState.id.desc(),
+                )
+                .limit(1)
+            )
+            if latest_id is None:
+                return ()
+            event_id = int(latest_id)
+
+        locked = await session.scalar(
+            select(HalloweenEventState)
+            .where(HalloweenEventState.id == int(event_id))
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if locked is None or locked.leaderboard_finalized:
+            return ()
+
+        top3 = await cls.get_leaderboard(session, locked.id, limit=3)
+        # Pre-lock target wallets in ascending user_id order so concurrent
+        # wallet updates can never deadlock in MariaDB.
+        for uid in sorted(row[0] for row in top3):
+            await AppleWalletService.get_balance(session, uid, for_update=True)
+
+        payouts: List[TopDamageReward] = []
+        for idx, (uid, display_name, total_damage) in enumerate(top3, start=1):
+            apples = TOP3_DAMAGE_REWARDS.get(idx, 0)
+            if apples <= 0 or total_damage <= 0:
+                continue
+            await AppleWalletService.earn(
+                session,
+                uid,
+                apples,
+                reason="halloween_top3_reward",
+                ref_type="halloween_event",
+                ref_id=locked.id,
+                idempotency_key=f"hw_top3_final:{locked.id}:rank{idx}:{uid}",
+            )
+            payouts.append(
+                TopDamageReward(
+                    rank=idx,
+                    user_id=uid,
+                    display_name=display_name,
+                    damage=total_damage,
+                    apples=apples,
+                )
+            )
+
+        locked.leaderboard_finalized = True
+        locked.leaderboard_finalized_at = moment
+        await session.flush()
+        return tuple(payouts)
+
+    @classmethod
+    async def end_event(
+        cls,
+        session: AsyncSession,
+        *,
+        now: Optional[datetime] = None,
+    ) -> EndEventOutcome:
+        """Finalize Top-3 rewards once, mark event inactive, and disable flag."""
+        moment = _utc(now or datetime.now(timezone.utc))
+        target = await session.scalar(
+            select(HalloweenEventState)
+            .order_by(
+                HalloweenEventState.is_active.desc(),
+                HalloweenEventState.id.desc(),
+            )
+            .limit(1)
+        )
+        payouts: Tuple[TopDamageReward, ...] = ()
+        target_id: Optional[int] = None
+        if target is not None:
+            target_id = int(target.id)
+            payouts = await cls.finalize_top_damage_rewards(
+                session, event_id=target_id, now=moment
+            )
+
+        active_rows = list(
+            (
+                await session.scalars(
+                    select(HalloweenEventState).where(
+                        HalloweenEventState.is_active == True  # noqa: E712
+                    )
+                )
+            ).all()
+        )
+        for row in active_rows:
+            row.is_active = False
+        if target is not None:
+            target.is_active = False
+
+        await ConfigService.set(session, "halloween_enabled", False)
+        await session.flush()
+
+        group_ids = tuple(
+            int(gid)
+            for gid in (
+                await session.scalars(
+                    select(Group.id)
+                    .where(Group.is_active == True)  # noqa: E712
+                    .order_by(Group.id.asc())
+                )
+            ).all()
+        )
+        return EndEventOutcome(
+            event_id=target_id,
+            payouts=payouts,
+            group_ids=group_ids,
+        )
+
+    @classmethod
+    async def get_event_status_summary(
+        cls,
+        session: AsyncSession,
+    ) -> EventStatusSummary:
+        """Read current event state, remaining window inputs, and attacker counts."""
+        enabled = await cls.is_enabled(session)
+        state = await session.scalar(
+            select(HalloweenEventState)
+            .order_by(
+                HalloweenEventState.is_active.desc(),
+                HalloweenEventState.id.desc(),
+            )
+            .limit(1)
+        )
+        if state is None:
+            return EventStatusSummary(
+                enabled=enabled,
+                state=None,
+                active_attackers=0,
+                total_attacks=0,
+                top3=(),
+            )
+        active_attackers = int(
+            await session.scalar(
+                select(func.count(func.distinct(HalloweenAttack.user_id))).where(
+                    HalloweenAttack.event_id == state.id
+                )
+            )
+            or 0
+        )
+        total_attacks = int(
+            await session.scalar(
+                select(func.count(HalloweenAttack.id)).where(
+                    HalloweenAttack.event_id == state.id
+                )
+            )
+            or 0
+        )
+        top3 = tuple(await cls.get_leaderboard(session, state.id, limit=3))
+        return EventStatusSummary(
+            enabled=enabled,
+            state=state,
+            active_attackers=active_attackers,
+            total_attacks=total_attacks,
+            top3=top3,
+        )
 
     @classmethod
     async def ensure_active_event(
@@ -391,6 +681,10 @@ class HalloweenService:
             )
         )
         await session.flush()
+        if new_hp == 0:
+            await cls.finalize_top_damage_rewards(
+                session, event_id=locked_state.id, now=moment
+            )
         return AttackOutcome(
             damage=damage,
             is_crit=is_crit,
@@ -702,11 +996,16 @@ class HalloweenService:
             locked.weakened_at = moment
             weakened = True
 
-        # 2. Defeat detection: stamp defeated_at once so announcement never repeats.
-        if int(locked.boss_hp) == 0 and locked.defeated_at is None:
-            locked.defeated_at = moment
-            locked.current_phase = 5
-            defeated = True
+        # 2. Defeat detection: stamp defeated_at & settle Top-3 rewards once.
+        if int(locked.boss_hp) == 0:
+            if locked.defeated_at is None:
+                locked.defeated_at = moment
+                locked.current_phase = 5
+                defeated = True
+            if not locked.leaderboard_finalized:
+                await cls.finalize_top_damage_rewards(
+                    session, event_id=locked.id, now=moment
+                )
 
         active_group_ids = list(
             (

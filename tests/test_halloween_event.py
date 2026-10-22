@@ -511,3 +511,244 @@ async def test_random_loot_drop_gives_seeds(db_session):
     cb_4, bot_4 = _mock_callback(uids[3], f"hw_drop:{drop_id}", chat_id=-1009002, message_id=777)
     await handle_halloween_group_drop_claim(cb_4, bot_4)
     assert await ItemService.get_total(db_session, uids[3], "pumpkin_seed") == 0
+
+
+# ---------------------------------------------------------------------------
+# 6. Admin controls (/hw_start, /hw_end, /hw_status) & Top-3 finalization
+# ---------------------------------------------------------------------------
+
+
+def _mock_private_command(user_id: int, text: str):
+    msg = MagicMock(spec=Message)
+    msg.text = text
+    msg.from_user = SimpleNamespace(
+        id=user_id,
+        first_name="مدیر",
+        last_name=None,
+        username="admin_user",
+        language_code="fa",
+        is_bot=False,
+    )
+    msg.chat = SimpleNamespace(id=user_id, type="private", title=None, username="admin_user")
+    msg.answer = AsyncMock()
+    msg.reply = AsyncMock()
+    bot = MagicMock()
+    bot.send_message = AsyncMock()
+    msg.bot = bot
+    return msg, bot
+
+
+@pytest.mark.asyncio
+async def test_hw_start_requires_admin_and_initializes_state(db_session, monkeypatch):
+    from sib.core.config import settings
+    from sib.handlers.admin import handle_hw_start, handle_hw_status
+
+    admin_id = 990001
+    non_admin_id = 990002
+    monkeypatch.setattr(settings, "ADMIN_IDS", [admin_id])
+
+    # Non-admin invocation must NOT create event state or flip flag.
+    non_admin_msg, non_admin_bot = _mock_private_command(non_admin_id, "/hw_start 250000")
+    await handle_hw_start(non_admin_msg, non_admin_bot)
+    assert await HalloweenService.is_enabled(db_session) is False
+    assert (await db_session.scalars(select(HalloweenEventState))).first() is None
+    assert non_admin_bot.send_message.await_count == 0
+
+    # Authorized admin initializes 7-day state row with exact boss_hp == max_hp.
+    admin_msg, admin_bot = _mock_private_command(admin_id, "/hw_start 250000")
+    before = datetime.now(timezone.utc) - timedelta(seconds=2)
+    await handle_hw_start(admin_msg, admin_bot)
+    after = datetime.now(timezone.utc) + timedelta(seconds=2)
+
+    state = await db_session.scalar(
+        select(HalloweenEventState).order_by(HalloweenEventState.id.desc()).limit(1)
+    )
+    assert state is not None
+    assert state.boss_hp == 250_000
+    assert state.max_hp == 250_000
+    assert state.is_active is True
+    started = state.started_at.replace(tzinfo=timezone.utc) if state.started_at.tzinfo is None else state.started_at
+    ends = state.ends_at.replace(tzinfo=timezone.utc) if state.ends_at.tzinfo is None else state.ends_at
+    assert before <= started <= after
+    assert abs((ends - started) - timedelta(days=7)) < timedelta(seconds=1)
+
+    # /hw_status reports live boss HP, remaining time, and active attacker count.
+    u1 = await create_test_user(db_session, "مهاجم فعال")
+    db_session.add(
+        HalloweenAttack(
+            event_id=state.id,
+            user_id=u1.id,
+            damage=1500,
+            is_crit=False,
+            boss_hp_after=248_500,
+        )
+    )
+    await db_session.commit()
+
+    status_msg, _ = _mock_private_command(admin_id, "/hw_status")
+    await handle_hw_status(status_msg)
+    status_reply = status_msg.answer.await_args.args[0]
+    assert "250,000" in status_reply
+    assert "باقی مانده" in status_reply
+    assert "تعداد مهاجمان فعال: 1" in status_reply
+
+
+@pytest.mark.asyncio
+async def test_hw_start_broadcasts_and_enables_flag(db_session, monkeypatch):
+    from sib.core.config import settings
+    from sib.handlers.admin import handle_hw_start
+
+    admin_id = 990011
+    monkeypatch.setattr(settings, "ADMIN_IDS", [admin_id])
+
+    g_active_1 = Group(id=-1009101, title="گروه فعال اول", is_active=True)
+    g_active_2 = Group(id=-1009102, title="گروه فعال دوم", is_active=True)
+    g_inactive = Group(id=-1009103, title="گروه غیرفعال", is_active=False)
+    db_session.add_all([g_active_1, g_active_2, g_inactive])
+    await db_session.commit()
+
+    # Populate cached False first to prove cache busting works immediately on /hw_start!
+    assert await HalloweenService.is_enabled() is False
+
+    admin_msg, admin_bot = _mock_private_command(admin_id, "/hw_start 500000")
+    await handle_hw_start(admin_msg, admin_bot)
+
+    # Both cached zero-session read AND DB read immediately see True!
+    assert await HalloweenService.is_enabled() is True
+    assert await HalloweenService.is_enabled(db_session) is True
+
+    expected_broadcast = (
+        "🎃 ایونت هالووین آغاز شد! سیبومورتیس با 500000 جون به اواریا آمد. کلمه «هالووین» را بزنید!"
+    )
+    sent_calls = [(call.args[0], call.args[1]) for call in admin_bot.send_message.await_args_list]
+    assert len(sent_calls) == 2
+    assert set(sent_calls) == {
+        (-1009101, expected_broadcast),
+        (-1009102, expected_broadcast),
+    }
+
+
+@pytest.mark.asyncio
+async def test_hw_end_disables_flag(db_session, monkeypatch):
+    from sib.core.config import settings
+    from sib.handlers.admin import handle_hw_end, handle_hw_start
+
+    admin_id = 990021
+    non_admin_id = 990022
+    monkeypatch.setattr(settings, "ADMIN_IDS", [admin_id])
+
+    db_session.add(Group(id=-1009201, title="گروه اعلان پایان", is_active=True))
+    await db_session.commit()
+
+    start_msg, start_bot = _mock_private_command(admin_id, "/hw_start 300000")
+    await handle_hw_start(start_msg, start_bot)
+    assert await HalloweenService.is_enabled() is True
+
+    # Non-admin /hw_end is ignored.
+    bad_msg, bad_bot = _mock_private_command(non_admin_id, "/hw_end")
+    await handle_hw_end(bad_msg, bad_bot)
+    assert await HalloweenService.is_enabled() is True
+
+    # Admin /hw_end flips event is_active=False, disables flag & cache, and broadcasts exact text.
+    end_msg, end_bot = _mock_private_command(admin_id, "/hw_end")
+    await handle_hw_end(end_msg, end_bot)
+
+    assert await HalloweenService.is_enabled() is False
+    assert await HalloweenService.is_enabled(db_session) is False
+
+    state = await db_session.scalar(
+        select(HalloweenEventState).order_by(HalloweenEventState.id.desc()).limit(1)
+    )
+    await db_session.refresh(state)
+    assert state.is_active is False
+
+    sent_calls = [(call.args[0], call.args[1]) for call in end_bot.send_message.await_args_list]
+    assert sent_calls == [(-1009201, "🎃 ایونت هالووین به پایان رسید.")]
+
+
+@pytest.mark.asyncio
+async def test_top_3_damage_rewards_are_granted_once(db_session, monkeypatch):
+    from sib.core.config import settings
+    from sib.handlers.admin import handle_hw_end, handle_hw_start
+
+    admin_id = 990031
+    monkeypatch.setattr(settings, "ADMIN_IDS", [admin_id])
+
+    players = [await create_test_user(db_session, f"قهرمان {idx}") for idx in range(1, 5)]
+    uids = [p.id for p in players]
+    await db_session.commit()
+
+    # Scenario A: Boss drops to 0 HP via killing blow -> #1=1000, #2=700, #3=500, #4=0.
+    start_msg, start_bot = _mock_private_command(admin_id, "/hw_start 1000")
+    await handle_hw_start(start_msg, start_bot)
+
+    state = await db_session.scalar(
+        select(HalloweenEventState).order_by(HalloweenEventState.id.desc()).limit(1)
+    )
+    event1_id = state.id
+
+    for uid, dmg in zip(uids, (500, 300, 150, 45)):
+        db_session.add(
+            HalloweenAttack(
+                event_id=event1_id,
+                user_id=uid,
+                damage=dmg,
+                is_crit=False,
+                boss_hp_after=max(1, 1000 - dmg),
+            )
+        )
+    state.boss_hp = 5  # Next attack is the killing blow!
+    await ItemService.grant(db_session, uids[3], "pumpkin_seed", 1)
+    await db_session.commit()
+
+    # Player #4 lands the killing blow (still ranked #4 in total damage):
+    await HalloweenService.attack_boss(db_session, uids[3], rng=random.Random(1))
+    await db_session.commit()
+
+    assert await AppleWalletService.get_balance(db_session, uids[0]) == 1000
+    assert await AppleWalletService.get_balance(db_session, uids[1]) == 700
+    assert await AppleWalletService.get_balance(db_session, uids[2]) == 500
+    assert await AppleWalletService.get_balance(db_session, uids[3]) == 0
+
+    await db_session.refresh(state)
+    assert state.leaderboard_finalized is True
+    assert state.leaderboard_finalized_at is not None
+
+    # Subsequent maintenance ticks AND /hw_end MUST NOT pay Top-3 a second time!
+    await MaintenanceService.run_once()
+    end_msg, end_bot = _mock_private_command(admin_id, "/hw_end")
+    await handle_hw_end(end_msg, end_bot)
+    await handle_hw_end(end_msg, end_bot)
+
+    assert await AppleWalletService.get_balance(db_session, uids[0]) == 1000
+    assert await AppleWalletService.get_balance(db_session, uids[1]) == 700
+    assert await AppleWalletService.get_balance(db_session, uids[2]) == 500
+    assert await AppleWalletService.get_balance(db_session, uids[3]) == 0
+
+    # Scenario B: New event ended via /hw_end BEFORE boss reaches 0 HP -> still pays Top-3 once!
+    start2_msg, start2_bot = _mock_private_command(admin_id, "/hw_start 50000")
+    await handle_hw_start(start2_msg, start2_bot)
+    state2 = await db_session.scalar(
+        select(HalloweenEventState).order_by(HalloweenEventState.id.desc()).limit(1)
+    )
+    for uid, dmg in zip(uids, (100, 900, 400, 50)):  # Order now: u2 (#1), u3 (#2), u1 (#3)
+        db_session.add(
+            HalloweenAttack(
+                event_id=state2.id,
+                user_id=uid,
+                damage=dmg,
+                is_crit=False,
+                boss_hp_after=48_000,
+            )
+        )
+    await db_session.commit()
+
+    end2_msg, end2_bot = _mock_private_command(admin_id, "/hw_end")
+    await handle_hw_end(end2_msg, end2_bot)
+    await handle_hw_end(end2_msg, end2_bot)
+
+    assert await AppleWalletService.get_balance(db_session, uids[1]) == 700 + 1000
+    assert await AppleWalletService.get_balance(db_session, uids[2]) == 500 + 700
+    assert await AppleWalletService.get_balance(db_session, uids[0]) == 1000 + 500
+    assert await AppleWalletService.get_balance(db_session, uids[3]) == 0
+

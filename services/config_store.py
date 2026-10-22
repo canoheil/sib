@@ -496,6 +496,10 @@ class ConfigService:
         else:
             row.value = encoded
         await session.flush()
+        if key == "halloween_enabled":
+            from sib.services.halloween import invalidate_halloween_config_cache
+
+            invalidate_halloween_config_cache()
 
     @classmethod
     def default(cls, key: str) -> Any:

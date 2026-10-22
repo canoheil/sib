@@ -470,60 +470,9 @@ async def handle_halloween_group_drop_claim(
         )
 
 
-# ---------------------------------------------------------------------------
-# Private operator controls (/hw_start, /hw_stop, /hw_status)
-# ---------------------------------------------------------------------------
-
-
-@router.message(Command("hw_start", "hw_stop", "hw_status"))
-async def handle_halloween_admin_command(message: Message) -> None:
-    chat_type = getattr(getattr(message, "chat", None), "type", None)
-    if getattr(chat_type, "value", chat_type) != "private":
-        return
-    if not message.from_user or not is_admin(message.from_user.id):
-        await message.answer("دسترسی ندارید.")
-        return
-
-    parts = (message.text or "").split()
-    cmd = parts[0].split("@", 1)[0].lstrip("/") if parts else ""
-    now = datetime.now(timezone.utc)
-
-    async with get_session() as session:
-        session.add(
-            AdminLog(
-                admin_id=message.from_user.id,
-                action=cmd,
-                details=" ".join(parts[1:])[:500],
-            )
-        )
-        if cmd == "hw_start":
-            custom_hp = (
-                int(parts[1])
-                if len(parts) > 1 and parts[1].isdigit() and int(parts[1]) > 0
-                else None
-            )
-            await ConfigService.set(session, "halloween_enabled", True)
-            state = await HalloweenService.ensure_active_event(session, now=now)
-            if custom_hp is not None:
-                state.max_hp = custom_hp
-                state.boss_hp = custom_hp
-                state.current_phase = 1
-                state.defeated_at = None
-                state.last_day_weakened = False
-            reply_text = (
-                f"🎃 رویداد هالووین فعال شد! جان باس: {state.boss_hp:,} / {state.max_hp:,}"
-            )
-        elif cmd == "hw_stop":
-            await ConfigService.set(session, "halloween_enabled", False)
-            reply_text = "🛑 رویداد هالووین غیرفعال شد. دونه کدوها در کوله‌پشتی بازیکنان باقی می‌مانند."
-        else:
-            enabled = await HalloweenService.is_enabled(session)
-            state = await HalloweenService.ensure_active_event(session, now=now)
-            reply_text = (
-                f"🎃 وضعیت هالووین: {'فعال' if enabled else 'غیرفعال'}\n"
-                f"💀 جان باس: {state.boss_hp:,} / {state.max_hp:,}\n"
-                f"🔥 فاز فعلی: {fa_digits(state.current_phase)}\n"
-                f"⚡ تضعیف روز هفتم: {'بله' if state.last_day_weakened else 'خیر'}"
-            )
-
-    await message.answer(reply_text)
+# Re-export authoritative Halloween admin handlers from ``sib.handlers.admin``
+from sib.handlers.admin import (  # noqa: E402, F401
+    handle_hw_end,
+    handle_hw_start,
+    handle_hw_status,
+)

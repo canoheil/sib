@@ -153,6 +153,9 @@ async def db_session():
         await session.execute(text("DELETE FROM games"))
         await seed_default_data(session, include_sample_ad=False)
         await session.commit()
+        from sib.services.halloween import invalidate_halloween_config_cache
+
+        invalidate_halloween_config_cache()
 
         yield session
         await session.rollback()
