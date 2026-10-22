@@ -10,6 +10,7 @@ import pytest
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.methods import EditMessageCaption, SendPhoto
 
+from sib.core.text import format_html
 from sib.database.models import Inv2Attack, Inv2Invasion, PlayerCard
 from sib.services.invasion_v2 import presentation
 from sib.services.sib_claim import fa_digits
@@ -58,13 +59,18 @@ async def test_announcement_caption_contains_hp(db):
     kwargs = bot.send_photo.await_args.kwargs
     caption = kwargs["caption"]
     assert HP in caption
-    assert caption.endswith(f"\n\n{HP}: **{fa_digits(200)}** / **{fa_digits(200)}**")
+    assert caption.endswith(format_html(f"\n\n{HP}: **{fa_digits(200)}** / **{fa_digits(200)}**"))
     assert len(caption) <= 1024
+    # HW3: the group receives HTML, so no literal "**" is ever displayed.
+    assert kwargs["parse_mode"] == "HTML"
+    assert "**" not in caption
     # The narrative is stored so later HP edits rebuild the same prose.
     async with factory() as s:
         inv = await s.get(Inv2Invasion, inv_id)
         assert inv.announcement_narrative is not None
-        assert caption.startswith(inv.announcement_narrative)
+        # The stored narrative is the un-rendered source; the group sees it
+        # rendered as HTML.
+        assert caption.startswith(format_html(inv.announcement_narrative))
         assert inv.message_id == 123 and inv.message_chat_id == -100
     # The normal callback remains backward compatible.
     button = kwargs["reply_markup"].inline_keyboard[0][0]
@@ -89,7 +95,8 @@ async def test_join_edits_announcement_to_new_hp(db, monkeypatch):
     assert bot.edit_message_caption.await_count == 1
     kwargs = bot.edit_message_caption.await_args.kwargs
     assert kwargs["chat_id"] == -100 and kwargs["message_id"] == 123
-    assert kwargs["caption"].endswith(f"\n\n{HP}: **{fa_digits(159)}** / **{fa_digits(200)}**")
+    assert kwargs["caption"].endswith(
+        format_html(f"\n\n{HP}: **{fa_digits(159)}** / **{fa_digits(200)}**"))
     # The edit is a metered send: photo + successful edit.
     assert presentation.record_send_success.await_count == 2
 
@@ -145,7 +152,8 @@ async def test_kill_edits_announcement_to_zero(db):
     assert bot.edit_message_caption.await_count == 1
     assert inv_id not in presentation._pending_edits
     kwargs = bot.edit_message_caption.await_args.kwargs
-    assert kwargs["caption"].endswith(f"\n\n{HP}: **{fa_digits(0)}** / **{fa_digits(1)}**")
+    assert kwargs["caption"].endswith(
+        format_html(f"\n\n{HP}: **{fa_digits(0)}** / **{fa_digits(1)}**"))
 
 
 @pytest.mark.asyncio
@@ -201,7 +209,7 @@ async def test_throttle_coalesces_edits(db, monkeypatch):
     assert bot.edit_message_caption.await_count == 1  # one coalesced edit
     # The single edit reflects the latest committed HP, not the stale one.
     caption = bot.edit_message_caption.await_args.kwargs["caption"]
-    assert caption.endswith(f"\n\n{HP}: **{fa_digits(170)}** / **{fa_digits(200)}**")
+    assert caption.endswith(format_html(f"\n\n{HP}: **{fa_digits(170)}** / **{fa_digits(200)}**"))
     assert inv_id not in presentation._pending_edits
 
 
@@ -238,8 +246,10 @@ async def test_join_caption_contains_damage_line(db, monkeypatch):
     bot = _join_bot()
     await presentation.InvasionPresentation().on_join(bot, inv_id, 1, attack_id)
     caption = bot.send_photo.await_args.kwargs["caption"]
-    assert caption == f"ضربهٔ سنگین بر زره\n\n🔥 {DAMAGE}: **{fa_digits(67)}**"
+    assert caption == format_html(f"ضربهٔ سنگین بر زره\n\n🔥 {DAMAGE}: **{fa_digits(67)}**")
     assert len(caption) <= 1024
+    assert bot.send_photo.await_args.kwargs["parse_mode"] == "HTML"
+    assert "**" not in caption
 
 
 @pytest.mark.asyncio
@@ -252,7 +262,7 @@ async def test_crit_uses_bomb_emoji(db, monkeypatch):
     bot = _join_bot()
     await presentation.InvasionPresentation().on_join(bot, inv_id, 1, attack_id)
     caption = bot.send_photo.await_args.kwargs["caption"]
-    assert caption.endswith(f"\n\n💥 {DAMAGE}: **{fa_digits(41)}**")
+    assert caption.endswith(format_html(f"\n\n💥 {DAMAGE}: **{fa_digits(41)}**"))
     assert "🔥" not in caption
 
 
@@ -267,7 +277,7 @@ async def test_kill_uses_win_emoji(db, monkeypatch):
     bot = _join_bot()
     await presentation.InvasionPresentation().on_join(bot, inv_id, 1, attack_id)
     caption = bot.send_photo.await_args.kwargs["caption"]
-    assert caption.endswith(f"\n\n🏆 {DAMAGE}: **{fa_digits(41)}**")
+    assert caption.endswith(format_html(f"\n\n🏆 {DAMAGE}: **{fa_digits(41)}**"))
     assert "💥" not in caption
 
 

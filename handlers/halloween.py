@@ -13,7 +13,7 @@ from aiogram import Bot, F, Router
 from aiogram.types import CallbackQuery, FSInputFile, Message
 
 from sib.core.logging import logger
-from sib.core.text import safe_name
+from sib.core.text import format_html, format_html_caption, safe_name, strip_bold
 from sib.database.connection import get_session
 from sib.database.models import HalloweenLootDrop
 from sib.keyboards.halloween import (
@@ -304,16 +304,16 @@ async def handle_halloween_command(message: Message, bot: Bot = None) -> None:
         try:
             sent = await message.answer_photo(
                 photo=photo,
-                caption=caption,
+                caption=format_html_caption(caption),
                 reply_markup=keyboard,
-                parse_mode="Markdown",
+                parse_mode="HTML",
             )
         except Exception:
             logger.exception("Halloween photo send failed; falling back to text")
             sent = None
     if sent is None:
         sent = await message.answer(
-            caption, reply_markup=keyboard, parse_mode="Markdown"
+            format_html(caption), reply_markup=keyboard, parse_mode="HTML"
         )
 
     msg_id = getattr(sent, "message_id", None) if sent is not None else None
@@ -407,7 +407,8 @@ async def _run_attack(
             extras.append(ATTACK_DEFEAT_LINE)
         if extras:
             text = text + "\n" + "\n".join(extras)
-        await safe_send_screen(bot, int(chat_id), text, parse_mode="Markdown")
+        await safe_send_screen(bot, int(chat_id), format_html(text),
+                               parse_mode="HTML")
 
     # --- the attacker's own menu follows the live boss (new art + HP) ---
     if bot is not None and menu_message_id and chat_id:
@@ -415,9 +416,10 @@ async def _run_attack(
             bot,
             int(chat_id),
             int(menu_message_id),
-            caption,
+            format_html(caption),
             reply_markup=get_halloween_main_keyboard(),
             photo=photo,
+            parse_mode="HTML",
         )
     return outcome, None
 
@@ -505,7 +507,8 @@ async def handle_halloween_menu_callback(callback: CallbackQuery, bot: Bot) -> N
     await safe_edit_callback_message(
         callback,
         bot,
-        caption,
+        format_html(caption),
+        parse_mode="HTML",
         reply_markup=get_halloween_main_keyboard(),
         photo=photo,
     )
@@ -548,17 +551,18 @@ async def handle_halloween_loot(callback: CallbackQuery, bot: Bot) -> None:
     )
     await safe_answer_callback(
         callback,
-        (
+        strip_bold(
             f"🎃 **{fa_digits(outcome.seeds_granted)} دونه کدو** گرفتی! "
             f"غنیمت بعدی: {format_duration_fa(loot.remaining_seconds)}"
-        ).replace("**", ""),
+        ),
         show_alert=True,
     )
     if callback.message is not None:
         await safe_edit_callback_message(
             callback,
             bot,
-            caption,
+            format_html(caption),
+            parse_mode="HTML",
             reply_markup=get_halloween_main_keyboard(),
             photo=photo,
         )
@@ -673,12 +677,13 @@ async def handle_halloween_claim_milestone(
         alert_text += (
             f"\n🏆 جایزه سه نفر اول: **{fa_digits(outcome.summary['top3_bonus_apples'])} سیب**!"
         )
-    await safe_answer_callback(callback, alert_text.replace("**", ""), show_alert=True)
+    await safe_answer_callback(callback, strip_bold(alert_text), show_alert=True)
     if callback.message is not None:
         await safe_edit_callback_message(
             callback,
             bot,
-            format_reward_track_caption(state, statuses),
+            format_html(format_reward_track_caption(state, statuses)),
+            parse_mode="HTML",
             reply_markup=get_halloween_reward_track_keyboard(statuses),
             photo=photo,
         )
@@ -719,7 +724,7 @@ async def handle_halloween_group_drop_claim(
 
     await safe_answer_callback(
         callback,
-        f"🎃 **{fa_digits(outcome.seeds_granted)} دونه کدو** گرفتی!".replace("**", ""),
+        strip_bold(f"🎃 **{fa_digits(outcome.seeds_granted)} دونه کدو** گرفتی!"),
         show_alert=True,
     )
     if callback.message is not None:
@@ -735,7 +740,8 @@ async def handle_halloween_group_drop_claim(
         await safe_edit_callback_message(
             callback,
             bot,
-            base_caption + status_line,
+            format_html(base_caption + status_line),
+            parse_mode="HTML",
             reply_markup=get_loot_drop_keyboard(
                 drop_id, outcome.claimed_count, outcome.max_claims
             ),

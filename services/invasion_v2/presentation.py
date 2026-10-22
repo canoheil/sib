@@ -9,6 +9,7 @@ from aiogram.types import FSInputFile, InlineKeyboardMarkup
 from sqlalchemy import func, select
 
 from sib.core.logging import logger
+from sib.core.text import format_html, format_html_caption
 from sib.database.connection import get_session
 from sib.database.models import (
     Character, Inv2Attack, Inv2Invasion, Inv2RandomEvent, Inv2Region, Inv2Reward,
@@ -146,6 +147,11 @@ def _is_missing_reply(error: TelegramBadRequest) -> bool:
 
 
 def _caption(text: str) -> str:
+    """Shorten the *source* text; rendering to HTML happens at the send.
+
+    Kept separate from :func:`format_html_caption` so the stored narrative
+    and every builder test keep working on the un-rendered text.
+    """
     return text[:1020]  # leave room below Telegram's 1024-character limit
 
 
@@ -206,7 +212,8 @@ async def _edit_announcement_caption(
     """
     try:
         await bot.edit_message_caption(chat_id=chat_id, message_id=message_id,
-                                       caption=caption, reply_markup=reply_markup)
+                                       caption=caption, reply_markup=reply_markup,
+                                       parse_mode="HTML")
     except TelegramBadRequest as exc:
         if _is_not_modified(exc):
             logger.debug("inv2 HP edit unchanged, skipping group=%s message=%s", group_id, message_id)
@@ -263,7 +270,8 @@ async def _apply_hp_edit(bot, invasion_id: int, *, allow_victory: bool = False) 
     except Exception:
         logger.exception("inv2 HP edit state read failed invasion=%s", invasion_id)
         return
-    await _edit_announcement_caption(bot, group_id, chat_id, message_id, caption,
+    await _edit_announcement_caption(bot, group_id, chat_id, message_id,
+                                     format_html_caption(caption),
                                      reply_markup=reply_markup)
 
 
@@ -370,7 +378,8 @@ async def announce_withered_in_group(bot, results) -> None:
                 if not names:
                     continue
                 text = f"{WITHER_GROUP_HEADER}\n**{'، '.join(names)}**\n{WITHER_GROUP_FOOTER}"
-                await _telegram(group_id, bot.send_message, chat_id=group_id, text=text, parse_mode=None)
+                await _telegram(group_id, bot.send_message, chat_id=group_id,
+                                text=format_html(text), parse_mode="HTML")
     except Exception:
         logger.exception("inv2 wither group announcement failed")
 
@@ -389,8 +398,8 @@ async def deliver_wither_notifications(bot, results) -> None:
         try:
             await bot.send_message(
                 chat_id=result.user_id,
-                text=WITHER_NOTIFICATION_TEXT,
-                parse_mode=None,
+                text=format_html(WITHER_NOTIFICATION_TEXT),
+                parse_mode="HTML",
             )
         except (TelegramBadRequest, TelegramForbiddenError):
             logger.debug(
@@ -432,7 +441,8 @@ class InvasionPresentation:
                 if window <= 0:
                     raise ValueError("Invalid join window")
                 message = await _telegram(group_id, bot.send_photo, chat_id=group_id,
-                    photo=FSInputFile(path), caption=caption, reply_markup=kb, parse_mode=None)
+                    photo=FSInputFile(path), caption=format_html_caption(caption),
+                    reply_markup=kb, parse_mode="HTML")
                 if message is None:
                     return
                 now = datetime.now(timezone.utc)
@@ -483,8 +493,8 @@ class InvasionPresentation:
                                              is_crit=bool(attack.is_crit),
                                              is_kill=inv.enemy_hp_remaining <= 0)
                 await _telegram(inv.group_id, bot.send_photo, chat_id=inv.group_id,
-                    photo=FSInputFile(path), caption=caption,
-                    reply_to_message_id=inv.message_id, parse_mode=None)
+                    photo=FSInputFile(path), caption=format_html_caption(caption),
+                    reply_to_message_id=inv.message_id, parse_mode="HTML")
                 # Live HP view: refresh the announcement caption. The attack
                 # is committed, so this never blocks or reopens the join flow.
                 if inv.message_id is None:
@@ -524,7 +534,8 @@ class InvasionPresentation:
                 # Telegram caption edit and photo send are separate metered calls.
                 await _telegram(inv.group_id, bot.edit_message_caption,
                     chat_id=inv.message_chat_id or inv.group_id, message_id=inv.message_id,
-                    caption=narrative_text, reply_markup=None, parse_mode=None)
+                    caption=format_html_caption(narrative_text), reply_markup=None,
+                    parse_mode="HTML")
                 caption = narrative_text
                 reward_lines = ()
                 if inv.status == InvasionStatus.VICTORY.value:
@@ -552,7 +563,8 @@ class InvasionPresentation:
                     ("compose-v4", "result", inv.id, *image_args),
                     lambda: compose_result_image(*image_args))
                 sent = await _telegram(inv.group_id, bot.send_photo, chat_id=inv.group_id,
-                    photo=FSInputFile(path), caption=_caption(caption), parse_mode=None)
+                    photo=FSInputFile(path), caption=format_html_caption(_caption(caption)),
+                    parse_mode="HTML")
                 if sent is None:
                     return False
                 if inv.status == InvasionStatus.VICTORY.value and inv.delivered_at is None:
@@ -633,7 +645,7 @@ async def _edit_event_caption(
     try:
         await bot.edit_message_caption(
             chat_id=chat_id, message_id=message_id, caption=caption,
-            reply_markup=reply_markup, parse_mode=None,
+            reply_markup=reply_markup, parse_mode="HTML",
         )
     except TelegramBadRequest as exc:
         if _is_not_modified(exc):
@@ -697,17 +709,19 @@ async def publish_event(bot, event_id: int) -> bool:
         if image_path is not None:
             message = await _telegram(
                 group_id, bot.send_photo, chat_id=group_id,
-                photo=FSInputFile(image_path), caption=_caption(caption),
+                photo=FSInputFile(image_path),
+                caption=format_html_caption(_caption(caption)),
                 reply_markup=keyboard, reply_to_message_id=reply_to_message_id,
-                parse_mode=None,
+                parse_mode="HTML",
             )
         if message is None:
             # Missing art or a rejected photo: the event still reaches the
             # group as text. This is the documented graceful fallback.
             message = await _telegram(
-                group_id, bot.send_message, chat_id=group_id, text=caption,
+                group_id, bot.send_message, chat_id=group_id,
+                text=format_html_caption(caption),
                 reply_markup=keyboard, reply_to_message_id=reply_to_message_id,
-                parse_mode=None,
+                parse_mode="HTML",
             )
         now = datetime.now(timezone.utc)
         async with get_session() as session:
@@ -796,7 +810,7 @@ async def refresh_loot_caption(bot, event_id: int) -> None:
             chat_id = event.message_chat_id or group_id
             message_id = event.message_id
         await _edit_event_caption(
-            bot, group_id, chat_id, message_id, _caption(caption),
+            bot, group_id, chat_id, message_id, format_html_caption(_caption(caption)),
             reply_markup=None if full else loot_keyboard(event_id),
         )
     except Exception:
@@ -836,7 +850,7 @@ async def close_expired_events(bot) -> int:
             if template is not None and template.category == catalog.LOOT:
                 await _edit_event_caption(
                     bot, group_id, chat_id or group_id, message_id,
-                    _caption(caption), reply_markup=None,
+                    format_html_caption(_caption(caption)), reply_markup=None,
                 )
             async with get_session() as session:
                 event = await session.get(Inv2RandomEvent, event_id)

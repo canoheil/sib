@@ -11,6 +11,7 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup
 from sqlalchemy import select, func
 from sib.admin.auth import IsAdminFilter, is_admin
 from sib.core.logging import log_event, Events
+from sib.core.text import format_html
 from sib.database.connection import get_session
 from sib.database.models import AdminLog, User, Group, Game, Match, AdCampaign, SponsorChannel
 from sib.keyboards.common import get_admin_main_keyboard, danger_button, primary_button
@@ -272,7 +273,9 @@ async def _broadcast_to_active_groups(
     sent_count = 0
     for gid in group_ids:
         try:
-            await target_bot.send_message(gid, text, parse_mode="Markdown")
+            await target_bot.send_message(
+                gid, format_html(text), parse_mode="HTML"
+            )
             sent_count += 1
         except Exception:
             continue

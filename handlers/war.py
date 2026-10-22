@@ -17,7 +17,7 @@ from aiogram.types import (
 from sqlalchemy import select
 
 from sib.core.logging import logger
-from sib.core.text import plain_display_name, safe_name
+from sib.core.text import format_html, plain_display_name, plain_text, safe_name
 from sib.database.connection import get_session
 from sib.database.models import Character, Group, GroupWar, User
 from sib.keyboards.common import danger_button, primary_button, success_button
@@ -140,14 +140,15 @@ async def send_war_status(message: Message, group_id: int, user_id: int):
     caption, markup, photo = screen
     if photo is not None:
         try:
-            await message.answer_photo(photo, caption=caption, reply_markup=markup)
+            await message.answer_photo(photo, caption=format_html(caption),
+                                       reply_markup=markup, parse_mode="HTML")
             return
         except Exception:
             logger.warning(
                 "War photo delivery failed; falling back to text", exc_info=True
             )
 
-    await message.answer(caption, reply_markup=markup)
+    await message.answer(format_html(caption), reply_markup=markup, parse_mode="HTML")
 
 
 async def edit_war_status(callback: CallbackQuery, group_id: int, user_id: int) -> bool:
@@ -163,7 +164,8 @@ async def edit_war_status(callback: CallbackQuery, group_id: int, user_id: int) 
         return False
     caption, markup, photo = screen
     return await safe_edit_callback_message(
-        callback, callback.bot, caption, reply_markup=markup, photo=photo
+        callback, callback.bot, format_html(caption), reply_markup=markup,
+        photo=photo, parse_mode="HTML",
     )
 
 
@@ -190,26 +192,39 @@ def _mention(user_id: int, first_name: Optional[str]) -> str:
 
 
 async def _send_dispatch(bot, chat_id: int, photo_bytes: bytes, caption: str):
-    """Deliver battle dispatch photo + caption, with graceful fallback to text."""
+    """Deliver battle dispatch photo + caption, with graceful fallback to text.
+
+    The dispatch carries the ``**`` narrative, so the primary send is HTML.
+    Every degraded retry drops to *plain* text (no parse mode) rather than
+    replaying HTML with the parse mode switched off, which would show the
+    ``<b>`` tags to both groups.
+    """
     try:
         await bot.send_photo(
             chat_id=chat_id,
             photo=BufferedInputFile(photo_bytes, filename="attack.jpg"),
-            caption=caption,
+            caption=format_html(caption),
+            parse_mode="HTML",
         )
+        return
     except Exception:
-        try:
-            await bot.send_photo(
-                chat_id=chat_id,
-                photo=BufferedInputFile(photo_bytes, filename="attack.jpg"),
-                caption=caption,
-                parse_mode=None,
-            )
-        except Exception:
-            try:
-                await bot.send_message(chat_id=chat_id, text=caption)
-            except Exception:
-                logger.exception("Failed to deliver war dispatch to chat %s", chat_id)
+        logger.warning("War dispatch HTML send failed chat=%s; retrying plain",
+                       chat_id, exc_info=True)
+    plain = plain_text(caption)
+    try:
+        await bot.send_photo(
+            chat_id=chat_id,
+            photo=BufferedInputFile(photo_bytes, filename="attack.jpg"),
+            caption=plain,
+            parse_mode=None,
+        )
+        return
+    except Exception:
+        pass
+    try:
+        await bot.send_message(chat_id=chat_id, text=plain, parse_mode=None)
+    except Exception:
+        logger.exception("Failed to deliver war dispatch to chat %s", chat_id)
 
 
 @router.message(F.chat.type.in_(GROUPS), F.text == "وضعیت جنگ")

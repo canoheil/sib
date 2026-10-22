@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock
 import pytest
 import sqlalchemy as sa
 
+from sib.core.text import format_html
 from sib.handlers import apple_mine as mine_handler
 from sib.services import apple_mine as mine_service
 from sib.services import apple_mine_narrative as narrative
@@ -559,9 +560,9 @@ async def test_work_performs_shift_directly(monkeypatch):
     edit_args, edit_kwargs = edit_caption.await_args
     assert edit_args[:3] == (bot, -501, 77)
     assert edit_kwargs["reply_markup"].inline_keyboard == []
-    assert edit_kwargs["parse_mode"] == "Markdown"
+    assert edit_kwargs["parse_mode"] == "HTML"
     caption = edit_args[3]
-    assert caption == (
+    assert caption == format_html(
         "⛏ **رگهٔ سیب** رو پیدا کردی.\n"
         "⛏ **۱۸ سیب معمولی** گیرت اومد!\n"
         "🔨 سطح کلنگ: **۲**؛ شیفت بعدی: **۱۵ دقیقه دیگه**"
@@ -655,9 +656,10 @@ async def test_pickaxe_screen_swaps_photo_in_place(monkeypatch, tmp_path):
     assert str(getattr(kwargs["photo"], "path", kwargs["photo"])).endswith(
         "pickaxe_2.jpg"
     )
-    assert "📊 سطح فعلی: **۲ از ۵**" in kwargs["text"]
-    assert "💰 هزینه ارتقا: **۶۰۰ سیب**" in kwargs["text"]
-    assert kwargs["parse_mode"] == "Markdown"
+    assert format_html("📊 سطح فعلی: **۲ از ۵**") in kwargs["text"]
+    assert format_html("💰 هزینه ارتقا: **۶۰۰ سیب**") in kwargs["text"]
+    assert "**" not in kwargs["text"]
+    assert kwargs["parse_mode"] == "HTML"
     kb = kwargs["reply_markup"].inline_keyboard
     assert {b.callback_data for row in kb for b in row} == {
         "mine:pickaxe:upgrade",
@@ -702,11 +704,12 @@ async def test_upgrade_success_edits_to_new_level(monkeypatch, tmp_path):
     assert str(getattr(kwargs["photo"], "path", kwargs["photo"])).endswith(
         "pickaxe_3.jpg"
     )
-    assert "🔨 **ارتقای کلنگ**" in kwargs["text"]
-    assert "📊 سطح فعلی: **۳ از ۵**" in kwargs["text"]
-    assert "🍎 موجودی شما: **۷۵۰ سیب**" in kwargs["text"]
+    assert format_html("🔨 **ارتقای کلنگ**") in kwargs["text"]
+    assert format_html("📊 سطح فعلی: **۳ از ۵**") in kwargs["text"]
+    assert format_html("🍎 موجودی شما: **۷۵۰ سیب**") in kwargs["text"]
+    assert "**" not in kwargs["text"]
     assert "🎉" not in kwargs["text"]
-    assert kwargs["parse_mode"] == "Markdown"
+    assert kwargs["parse_mode"] == "HTML"
 
 
 @pytest.mark.asyncio
@@ -772,7 +775,7 @@ async def test_upgrade_stale_max_level_renders_max_screen(monkeypatch, tmp_path)
     assert str(getattr(kwargs["photo"], "path", kwargs["photo"])).endswith(
         "pickaxe_5.jpg"
     )
-    assert "🏆 **کلنگ به سطح ۵ رسید!**" in kwargs["text"]
+    assert format_html("🏆 **کلنگ به سطح ۵ رسید!**") in kwargs["text"]
     assert "🎉" not in kwargs["text"]
     kb = kwargs["reply_markup"].inline_keyboard
     assert {b.callback_data for row in kb for b in row} == {"mine:pickaxe:back"}
