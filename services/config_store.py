@@ -341,9 +341,17 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     # sender's successful hugs start the cooldown (see services/sib_hug.py).
     "sib_hug_amount": 10,
     "sib_hug_cooldown_seconds": 10 * 60,
+    # Friendship Bonus (SOC1): when the two participants already have an
+    # ACCEPTED apple_friendships row, this bonus is ADDED on top of the base
+    # amount for BOTH of them - so the default pair 10 + 10 pays 20 each.
+    # Additive (not a replacement amount) so rebalancing the base reward keeps
+    # the bonus meaningful, and tunable here without a deploy or migration.
+    "sib_hug_friend_bonus": 10,
     # "بوس سیبی" (Sib Kiss): independent of hug, claim, and received kisses.
     "sib_kiss_amount": 10,
     "sib_kiss_cooldown_seconds": 10 * 60,
+    # Friendship Bonus for «بوس سیبی», same rule as the hug bonus above.
+    "sib_kiss_friend_bonus": 10,
     # Daily Sib Treasure Chest («صندوقچه گنج روزانه»): one claim per player
     # per UTC calendar day (the established daily boundary: trades_per_day,
     # flower_daily_limit_per_direction and the XP daily caps all reset at

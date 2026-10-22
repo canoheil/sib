@@ -112,7 +112,12 @@ Alembic migrations (`database/`).
 - Marriage and shared love are shown on the profile.
 - Two lightweight social reply actions also exist: «بغل سیبی» (hug)
   and «بوس سیبی» (kiss), in `handlers/sib_hug.py` and
-  `handlers/sib_kiss.py`.
+  `handlers/sib_kiss.py`. Both participants receive `sib_hug_amount`
+  / `sib_kiss_amount` (10) apples; when the two players are **accepted
+  apple friends**, they get the Friendship Bonus instead and each
+  receives base + `sib_hug_friend_bonus` / `sib_kiss_friend_bonus`
+  (10 + 10 = 20). The bonus never touches the cooldown or the
+  idempotency keys, so it cannot be farmed.
 
 ### Party and matchmaking
 

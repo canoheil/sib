@@ -154,6 +154,31 @@ class FriendshipService:
         await session.flush()
         return True
 
+    @classmethod
+    async def are_friends(cls, session: AsyncSession, user_id: int, friend_id: int) -> bool:
+        """True only when an ACCEPTED friendship links the two users.
+
+        Direction-agnostic: ``apple_friendships`` stores one row per pair, so
+        the pair is matched in BOTH column orders. A PENDING request is NOT a
+        friendship and never counts (see ``FriendshipStatus``).
+
+        Deliberately a plain read with no ``FOR UPDATE``: callers use it only
+        to SIZE a reward (the Sib Hug / Sib Kiss friendship bonus), never to
+        guard an integrity rule. Locking the pair here would also gap-lock the
+        pair range on MariaDB, which would block unrelated friend-request
+        inserts for the whole duration of a hug transaction.
+        """
+        user_id, friend_id = int(user_id), int(friend_id)
+        if user_id == friend_id:
+            return False
+        row_id = await session.scalar(
+            select(AppleFriendship.id)
+            .where(cls._pair_clause(user_id, friend_id))
+            .where(AppleFriendship.status == FriendshipStatus.ACCEPTED)
+            .limit(1)
+        )
+        return row_id is not None
+
     @staticmethod
     async def list_friends(
         session: AsyncSession, user_id: int, *, offset: int = 0, limit: Optional[int] = None

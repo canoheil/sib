@@ -122,5 +122,6 @@ async def handle_sib_hug(message: Message) -> None:
         _mention(sender.id, sender.first_name),
         _mention(target.id, target.first_name),
         result.amount,
+        friends=result.friendship_bonus,
     )
     await send_scene_reply(message, HUG_SCENE_KEY, text)
