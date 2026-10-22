@@ -44,29 +44,111 @@ from sib.services.invasion_v2.damage import compute_damage
 from sib.services.items import ItemService
 from sib.services.lock_order import lock_user_row
 from sib.services.player_cards import DuplicateCardError, PlayerCardService
+from sib.services.sib_claim import fa_digits
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ASSETS_HALLOWEEN_DIR = REPO_ROOT / "assets" / "halloween"
 SIBOMORTIS_IMAGE_PATH = ASSETS_HALLOWEEN_DIR / "sibomortis.jpg"
 AMBER_CARD_IMAGE_PATH = REPO_ROOT / "assets" / "characters" / "amber.jpg"
 
+# HW2 — Boss Evolution artwork. Every artwork key stays overridable at
+# runtime through ``/setasset <key>`` (``bot_assets``); the bundled JPEGs are
+# the versioned fallback. ``BOSS_ART`` is keyed by ``phase_for_hp()`` result.
+BOSS_ART: Dict[int, Tuple[str, Path]] = {
+    1: ("halloween_boss", SIBOMORTIS_IMAGE_PATH),
+    2: ("halloween_boss_75", ASSETS_HALLOWEEN_DIR / "sibomortis_75.jpg"),
+    3: ("halloween_boss_50", ASSETS_HALLOWEEN_DIR / "sibomortis_50.jpg"),
+    4: ("halloween_boss_25", ASSETS_HALLOWEEN_DIR / "sibomortis_25.jpg"),
+    # Defeated: the collapsed body stays on screen as the raid's epitaph.
+    5: ("halloween_boss_25", ASSETS_HALLOWEEN_DIR / "sibomortis_25.jpg"),
+}
+
+# HW2 — the boss talks back: one short Persian line per evolution phase, so
+# the menu reads like a living fight instead of a static counter.
+BOSS_PHASE_TAUNTS: Dict[int, str] = {
+    1: "💪 **سیبومورتیس استوار ایستاده و به ضربه‌هایت اهمیت نمی‌دهد.**",
+    2: "🩸 **تنه‌اش ترک خورده؛ چشمانش آتشین‌تر شده است.**",
+    3: "🔥 **سیبومورتیس خشمگین است! زره چوبینش شکسته.**",
+    4: "🥀 **سیبومورتیس در حال فروپاشی‌ست؛ نورش رو به خاموشی است.**",
+    5: "",  # dead boss: the menu prints its own defeat line instead
+}
+
 LOOT_DROP_VARIANTS: Dict[str, Tuple[str, Path]] = {
     "pumpkin_chest": (
-        "🎃 **صندوق کدو رسید!** **۳ نفر اول** هرکدوم **۱ تا ۳ دونه کدو** می‌گیرن.",
+        "🎃 **صندوق کدو رسید!** **۳ نفر اول** هرکدوم **۳ تا ۶ دونه کدو** می‌گیرن.",
         ASSETS_HALLOWEEN_DIR / "loot_pumpkin_chest.jpg",
     ),
     "lantern_crate": (
-        "🕯 **فانوس سایه پیدا شد!** **۳ نفر اول** هرکدوم **۱ تا ۳ دونه کدو** می‌گیرن.",
+        "🕯 **فانوس سایه پیدا شد!** **۳ نفر اول** هرکدوم **۳ تا ۶ دونه کدو** می‌گیرن.",
         ASSETS_HALLOWEEN_DIR / "loot_lantern_crate.jpg",
     ),
     "autumn_hollow": (
-        "🍂 **کدوی باغ خزان رسید!** **۳ نفر اول** هرکدوم **۱ تا ۳ دونه کدو** می‌گیرن.",
+        "🍂 **کدوی باغ خزان رسید!** **۳ نفر اول** هرکدوم **۳ تا ۶ دونه کدو** می‌گیرن.",
         ASSETS_HALLOWEEN_DIR / "loot_autumn_hollow.jpg",
     ),
 }
 
 MILESTONES: Tuple[int, ...] = (75, 50, 25, 0)
 BASE_UNARMED_POWER = 10
+# HW2 balance pass: seed loot raised from 1–3 to 3–6 per claim, and every
+# milestone reward multiplied (players found the event too passive + too poor).
+SEED_LOOT_MIN = 3
+SEED_LOOT_MAX = 6
+# HW2 balance pass: damage = Main Card power with a 10% chance to double.
+ATTACK_CRIT_CHANCE = 0.10
+ATTACK_CRIT_MULTIPLIER = 2
+AMBER_MILESTONE_PCT = 25
+
+# ``apples`` = normal Apples from the wallet, every other key is an
+# ``ITEM_CATALOG`` key. The 25% row additionally grants the exclusive Amber
+# card and the 0% row the Top-3 victory bonus (see ``claim_milestone``).
+MILESTONE_REWARDS: Dict[int, Dict[str, int]] = {
+    75: {"apples": 500, "pumpkin_seed": 3},
+    50: {"magic_powder": 5, "apple_gold": 5},
+    25: {"apple_diamond": 3},
+    0: {"apples": 1500, "apple_obsidian": 1},
+}
+
+#: Persian label + emoji per reward key (emojis mirror ``ITEM_CATALOG``).
+MILESTONE_REWARD_LABELS: Dict[str, Tuple[str, str]] = {
+    "apples": ("سیب", "🍎"),
+    "pumpkin_seed": ("دونه کدو", "🎃"),
+    "magic_powder": ("پودر جادویی", "✨"),
+    "apple_gold": ("سیب طلایی", "🌕"),
+    "apple_diamond": ("سیب الماسی", "💎"),
+    "apple_obsidian": ("سیب ابسیدینی", "🌑"),
+}
+
+
+def milestone_reward_parts(milestone_pct: int) -> List[Tuple[str, int]]:
+    """Ordered ``(reward_key, quantity)`` list for one milestone."""
+    return [
+        (key, int(qty))
+        for key, qty in MILESTONE_REWARDS[int(milestone_pct)].items()
+    ]
+
+
+def milestone_reward_line(milestone_pct: int, *, sep: str = " + ") -> str:
+    """One readable Persian reward line for a milestone, used by every screen.
+
+    ``75%`` → ``**۵۰۰ سیب** 🍎 + **۳ دونه کدو** 🎃``. The 25% line leads with
+    the exclusive Amber card and the 0% line closes with the Top-3 bonus, so
+    the Reward Track, the claim alert and the help text never drift apart.
+    """
+    parts = []
+    if int(milestone_pct) == AMBER_MILESTONE_PCT:
+        parts.append("**کارت امبر** 🎴")
+    for key, qty in milestone_reward_parts(milestone_pct):
+        label, emoji = MILESTONE_REWARD_LABELS[key]
+        parts.append(f"**{fa_digits(qty)} {label}** {emoji}")
+    line = sep.join(parts)
+    if int(milestone_pct) == 0:
+        line += (
+            f" (+**{fa_digits(TOP3_VICTORY_BONUS_APPLES)} سیب ویژهٔ "
+            "۳ نفر اول** 🏆)"
+        )
+    return line
+
 TOP3_VICTORY_BONUS_APPLES = 1000
 TOP3_DAMAGE_REWARDS: Dict[int, int] = {
     1: 1000,
@@ -74,9 +156,12 @@ TOP3_DAMAGE_REWARDS: Dict[int, int] = {
     3: 500,
 }
 
-START_ANNOUNCEMENT_TEMPLATE = (
-    "🎃 **هالووین شروع شد!**\n"
-    "سیبومورتیس با **{max_hp} جون** رسید؛ برای نبرد «هالووین» رو بفرست."
+# HW2 hype launch broadcast (TASK 6) — static, no formatting placeholders.
+START_ANNOUNCEMENT = (
+    "🚨 **سیبومورتیس از راه رسید!** 🎃\n"
+    "تاریکی اواریا را فرا گرفته. برای حمله به این هیولای افسانه‌ای، "
+    "کلمه «هالووین» را در گروه بزنید و بجنگید!\n"
+    "جایزه نهایی: کارت افسانه‌ای امبر! 🎴"
 )
 END_ANNOUNCEMENT = "🎃 **هالووین تموم شد!**"
 START_TEST_CONFIRMATION = "✅ ایونت در حالت تست (بی‌صدا) فعال شد."
@@ -132,6 +217,45 @@ def milestone_hp_threshold(max_hp: int, milestone_pct: int) -> int:
     return (max_hp * milestone_pct) // 100
 
 
+def boss_art_for_phase(phase: int) -> Tuple[str, Path]:
+    """``(asset_key, bundled_path)`` for the boss artwork of a phase.
+
+    HW2 boss evolution: the menu image is a function of ``boss_hp`` only, so
+    every render (open, refresh, post-attack edit) shows the matching form.
+    """
+    return BOSS_ART.get(int(phase), BOSS_ART[1])
+
+
+def boss_phase(state: HalloweenEventState) -> int:
+    """Live evolution phase of ``state`` (recomputed, never trusted from DB)."""
+    return phase_for_hp(int(state.boss_hp), max(1, int(state.max_hp)))
+
+
+def boss_taunt_for_phase(phase: int) -> str:
+    return BOSS_PHASE_TAUNTS.get(int(phase), BOSS_PHASE_TAUNTS[1])
+
+
+def format_duration_fa(seconds: int) -> str:
+    """Persian «۳ ساعت و ۱۵ دقیقه» countdown text (never «۰ دقیقه»)."""
+    total = max(0, int(seconds))
+    if total < 60:
+        return "کمتر از یک دقیقه"
+    hours, remainder = divmod(total, 3600)
+    minutes = (remainder + 59) // 60  # never advertise a zero wait mid-hour
+    if hours and minutes:
+        return f"{fa_digits(hours)} ساعت و {fa_digits(minutes)} دقیقه"
+    if hours:
+        return f"{fa_digits(hours)} ساعت"
+    if minutes:
+        return f"{fa_digits(minutes)} دقیقه"
+    return "کمتر از یک دقیقه"
+
+
+def seed_loot_range_fa() -> str:
+    """Persian «۳ تا ۶» seed range advertised in the menu and loot alerts."""
+    return f"{fa_digits(SEED_LOOT_MIN)} تا {fa_digits(SEED_LOOT_MAX)}"
+
+
 class HalloweenError(ValueError):
     """Player-facing Halloween error with Persian message."""
 
@@ -172,6 +296,17 @@ class SeedClaimOutcome:
     seeds_granted: int
     total_seeds: int
     next_claim_at: datetime
+    cooldown_seconds: int = 0
+
+
+@dataclass(frozen=True)
+class SeedLootStatus:
+    """Player-facing seed-loot cooldown state for the Boss Menu."""
+
+    ready: bool
+    remaining_seconds: int
+    next_claim_at: Optional[datetime] = None
+    total_claims: int = 0
 
 
 @dataclass(frozen=True)
@@ -182,6 +317,19 @@ class AttackOutcome:
     max_hp: int
     remaining_seeds: int
     card_name_fa: Optional[str]
+    # HW2 boss evolution: the phase the boss was in BEFORE this hit and the
+    # one it is in AFTER, so the menu can swap artwork and announce a
+    # transformation the moment a threshold is crossed.
+    phase_before: int = 1
+    phase_after: int = 1
+
+    @property
+    def evolved(self) -> bool:
+        return self.phase_before != self.phase_after
+
+    @property
+    def hp_percent_after(self) -> int:
+        return max(0, min(100, (int(self.boss_hp_after) * 100) // max(1, int(self.max_hp))))
 
 
 @dataclass(frozen=True)
@@ -547,6 +695,46 @@ class HalloweenService:
         return state
 
     @classmethod
+    async def get_seed_loot_status(
+        cls,
+        session: AsyncSession,
+        user_id: int,
+        *,
+        now: Optional[datetime] = None,
+    ) -> SeedLootStatus:
+        """Exact per-user loot cooldown for the Boss Menu (HW2 UI).
+
+        Reads the same ``halloween_seed_cooldowns`` row the claim writes, so
+        the advertised countdown and the enforced cooldown can never disagree.
+        """
+        moment = _utc(now or datetime.now(timezone.utc))
+        state = await cls.ensure_active_event(session, now=moment)
+        cooldown_seconds = int(
+            await ConfigService.get(session, "halloween_loot_cooldown_seconds")
+            or 14_400
+        )
+        cd = await session.get(HalloweenSeedCooldown, (state.id, user_id))
+        if cd is None:
+            return SeedLootStatus(
+                ready=True, remaining_seconds=0, next_claim_at=None
+            )
+        elapsed = (moment - _utc(cd.last_claimed_at)).total_seconds()
+        remaining = int(cooldown_seconds - elapsed)
+        if remaining <= 0:
+            return SeedLootStatus(
+                ready=True,
+                remaining_seconds=0,
+                next_claim_at=None,
+                total_claims=int(cd.total_claims),
+            )
+        return SeedLootStatus(
+            ready=False,
+            remaining_seconds=remaining,
+            next_claim_at=moment + timedelta(seconds=remaining),
+            total_claims=int(cd.total_claims),
+        )
+
+    @classmethod
     async def claim_seed_loot(
         cls,
         session: AsyncSession,
@@ -555,7 +743,7 @@ class HalloweenService:
         rng: Optional[random.Random] = None,
         now: Optional[datetime] = None,
     ) -> SeedClaimOutcome:
-        """Claim 1–3 ``pumpkin_seed`` on a 4-hour per-user cooldown."""
+        """Claim ``SEED_LOOT_MIN``–``SEED_LOOT_MAX`` ``pumpkin_seed`` on a 4-hour per-user cooldown."""
         if not await cls.is_enabled(session):
             raise HalloweenDisabledError(EVENT_DISABLED_ALERT)
 
@@ -576,7 +764,7 @@ class HalloweenService:
             if elapsed < cooldown_seconds:
                 raise HalloweenCooldownError(int(cooldown_seconds - elapsed))
 
-        granted = int(rng.randint(1, 3))
+        granted = int(rng.randint(SEED_LOOT_MIN, SEED_LOOT_MAX))
         if cd is None:
             cd = HalloweenSeedCooldown(
                 event_id=state.id,
@@ -599,6 +787,7 @@ class HalloweenService:
             seeds_granted=granted,
             total_seeds=total_seeds,
             next_claim_at=moment + timedelta(seconds=cooldown_seconds),
+            cooldown_seconds=cooldown_seconds,
         )
 
     @classmethod
@@ -650,7 +839,9 @@ class HalloweenService:
         card_power, card_id, character_id, card_name_fa = await cls._resolve_player_attack_card(
             session, user_id
         )
-        damage, is_crit = compute_damage(card_power, rng, crit_chance=0.10)
+        damage, is_crit = compute_damage(
+            card_power, rng, crit_chance=ATTACK_CRIT_CHANCE
+        )
         damage = max(1, int(damage))
 
         # Rank 8 lock: acquire global boss row LAST for sub-millisecond hold.
@@ -666,8 +857,11 @@ class HalloweenService:
             raise HalloweenBossDefeatedError("🎉 سیبومورتیس قبلاً شکست خورده است! از مسیر جوایز پاداش خود را بگیرید.")
 
         new_hp = max(0, int(locked_state.boss_hp) - damage)
+        max_hp = int(locked_state.max_hp)
+        phase_before = phase_for_hp(int(locked_state.boss_hp), max_hp)
+        phase_after = phase_for_hp(new_hp, max_hp)
         locked_state.boss_hp = new_hp
-        locked_state.current_phase = phase_for_hp(new_hp, int(locked_state.max_hp))
+        locked_state.current_phase = phase_after
         if new_hp == 0 and locked_state.finisher_user_id is None:
             locked_state.finisher_user_id = user_id
 
@@ -693,9 +887,11 @@ class HalloweenService:
             damage=damage,
             is_crit=is_crit,
             boss_hp_after=new_hp,
-            max_hp=int(locked_state.max_hp),
+            max_hp=max_hp,
             remaining_seeds=remaining_seeds,
             card_name_fa=card_name_fa,
+            phase_before=phase_before,
+            phase_after=phase_after,
         )
 
     @classmethod
@@ -812,26 +1008,29 @@ class HalloweenService:
 
         summary: Dict[str, object] = {}
         unlocked_amber = False
+        rewards = MILESTONE_REWARDS[milestone_pct]
 
-        if milestone_pct == 75:
-            await ItemService.grant(session, user_id, "pumpkin_seed", 2)
+        apples = int(rewards.get("apples", 0))
+        if apples:
             await AppleWalletService.earn(
                 session,
                 user_id,
-                150,
+                apples,
                 reason="halloween_milestone",
                 ref_type="halloween_claim",
                 ref_id=claim_row.id,
-                idempotency_key=f"hw_ms:{state.id}:{user_id}:75",
+                idempotency_key=f"hw_ms:{state.id}:{user_id}:{milestone_pct}",
             )
-            summary = {"apples": 150, "pumpkin_seed": 2}
+            summary["apples"] = apples
 
-        elif milestone_pct == 50:
-            await ItemService.grant(session, user_id, "magic_powder", 3)
-            await ItemService.grant(session, user_id, "apple_gold", 2)
-            summary = {"magic_powder": 3, "apple_gold": 2}
+        for item_key, quantity in rewards.items():
+            if item_key == "apples":
+                continue
+            await ItemService.grant(session, user_id, item_key, int(quantity))
+            summary[item_key] = int(quantity)
 
-        elif milestone_pct == 25:
+        # 25% is the exclusive Amber card reveal (never purchasable elsewhere).
+        if milestone_pct == AMBER_MILESTONE_PCT:
             amber = await CharacterService.get_by_code(session, "amber")
             if amber is None:
                 from sib.database.connection import seed_characters
@@ -850,29 +1049,25 @@ class HalloweenService:
                     summary["card"] = "amber"
                 except DuplicateCardError:
                     summary["card_already_owned"] = "amber"
-            await ItemService.grant(session, user_id, "apple_diamond", 1)
-            summary["apple_diamond"] = 1
 
-        elif milestone_pct == 0:
-            await ItemService.grant(session, user_id, "apple_obsidian", 1)
+        # 0% is the victory milestone: the Top-3 damage dealers of the event
+        # additionally receive the ranked victory bonus.
+        if milestone_pct == 0:
             top3 = await cls.get_leaderboard(session, state.id, limit=3)
             top3_ids = {uid for uid, _name, _dmg in top3}
             is_top3 = user_id in top3_ids
-            apples_total = 500 + (TOP3_VICTORY_BONUS_APPLES if is_top3 else 0)
-            await AppleWalletService.earn(
-                session,
-                user_id,
-                apples_total,
-                reason="halloween_milestone",
-                ref_type="halloween_claim",
-                ref_id=claim_row.id,
-                idempotency_key=f"hw_ms:{state.id}:{user_id}:0",
-            )
-            summary = {
-                "apples": 500,
-                "apple_obsidian": 1,
-                "top3_bonus_apples": TOP3_VICTORY_BONUS_APPLES if is_top3 else 0,
-            }
+            bonus = TOP3_VICTORY_BONUS_APPLES if is_top3 else 0
+            if bonus:
+                await AppleWalletService.earn(
+                    session,
+                    user_id,
+                    bonus,
+                    reason="halloween_top3_bonus",
+                    ref_type="halloween_claim",
+                    ref_id=claim_row.id,
+                    idempotency_key=f"hw_ms_top3:{state.id}:{user_id}",
+                )
+            summary["top3_bonus_apples"] = bonus
 
         claim_row.reward_summary_json = json.dumps(summary, ensure_ascii=False)
         await session.flush()
@@ -892,7 +1087,7 @@ class HalloweenService:
         rng: Optional[random.Random] = None,
         now: Optional[datetime] = None,
     ) -> DropClaimOutcome:
-        """Claim 1–3 ``pumpkin_seed`` from an active group chest (first 3 winners)."""
+        """Claim ``SEED_LOOT_MIN``–``SEED_LOOT_MAX`` seeds from a group chest (first 3 winners)."""
         if not await cls.is_enabled(session):
             raise HalloweenDisabledError(EVENT_DISABLED_ALERT)
 
@@ -926,7 +1121,7 @@ class HalloweenService:
 
         await lock_user_row(session, user_id)
 
-        seeds = int(rng.randint(1, 3))
+        seeds = int(rng.randint(SEED_LOOT_MIN, SEED_LOOT_MAX))
         slot_no = int(drop.claimed_count) + 1
         drop.claimed_count = slot_no
         if drop.claimed_count >= drop.max_claims:

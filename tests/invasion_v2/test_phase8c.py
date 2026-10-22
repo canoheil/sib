@@ -116,7 +116,7 @@ def test_migration_chain_head():
     cfg = Config()
     cfg.set_main_option("script_location", str(ROOT / "database/migrations"))
     scripts = ScriptDirectory.from_config(cfg)
-    assert scripts.get_current_head() == "058_halloween_leaderboard_finalized"
+    assert scripts.get_current_head() == "059_halloween_seed_loot_boost"
     assert _migration().down_revision == "039_archive_inv1_tables"
     chain = {
         "041_inv2_announcement_narrative": "040_inv2_difficulty_default",
@@ -137,6 +137,7 @@ def test_migration_chain_head():
         "056_garden_wither_grace_hours": "055_inv2_random_events",
         "057_halloween_event": "056_garden_wither_grace_hours",
         "058_halloween_leaderboard_finalized": "057_halloween_event",
+        "059_halloween_seed_loot_boost": "058_halloween_leaderboard_finalized",
     }
     for revision, parent in chain.items():
         path = ROOT / f"database/migrations/versions/{revision}.py"

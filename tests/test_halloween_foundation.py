@@ -33,6 +33,13 @@ from sib.services.assets import AssetService, bundled_item_path
 from sib.services.card_progression import MAX_CARD_LEVEL, attributes_at_level, base_attributes
 from sib.services.card_upgrade import CardUpgradeService
 from sib.services.character_art import artwork_path, resolve_character_photo
+from sib.services.halloween import (
+    LOOT_DROP_VARIANTS,
+    SEED_LOOT_MAX,
+    SEED_LOOT_MIN,
+    boss_art_for_phase,
+    seed_loot_range_fa,
+)
 from sib.services.config_store import CONFIG_DEFAULTS, ConfigService
 from sib.services.daily_chest import DailyChestService
 from sib.services.items import ITEM_CATALOG, ItemService, item_emoji, item_label
@@ -348,6 +355,10 @@ async def test_amber_exclusive_card_seeded_excluded_from_shop_and_usable_everywh
 def test_all_halloween_assets_exist_and_decode_cleanly():
     expected_square_1024 = (
         REPO_ROOT / "assets/halloween/sibomortis.jpg",
+        # HW2 boss evolution artwork (75% / 50% / 25% HP forms).
+        REPO_ROOT / "assets/halloween/sibomortis_75.jpg",
+        REPO_ROOT / "assets/halloween/sibomortis_50.jpg",
+        REPO_ROOT / "assets/halloween/sibomortis_25.jpg",
         REPO_ROOT / "assets/halloween/loot_pumpkin_chest.jpg",
         REPO_ROOT / "assets/halloween/loot_lantern_crate.jpg",
         REPO_ROOT / "assets/halloween/loot_autumn_hollow.jpg",
@@ -360,6 +371,12 @@ def test_all_halloween_assets_exist_and_decode_cleanly():
             assert im.mode == "RGB"
             assert im.size == (1024, 1024), f"unexpected size {im.size} for {path}"
 
+    # Every evolution phase resolves to a bundled file that actually exists,
+    # so the menu can never render a missing image mid-fight.
+    for phase in (1, 2, 3, 4, 5):
+        _key, path = boss_art_for_phase(phase)
+        assert path.is_file(), f"missing boss artwork for phase {phase}: {path}"
+
     assert bundled_item_path("pumpkin_seed") == REPO_ROOT / "assets/items/pumpkin_seed.jpg"
 
     amber_art = REPO_ROOT / "assets/characters/amber.jpg"
@@ -367,3 +384,115 @@ def test_all_halloween_assets_exist_and_decode_cleanly():
     with Image.open(amber_art) as im:
         im.load()
         assert im.width > 0 and im.height > 0
+
+
+# ---------------------------------------------------------------------------
+# 5. Migration 059 (HW2 balance pass): group chest seed cap 3 -> 6
+# ---------------------------------------------------------------------------
+
+
+def _load_migration_059():
+    path = REPO_ROOT / "database/migrations/versions/059_halloween_seed_loot_boost.py"
+    spec = importlib.util.spec_from_file_location("migration_059", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _hw_claims_check_constraints(conn):
+    return {
+        c["name"]: c["sqltext"]
+        for c in sa.inspect(conn).get_check_constraints("halloween_loot_drop_claims")
+    }
+
+
+def test_migration_059_widens_the_group_chest_seed_cap():
+    migration = _load_migration_059()
+    assert migration.revision == "059_halloween_seed_loot_boost"
+    assert migration.down_revision == "058_halloween_leaderboard_finalized"
+
+    engine = sa.create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        Base.metadata.create_all(
+            conn,
+            tables=[
+                User.__table__,
+                Group.__table__,
+                Character.__table__,
+                PlayerCard.__table__,
+                SystemConfig.__table__,
+            ],
+        )
+        with Operations.context(MigrationContext.configure(conn)):
+            _load_migration_057().upgrade()
+
+        # HW1 shipped the 1..3 cap; migration 057 must still create it.
+        assert (
+            _hw_claims_check_constraints(conn)["ck_hw_drop_claims_seeds"]
+            == "seeds_granted BETWEEN 1 AND 3"
+        )
+
+        with Operations.context(MigrationContext.configure(conn)):
+            migration.upgrade()
+
+        assert (
+            _hw_claims_check_constraints(conn)["ck_hw_drop_claims_seeds"]
+            == "seeds_granted BETWEEN 1 AND 6"
+        )
+        # The table itself is untouched: same unique keys, index and columns.
+        inspector = sa.inspect(conn)
+        assert {
+            uq["name"] for uq in inspector.get_unique_constraints("halloween_loot_drop_claims")
+        } == {"uq_hw_drop_claims_drop_user", "uq_hw_drop_claims_drop_slot"}
+        assert {
+            idx["name"] for idx in inspector.get_indexes("halloween_loot_drop_claims")
+        } >= {"ix_hw_drop_claims_user"}
+        assert [
+            col["name"] for col in inspector.get_columns("halloween_loot_drop_claims")
+        ] == ["id", "drop_id", "user_id", "slot_no", "seeds_granted", "claimed_at"]
+
+        insert = sa.text(
+            "INSERT INTO halloween_loot_drop_claims "
+            "(drop_id, user_id, slot_no, seeds_granted, claimed_at) "
+            "VALUES (:d, :u, :s, :seeds, '2026-10-22 00:00:00')"
+        )
+        # A 6-seed winner (the new HW2 maximum) is now legal…
+        conn.execute(insert, {"d": 1, "u": 1, "s": 1, "seeds": 6})
+        # …historical 1-seed rows stay legal, and 7 is still refused.
+        conn.execute(insert, {"d": 2, "u": 2, "s": 1, "seeds": 1})
+        with pytest.raises(sa.exc.IntegrityError):
+            conn.execute(insert, {"d": 3, "u": 3, "s": 1, "seeds": 7})
+
+        # Downgrade refuses to re-cap while HW2 rows above 3 exist…
+        with pytest.raises(RuntimeError):
+            with Operations.context(MigrationContext.configure(conn)):
+                migration.downgrade()
+        conn.execute(
+            sa.text("DELETE FROM halloween_loot_drop_claims WHERE seeds_granted > 3")
+        )
+        # …and restores the original HW1 check once they are gone.
+        with Operations.context(MigrationContext.configure(conn)):
+            migration.downgrade()
+        assert (
+            _hw_claims_check_constraints(conn)["ck_hw_drop_claims_seeds"]
+            == "seeds_granted BETWEEN 1 AND 3"
+        )
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_hw2_seed_payout_ranges_are_consistent_everywhere(db_session):
+    """Model constraint, service range and the public chest copy all say 3-6."""
+    assert (SEED_LOOT_MIN, SEED_LOOT_MAX) == (3, 6)
+    model_checks = {
+        str(c.sqltext)
+        for c in HalloweenLootDropClaim.__table__.constraints
+        if isinstance(c, sa.CheckConstraint)
+    }
+    assert "seeds_granted BETWEEN 1 AND 6" in model_checks
+
+    # The chest message advertised in the group matches the payout range, so
+    # the loot promise and the loot reality can never drift apart.
+    for caption, _path in LOOT_DROP_VARIANTS.values():
+        assert seed_loot_range_fa() in caption

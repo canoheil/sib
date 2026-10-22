@@ -258,8 +258,10 @@ class HalloweenLootDropClaim(Base):
     __table_args__ = (
         UniqueConstraint("drop_id", "user_id", name="uq_hw_drop_claims_drop_user"),
         UniqueConstraint("drop_id", "slot_no", name="uq_hw_drop_claims_drop_slot"),
+        # HW2 balance pass: 3–6 seeds per claim (1 kept as the floor for rows
+        # written before the rebalance, 6 is the new ceiling).
         CheckConstraint(
-            "seeds_granted BETWEEN 1 AND 3", name="ck_hw_drop_claims_seeds"
+            "seeds_granted BETWEEN 1 AND 6", name="ck_hw_drop_claims_seeds"
         ),
         Index("ix_hw_drop_claims_user", "user_id"),
     )
