@@ -87,6 +87,13 @@ async def main():
         MaintenanceService.run_forever(maintenance_stop, bot=bot)
     )
 
+    # Expired transfer confirmations: cancel stale pending rows every 60s.
+    from sib.handlers.transfers import run_pending_cleanup_forever
+    transfers_stop = asyncio.Event()
+    transfers_cleanup_task = asyncio.create_task(
+        run_pending_cleanup_forever(transfers_stop)
+    )
+
     logger.info("sib bot is ready. Starting polling...")
     log_event(Events.SYSTEM_RESTART_RECOVERY, {"status": "starting_polling"})
 
@@ -97,6 +104,13 @@ async def main():
         maintenance_task.cancel()
         try:
             await maintenance_task
+        except asyncio.CancelledError:
+            pass
+
+        transfers_stop.set()
+        transfers_cleanup_task.cancel()
+        try:
+            await transfers_cleanup_task
         except asyncio.CancelledError:
             pass
 

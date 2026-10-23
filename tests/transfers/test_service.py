@@ -8,6 +8,7 @@ SQLite, so the real two-session race test is marked ``requires_row_locks``
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 import pytest
 import pytest_asyncio
@@ -520,6 +521,53 @@ async def test_daily_limit_counts_only_today(session):
     await session.commit()
 
     assert result.ok is True
+
+
+@pytest.mark.asyncio
+async def test_daily_limit_is_rechecked_under_the_lock(session):
+    """The post-lock re-check refuses even when the pre-lock read missed it.
+
+    A transfer committed by a concurrent request between the pre-lock count
+    and the lock acquisition must still be counted. The pre-lock helper is
+    stubbed to report 0 (the stale snapshot) so only the locked re-count can
+    refuse this call.
+    """
+    from sib.services.transfers import service as transfer_service
+
+    sender = await _user(session, "قفل روزانه")
+    receiver = await _user(session, "گیرنده قفل روزانه")
+    await _credit(session, sender.id, 1000)
+    await _set_config(session, "transfer_daily_limit", 1)
+
+    # One completed transfer today (Tehran day), i.e. the quota is spent.
+    day_start, _day_end = transfer_service.tehran_day_bounds()
+    session.add(
+        TransferLog(
+            from_user_id=sender.id,
+            to_user_id=receiver.id,
+            item_type=ITEM_APPLE,
+            amount=10,
+            fee=0,
+            created_at=day_start + timedelta(minutes=1),
+        )
+    )
+    await session.commit()
+
+    async def stale_count(*args, **kwargs):  # the racy pre-lock read
+        return 0
+
+    with patch.object(transfer_service, "_transfers_today", stale_count):
+        result = await execute_transfer(
+            session, sender.id, receiver.id, ITEM_APPLE, 100
+        )
+    await session.commit()
+
+    assert (result.ok, result.reason) == (False, "daily_limit")
+    assert result.amount_sent == 0 and result.amount_received == 0
+    assert result.fee == 0 and result.transfer_id is None
+    assert await AppleWalletService.get_balance(session, sender.id) == 1000
+    assert await AppleWalletService.get_balance(session, receiver.id) == 0
+    assert len(await _logs(session)) == 1  # only the pre-existing row
 
 
 @pytest.mark.asyncio

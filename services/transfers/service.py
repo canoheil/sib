@@ -229,6 +229,29 @@ async def _transfers_today(session: AsyncSession, user_id: int) -> int:
     )
 
 
+async def _transfers_today_locked(session: AsyncSession, user_id: int) -> int:
+    """Same day count, read as a LOCKING read (post-lock re-check).
+
+    A plain ``SELECT`` would be answered from the transaction's REPEATABLE
+    READ snapshot, which was established before the competing transfer
+    committed - i.e. it would still see the stale count. Row locking reads
+    the latest committed rows (and, under InnoDB REPEATABLE READ, takes the
+    gap locks on the sender's ``(from_user_id, created_at)`` range), so the
+    re-check really does observe a concurrent commit.
+    """
+    day_start, day_end = tehran_day_bounds()
+    rows = await session.scalars(
+        select(TransferLog.id)
+        .where(
+            TransferLog.from_user_id == user_id,
+            TransferLog.created_at >= day_start,
+            TransferLog.created_at < day_end,
+        )
+        .with_for_update()
+    )
+    return len(list(rows))
+
+
 async def execute_transfer(
     session: AsyncSession,
     from_user_id: int,
@@ -310,6 +333,15 @@ async def execute_transfer(
         await lock_user_rows_in_order(session, (from_user_id, to_user_id))
     except ValueError:  # user vanished between the read and the lock
         return _fail(REASON_USER_NOT_FOUND)
+
+    # TOCTOU re-check (Phase 1 review): the pre-lock count above can be raced
+    # by another transfer of the same sender. Now that the sender's user row
+    # (rank 0) is held, every other transfer of this sender is blocked or
+    # already committed, so re-counting in the same transaction closes the
+    # window. Additive: the pre-lock validation order is unchanged.
+    if config.daily_limit > 0:
+        if await _transfers_today_locked(session, from_user_id) >= config.daily_limit:
+            return _fail(REASON_DAILY_LIMIT)
 
     first_id, second_id = sorted((from_user_id, to_user_id))
 
