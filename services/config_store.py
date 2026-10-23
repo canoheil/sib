@@ -16,7 +16,14 @@ from sib.database.models import SystemConfig
 # Invasion v2 defaults; database/admin overrides remain authoritative.
 DEFAULT_INVASION_DIFFICULTY_MULTIPLIER = 2.0
 DEFAULT_INVASION_JOIN_WINDOW_SECONDS = 1800
+# Legacy "every N seconds since last spawn" cadence. No longer read by the
+# scheduler (see invasion_spawn_hours below), kept only for backward
+# compatibility with any external tooling/admin display that still reads it.
 DEFAULT_INVASION_INTERVAL_SECONDS = 14400
+# Fixed daily spawn schedule (Asia/Tehran local hours), comma-separated.
+DEFAULT_INVASION_SPAWN_HOURS = "0,12,16,20"
+# A tick counts as "in slot H" while local minute < this value.
+DEFAULT_INVASION_SLOT_WINDOW_MINUTES = "30"
 
 
 # Safe built-in defaults. Everything here is overridable via the
@@ -25,6 +32,10 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     "invasion_difficulty_multiplier": DEFAULT_INVASION_DIFFICULTY_MULTIPLIER,
     "invasion_join_window_seconds": DEFAULT_INVASION_JOIN_WINDOW_SECONDS,
     "invasion_interval_seconds": DEFAULT_INVASION_INTERVAL_SECONDS,
+    # Fixed daily spawn schedule, Asia/Tehran local time (replaces the
+    # interval-based cadence above; see services/invasion_v2/scheduler.py).
+    "invasion_spawn_hours": DEFAULT_INVASION_SPAWN_HOURS,
+    "invasion_slot_window_minutes": DEFAULT_INVASION_SLOT_WINDOW_MINUTES,
     # IV3 random events inside an active invasion (docs/invasion-rework/
     # IV3-RECON.md). Seeded OFF by migration 055: the master
     # ``invasion_enabled`` flag still gates everything, and an operator turns
