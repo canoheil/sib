@@ -9,7 +9,8 @@ from sqlalchemy import func, or_, select
 from sib.database.models import Group, Inv2GroupState, Inv2Invasion, Inv2Region, SystemConfig
 from sib.services.config_store import (
     CONFIG_DEFAULTS, ConfigService, DEFAULT_INVASION_DIFFICULTY_MULTIPLIER,
-    DEFAULT_INVASION_JOIN_WINDOW_SECONDS, DEFAULT_INVASION_INTERVAL_SECONDS,
+    DEFAULT_INVASION_JOIN_WINDOW_SECONDS, DEFAULT_INVASION_SPAWN_HOURS,
+    DEFAULT_INVASION_SLOT_WINDOW_MINUTES,
 )
 from . import admin_runtime
 from .circuit_breaker import is_group_available
@@ -44,18 +45,43 @@ def _group_id(raw: str) -> int:
     return value
 
 
+def _spawn_schedule_display(raw_hours, raw_window) -> tuple[str, int]:
+    """Render the fixed Asia/Tehran spawn schedule for /inv2_status.
+
+    Never raises: a missing, empty or malformed ``invasion_spawn_hours`` /
+    ``invasion_slot_window_minutes`` config row falls back to the same
+    defaults the scheduler itself uses (services/invasion_v2/scheduler.py).
+    """
+    hours_raw = str(raw_hours) if raw_hours else DEFAULT_INVASION_SPAWN_HOURS
+    try:
+        hours = sorted({int(part.strip()) for part in hours_raw.split(",") if part.strip() != ""})
+    except ValueError:
+        hours = []
+    if not hours:
+        hours = sorted(int(part.strip()) for part in DEFAULT_INVASION_SPAWN_HOURS.split(","))
+    hours_text = "، ".join(f"{hour:02d}:00" for hour in hours)
+    try:
+        window = int(DEFAULT_INVASION_SLOT_WINDOW_MINUTES if not raw_window else raw_window)
+    except (TypeError, ValueError):
+        window = int(DEFAULT_INVASION_SLOT_WINDOW_MINUTES)
+    return hours_text, window
+
+
 async def status(session) -> str:
     flag = await ConfigService.get(session, "invasion_enabled")
     join = await ConfigService.get(session, "invasion_join_window_seconds")
-    interval = await ConfigService.get(session, "invasion_interval_seconds")
     difficulty = await ConfigService.get(session, "invasion_difficulty_multiplier")
+    raw_spawn_hours = await ConfigService.get(session, "invasion_spawn_hours")
+    raw_slot_window = await ConfigService.get(session, "invasion_slot_window_minutes")
+    hours_text, window_minutes = _spawn_schedule_display(raw_spawn_hours, raw_slot_window)
     active = await session.scalar(select(func.count()).select_from(Inv2Invasion).where(Inv2Invasion.status == "ACTIVE"))
     muted = await session.scalar(select(func.count()).select_from(Inv2GroupState).where(Inv2GroupState.muted_until > NOW()))
     lost = await session.scalar(select(func.count()).select_from(Inv2Region).where(Inv2Region.is_lost_to_enemy.is_(True)))
     return ("⚔️ وضعیت یورش\n"
             f"فعال: {'بله' if flag is True or str(flag).lower() == 'true' else 'خیر'}"
             f" · پنجرهٔ پیوستن: {fa_number(join if join is not None else DEFAULT_INVASION_JOIN_WINDOW_SECONDS)} ثانیه\n"
-            f"فاصله: {fa_number(interval if interval is not None else DEFAULT_INVASION_INTERVAL_SECONDS)} ثانیه"
+            f"ساعت‌های اسپان (تهران): {hours_text}\n"
+            f"پنجره هر اسلات: {window_minutes} دقیقه"
             f" · سختی: {fa_number(difficulty if difficulty is not None else DEFAULT_INVASION_DIFFICULTY_MULTIPLIER)}\n"
             f"یورش فعال: {fa_number(active)} · گروه خاموش: {fa_number(muted)}"
             f" · ناحیهٔ از‌دست‌رفته: {fa_number(lost)}\n"

@@ -5,6 +5,7 @@ import random
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Sequence
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,7 +14,8 @@ from sib.core.logging import logger
 from sib.database.connection import get_session
 from sib.database.models import Group, Inv2GroupState, Inv2Invasion, Inv2Region
 from sib.services.config_store import (
-    ConfigService, DEFAULT_INVASION_DIFFICULTY_MULTIPLIER, DEFAULT_INVASION_INTERVAL_SECONDS,
+    ConfigService, DEFAULT_INVASION_DIFFICULTY_MULTIPLIER,
+    DEFAULT_INVASION_SPAWN_HOURS, DEFAULT_INVASION_SLOT_WINDOW_MINUTES,
 )
 
 from . import admin_runtime
@@ -22,6 +24,10 @@ from .enemy import choose_enemy_type, compute_enemy_hp, enemy_spec
 from .enums import InvasionStatus
 from .occurrence import build_occurrence_key
 from .power_resolver import get_power_resolver
+
+# Fixed daily spawn schedule is always evaluated against Iran local time,
+# regardless of the server's own timezone (currently UTC on production).
+TEHRAN_TZ = ZoneInfo("Asia/Tehran")
 
 
 def _utc(value: datetime) -> datetime:
@@ -115,6 +121,31 @@ class InvasionScheduler:
             cls._missing_resolver_logged = True
 
     @classmethod
+    def _current_slot(
+        cls, now_utc: datetime, *,
+        spawn_hours: str | None = None, slot_window_minutes: int | str | None = None,
+    ) -> datetime | None:
+        """Return the UTC instant of the active Asia/Tehran slot hour, or None.
+
+        Pure: no DB/session access, so every edge of the fixed daily schedule
+        (``00:00``, ``12:00``, ``16:00``, ``20:00`` Asia/Tehran by default) is
+        unit-testable without a database. ``now_utc`` must already be
+        timezone-aware; only ``Asia/Tehran`` is consulted, never the server's
+        own local timezone. A tick is "in slot H" when the local hour equals
+        H and the local minute is still below ``slot_window_minutes``.
+        """
+        hours_raw = DEFAULT_INVASION_SPAWN_HOURS if spawn_hours is None else str(spawn_hours)
+        window_raw = (DEFAULT_INVASION_SLOT_WINDOW_MINUTES if slot_window_minutes is None
+                      else slot_window_minutes)
+        window = int(window_raw)
+        hours = {int(part.strip()) for part in hours_raw.split(",") if part.strip() != ""}
+        local = now_utc.astimezone(TEHRAN_TZ)
+        if local.hour not in hours or local.minute >= window:
+            return None
+        slot_local = local.replace(minute=0, second=0, microsecond=0)
+        return slot_local.astimezone(timezone.utc)
+
+    @classmethod
     async def _spawn_if_due(cls, session: AsyncSession, now: datetime, rng: random.Random,
                             stats: dict | None = None) -> None:
         # Avoid scanning groups without an installed authoritative resolver.
@@ -124,10 +155,22 @@ class InvasionScheduler:
                 stats["skipped_no_resolver"] += 1
             return
         cls._missing_resolver_logged = False
-        raw_interval = await ConfigService.get(session, "invasion_interval_seconds")
-        interval = int(DEFAULT_INVASION_INTERVAL_SECONDS if raw_interval is None else raw_interval)
-        if interval <= 0:
-            logger.error("inv2 spawn skipped: invasion_interval_seconds must be positive")
+        # Fixed daily schedule (Asia/Tehran): replaces the old "N seconds
+        # since last spawn" interval gate. invasion_interval_seconds is no
+        # longer read here; it stays in config only for back-compat.
+        raw_spawn_hours = await ConfigService.get(session, "invasion_spawn_hours")
+        spawn_hours = DEFAULT_INVASION_SPAWN_HOURS if raw_spawn_hours is None else str(raw_spawn_hours)
+        raw_slot_window = await ConfigService.get(session, "invasion_slot_window_minutes")
+        slot_window_minutes = (DEFAULT_INVASION_SLOT_WINDOW_MINUTES if raw_slot_window is None
+                               else raw_slot_window)
+        try:
+            slot = cls._current_slot(now, spawn_hours=spawn_hours, slot_window_minutes=slot_window_minutes)
+        except (TypeError, ValueError):
+            logger.error(
+                "inv2 spawn skipped: invasion_spawn_hours/invasion_slot_window_minutes malformed"
+            )
+            return
+        if slot is None:
             return
         raw_difficulty = await ConfigService.get(session, "invasion_difficulty_multiplier")
         difficulty = float(DEFAULT_INVASION_DIFFICULTY_MULTIPLIER if raw_difficulty is None else raw_difficulty)
@@ -152,25 +195,26 @@ class InvasionScheduler:
         )).all())
         if not groups:
             return
-        last = await session.scalar(
-            select(Inv2Invasion).order_by(
-                Inv2Invasion.scheduled_at.desc(), Inv2Invasion.id.desc()
-            ).limit(1).with_for_update()
-        )
-        if last is not None and now < _utc(last.scheduled_at) + timedelta(seconds=interval):
-            return
         regions = list((await session.scalars(select(Inv2Region).order_by(Inv2Region.code))).all())
         if not regions:
             logger.warning("inv2 spawn skipped: no regions seeded")
             return
 
         # Stable order: groups were already locked and sorted by id above.
-        # Every eligible group may spawn in this tick; the global interval
-        # gate above only stops a second tick inside the same interval.
+        # Every eligible group may spawn in this tick; the per-group
+        # last_spawn_slot gate below only stops a second tick inside the
+        # same fixed daily slot (no interval gate anymore).
         for group in groups:
             if not await is_group_available(group.id, session=session, now=now):
                 if stats is not None:
                     stats["skipped_muted"] += 1
+                continue
+            state = await session.scalar(
+                select(Inv2GroupState).where(Inv2GroupState.group_id == group.id).with_for_update()
+            )
+            if state is not None and state.last_spawn_slot is not None and _utc(state.last_spawn_slot) == slot:
+                if stats is not None:
+                    stats["skipped_already_spawned_slot"] = stats.get("skipped_already_spawned_slot", 0) + 1
                 continue
             live_count = await session.scalar(
                 select(func.count()).select_from(Inv2Invasion).where(
@@ -210,7 +254,10 @@ class InvasionScheduler:
             if hp <= 0:
                 logger.debug("inv2 spawn skipped: group %s computed nonpositive HP", group.id)
                 continue
-            slot_epoch = int(now.timestamp() // interval * interval)
+            # Slot epoch keys off the fixed daily slot instant, not the old
+            # interval: same group+region+slot can never double-spawn even if
+            # last_spawn_slot below were somehow bypassed.
+            slot_epoch = int(slot.timestamp())
             occurrence_key = build_occurrence_key(group.id, region.code, slot_epoch)
             exists = await session.scalar(
                 select(Inv2Invasion.id).where(Inv2Invasion.occurrence_key == occurrence_key)
@@ -228,6 +275,13 @@ class InvasionScheduler:
             session.add(invasion)
             await session.flush()
             region.last_invasion_id = invasion.id
+            # Persist the slot so a later tick in the same window (or a
+            # restarted worker) never spawns a second invasion for this slot.
+            if state is None:
+                state = Inv2GroupState(group_id=group.id, consecutive_failures=0, last_spawn_slot=slot)
+                session.add(state)
+            else:
+                state.last_spawn_slot = slot
             if stats is not None:
                 stats["spawned"] += 1
             logger.info(
@@ -235,7 +289,7 @@ class InvasionScheduler:
                 group.id, enemy_type.value, hp, region.code,
             )
             # No return here: the next eligible group in this same tick
-            # is entitled to its own invasion for this interval.
+            # is entitled to its own invasion for this slot.
 
     @classmethod
     async def tick(cls, *, now: datetime | None = None, rng: random.Random | None = None) -> list[tuple[int, str]] | None:

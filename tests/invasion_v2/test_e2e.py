@@ -68,7 +68,9 @@ async def test_v2_full_battle_offline(db, monkeypatch):
         bot = SimpleNamespace(send_photo=AsyncMock(return_value=SimpleNamespace(
             chat=SimpleNamespace(id=-100), message_id=123)),
             edit_message_caption=AsyncMock(return_value=True))
-        now = datetime.now(timezone.utc)
+        # Fixed Tehran-local 12:00 spawn slot (see InvasionScheduler._current_slot)
+        # rather than the real wall clock, so this test is deterministic.
+        now = datetime(2026, 10, 14, 8, 30, tzinfo=timezone.utc)
         await InvasionScheduler.tick(now=now, rng=Random(4))
         async with factory() as s:
             inv = await s.scalar(select(Inv2Invasion))

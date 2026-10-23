@@ -2,11 +2,12 @@
 
 Previously the scheduler spawned at most one invasion per global interval
 (round-robin across groups), so with 7 groups and a 2h interval a group saw
-an invasion only every ~14h. These tests pin the new policy: the global
-interval gate still stops a second tick inside the same interval, but a
-single due tick iterates all active groups in id order and spawns for each
-one that is unmuted, below `invasion_max_active_per_group` live invasions
-and resolved to a positive average card power.
+an invasion only every ~14h. These tests pin the new policy: spawning is
+gated by the fixed Asia/Tehran daily schedule (00:00/12:00/16:00/20:00, see
+`InvasionScheduler._current_slot`) instead of a global interval, but a
+single due tick still iterates all active groups in id order and spawns for
+each one that is unmuted, below `invasion_max_active_per_group` live
+invasions and resolved to a positive average card power.
 
 No Telegram or external database is contacted; the session boundary used by
 production is replaced by an isolated SQLite-backed fake provider, exactly
@@ -36,7 +37,7 @@ from sib.services.invasion_v2.power_resolver import set_power_resolver
 from sib.services.invasion_v2.scheduler import InvasionScheduler
 
 
-NOW = datetime(2026, 10, 14, 12, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 14, 8, 30, tzinfo=timezone.utc)  # Tehran local 12:00:00 (a spawn slot)
 
 
 class FakeResolver:
@@ -103,7 +104,7 @@ def _tick_record(caplog) -> logging.LogRecord:
 async def _add_live_invasion(sessions, group_id: int, key: str, *,
                              status: str = "ACTIVE",
                              scheduled_at: datetime | None = None) -> None:
-    """A live invasion old enough not to trip the global interval gate."""
+    """A pre-existing live invasion for a group (status PENDING/ACTIVE)."""
     async with sessions.begin() as session:
         session.add(Inv2Invasion(
             group_id=group_id, region_code="region_0", enemy_type="soldier",
@@ -170,16 +171,14 @@ async def test_skip_groups_with_active_invasion(db, caplog):
 
 
 @pytest.mark.asyncio
-async def test_no_spawn_before_interval_elapsed(db, caplog):
-    # Most recent invasion anywhere was 10 minutes ago; the default global
-    # interval is 14400s, so this tick must not spawn for any group.
-    await _add_live_invasion(db, 1, "recent", status="PENDING",
-                             scheduled_at=NOW - timedelta(minutes=10))
+async def test_no_spawn_outside_slot_window(db, caplog):
+    # NOW + 1h lands at 13:00 Tehran local, which is not one of the
+    # configured invasion_spawn_hours (0, 12, 16, 20): no group spawns.
     set_power_resolver(FakeResolver({1: 500.0, 2: 500.0, 3: 500.0}))
     with caplog.at_level(logging.INFO, logger="sib"):
-        await InvasionScheduler.tick(now=NOW, rng=Random(4))
+        await InvasionScheduler.tick(now=NOW + timedelta(hours=1), rng=Random(4))
     rows = await _rows(db)
-    assert len(rows) == 1
+    assert rows == []
     assert _tick_record(caplog).spawned == 0
 
 

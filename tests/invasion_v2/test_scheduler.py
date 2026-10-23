@@ -26,7 +26,7 @@ from sib.services.invasion_v2.power_resolver import set_power_resolver
 from sib.services.invasion_v2.scheduler import InvasionScheduler
 
 
-NOW = datetime(2026, 10, 14, 12, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 14, 8, 30, tzinfo=timezone.utc)  # Tehran local 12:00:00 (a spawn slot)
 
 
 @pytest.fixture
@@ -142,7 +142,9 @@ async def test_muted_and_inactive_groups_are_skipped_during_spawn(db, monkeypatc
     monkeypatch.setattr(scheduler, "choose_enemy_type", lambda rng: EnemyType.SOLDIER)
     for _ in range(3):
         await circuit_breaker.record_send_failure(1, now=NOW)
-    await InvasionScheduler.tick(now=NOW + timedelta(hours=1), rng=Random(12))
+    # Same slot the mute was recorded in: group 1 stays muted (24h mute),
+    # group 2 is free to spawn.
+    await InvasionScheduler.tick(now=NOW, rng=Random(12))
     async with db() as session:
         rows = list((await session.scalars(select(Inv2Invasion))).all())
         assert len(rows) == 1 and rows[0].group_id == 2
@@ -250,15 +252,22 @@ async def test_recovery_expires_only_overdue_active_with_warning(db, caplog):
 
 
 @pytest.mark.asyncio
-async def test_default_interval_waits_four_hours(db):
+async def test_fixed_slot_blocks_same_slot_repeat_but_allows_next_slot(db):
+    # Replaces the old "wait invasion_interval_seconds" cadence test: the
+    # scheduler now gates on the fixed Asia/Tehran daily schedule
+    # (00:00/12:00/16:00/20:00) instead of elapsed seconds since the last
+    # spawn. NOW is the 12:00 Tehran slot.
     set_power_resolver(SimpleNamespace(average_main_card_power=AsyncMock(return_value=500.0)))
     await InvasionScheduler.tick(now=NOW, rng=Random(4))
     async with db.begin() as session:
         for invasion in (await session.scalars(select(Inv2Invasion))).all():
             invasion.status = InvasionStatus.DEFEAT.value
-    await InvasionScheduler.tick(now=NOW + timedelta(seconds=14399), rng=Random(4))
+    # Still inside the 12:00 slot window (20 minutes later): must NOT
+    # spawn again, even though both prior invasions already finalized.
+    await InvasionScheduler.tick(now=NOW + timedelta(minutes=20), rng=Random(4))
     async with db() as session:
         assert await session.scalar(select(func.count()).select_from(Inv2Invasion)) == 2
-    await InvasionScheduler.tick(now=NOW + timedelta(seconds=14400), rng=Random(4))
+    # The next scheduled slot (16:00 Tehran, NOW + 4h) is a new slot: spawns again.
+    await InvasionScheduler.tick(now=NOW + timedelta(hours=4), rng=Random(4))
     async with db() as session:
         assert await session.scalar(select(func.count()).select_from(Inv2Invasion)) == 4
