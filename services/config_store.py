@@ -487,6 +487,27 @@ CONFIG_DEFAULTS: dict[str, Any] = {
         "4": {"apple_normal": 25, "apple_gold": 33, "apple_diamond": 28, "apple_obsidian": 14},
         "5": {"apple_normal": 15, "apple_gold": 34, "apple_diamond": 34, "apple_obsidian": 17},
     },
+    # User-to-user apple transfers (services/transfers/, migration 062).
+    # Every value is overridable from the admin panel; the service reads them
+    # through ConfigService on EVERY request (never cached at import time).
+    # The migration seeds the same values as strings.
+    #
+    # Fee in percent of the requested amount, INTEGER 0..100. The fee is
+    # ceil(amount * percent / 100), paid by the sender ON TOP of the amount
+    # (the receiver always gets the full amount) and burned.
+    "transfer_fee_percent": 0,
+    # Raw transfer amount bounds. The parser never validates them; the
+    # service refuses out-of-bounds amounts with "amount_out_of_bounds".
+    "transfer_min_amount": 1,
+    "transfer_max_amount": 10_000,
+    # Maximum number of completed transfers per sender per Asia/Tehran
+    # calendar day. 0 = unlimited.
+    "transfer_daily_limit": 0,
+    # Minimum gap between two transfers of the same sender, in seconds.
+    # 0 = no cooldown.
+    "transfer_cooldown_seconds": 0,
+    # Master switch. "false" makes every transfer return reason="disabled".
+    "transfer_enabled": True,
 }
 
 
