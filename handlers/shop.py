@@ -34,6 +34,12 @@ from sib.services.items import (
     item_label,
 )
 from sib.services.shop import ShopError, ShopService
+from sib.services.seedling import (
+    SEEDLING_EMOJI,
+    SEEDLING_ITEM_KEY,
+    SEEDLING_LABEL,
+    SeedlingService,
+)
 from sib.keyboards.common import (
     danger_button,
     primary_button,
@@ -607,12 +613,27 @@ SELL_EMPTY_LINE = (
     "سیب‌های ویژه 🌕💎🌑 را از برداشت درخت‌های باغ به دست بیاور."
 )
 
+# Seedlings are NOT ``user_items`` rows: they live in ``seedling_inventories``
+# and only the ones above the garden's planting capacity are sellable (see
+# ``SeedlingService``), so the Sell section gets its own entry + callbacks.
+SEEDLING_SELL_CALLBACK = "shop_sell_seedling"
+SEEDLING_SELL_ONE_CALLBACK = "shop_sell_seedling_one"
+SEEDLING_SELL_ALL_CALLBACK = "shop_sell_seedling_all"
+SEEDLING_SELL_ALL_OK_CALLBACK = "shop_sell_seedling_all_ok"
+
+SELL_EMPTY_SEEDLING_HINT = (
+    "🌱 نهال‌ها هم وقتی از ظرفیت باغت بیشتر بشن، همین‌جا برای فروش ظاهر می‌شن."
+)
+
 
 async def _sell_view(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
     """Sell Items ROOT: one button per OWNED sellable item (name + qty)."""
     async with get_session() as session:
         balance = await AppleWalletService.get_balance(session, user_id)
         sellable = await ItemService.sellable_inventory(session, user_id)
+        seedling_total, seedling_capacity, seedling_extra, seedling_price = (
+            await SeedlingService.sell_summary(session, user_id)
+        )
 
     lines = [
         "💰 **فروشگاه — فروش آیتم‌ها**",
@@ -628,10 +649,27 @@ async def _sell_view(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
             )]
         )
 
+    # Seedling entry: only when selling is enabled AND the player owns more
+    # seedlings than their garden can ever plant.
+    seedling_lines: list[str] = []
+    if seedling_price is not None and seedling_extra > 0:
+        seedling_lines = [
+            f"{SEEDLING_EMOJI} {SEEDLING_LABEL}: `{seedling_total}` "
+            f"(قابل فروش: `{seedling_extra}` — بیشتر از ظرفیت باغ `{seedling_capacity}`)"
+        ]
+        buttons.append(
+            [primary_button(
+                text=f"{SEEDLING_EMOJI} {SEEDLING_LABEL} — {seedling_extra} قابل فروش",
+                callback_data=SEEDLING_SELL_CALLBACK,
+            )]
+        )
+
     if buttons:
+        lines.extend(seedling_lines)
         lines.append("آیتمی که می‌خوای بفروشی رو انتخاب کن 👇")
     else:
         lines.append(SELL_EMPTY_LINE)
+        lines.append(SELL_EMPTY_SEEDLING_HINT)
     buttons.append([primary_button(text="🔄 بروزرسانی", callback_data="shop_sell")])
     buttons.append([danger_button(text="↩️ بازگشت به فروشگاه", callback_data="shop_refresh")])
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -841,6 +879,196 @@ async def handle_shop_sell_all(callback: CallbackQuery, bot: Bot):
     text, kb, photo, ok = await _sell_confirm_view(actor, item_key)
     await safe_answer_callback(callback, None if ok else "از این آیتم نداری!")
     await safe_edit_callback_message(callback, bot, text, reply_markup=kb, photo=photo)
+
+
+# ---------------------------------------------------------------------------
+# Section 3b: Sell EXTRA seedlings (above the garden's planting capacity)
+# ---------------------------------------------------------------------------
+#
+# Flow (same shape as the items above):
+#     Sell Items  ->  «نهال» (art + capacity + price)
+#                 ->  Sell 1 / Sell All -> confirmation -> back to the list
+#
+# Seedlings are not ``user_items`` rows, so they get their own service call
+# (``SeedlingService.sell``) and callbacks, but the SAME currency (normal
+# Apples, wallet + ledger, reason ``seedling_sold``) as every other sale.
+# Only seedlings above ``garden.capacity_plots`` are sellable: a planted tree
+# is never removed, so those extra seedlings can never be planted.
+
+
+async def _seedling_sell_state(user_id: int):
+    """Fresh (price, total, capacity, extra, balance, photo) for the page."""
+    from sib.services.assets import AssetService
+    from sib.services.character_art import photo_arg
+
+    async with get_session() as session:
+        total, capacity, extra, price = await SeedlingService.sell_summary(
+            session, user_id
+        )
+        balance = await AppleWalletService.get_balance(session, user_id)
+        file_id, fs_path = await AssetService.resolve_photo(session, SEEDLING_ITEM_KEY)
+        photo = photo_arg(file_id, fs_path)
+    return price, total, capacity, extra, balance, photo
+
+
+async def _seedling_sell_view(user_id: int):
+    """Seedling page: art, capacity, owned total, sell price, Sell 1 / All."""
+    price, total, capacity, extra, balance, photo = await _seedling_sell_state(user_id)
+
+    if price is None or extra <= 0:
+        text, kb = await _sell_view(user_id)
+        return text, kb, None, False
+
+    lines = [
+        f"{SEEDLING_EMOJI} **{SEEDLING_LABEL}**",
+        "",
+        "هر نهال توی باغ به یک درخت تبدیل می‌شه؛ پس فقط نهال‌های بیشتر از "
+        "ظرفیت باغت قابل فروشاند.",
+        "",
+        f"📦 نهال‌های شما: `{total}`",
+        f"🌳 ظرفیت باغ: `{capacity}` قطعه",
+        f"💸 قابل فروش: `{extra}`",
+        f"💰 قیمت فروش هر نهال: `{price}` سیب 🍎",
+        f"🧮 ارزش کل: `{extra * price}` سیب 🍎",
+        f"💰 سیب‌های شما: `{balance}`",
+    ]
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [success_button(
+                text=f"💸 فروش یکی ({price} 🍎)",
+                callback_data=SEEDLING_SELL_ONE_CALLBACK,
+            )],
+            [success_button(
+                text=f"💸 فروش همه ({extra * price} 🍎)",
+                callback_data=SEEDLING_SELL_ALL_CALLBACK,
+            )],
+            [danger_button(text="↩️ بازگشت به فروش آیتم‌ها", callback_data="shop_sell")],
+        ]
+    )
+    return "\n".join(lines), kb, photo, True
+
+
+async def _seedling_sell_confirm_view(user_id: int):
+    """Sell-All confirmation. The shown count is informational only — the
+    confirm handler re-reads the garden capacity and the inventory first."""
+    price, total, capacity, extra, balance, photo = await _seedling_sell_state(user_id)
+
+    if price is None or extra <= 0:
+        text, kb = await _sell_view(user_id)
+        return text, kb, None, False
+
+    lines = [
+        "⚠️ **تأیید فروش نهال‌ها**",
+        "",
+        f"مطمئنی می‌خوای همهٔ `{extra}` نهال اضافه رو بفروشی؟",
+        f"🌳 ظرفیت باغت `{capacity}` قطعه‌ست و این نهال‌ها به باغت اضافه نمی‌شن.",
+        "",
+        f"💰 دریافتی تقریبی: `{extra * price}` سیب 🍎",
+        "",
+        "این کار برگشت‌پذیر نیست.",
+    ]
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [success_button(
+                text="✅ بله، همه را بفروش",
+                callback_data=SEEDLING_SELL_ALL_OK_CALLBACK,
+            )],
+            [danger_button(text="❌ انصراف", callback_data=SEEDLING_SELL_CALLBACK)],
+        ]
+    )
+    return "\n".join(lines), kb, photo, True
+
+
+@router.callback_query(F.data == SEEDLING_SELL_CALLBACK)
+async def handle_shop_sell_seedling(callback: CallbackQuery, bot: Bot):
+    """Open the seedling selling page (or the list when nothing is extra)."""
+    user = callback.from_user
+    if not user:
+        return
+    actor = await _shop_actor(callback)
+    if not actor or actor != user.id:
+        return
+    text, kb, photo, ok = await _seedling_sell_view(actor)
+    await safe_answer_callback(
+        callback, None if ok else "فعلاً نهال اضافه‌ای برای فروش نداری."
+    )
+    await safe_edit_callback_message(callback, bot, text, reply_markup=kb, photo=photo)
+
+
+@router.callback_query(F.data == SEEDLING_SELL_ONE_CALLBACK)
+async def handle_shop_sell_seedling_one(callback: CallbackQuery, bot: Bot):
+    """Sell exactly ONE extra seedling, then refresh the page with fresh data."""
+    user = callback.from_user
+    if not user:
+        return
+    actor = await _shop_actor(callback)
+    if not actor or actor != user.id:
+        return
+
+    error = None
+    apples = 0
+    try:
+        async with get_session() as session:
+            apples = await SeedlingService.sell(session, actor, 1)
+    except ValueError as e:
+        error = str(e)
+    if error is not None:
+        await _render_sell_list(callback, bot, actor, answer=error)
+        return
+
+    # No extras left -> _seedling_sell_view falls back to the (now shorter)
+    # list; otherwise the page is re-rendered from fresh inventory data.
+    text, kb, photo, _still_available = await _seedling_sell_view(actor)
+    await safe_answer_callback(callback, f"فروش انجام شد! `{apples}` سیب دریافت کردی 🍎")
+    await safe_edit_callback_message(callback, bot, text, reply_markup=kb, photo=photo)
+
+
+@router.callback_query(F.data == SEEDLING_SELL_ALL_CALLBACK)
+async def handle_shop_sell_seedling_all(callback: CallbackQuery, bot: Bot):
+    """Sell All asks first — no transaction happens on this screen."""
+    user = callback.from_user
+    if not user:
+        return
+    actor = await _shop_actor(callback)
+    if not actor or actor != user.id:
+        return
+    text, kb, photo, ok = await _seedling_sell_confirm_view(actor)
+    await safe_answer_callback(
+        callback, None if ok else "نهال اضافه‌ای برای فروش نداری!"
+    )
+    await safe_edit_callback_message(callback, bot, text, reply_markup=kb, photo=photo)
+
+
+@router.callback_query(F.data == SEEDLING_SELL_ALL_OK_CALLBACK)
+async def handle_shop_sell_seedling_all_confirm(callback: CallbackQuery, bot: Bot):
+    """Confirmed Sell All: re-read capacity + inventory, sell every extra."""
+    user = callback.from_user
+    if not user:
+        return
+    actor = await _shop_actor(callback)
+    if not actor or actor != user.id:
+        return
+
+    error = None
+    apples = 0
+    try:
+        async with get_session() as session:
+            # User row first (lock policy rank 0), then the seedling row.
+            await lock_user_row(session, actor)
+            _total, _capacity, extra, _price = await SeedlingService.sell_summary(
+                session, actor
+            )
+            if extra <= 0:
+                raise ValueError("نهال اضافه‌ای برای فروش نداری!")
+            apples = await SeedlingService.sell(session, actor, extra)
+    except ValueError as e:
+        error = str(e)
+    if error is not None:
+        await _render_sell_list(callback, bot, actor, answer=error)
+        return
+
+    await safe_answer_callback(callback, f"فروش انجام شد! `{apples}` سیب دریافت کردی 🍎")
+    await _render_sell_list(callback, bot, actor)
 
 
 # ---------------------------------------------------------------------------

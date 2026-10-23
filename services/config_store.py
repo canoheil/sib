@@ -199,6 +199,20 @@ CONFIG_DEFAULTS: dict[str, Any] = {
         "flower": 15,
         "pumpkin_seed": 15,
     },
+    # Seedling sell price (shop «فروش آیتم‌ها» -> «نهال»), normal Apples.
+    #
+    # A seedling is NOT buyable (it is a win reward), so the ceiling is the
+    # value of what it produces. One seedling plants ONE tree, and a tree's
+    # first harvest at magic level 0 is worth, from garden_drop_weights["0"] x
+    # item_sell_prices (normal Apple = garden_fruit_amount = 3):
+    #   0.70 * 3  + 0.20 * 50 + 0.09 * 100 + 0.01 * 200 = 23.1 Apples
+    # so 20 stays BELOW even that single harvest, and the tree repeats its
+    # harvest every garden_fruit_seconds (12h) for the rest of its life:
+    # planting always pays more than selling. 20 also sits above the cheapest
+    # existing sell prices (flower 15, pumpkin_seed 15) because a seedling
+    # costs a whole ranked win, while a friendly (casual) win already pays 10
+    # Apples (friendly_reward_apples_per_match).
+    "seedling_sell_price": 20,
     # Halloween global world-boss event («سیبومورتیس» / Sibomortis, HW1-RECON).
     "halloween_enabled": False,
     "halloween_default_max_hp": 500_000,
