@@ -35,7 +35,7 @@ from sib.database.models import DailyChestClaim, SystemConfig
 from sib.database.models.daily_chest import REWARD_APPLES, REWARD_CARD
 from sib.database.models.panel import PanelOwner
 from sib.handlers import daily_chest as chest
-from sib.keyboards.common import get_group_welcome_keyboard, get_private_welcome_keyboard
+from sib.keyboards.common import get_group_welcome_keyboard, get_private_start_keyboard
 from sib.middleware.panel_guard import PanelGuardMiddleware
 from sib.services import daily_chest as daily_chest_service
 from sib.services import marriage_art
@@ -207,7 +207,7 @@ def test_group_main_menu_offers_the_chest_next_to_the_private_entry_point():
     group = [b for b in _buttons(get_group_welcome_keyboard()) if b.callback_data == "group_chest"]
     assert len(group) == 1
     assert group[0].text == "🎁 صندوقچه گنج روزانه"
-    private = [b.callback_data for b in _buttons(get_private_welcome_keyboard("sib_bot"))]
+    private = [b.callback_data for b in _buttons(get_private_start_keyboard("sib_bot"))]
     assert "apple_chest" in private  # the private entry point is untouched
 
 

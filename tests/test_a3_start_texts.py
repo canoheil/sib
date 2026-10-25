@@ -35,8 +35,8 @@ from sib.keyboards.common import get_group_welcome_keyboard
 
 ADD_TO_GROUP_LABEL = "➕ افزودن سیب به گروه"
 
-# The eight buttons removed from the private /start reply markup (they stay
-# available on the private MAIN menu, which uses get_private_welcome_keyboard).
+# The buttons of the private first-session menu (one menu only: /start and
+# every «🏠 منوی اصلی» back button render get_private_start_keyboard).
 #: The first-session menu the private /start MUST offer (callback data).
 FIRST_SESSION_CALLBACKS = [
     "apple_chest",

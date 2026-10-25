@@ -41,72 +41,27 @@ def get_membership_keyboard(channel_link: str) -> InlineKeyboardMarkup:
     return keyboard
 
 
-def get_private_welcome_keyboard(bot_username: str) -> InlineKeyboardMarkup:
-    """Main Apple Ecosystem keyboard for private chat."""
-    add_group_url = f"https://t.me/{bot_username}?startgroup=true"
-
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                primary_button(
-                    text="🌳 باغ من",
-                    callback_data="apple_garden",
-                ),
-                primary_button(
-                    text="🎴 کارت‌های من",
-                    callback_data="apple_cards",
-                ),
-            ],
-            [
-                primary_button(
-                    text="🛒 فروشگاه",
-                    callback_data="apple_shop",
-                ),
-                primary_button(
-                    text="📚 ویکی کاراکترها",
-                    callback_data="apple_wiki",
-                ),
-            ],
-            [
-                primary_button(
-                    text="🔄 مبادله کارت",
-                    callback_data="apple_trade",
-                ),
-            ],
-            [
-                primary_button(
-                    text="🎁 صندوقچه گنج روزانه",
-                    callback_data="apple_chest",
-                ),
-            ],
-            [
-                primary_button(
-                    text="👤 پروفایل من",
-                    callback_data="apple_profile",
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text="➕ افزودن سیب به گروه",
-                    url=add_group_url,
-                    style="primary",
-                )
-            ],
-            [
-                success_button(
-                    text="🎮 بازی‌ها و راهنما",
-                    callback_data="help_menu",
-                )
-            ],
-        ]
-    )
-    return keyboard
-
-
 def get_private_start_keyboard(
     bot_username: str, gate_channel_link: Optional[str] = None
 ) -> InlineKeyboardMarkup:
-    """Private /start keyboard: the REAL first-session menu.
+    """The ONE private menu: /start's home screen AND the «🏠 منوی اصلی» target.
+
+    There used to be two private menus — this real one and an older
+    ``get_private_welcome_keyboard`` that every back button jumped to. The
+    older one listed the wiki and card trading at the top level, labelled its
+    guide entry «🎮 بازی‌ها و راهنما» while opening the guide, and silently
+    disagreed with /start, so pressing «🏠 منوی اصلی» inside the guide dropped
+    the player into a menu the game no longer has anywhere else. That builder
+    is gone: every private entry point renders THIS keyboard, so «back» lands
+    on the screen /start shows.
+
+    ``gate_channel_link`` is the only variant, and only the /start flow passes
+    it: navigation never spends a chat-member API call to decide what the menu
+    looks like.
+
+    The wiki is reachable from «🎴 کارت‌های من» and card trading from
+    «👤 پروفایل من», so nothing was orphaned by removing them from the top
+    level.
 
     Replaces the Phase A3 "exactly one button" funnel. That funnel showed a
     brand-new player exactly one action — «افزودن سیب به گروه» — which is a
