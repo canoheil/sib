@@ -292,8 +292,37 @@ async def test_withered_fruit_is_not_advertised(db_session):
     plot.is_withered = True
     await db_session.commit()
 
-    stats = await ReminderService.run_tick(_bot(), now=EVENING_UTC)
+    bot = _bot()
+    stats = await ReminderService.run_tick(bot, now=EVENING_UTC)
+
+    # Not "silent because of some other gate": the sweep ran and found
+    # nothing worth a DM.
+    assert stats.reason == "nothing to say"
     assert stats.sent == 0
+    bot.send_message.assert_not_awaited()
+
+
+async def test_one_healthy_plot_is_enough_even_if_another_is_withered(db_session):
+    await _enable(db_session)
+    user = await _make_user(db_session)
+    await _claim_chest(db_session, user)
+    await _ready_garden(db_session, user, plots=2, now=EVENING_UTC)
+
+    withered = (
+        await db_session.scalars(
+            select(GardenPlot).where(GardenPlot.garden_id == user.id)
+        )
+    ).all()
+    withered[0].is_withered = True
+    await db_session.commit()
+
+    bot = _bot()
+    stats = await ReminderService.run_tick(bot, now=EVENING_UTC)
+
+    assert stats.sent == 1
+    args, _kwargs = bot.send_message.await_args
+    # Only the healthy plot is counted.
+    assert "۱ درخت" in args[1]
 
 
 async def test_unripe_garden_is_not_advertised(db_session):
