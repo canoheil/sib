@@ -18,7 +18,7 @@ from sib.keyboards.common import (
     get_cards_keyboard,
     get_group_welcome_keyboard,
     get_profile_keyboard,
-    get_private_welcome_keyboard,
+    get_private_start_keyboard,
     nav_back_row,
     nav_refresh_row,
 )

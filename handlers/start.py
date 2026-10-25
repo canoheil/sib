@@ -13,7 +13,6 @@ from sib.core.logging import logger, log_event, Events
 from sib.core.text import escape_markdown, plain_display_name, safe_name
 from sib.database.connection import get_session
 from sib.keyboards.common import (
-    get_private_welcome_keyboard,
     get_private_start_keyboard,
     get_group_welcome_keyboard,
     get_cards_keyboard,
@@ -869,8 +868,17 @@ async def handle_referral_invite(callback: CallbackQuery, bot: Bot):
 
 def _main_menu_text_and_kb(user, chat) -> tuple:
     """Shared main-menu builder (context-aware): groups get the group menu,
-    private chats get the private menu. Used by both the 'main_menu'
-    callback and the 'سیب منو' wake word - one source of truth."""
+    private chats get the REAL private menu. Used by both the 'main_menu'
+    callback and the 'سیب منو' wake word - one source of truth.
+
+    The private branch is the SAME keyboard /start renders
+    (``get_private_start_keyboard``) minus the optional channel-gate row: a
+    navigation button must not spend a chat-member API call, and the host of
+    back buttons in private screens (guide, shop, garden, cards, wiki, chest)
+    all land here, so this function decides what «منوی اصلی» means. It used to
+    return the retired ``get_private_welcome_keyboard``, which is why the guide
+    dumped players into an old menu that nothing else in the bot opens.
+    """
     is_group = bool(chat and chat.type in ("group", "supergroup"))
     if is_group:
         text = "🍏 **منوی اصلی سیب**\nاز منوی زیر بخش مورد نظرت رو انتخاب کن 👇"
@@ -881,7 +889,7 @@ def _main_menu_text_and_kb(user, chat) -> tuple:
             f"🍏 **منوی اصلی سیب**\n\n"
             f"سلام {name}! از منوی زیر بخش مورد نظرت رو انتخاب کن 👇"
         )
-        kb = get_private_welcome_keyboard(settings.BOT_USERNAME)
+        kb = get_private_start_keyboard(settings.BOT_USERNAME)
     return text, kb
 
 

@@ -737,9 +737,9 @@ async def test_existing_daily_reward_paths_stay_untouched(db_session):
 # Entry-point wiring (task spec #8)
 # ---------------------------------------------------------------------------
 def test_private_main_menu_offers_the_chest():
-    from sib.keyboards.common import get_private_welcome_keyboard
+    from sib.keyboards.common import get_private_start_keyboard
 
-    kb = get_private_welcome_keyboard("sib_bot")
+    kb = get_private_start_keyboard("sib_bot")
     callbacks = [
         button.callback_data for row in kb.inline_keyboard for button in row
     ]

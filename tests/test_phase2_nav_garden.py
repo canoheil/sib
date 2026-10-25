@@ -16,7 +16,7 @@ from sib.handlers.start import (
 )
 from sib.keyboards.common import (
     get_group_welcome_keyboard,
-    get_private_welcome_keyboard,
+    get_private_start_keyboard,
     get_profile_keyboard,
 )
 from sib.keyboards.party import get_games_menu_keyboard
@@ -221,7 +221,7 @@ def test_apple_battle_single_entry_in_games_menu():
 
     # Redundant duplicates are gone from main menu, group welcome, profile.
     for fn in (
-        lambda: get_private_welcome_keyboard("sibbot"),
+        lambda: get_private_start_keyboard("sibbot"),
         get_group_welcome_keyboard,
         lambda: get_profile_keyboard(),
     ):

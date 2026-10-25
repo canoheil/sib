@@ -553,9 +553,9 @@ async def test_start_welcome_keyboard_reaches_canonical_screens():
     /start welcome keyboard is a real screen callback that the canonical
     renderer can display from a text OR photo message."""
     from sib.core.config import settings
-    from sib.keyboards.common import get_private_welcome_keyboard
+    from sib.keyboards.common import get_private_start_keyboard
 
-    kb = get_private_welcome_keyboard(settings.BOT_USERNAME)
+    kb = get_private_start_keyboard(settings.BOT_USERNAME)
     callbacks = [b.callback_data for row in kb.inline_keyboard for b in row
                  if b.callback_data]
     assert "apple_garden" in callbacks

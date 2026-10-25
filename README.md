@@ -138,6 +138,16 @@ Alembic migrations (`database/`).
   گروه» as the **last** row. It replaces the Phase A3 single-button
   funnel, which left any player who does not administer a group with
   nothing to press.
+- That keyboard is the ONLY private menu (`get_private_start_keyboard`).
+  Every «🏠 منوی اصلی» button in a private screen (guide, shop,
+  garden, cards, wiki, chest) renders it, so «back» lands on the same
+  screen `/start` shows. The retired second menu
+  (`get_private_welcome_keyboard`, which listed the wiki and card
+  trading at the top level and labelled its guide entry «🎮 بازی‌ها و
+  راهنما») is deleted; the wiki lives in «🎴 کارت‌های من» and card
+  trading in «👤 پروفایل من». Navigation never calls the
+  membership API to decide what the menu looks like — the channel row
+  belongs to the `/start` join flow only.
 - The official-channel membership check is a **soft** gate: the menu
   and the starter pack are delivered first, and a missing membership
   only adds a «📢 عضویت در کانال سیب» row plus a line of copy.
