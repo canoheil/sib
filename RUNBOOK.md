@@ -167,6 +167,36 @@ journalctl -u sib | grep "EVENT:SYSTEM_RESTART_RECOVERY"
 - **توجه:** بازیکنان قدیمی هم در `/start` بعدی‌شان هدیه را می‌گیرند (بازگشت‌شان
   خواسته است). اگر نمی‌خواهید، پیش از دیپلوی بگویید تا شرط «فقط حساب تازه» اضافه شود.
 
+### لیگ هفتگی گروه‌ها (پچ رقابت گروهی)
+
+- امتیازها از جدول `matches` حساب می‌شوند (فقط نبرد واقعی و تمام‌شده؛ برد بات و
+  بازی دوستانه هرگز) و در دو جدول `group_league_weeks` / `group_league_awards`
+  فقط «هفتهٔ تسویه‌شده» و «سکوی نهایی» ذخیره می‌شود.
+- هفته از **شنبه ۰۰:۰۰ به وقت تهران** شروع می‌شود.
+- خاموش/روشن کردن بدون دیپلوی:
+  ```sql
+  UPDATE system_config SET value = 'false' WHERE `key` = 'league_enabled';
+  ```
+- تنظیم جایزه (سیب به ازای هر بازیکنِ بازی‌کردهٔ هر رتبه):
+  ```sql
+  UPDATE system_config SET value = '{"1": 300, "2": 150, "3": 100}'
+   WHERE `key` = 'league_rewards';
+  UPDATE system_config SET value = '3' WHERE `key` = 'league_min_points';
+  ```
+- `league_first_week` (که مهاجرت ۰۶۴ با هفتهٔ خودش پر می‌کند) جلوی جایزهٔ عقب‌افتاده
+  برای هفته‌های قبل از وجود لیگ را می‌گیرد؛ دست نزنید مگر اینکه بدانید چه می‌کنید.
+- تسویه از چرخهٔ نگهداری، ساعتی یک بار، یک‌بار برای هر هفته انجام می‌شود.
+- بررسی وضعیت:
+  ```sql
+  SELECT week_key, winner_group_id, apples_paid, finalized_at
+    FROM group_league_weeks ORDER BY week_key DESC LIMIT 5;
+  SELECT week_key, rank, group_id, points, players_paid, apples_per_player
+    FROM group_league_awards ORDER BY week_key DESC, rank ASC LIMIT 9;
+  ```
+- برای تسویهٔ دستی یک هفتهٔ خاص (مثلاً بعد از قطعی طولانی): از پنل ادمین استفاده
+  نکنید؛ فقط `league_enabled` را روشن بگذارید — چرخهٔ بعدی خودش هفتهٔ گذشته را
+  تسویه می‌کند و به‌خاطر کلید idempotency دوباره پرداخت نمی‌شود.
+
 ### استریک روزانه و یادآوری‌ها (پچ بازگشت بازیکن)
 
 **استریک صندوق روزانه**
