@@ -60,6 +60,7 @@ from sib.services.daily_chest import (
     format_next_reset,
     format_open_result,
     format_reward_line,
+    format_streak_line,
     next_reset_at,
     utc_day,
 )
@@ -142,10 +143,30 @@ def _keyboard(*, can_open: bool) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _claimed_screen(claim: DailyChestClaim, now: datetime) -> str:
+async def _streak_screen_line(session, user_id: int) -> str:
+    """Read-only streak line for the chest screen (never pays anything)."""
+    from sib.services.daily_streak import DailyStreakService
+
+    try:
+        streak = await DailyStreakService.summary(session, user_id)
+    except Exception:  # pragma: no cover - the screen must always render
+        logger.exception("daily streak screen line failed user=%s", user_id)
+        return ""
+    return format_streak_line(
+        streak.days,
+        next_milestone=streak.next_milestone,
+        days_to_next=streak.days_to_next,
+    )
+
+
+def _claimed_screen(
+    claim: DailyChestClaim, now: datetime, *, streak_line: str = ""
+) -> str:
+    streak_block = f"{streak_line}\n\n" if streak_line else ""
     return (
         f"{CHEST_TITLE}\n\n"
         f"✅ امروز {format_claimed_line(claim)} گرفتی.\n\n"
+        f"{streak_block}"
         f"{format_next_reset(next_reset_at(now), now)}"
     )
 
@@ -165,8 +186,20 @@ async def _render_screen(
 
     claim = await DailyChestService.get_today_claim(session, user_id, now=now)
     if claim is not None:
-        return _claimed_screen(claim, now), _keyboard(can_open=False)
-    return CHEST_AVAILABLE_TEXT, _keyboard(can_open=True)
+        return (
+            _claimed_screen(
+                claim, now, streak_line=await _streak_screen_line(session, user_id)
+            ),
+            _keyboard(can_open=False),
+        )
+
+    # Not claimed yet: show the streak that is on the line today, so the
+    # "don't lose it" pressure is visible BEFORE the player opens the chest.
+    streak_line = await _streak_screen_line(session, user_id)
+    text = CHEST_AVAILABLE_TEXT
+    if streak_line:
+        text = f"{CHEST_AVAILABLE_TEXT}\n\n{streak_line}"
+    return text, _keyboard(can_open=True)
 
 
 async def _claim_panel_for(

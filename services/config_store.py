@@ -362,6 +362,20 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     # config compatibility and is no longer read. The cooldown is fixed.
     "sib_claim_amount": 5,
     "sib_claim_cooldown_seconds": 5 * 60,
+    # Come-back reminders (services/reminders.py). The built-in default is
+    # OFF so a checkout without migration 063 never messages anybody; the
+    # migration seeds reminders_enabled=true for a real install, and an
+    # operator can flip it back from system_config at any time.
+    "reminders_enabled": False,
+    "reminders_min_gap_hours": 20,
+    "reminders_window_start_hour": 16,
+    "reminders_window_end_hour": 22,
+    "reminders_chest_after_hour": 17,
+    "reminders_batch_size": 25,
+    # Daily chest streak milestones (day -> extra Apples). The streak itself
+    # is DERIVED from daily_chest_claims (services/daily_streak.py), so the
+    # whole ladder is this one config value: rebalance it without a deploy.
+    "daily_streak_rewards": {"3": 30, "7": 100, "14": 250},
     # "بغل سیبی" (Sib Hug): both participants receive the amount; only the
     # sender's successful hugs start the cooldown (see services/sib_hug.py).
     "sib_hug_amount": 10,

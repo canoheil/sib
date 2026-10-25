@@ -675,6 +675,11 @@ async def handle_apple_profile(callback: CallbackQuery, bot: Bot):
         friend_count = await FriendshipService.count_friends(session, user.id)
         account_progress = await PlayerXPService.get_progress(session, user.id)
         selected_skin = await ProfileSkinService.get_selected_skin(session, user.id)
+        # The reminder switch shows the player's CURRENT preference; the
+        # service reads the state row (absent row == reminders on).
+        from sib.services.reminders import ReminderService
+
+        reminders_on = not await ReminderService.is_opted_out(session, user.id)
 
     lines = [
         f"👤 **پروفایل سیبی {safe_name(user.first_name, 'شما')}** 🍏",
@@ -692,7 +697,7 @@ async def handle_apple_profile(callback: CallbackQuery, bot: Bot):
 
     lines.append(profile_friend_count_line(friend_count))
 
-    kb = get_profile_keyboard()
+    kb = get_profile_keyboard(reminders_on=reminders_on)
 
     # Green Apple delegates to its original Level-specific art resolver.
     from sib.services.profile_artwork import ProfileArtworkResolver

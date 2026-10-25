@@ -490,8 +490,9 @@ def test_migration_061_revises_060_and_keeps_one_head():
     assert migration.revision == "061_seedling_sell_price"
     assert migration.down_revision == "060_invasion_fixed_schedule"
 
-    # Every other revision still has at most one child: 061 is now revised
-    # by 062_transfers, which is the single head.
+    # Every other revision still has at most one child: 061 is revised by
+    # 062_transfers, which is itself revised by 063_reminders - the single
+    # head of the one linear history.
     versions = REPO_ROOT / "database/migrations/versions"
     revisions = {}
     for path in versions.glob("*.py"):
@@ -502,7 +503,7 @@ def test_migration_061_revises_060_and_keeps_one_head():
     parents = [parent for parent in revisions.values() if parent]
     assert len(parents) == len(set(parents)), "forked migration history"
     heads = set(revisions) - set(parents)
-    assert heads == {"062_transfers"}
+    assert heads == {"063_reminders"}
 
 
 def test_migration_061_seeds_the_default_price_and_is_idempotent(tmp_path):

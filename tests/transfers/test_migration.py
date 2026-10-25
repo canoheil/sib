@@ -98,7 +98,9 @@ def test_migration_062_revises_061_and_is_the_only_head():
 
     parents = [parent for parent in revisions.values() if parent]
     assert len(parents) == len(set(parents)), "forked migration history"
-    assert set(revisions) - set(parents) == {"062_transfers"}
+    # 062 is no longer the head: 063_reminders (come-back reminders) revises
+    # it, and the history stays linear with exactly one head.
+    assert set(revisions) - set(parents) == {"063_reminders"}
 
 
 # ---------------------------------------------------------------------------
