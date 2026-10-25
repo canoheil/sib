@@ -387,6 +387,10 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     # Never finalize a week that started before this key (the migration seeds
     # it with its own week, so the first deploy pays no retroactive prize).
     "league_first_week": "",
+    # Trophy card for rank 1 (see services/group_league.py::_award). Empty
+    # string disables the card without touching the Apple prizes; the card
+    # itself is ``shop_enabled: false`` so the league is its only source.
+    "league_champion_card_code": "hero",
     # "بغل سیبی" (Sib Hug): both participants receive the amount; only the
     # sender's successful hugs start the cooldown (see services/sib_hug.py).
     "sib_hug_amount": 10,

@@ -33,9 +33,19 @@ pay twice. ``league_first_week`` (seeded by migration 064) stops the first
 deploy from paying a retroactive prize for a week that ended before the league
 existed.
 
+The champion card
+----------------
+Rank 1 also hands out the **champion card** (``league_champion_card_code``,
+``hero`` by default) to every player who actually played for the winning
+group. The card is a trophy: it is not in the shop, the daily chest never
+drops it, and the starter pack can never hand it out — the league is the
+only way in. Ownership is checked before the grant, so winning three weeks
+in a row still leaves one card (the reward for repeat wins stays the Apples).
+
 Everything is config-driven: ``league_enabled`` (kill switch),
 ``league_rewards`` (``{"1": 300, "2": 150, "3": 100}`` per participating
-player), ``league_min_points`` (a 0-point week has no champion).
+player), ``league_min_points`` (a 0-point week has no champion),
+``league_champion_card_code`` (the trophy card, empty to disable).
 """
 
 from dataclasses import dataclass
@@ -50,6 +60,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sib.core.logging import Events, log_event, logger
 from sib.core.text import escape_markdown
 from sib.database.models import (
+    Character,
     Group,
     GroupLeagueAward,
     GroupLeagueWeek,
@@ -57,6 +68,8 @@ from sib.database.models import (
     MatchPlayer,
     MatchState,
     MatchType,
+    PlayerCard,
+    ReleaseStatus,
     User,
 )
 from sib.services.apple_wallet import AppleWalletService
@@ -78,6 +91,10 @@ LEAGUE_KEY_FORMAT = "league:{week}:{group}:{user}"
 #: Apples per participating player, by rank. Small enough to be a bonus, big
 #: enough to matter next to a 300-Apple card.
 DEFAULT_REWARDS: dict[int, int] = {1: 300, 2: 150, 3: 100}
+
+#: The card only the league can hand out (``shop_enabled`` is false for it, so
+#: neither the shop, the daily chest nor the starter pack can grant it).
+DEFAULT_CHAMPION_CARD_CODE = "hero"
 
 #: Rows shown on the panel (the podium plus the chasing pack).
 LEAGUE_TABLE_LIMIT = 10
@@ -204,6 +221,8 @@ class LeagueAwardResult:
     points: int
     players_paid: int
     apples_per_player: int
+    #: Champion cards actually handed out (rank 1 only, owners excluded).
+    cards_paid: int = 0
 
     @property
     def apples_total(self) -> int:
@@ -259,6 +278,10 @@ class GroupLeagueService:
             ),
             "first_week": str(
                 await ConfigService.get(session, "league_first_week") or ""
+            ),
+            "champion_card": str(
+                await ConfigService.get(session, "league_champion_card_code")
+                or ""
             ),
         }
 
@@ -468,12 +491,19 @@ class GroupLeagueService:
             row for row in table[:3] if row.points >= conf["min_points"]
         ]
 
+        champion_card = await cls.champion_card(session, conf["champion_card"])
+
         awards: list[LeagueAwardResult] = []
         apples_paid = 0
         for row in podium:
             per_player = conf["rewards"].get(row.rank, 0)
             players = await cls._participants(session, key, row.group_id)
             paid = 0
+            cards_paid = 0
+            if row.rank == 1 and champion_card is not None:
+                cards_paid = await cls._grant_champion_card(
+                    session, players, champion_card
+                )
             if per_player > 0:
                 for user_id in players:
                     await AppleWalletService.earn(
@@ -512,6 +542,7 @@ class GroupLeagueService:
                     points=row.points,
                     players_paid=paid,
                     apples_per_player=per_player,
+                    cards_paid=cards_paid,
                 )
             )
 
@@ -567,6 +598,76 @@ class GroupLeagueService:
             if team == match_ids[match_id]:
                 players.add(int(user_id))
         return sorted(players)
+
+    @classmethod
+    async def champion_card(
+        cls, session: AsyncSession, code: str
+    ) -> Optional[Character]:
+        """The trophy card for rank 1, or ``None`` when it cannot be granted.
+
+        A missing, inactive or unreleased card is not an error: the Apple
+        prizes must still be paid on a deployment that has not seeded the
+        card yet.
+        """
+        if not code:
+            return None
+        character = await session.scalar(
+            select(Character).where(Character.code == code)
+        )
+        if (
+            character is None
+            or not character.is_active
+            or character.release_status != ReleaseStatus.RELEASED
+        ):
+            return None
+        return character
+
+    @classmethod
+    async def _grant_champion_card(
+        cls,
+        session: AsyncSession,
+        players: Sequence[int],
+        character: Character,
+    ) -> int:
+        """Hand the trophy card to each winner who does not own it yet.
+
+        One card per character per player is the game's oldest card rule, so
+        this is a query-then-insert (not a blind insert) and repeats are
+        skipped silently — a player who already won keeps their single card.
+        """
+        if not players:
+            return 0
+        owned = set(
+            (
+                await session.scalars(
+                    select(PlayerCard.user_id).where(
+                        PlayerCard.character_id == character.id,
+                        PlayerCard.user_id.in_(list(players)),
+                    )
+                )
+            ).all()
+        )
+        granted = 0
+        for user_id in players:
+            if user_id in owned:
+                continue
+            session.add(
+                PlayerCard(
+                    user_id=user_id, character_id=character.id, level=1
+                )
+            )
+            granted += 1
+        if granted:
+            await session.flush()
+            log_event(
+                Events.CHARACTER_EVENT,
+                {
+                    "action": "champion_card_granted",
+                    "character": character.code,
+                    "count": granted,
+                },
+            )
+        return granted
 
     @classmethod
     async def finalize_due_weeks(
@@ -694,18 +795,26 @@ def format_table(rows: Sequence[LeagueRow], *, limit: int = LEAGUE_TABLE_LIMIT) 
     return "\n".join(lines)
 
 
-def format_reward_ladder(rewards: dict[int, int]) -> str:
+def format_reward_ladder(rewards: dict[int, int], champion_card_name: str = "") -> str:
     medals = {1: "🥇", 2: "🥈", 3: "🥉"}
     parts = [
         f"{medals[rank]} {fa_digits(apples)} سیب"
         for rank, apples in sorted(rewards.items())
         if apples > 0
     ]
-    if not parts:
+    if not parts and not champion_card_name:
         return ""
-    return (
-        "🎁 جایزهٔ هر بازیکنِ بازی‌کردهٔ گروه‌های برتر: " + " | ".join(parts)
-    )
+    lines = []
+    if parts:
+        lines.append(
+            "🎁 جایزهٔ هر بازیکنِ بازی‌کردهٔ گروه‌های برتر: " + " | ".join(parts)
+        )
+    if champion_card_name:
+        lines.append(
+            f"🏆 کارت قهرمان (**{escape_markdown(champion_card_name)}**) هم "
+            "فقط برای بازیکن‌های گروه اول — یک‌بار برای همیشه."
+        )
+    return "\n".join(lines)
 
 
 def format_panel(
@@ -719,6 +828,7 @@ def format_panel(
     last_awards: Sequence[PodiumRow] = (),
     is_group: bool = True,
     min_points: int = 0,
+    champion_card_name: str = "",
 ) -> str:
     """The whole «لیگ هفته» panel text."""
     lines = [PANEL_TITLE, f"🗓 هفتهٔ {week_label(key)}", format_countdown(now, key), ""]
@@ -737,7 +847,7 @@ def format_panel(
     lines.append("**جدول این هفته**")
     lines.append(format_table(rows))
 
-    ladder = format_reward_ladder(rewards)
+    ladder = format_reward_ladder(rewards, champion_card_name)
     if ladder:
         lines.extend(["", ladder])
 
@@ -784,11 +894,13 @@ def format_champion_announcement(result: LeagueFinal) -> str:
             f"{fa_digits(award.players_paid)} بازیکن × "
             f"{fa_digits(award.apples_per_player)} سیب"
         )
-    lines.extend(
-        [
-            "",
-            "🍎 جایزهٔ بازیکن‌های هر گروه مستقیم به کیف سیبشون واریز شد.",
-            "لیگ جدید از همین حالا شروع شده — /league",
-        ]
-    )
+    cards = sum(award.cards_paid for award in result.awards)
+    lines.append("")
+    lines.append("🍎 جایزهٔ بازیکن‌های هر گروه مستقیم به کیف سیبشون واریز شد.")
+    if cards:
+        lines.append(
+            f"🏆 و {fa_digits(cards)} بازیکنِ تیم اول کارت قهرمان رو گرفتن — "
+            "این کارت فقط از راه لیگ به دست می‌آد."
+        )
+    lines.append("لیگ جدید از همین حالا شروع شده — /league")
     return "\n".join(lines)

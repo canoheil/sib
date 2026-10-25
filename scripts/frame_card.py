@@ -1,5 +1,16 @@
 #!/usr/bin/env python3
-"""Compose character art into the canonical golden card frame.
+"""RETIRED — do not use this script for new cards.
+
+Since the roster moved to delivered art, the image in ``assets/characters/``
+**is** the card: the artist bakes the frame, the name plate and the crown into
+the picture, and the game only resolves the path
+(``services/character_art.artwork_path``). Running this script on a delivered
+card re-crops it and draws a second frame on top of the first one. Kept only
+for the four legacy cards it originally produced; no runtime code imports it
+and ``tests/test_character_art.py`` fails if anything in ``services`` /
+``handlers`` / ``keyboards`` / ``games`` starts using it again.
+
+Compose character art into the canonical golden card frame.
 
 ONE frame for ALL character cards (now and forever):
 

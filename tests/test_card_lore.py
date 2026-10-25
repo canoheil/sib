@@ -101,7 +101,8 @@ async def test_red_apple_wiki_and_shop_share_exact_content(db_session):
 
 async def test_bold_labels_and_card_names_apply_to_all_cards(db_session):
     characters = await _seeded(db_session)
-    assert len(characters) == 18
+    # 18 shop/wiki cards + the league trophy («هیرو»), which is also a wiki page.
+    assert len(characters) == 19
     for character in characters.values():
         wiki = await WikiService.wiki_page(db_session, character.id)
         assert wiki.startswith(f"*{escape_markdown(character.name_fa)}*\n")

@@ -117,6 +117,14 @@ Alembic migrations (`database/`).
 - The maintenance cycle finalizes the week that just ended, once an hour
   behind its own `try/except`, and announces the result in the podium's
   groups (best effort — being removed from a group is not an error).
+- **Champion card:** rank 1 also hands the trophy card
+  `league_champion_card_code` (`hero` — «هیرو», drawn with his white wolf
+  «سپیدچنگ») to every player who actually played for the winning group.
+  The card is `shop_enabled: false`, so the weekly shop, the daily chest
+  and the starter pack can never grant it: the league is its only source.
+  Winning again never duplicates it (one card per character per player);
+  the repeat prize stays the Apples. A missing or disabled card never
+  blocks the Apple payout.
 - Kill switch: `league_enabled` (built-in default **off**, seeded **on**
   by the migration).
 
@@ -176,6 +184,15 @@ Alembic migrations (`database/`).
   `034_card_affiliations`); adding a faction needs no code change.
 - Profile skins change a card/profile's appearance only, never its
   stats (`services/profile_skin.py`, migration `029_profile_skins`).
+- **Card art is delivered, not generated:** the image at
+  `assets/characters/{code}.jpg` *is* the card — the artist bakes the
+  frame, the name plate and the crown into the picture.
+  `services/character_art.py` resolves that path and hands the file to
+  Telegram; nothing crops, resizes, re-encodes or frames it at runtime.
+  The old golden-frame pipeline (`scripts/frame_card.py`) is retired and
+  a test fails if any runtime code starts using it again. The house
+  format is a 4:5 portrait (912×1136 … 1850×2304) under Telegram's 10 MB
+  photo limit.
 
 ### Chests and shop
 
