@@ -725,7 +725,19 @@ class MaintenanceService:
         """Run maintenance cycles until stop_event is set."""
         cls._bot = bot
         logger.info(f"Maintenance worker started (interval={cls.INTERVAL_SECONDS}s)")
-        logger.info(f"Invasion system enabled: {await cls._invasion_enabled()}")
+        invasion_enabled = await cls._invasion_enabled()
+        if invasion_enabled:
+            logger.info("Invasion system enabled: True")
+        else:
+            # The flagship feature ships OFF (migration 036). A silently
+            # disabled invasion means even a group whose members all own a
+            # Main Card never sees the one thing the /start copy promises,
+            # so say it loudly at every boot instead of one INFO line.
+            logger.warning(
+                "Invasion system DISABLED (system_config.invasion_enabled=false): "
+                "no group will ever see a شیاسیب invasion. Turn it on from the "
+                "admin chat with /inv2_toggle when you are ready to run it."
+            )
         from sib.services.invasion_v2.power_resolver import get_power_resolver
 
         resolver = get_power_resolver()

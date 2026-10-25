@@ -58,6 +58,34 @@ Alembic migrations (`database/`).
 - Shift state is persisted (migration `043_apple_mine_shift`), so a
   restart does not lose an in-progress shift.
 
+### First session (starter pack and the private home screen)
+
+- A brand-new account is never created empty. `/start` pays a
+  **starter pack** exactly once per account: one released shop card
+  (level 1), immediately selected as the player's Main Card, plus
+  `STARTER_APPLES` (100) through the auditable wallet ledger
+  (`services/onboarding.py`). The ledger row with the fixed key
+  `starter_pack:<user id>` *is* the "already granted" marker, so the
+  pack needs no new column, no migration and cannot be farmed by
+  re-entering a group; a player who already owns the starter character
+  gets the Apples only. The pack is paid for group-first `/start`s
+  too, so every player ends up with the Main Card that invasion power
+  and duels read.
+- The private `/start` keyboard is the real first-session menu
+  (chest, garden, cards, shop, profile, help) with «➕ افزودن سیب به
+  گروه» as the **last** row. It replaces the Phase A3 single-button
+  funnel, which left any player who does not administer a group with
+  nothing to press.
+- The official-channel membership check is a **soft** gate: the menu
+  and the starter pack are delivered first, and a missing membership
+  only adds a «📢 عضویت در کانال سیب» row plus a line of copy.
+  Verifying membership removes the row; it never unlocks the game.
+- The player command menu is published from code at startup
+  (`services/bot_commands.py`, `set_my_commands`, 13 commands), so the
+  «/» button is no longer empty. Admin-only commands stay out of it.
+- Design rationale and the remaining growth work:
+  `docs/growth-diagnosis-fa.md`.
+
 ### Cards
 
 - Collectible character cards (`/cards`, «سیب کارت») seeded from
@@ -437,6 +465,9 @@ design history is in `TODO/DECISIONS.md`.
 - `docs/invasion-telegram.md` — invasion Telegram presentation notes.
 - `docs/lock-order.md` — database row-lock ordering rules.
 - `docs/shop-chests.md` — shop chest design, operations, known limits.
+- `docs/growth-diagnosis-fa.md` — honest growth diagnosis of the
+  first-session funnel (in Persian), what the starter-pack patch
+  changed, and the remaining retention/distribution work.
 - `RUNBOOK.md` (repo root) — production operations and deployment.
 
 ## Support

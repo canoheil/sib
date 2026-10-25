@@ -10,7 +10,13 @@ from sib.handlers.admin import handle_admin_command, handle_admin_dashboard
 
 @pytest.mark.asyncio
 async def test_start_private_chat_not_member(db_session):
-    """User who is not a member receives the Persian membership gate message."""
+    """A non-member still gets the full first-session screen (soft gate).
+
+    The old behaviour blocked /start with a «عضو کانال رسمی شو» message and
+    nothing else, so a player who had not joined the channel could not even
+    see the menu. The gate is now soft: the welcome, the starter pack and the
+    menu are delivered, and the channel is offered as an extra row.
+    """
     mock_msg = MagicMock(spec=Message)
     mock_msg.chat = TelegramChat(id=111222, type="private")
     mock_msg.from_user = TelegramUser(id=111222, is_bot=False, first_name="رضا")
@@ -24,8 +30,17 @@ async def test_start_private_chat_not_member(db_session):
 
     mock_msg.answer.assert_called_once()
     args, kwargs = mock_msg.answer.call_args
-    assert "عضو کانال رسمی شو" in args[0]
+    # The menu is there; the channel is a suggestion, not a wall.
+    assert "🍏 سلام رضا عزیز!" in args[0]
+    assert "کانال رسمی" in args[0]
     assert kwargs.get("reply_markup") is not None
+    labels = [
+        button.text
+        for row in kwargs["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert "🎁 صندوق روزانه" in labels
+    assert "📢 عضویت در کانال سیب" in labels
 
 
 @pytest.mark.asyncio

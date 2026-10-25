@@ -34,6 +34,7 @@ from sib.handlers.start import handle_start, handle_start_deep_link
 from sib.keyboards.common import get_profile_keyboard
 from sib.services.apple_wallet import AppleWalletService
 from sib.services.membership.checker import MembershipService
+from sib.services.onboarding import STARTER_APPLES
 from sib.services.referral import (
     INVITEE_BONUS_TEXT,
     INVITEE_REWARD_APPLES,
@@ -155,7 +156,12 @@ async def test_deep_link_saves_referrer(ref_db):
     # REF2: the attribution and the payment land together, right on /start.
     assert invitee.referral_rewarded is True
     assert await _balance(ref_db, INVITER_ID) == INVITER_REWARD_APPLES
-    assert await _balance(ref_db, INVITEE_ID) == INVITEE_REWARD_APPLES
+    # The invitee also receives the first-session starter pack (100 Apples,
+    # its own ledger key) in the same /start, so the two credits add up.
+    assert (
+        await _balance(ref_db, INVITEE_ID)
+        == INVITEE_REWARD_APPLES + STARTER_APPLES
+    )
     bot.send_message.assert_awaited_once()
 
 
@@ -245,7 +251,11 @@ async def test_reward_given_immediately_on_start(ref_db):
 
     # No group activity, no second message - the wallets are already paid.
     assert await _balance(ref_db, INVITER_ID) == INVITER_REWARD_APPLES == 100
-    assert await _balance(ref_db, INVITEE_ID) == INVITEE_REWARD_APPLES == 50
+    assert INVITEE_REWARD_APPLES == 50
+    assert (
+        await _balance(ref_db, INVITEE_ID)
+        == INVITEE_REWARD_APPLES + STARTER_APPLES
+    )
 
     invitee = await _load_user(ref_db, INVITEE_ID)
     assert invitee.referral_rewarded is True
@@ -274,7 +284,10 @@ async def test_invitee_is_told_about_the_bonus(ref_db):
     text = welcome.answer.await_args.args[0]
     assert INVITEE_BONUS_TEXT in text
     assert "۵۰ سیب" in text
-    assert await _balance(ref_db, SECOND_INVITEE_ID) == INVITEE_REWARD_APPLES
+    assert (
+        await _balance(ref_db, SECOND_INVITEE_ID)
+        == INVITEE_REWARD_APPLES + STARTER_APPLES
+    )
 
 
 @pytest.mark.asyncio
@@ -290,7 +303,10 @@ async def test_bonus_is_paid_behind_the_membership_gate(ref_db, monkeypatch):
     await handle_start_deep_link(gated, bot, _referral_command())
 
     assert INVITEE_BONUS_TEXT in gated.answer.await_args.args[0]
-    assert await _balance(ref_db, SECOND_INVITEE_ID) == INVITEE_REWARD_APPLES
+    assert (
+        await _balance(ref_db, SECOND_INVITEE_ID)
+        == INVITEE_REWARD_APPLES + STARTER_APPLES
+    )
     assert await _balance(ref_db, INVITER_ID) == INVITER_REWARD_APPLES
 
 
@@ -308,7 +324,10 @@ async def test_reward_given_only_once(ref_db):
         assert await ReferralService.grant_reward_if_due(session, INVITEE_ID) is None
 
     assert await _balance(ref_db, INVITER_ID) == 100
-    assert await _balance(ref_db, INVITEE_ID) == 50
+    assert (
+        await _balance(ref_db, INVITEE_ID)
+        == INVITEE_REWARD_APPLES + STARTER_APPLES
+    )
     assert len(await _referral_ledger(ref_db)) == 2
     bot.send_message.assert_awaited_once()
 
@@ -324,7 +343,12 @@ async def test_group_start_alone_also_pays(ref_db):
 
     group_msg.reply.assert_awaited_once()
     assert await _balance(ref_db, INVITER_ID) == 100
-    assert await _balance(ref_db, INVITEE_ID) == 50
+    # A group-first /start pays the starter pack too (the group welcome does
+    # not announce it, but the Main Card and the Apples are granted).
+    assert (
+        await _balance(ref_db, INVITEE_ID)
+        == INVITEE_REWARD_APPLES + STARTER_APPLES
+    )
     bot.send_message.assert_awaited_once()
 
 

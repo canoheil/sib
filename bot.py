@@ -75,6 +75,12 @@ async def main():
     # victory photos. The feature gate still controls all invasion operations.
     bot, dp = await create_bot_and_dispatcher()
 
+    # Publish the «/» command menu (players had an empty one before; the
+    # README used to require doing this by hand in BotFather). Best effort:
+    # a failure never blocks polling.
+    from sib.services.bot_commands import register_bot_commands
+    await register_bot_commands(bot)
+
     # Perform startup recovery and cleanup
     from sib.database.connection import get_session
     from sib.services.recovery import RecoveryService
