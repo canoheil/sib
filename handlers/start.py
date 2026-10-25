@@ -13,7 +13,6 @@ from sib.core.logging import logger, log_event, Events
 from sib.core.text import escape_markdown, plain_display_name, safe_name
 from sib.database.connection import get_session
 from sib.keyboards.common import (
-    get_membership_keyboard,
     get_private_welcome_keyboard,
     get_private_start_keyboard,
     get_group_welcome_keyboard,
@@ -40,6 +39,7 @@ from sib.services.help_content import (
 from sib.services.panel import PanelOwnershipService
 from sib.services.telegram_ui import safe_answer_callback, safe_edit_callback_message
 from sib.services.membership.checker import MembershipService
+from sib.services.onboarding import OnboardingService, StarterPack
 from sib.services.referral import INVITEE_BONUS_TEXT, ReferralService
 from sib.services.user import UserService
 from sib.services.group import GroupService
@@ -51,22 +51,95 @@ router = Router(name="start")
 # and in the guide's support section. One source of truth for both.
 
 
-def _private_start_text(first_name: str) -> str:
-    """Private /start welcome (Phase A3): Ovarya-first onboarding copy.
+def _private_start_text(
+    first_name: str,
+    *,
+    starter: Optional["StarterPack"] = None,
+    gate: bool = False,
+) -> str:
+    """Private /start welcome: the FIRST-SESSION screen, not a sales pitch.
 
     One source of truth for both entry paths — the direct member welcome in
     ``handle_start`` and the post-verification welcome in
-    ``handle_check_membership`` (the gate is only reachable from /start).
-    Legacy mini-games are mentioned once, as secondary content.
+    ``handle_check_membership``.
+
+    ``starter`` is the pack ``OnboardingService`` just paid (or None on a
+    replay, when there is nothing new to announce): a brand-new player is told
+    what they now own and what to press first, instead of being asked to add
+    the bot to a group they may not administer. ``gate`` appends the optional
+    official-channel line; it never replaces the menu.
     """
+    if starter is not None and starter.granted:
+        gift_lines = ["🎁 هدیهٔ شروع تو:"]
+        if starter.card_name:
+            gift_lines.append(
+                f"• کارت «{starter.card_name}» — همین حالا کارت اصلی‌ات شد"
+            )
+        gift_lines.append(
+            f"• {_fa_number(starter.apples)} سیب (موجودی فعلی: "
+            f"{_fa_number(starter.balance)})"
+        )
+        gift = "\n".join(gift_lines) + "\n\n"
+    else:
+        gift = ""
+
+    gate_line = (
+        "📢 کانال رسمی سیب را دنبال کن تا از یورش‌ها و کارت‌های جدید باخبر شوی "
+        "(دکمهٔ پایین).\n\n"
+        if gate
+        else ""
+    )
+
     return (
         f"🍏 سلام {first_name} عزیز!\n\n"
-        "سرزمین اواریا زیر یورش شیاسیب است. تو برای دفاع از آن فراخوانده شده‌ای.\n\n"
-        "با کارت‌هایت به نبردها بپیوند، در معدن سیب بکن، صندوق‌ها را بگشا، "
-        "گل‌هایت را پرورش بده و با هم‌گروهی‌هایت متحد شو.\n\n"
+        "سرزمین اواریا زیر یورش شیاسیب است و تو از امروز یکی از مدافعان آن هستی.\n\n"
+        f"{gift}"
+        "✨ همین حالا، داخل همین چت:\n"
+        "۱. صندوق روزانه‌ات را باز کن 🎁\n"
+        "۲. در باغت نهال بکار و برداشت کن 🌳\n"
+        "۳. کارتت را با سیب ارتقا بده 🎴\n\n"
+        "برای نبرد با بازیکن‌های دیگر و یورش شیاسیب، سیب را به گروهت اضافه کن "
+        "(دکمهٔ پایین) — بیشتر بخش‌های بازی داخل گروه اتفاق می‌افتد.\n\n"
         "🎲 بازی‌های جانبی: کارت بالا، سنگ‌کاغذ‌قیچی، دوز، چهار در یک ردیف، کشتی جنگی.\n\n"
-        "برای شروع، بات را به گروهت اضافه کن.\n\n"
+        f"{gate_line}"
         f"🔧 پشتیبانی: {SUPPORT_HANDLE}"
+    )
+
+
+def _fa_number(value: int) -> str:
+    """Latin digits to Persian digits (bot copy is Persian-only)."""
+    return str(value).translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
+
+
+async def _private_home(
+    bot: Bot, user, starter: Optional["StarterPack"] = None
+) -> tuple[str, InlineKeyboardMarkup]:
+    """The private home screen: menu always, channel row only when missing.
+
+    The membership gate is SOFT: a player who has not joined the official
+    channel still gets the full first-session screen and the starter pack.
+    Only the extra «📢 عضویت در کانال سیب» row is added — the old behaviour
+    (one blocking "join the channel" message before any value) was the single
+    biggest drop-off point of the funnel.
+    """
+    async with get_session() as session:
+        is_member, missing_channel = await MembershipService.check_user_membership(
+            bot, user.id, session
+        )
+
+    channel_link: Optional[str] = None
+    if not is_member:
+        channel_link = (
+            missing_channel.invite_link
+            if missing_channel is not None
+            else settings.OFFICIAL_CHANNEL_LINK
+        )
+
+    text = _private_start_text(
+        user.first_name or "دوست", starter=starter, gate=channel_link is not None
+    )
+    return text, get_private_start_keyboard(
+        settings.BOT_USERNAME, gate_channel_link=channel_link
     )
 
 
@@ -134,6 +207,15 @@ async def handle_start(message: Message, bot: Bot, command: Optional[CommandObje
             session, user.id
         )
 
+        # FIRST SESSION: the starter card + starter Apples, paid in this same
+        # transaction, exactly once per account (the wallet ledger row is the
+        # marker). Without it a new player owned nothing and the first card -
+        # the object the whole game is about - was ~3 hours of grinding away.
+        # Granted in groups too: a player whose first /start happens in a
+        # group must also end up with a Main Card, which is what the invasion
+        # power resolver counts.
+        starter = await OnboardingService.grant_starter_pack(session, user.id)
+
         # 1. Group / Supergroup chat
         if chat.type in ("group", "supergroup"):
             group = await GroupService.get_or_create_group(session, chat)
@@ -161,48 +243,32 @@ async def handle_start(message: Message, bot: Bot, command: Optional[CommandObje
         )
         return
 
-    async with get_session() as session:
-        # 2. Private chat
-        # Check channel membership gate
-        is_member, missing_channel = await MembershipService.check_user_membership(bot, user.id, session)
-
-        if not is_member:
-            channel_link = missing_channel.invite_link if missing_channel else settings.OFFICIAL_CHANNEL_LINK
-            membership_text = (
-                "🍏 **سلام!**\n\n"
-                "برای استفاده از سیب و دریافت اطلاعیه‌ها و بازی با گروه‌ها، عضو کانال رسمی شو 👇"
-            )
-            if referral_reward is not None:
-                # REF2: the referral bonus is already in the wallet, even
-                # though the channel gate still has to be passed.
-                membership_text = f"{membership_text}\n\n{INVITEE_BONUS_TEXT}"
-            await message.answer(
-                membership_text,
-                reply_markup=get_membership_keyboard(channel_link),
-                parse_mode="Markdown",
-            )
-            return
-
-        # If already member
-        # Phase A3: Ovarya-first onboarding with exactly ONE inline button
-        # (add to group). The full private menu stays available via
-        # «سیب منو» / main_menu. Plain text (no parse mode) so injected
-        # first names can never break Markdown parsing.
-        welcome_text = _private_start_text(user.first_name or "دوست")
-        if referral_reward is not None:
-            # REF2: the 50-apple referral bonus already landed in the
-            # invitee's wallet - say it out loud, in Persian.
-            welcome_text = f"{welcome_text}\n\n{INVITEE_BONUS_TEXT}"
-        await message.answer(
-            welcome_text,
-            reply_markup=get_private_start_keyboard(settings.BOT_USERNAME),
-            parse_mode=None,
-        )
+    # 2. Private chat — the first-session screen.
+    #
+    # The starter pack was already paid inside the /start transaction above
+    # (``starter``), so the welcome can promise exactly what landed. The
+    # membership gate is soft now: the menu and the pack are never blocked by
+    # a channel join, the join row is simply appended when it is missing.
+    welcome_text, welcome_kb = await _private_home(bot, user, starter=starter)
+    if referral_reward is not None:
+        # REF2: the 50-apple referral bonus already landed in the
+        # invitee's wallet - say it out loud, in Persian.
+        welcome_text = f"{welcome_text}\n\n{INVITEE_BONUS_TEXT}"
+    await message.answer(
+        welcome_text,
+        reply_markup=welcome_kb,
+        parse_mode=None,
+    )
 
 
 @router.callback_query(F.data == "check_membership")
 async def handle_check_membership(callback: CallbackQuery, bot: Bot):
-    """Handle user clicking [✅ بررسی عضویت]."""
+    """Handle user clicking [✅ بررسی عضویت] on the soft channel row.
+
+    Verifying membership never *unlocks* the game any more (the menu is always
+    available); it only removes the «📢 عضویت در کانال سیب» row and confirms
+    the join. A failed check keeps the row in place.
+    """
     user = callback.from_user
     if not user:
         return
@@ -210,21 +276,18 @@ async def handle_check_membership(callback: CallbackQuery, bot: Bot):
     async with get_session() as session:
         is_member, missing_channel = await MembershipService.check_user_membership(bot, user.id, session)
 
-        if not is_member:
-            await callback.answer(MESSAGES["membership_check_failed"], show_alert=True)
-            return
+    if not is_member:
+        await callback.answer(MESSAGES["membership_check_failed"], show_alert=True)
+        return
 
-        await callback.answer(MESSAGES["membership_check_success"], show_alert=True)
+    await callback.answer(MESSAGES["membership_check_success"], show_alert=True)
 
-        # Replace gate message with the SAME /start welcome new members see
-        # (Phase A3): one shared text + exactly ONE inline button. The
-        # verification itself is already confirmed by the alert above.
-        welcome_text = _private_start_text(user.first_name or "دوست")
-        if callback.message:
-            await safe_edit_callback_message(
-                callback,
-                bot,
-                welcome_text,
+    welcome_text, welcome_kb = await _private_home(bot, user)
+    if callback.message:
+        await safe_edit_callback_message(
+            callback,
+            bot,
+            welcome_text,
                 reply_markup=get_private_start_keyboard(settings.BOT_USERNAME),
                 parse_mode=None,
             )

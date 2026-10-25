@@ -1,13 +1,17 @@
-"""Phase A3 regressions: /start texts and the one-button private keyboard.
+"""Phase A3 regressions: /start texts and the private first-session menu.
 
-Covers the rewritten private and group /start messages:
-- the private /start reply carries EXACTLY ONE inline button, and it is the
-  "add to group" URL deep link;
-- none of the removed main-menu shortcuts reappear on /start;
+Covers the private and group /start messages:
+- the private /start reply carries the REAL first-session menu (chest, garden,
+  cards, shop, profile, help) with the "add to group" URL deep link LAST. The
+  old Phase A3 rule — exactly one button, add-to-group only — was the biggest
+  drop-off point of the funnel (a player who does not administer a group had
+  nothing to press) and was replaced by the starter-pack onboarding;
 - both texts are Ovarya-first, carry the support handle, mention the legacy
   mini-games (private, as secondary content) and the group title (group);
 - the group /start keyboard is unchanged;
 - both texts are Persian-only (injected values masked) and under 1024 chars.
+- the official-channel gate is SOFT: verifying membership only removes the
+  join row, it never unlocks the menu.
 """
 
 import re
@@ -27,32 +31,18 @@ from sib.handlers.start import (
     handle_check_membership,
     handle_start,
 )
-from sib.keyboards.common import (
-    get_group_welcome_keyboard,
-    get_private_start_keyboard,
-)
+from sib.keyboards.common import get_group_welcome_keyboard
 
 ADD_TO_GROUP_LABEL = "➕ افزودن سیب به گروه"
 
 # The eight buttons removed from the private /start reply markup (they stay
 # available on the private MAIN menu, which uses get_private_welcome_keyboard).
-REMOVED_BUTTON_LABELS = [
-    "🌳 باغ من",
-    "🎴 کارت‌های من",
-    "🛒 فروشگاه",
-    "📚 ویکی کاراکترها",
-    "🔄 مبادله کارت",
-    "🎁 صندوقچه گنج روزانه",
-    "👤 پروفایل من",
-    "🎮 بازی‌ها و راهنما",
-]
-REMOVED_BUTTON_CALLBACKS = [
+#: The first-session menu the private /start MUST offer (callback data).
+FIRST_SESSION_CALLBACKS = [
+    "apple_chest",
     "apple_garden",
     "apple_cards",
     "apple_shop",
-    "apple_wiki",
-    "apple_trade",
-    "apple_chest",
     "apple_profile",
     "help_menu",
 ]
@@ -129,38 +119,37 @@ async def _run_membership_gate_welcome(
 
 
 @pytest.mark.asyncio
-async def test_private_start_shows_exactly_one_button(db_session):
-    """The private /start reply markup has EXACTLY ONE inline button."""
+async def test_private_start_shows_the_first_session_menu(db_session):
+    """The private /start opens the screens a solo player can play today."""
     _text, kwargs = await _run_private_start()
     markup = kwargs.get("reply_markup")
     assert markup is not None
     buttons = _flatten(markup)
-    assert len(buttons) == 1
+    assert len(buttons) > 1
+    callbacks = [b.callback_data for b in buttons if b.callback_data]
+    for callback in FIRST_SESSION_CALLBACKS:
+        assert callback in callbacks
 
 
 @pytest.mark.asyncio
-async def test_private_start_button_is_url_add_to_group(db_session):
-    """The single private /start button is the add-to-group URL deep link."""
+async def test_private_start_keeps_add_to_group_as_the_last_row(db_session):
+    """«افزودن سیب به گروه» is still offered — but it is the goal, not a wall."""
     _text, kwargs = await _run_private_start()
-    button = _flatten(kwargs["reply_markup"])[0]
+    markup = kwargs["reply_markup"]
+    last_row = markup.inline_keyboard[-1]
+    assert len(last_row) == 1
+    button = last_row[0]
     assert button.text == ADD_TO_GROUP_LABEL
     assert button.url == f"https://t.me/{settings.BOT_USERNAME}?startgroup=true"
-    assert button.url.startswith("https://t.me/")
-    # It is a URL button, not a callback button.
     assert button.callback_data is None
 
 
 @pytest.mark.asyncio
-async def test_private_start_does_not_contain_removed_buttons(db_session):
-    """None of the eight removed main-menu buttons reappear on /start."""
+async def test_private_start_has_no_channel_row_for_members(db_session):
+    """A verified member sees the menu only — no channel prompt."""
     _text, kwargs = await _run_private_start()
-    buttons = _flatten(kwargs["reply_markup"])
-    texts = [b.text for b in buttons]
-    callbacks = [b.callback_data for b in buttons if b.callback_data]
-    for label in REMOVED_BUTTON_LABELS:
-        assert label not in texts
-    for callback in REMOVED_BUTTON_CALLBACKS:
-        assert callback not in callbacks
+    labels = [b.text for b in _flatten(kwargs["reply_markup"])]
+    assert all("عضویت در کانال" not in label for label in labels)
 
 
 # ---------------------------------------------------------------------------
@@ -279,21 +268,27 @@ async def test_all_start_texts_under_1024_chars(db_session):
 
 
 # ---------------------------------------------------------------------------
-# Supplementary: the gated /start path shows the same one-button welcome
+# Supplementary: verifying the channel never "unlocks" the game
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_membership_gate_welcome_matches_private_start(db_session):
-    """The membership gate (only reachable from /start) resolves into the
-    SAME Ovarya welcome with the SAME single add-to-group button."""
+async def test_membership_check_reopens_the_first_session_menu(db_session):
+    """Verifying the channel re-renders the SAME menu without the join row.
+
+    The gate is soft now: the menu (and the starter pack) are available before
+    verification, so a successful check only removes «📢 عضویت در کانال سیب».
+    """
     gate_text, gate_kwargs = await _run_membership_gate_welcome(first_name="Sima")
-    start_text, start_kwargs = await _run_private_start(first_name="Sima")
-    assert gate_text == start_text
+
+    assert "اواریا" in gate_text
+    assert SUPPORT_HANDLE in gate_text
 
     gate_markup = gate_kwargs.get("reply_markup")
     assert gate_markup is not None
-    buttons = _flatten(gate_markup)
-    assert len(buttons) == 1
-    assert buttons[0].text == ADD_TO_GROUP_LABEL
-    assert buttons[0].url == f"https://t.me/{settings.BOT_USERNAME}?startgroup=true"
+    callbacks = [b.callback_data for b in _flatten(gate_markup) if b.callback_data]
+    for callback in FIRST_SESSION_CALLBACKS:
+        assert callback in callbacks
+    labels = [b.text for b in _flatten(gate_markup)]
+    assert all("عضویت در کانال" not in label for label in labels)
+    assert labels[-1] == ADD_TO_GROUP_LABEL

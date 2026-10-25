@@ -103,28 +103,66 @@ def get_private_welcome_keyboard(bot_username: str) -> InlineKeyboardMarkup:
     return keyboard
 
 
-def get_private_start_keyboard(bot_username: str) -> InlineKeyboardMarkup:
-    """Private /start keyboard (Phase A3): exactly ONE action.
+def get_private_start_keyboard(
+    bot_username: str, gate_channel_link: Optional[str] = None
+) -> InlineKeyboardMarkup:
+    """Private /start keyboard: the REAL first-session menu.
 
-    The /start funnel points new players at a group — that is where the game
-    lives. The full private menu (garden, cards, shop, wiki, trading, chest,
-    profile, guide) stays reachable via «سیب منو» / ``main_menu``
-    (``get_private_welcome_keyboard`` is unchanged and remains the private
-    main-menu keyboard).
+    Replaces the Phase A3 "exactly one button" funnel. That funnel showed a
+    brand-new player exactly one action — «افزودن سیب به گروه» — which is a
+    dead end for anybody who is not an admin of a group: they had no card, no
+    apples and no screen to open. The main menu worked but only behind the
+    «سیب منو» phrase, which nobody types.
+
+    Now /start opens the loop a solo player can actually play today:
+
+    * «🎁 صندوق روزانه» — a free reward in the first session;
+    * «🌳 باغ من» / «🛒 فروشگاه» / «🎴 کارت‌های من» — the base-building loop;
+    * «👤 پروفایل من» / «📖 راهنما» — identity and help;
+    * «➕ افزودن سیب به گروه» — LAST: still the goal, no longer the wall.
+
+    ``gate_channel_link`` appends the official-channel row when the optional
+    membership gate is on and the player has not joined yet (soft gate: it
+    never blocks the menu).
     """
     add_group_url = f"https://t.me/{bot_username}?startgroup=true"
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
+    rows: list[list[InlineKeyboardButton]] = [
+        [
+            success_button(text="🎁 صندوق روزانه", callback_data="apple_chest"),
+            primary_button(text="🌳 باغ من", callback_data="apple_garden"),
+        ],
+        [
+            primary_button(text="🎴 کارت‌های من", callback_data="apple_cards"),
+            primary_button(text="🛒 فروشگاه", callback_data="apple_shop"),
+        ],
+        [
+            primary_button(text="👤 پروفایل من", callback_data="apple_profile"),
+            primary_button(text="📖 راهنما", callback_data="help_menu"),
+        ],
+    ]
+    if gate_channel_link:
+        # Soft gate row: join, then verify. «بررسی» removes the row; it never
+        # unlocks anything, because the menu above is already usable.
+        rows.append(
             [
                 InlineKeyboardButton(
-                    text="➕ افزودن سیب به گروه",
-                    url=add_group_url,
+                    text="📢 عضویت در کانال سیب",
+                    url=gate_channel_link,
                     style="primary",
-                )
+                ),
+                success_button(text="✅ بررسی", callback_data="check_membership"),
             ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="➕ افزودن سیب به گروه",
+                url=add_group_url,
+                style="primary",
+            )
         ]
     )
-    return keyboard
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def get_group_welcome_keyboard() -> InlineKeyboardMarkup:
