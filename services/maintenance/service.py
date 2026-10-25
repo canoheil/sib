@@ -4,6 +4,7 @@ import asyncio
 import json
 import time
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 
 from sib.core.logging import logger
@@ -40,6 +41,20 @@ class MaintenanceService:
     """Runs existing periodic database maintenance and timeout recovery."""
 
     INTERVAL_SECONDS = 30
+
+    #: Minimum gap between two reminder sweeps (the DM itself is gated
+    #: per player inside ``services/reminders.py``; this only bounds the
+    #: candidate query on a 30-second maintenance tick).
+    REMINDER_SWEEP_INTERVAL_SECONDS = 600
+    _last_reminder_sweep_at: Optional[datetime] = None
+
+    @classmethod
+    def _reminder_sweep_due(cls, now: datetime) -> bool:
+        last = cls._last_reminder_sweep_at
+        if last is None:
+            return True
+        return (now - last).total_seconds() >= cls.REMINDER_SWEEP_INTERVAL_SECONDS
+
     _bot = None
 
     @classmethod
@@ -559,6 +574,23 @@ class MaintenanceService:
             await cls.run_marriage_love_cycle()
         except Exception:
             logger.exception("Marriage/Love maintenance cycle failed")
+
+        # Come-back reminders (services/reminders.py): at most one short DM
+        # per player per day, only inside the local evening window, only when
+        # there is something real to say (chest still closed / fruit ready).
+        # Its own guard + its own transactions: a slow Telegram call here can
+        # never delay or roll back gameplay work committed above. The sweep
+        # itself is throttled - a 30s tick must not scan the user table 2,880
+        # times a day for a handful of evening messages.
+        try:
+            from sib.services.reminders import ReminderService
+
+            sweep_now = datetime.now(timezone.utc)
+            if cls._reminder_sweep_due(sweep_now):
+                cls._last_reminder_sweep_at = sweep_now
+                await ReminderService.run_tick(cls._bot, now=sweep_now)
+        except Exception:
+            logger.exception("Maintenance task failed: come-back reminders")
 
         # V2 is the only production invasion cycle. The feature-flag read is
         # inside the guard too: it must never be able to abort the cycle.

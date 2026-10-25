@@ -58,6 +58,37 @@ Alembic migrations (`database/`).
 - Shift state is persisted (migration `043_apple_mine_shift`), so a
   restart does not lose an in-progress shift.
 
+### Come-back loop (streak and reminders)
+
+- The **daily chest streak** is derived from `daily_chest_claims`, so it
+  needs no new table: consecutive UTC days up to today (or up to
+  yesterday while today is still unclaimed). Milestones pay extra
+  Apples through the wallet ledger, exactly once per day
+  (`daily_streak:<user>:<day>`), inside the chest transaction
+  (`services/daily_streak.py`). The ladder is one config value,
+  `daily_streak_rewards` (`{"3": 30, "7": 100, "14": 250}` by default);
+  the chest screen and the chest result both name the live streak.
+- **Reminders** are the only messages sent without being asked
+  (`services/reminders.py`): at most one short DM per player per day,
+  only inside the local evening window (Asia/Tehran,
+  `reminders_window_start_hour`..`reminders_window_end_hour`), and only
+  when there is something real to say — today's chest is still closed
+  after `reminders_chest_after_hour`, or a plot has fruit ready. The
+  sweep runs from the maintenance cycle, throttled to one candidate scan
+  per 10 minutes.
+- Safety rails, all enforced in code: `reminders_enabled` (built-in
+  default **off**, seeded **on** by migration `063_reminders`),
+  `reminders_min_gap_hours` (20), `reminders_batch_size` (25 per sweep),
+  banned/bot/inactive accounts filtered in SQL, `TelegramForbiddenError`
+  (player blocked the bot) recorded in `user_reminder_states.blocked_at`
+  and not retried until the player switches reminders back on (pressing
+  the switch proves the bot can reach them again, so the stale block is
+  cleared), and any other delivery failure is *not* recorded as sent so
+  the player keeps their turn.
+- The player can switch reminders off from the profile
+  («🔔/🔕 یادآوری‌ها», `handlers/reminders.py`); the label always shows
+  the current state and the toggle answers with an alert.
+
 ### First session (starter pack and the private home screen)
 
 - A brand-new account is never created empty. `/start` pays a

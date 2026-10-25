@@ -186,3 +186,5 @@ __all__ += [
     "HalloweenLootDropClaim",
 ]
 
+from sib.database.models.reminder import UserReminderState
+__all__ += ["UserReminderState"]

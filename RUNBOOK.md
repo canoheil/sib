@@ -167,6 +167,34 @@ journalctl -u sib | grep "EVENT:SYSTEM_RESTART_RECOVERY"
 - **توجه:** بازیکنان قدیمی هم در `/start` بعدی‌شان هدیه را می‌گیرند (بازگشت‌شان
   خواسته است). اگر نمی‌خواهید، پیش از دیپلوی بگویید تا شرط «فقط حساب تازه» اضافه شود.
 
+### استریک روزانه و یادآوری‌ها (پچ بازگشت بازیکن)
+
+**استریک صندوق روزانه**
+- از ردیف‌های `daily_chest_claims` محاسبه می‌شود؛ جدول یا ستون جدیدی ندارد.
+- پله‌ها در `system_config.daily_streak_rewards` است (پیش‌فرض `{"3": 30, "7": 100, "14": 250}`).
+- هر پاداش با کلید `daily_streak:<user_id>:<day>` پرداخت می‌شود؛ دستکاری دستی این ردیف باعث پرداخت دوباره می‌شود.
+
+**یادآوری‌ها** (تنها پیام‌هایی که ربات بدون درخواست می‌فرستد)
+- مایگریشن `063_reminders` جدول `user_reminder_states` و کلیدهای تنظیمات را می‌سازد.
+- خاموش/روشن کردن بدون دیپلوی:
+  ```sql
+  UPDATE system_config SET value = 'false' WHERE `key` = 'reminders_enabled';
+  ```
+  (یا `true` برای روشن)
+- سقف‌ها: حداکثر یک پیام به هر بازیکن در `reminders_min_gap_hours` (پیش‌فرض ۲۰ ساعت)،
+  حداکثر `reminders_batch_size` (۲۵) پیام در هر اسکن، و فقط بین ساعت‌های
+  `reminders_window_start_hour` تا `reminders_window_end_hour` به وقت تهران.
+- کسانی که بات را بلاک کرده‌اند در `user_reminder_states.blocked_at` ثبت می‌شوند و پیام نمی‌گیرند
+  تا وقتی خودشان از «پروفایل → 🔔 یادآوری‌ها» دوباره روشن کنند (فشردن همان دکمه ثابت می‌کند
+  بات می‌تواند به آن‌ها پیام بدهد، پس `blocked_at` صفر می‌شود).
+- بازیکن از «پروفایل → 🔔 یادآوری‌ها» می‌تواند خودش خاموش کند.
+- بررسی وضعیت:
+  ```sql
+  SELECT COUNT(*) FROM user_reminder_states WHERE opted_out = 1;
+  SELECT COUNT(*) FROM user_reminder_states WHERE blocked_at IS NOT NULL;
+  SELECT last_kind, COUNT(*) FROM user_reminder_states GROUP BY last_kind;
+  ```
+
 ---
 
 ## ۶. ایجاد و مدیریت کمپین‌های تبلیغاتی (Monetization & Ads)

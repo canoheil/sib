@@ -43,6 +43,7 @@ from sib.handlers.daily_chest import router as daily_chest_router
 from sib.handlers.apple_mine import router as apple_mine_router
 from sib.handlers.halloween import router as halloween_router
 from sib.handlers.transfers import router as transfers_router
+from sib.handlers.reminders import router as reminders_router
 
 
 def register_all_handlers(dp: Dispatcher) -> None:
@@ -76,6 +77,7 @@ def register_all_handlers(dp: Dispatcher) -> None:
     dp.include_router(friendly_router)
     dp.include_router(marriage_router)
     dp.include_router(friendship_router)
+    dp.include_router(reminders_router)
     dp.include_router(sib_hug_router)
     dp.include_router(sib_kiss_router)
     dp.include_router(daily_chest_router)

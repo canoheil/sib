@@ -319,6 +319,11 @@ class ChestClaimResult:
     claim: Optional[DailyChestClaim] = None
     character: Optional[Character] = None
     card: Optional[PlayerCard] = None
+    # Daily streak (derived from the claim ledger, see services/daily_streak).
+    streak_days: int = 0
+    streak_bonus: int = 0
+    streak_next_milestone: Optional[int] = None
+    streak_days_to_next: Optional[int] = None
 
 
 def format_remaining(until: datetime, now: datetime) -> str:
@@ -378,6 +383,31 @@ def format_reward_line(
     return line
 
 
+def format_streak_line(
+    days: int,
+    *,
+    bonus: int = 0,
+    next_milestone: Optional[int] = None,
+    days_to_next: Optional[int] = None,
+) -> str:
+    """The streak line: what was paid now, and what tomorrow is worth.
+
+    Empty for a player with no streak, so a first-day chest stays a plain
+    reward instead of pretending a streak exists.
+    """
+    if days <= 0:
+        return ""
+    line = f"🔥 **استریک {fa_digits(days)} روزه!**"
+    if bonus > 0:
+        line += f" پاداش استریک: **{fa_digits(bonus)} سیب** 🍎"
+    elif next_milestone is not None and days_to_next is not None:
+        line += (
+            f" {fa_digits(days_to_next)} روز دیگه تا پاداش "
+            f"{fa_digits(next_milestone)} روزه."
+        )
+    return line + "\nفردا هم بیا تا استریکت نشکنه."
+
+
 def format_open_result(result: ChestClaimResult, now: datetime) -> str:
     """Full result screen after a successful open."""
     reward_line = format_reward_line(
@@ -388,9 +418,17 @@ def format_open_result(result: ChestClaimResult, now: datetime) -> str:
         character=result.character,
         card=result.card,
     )
+    streak_line = format_streak_line(
+        result.streak_days,
+        bonus=result.streak_bonus,
+        next_milestone=result.streak_next_milestone,
+        days_to_next=result.streak_days_to_next,
+    )
+    streak_block = f"{streak_line}\n\n" if streak_line else ""
     return (
         "🎁 **صندوقچه گنج روزانه سیب**\n\n"
         f"{reward_line}\n\n"
+        f"{streak_block}"
         f"{format_next_reset(result.next_reset, now)}"
     )
 
@@ -693,6 +731,20 @@ class DailyChestService:
                 session, user_id=user_id, character_id=character.id
             )
 
+        # Daily streak: derived from this ledger, paid in the SAME transaction
+        # as the reward (a failed opening rolls back both, and the milestone
+        # credit is idempotent per day). A streak failure must never cost the
+        # player the chest itself, so it is isolated.
+        from sib.services.daily_streak import DailyStreakService
+
+        streak = None
+        try:
+            streak = await DailyStreakService.summary(
+                session, user_id, day=day, pay_bonus=True
+            )
+        except Exception:  # pragma: no cover - defensive
+            logger.exception("daily streak failed user=%s day=%s", user_id, day)
+
         log_event(
             Events.DAILY_CHEST_CLAIMED,
             {
@@ -701,6 +753,8 @@ class DailyChestService:
                 "reward_type": reward_type,
                 "quantity": claim.quantity,
                 "level_bonus": level_bonus,
+                "streak": streak.days if streak is not None else 0,
+                "streak_bonus": streak.bonus_apples if streak is not None else 0,
             },
         )
         return ChestClaimResult(
@@ -713,6 +767,14 @@ class DailyChestService:
             claim=claim,
             character=character,
             card=card,
+            streak_days=streak.days if streak is not None else 0,
+            streak_bonus=streak.bonus_apples if streak is not None else 0,
+            streak_next_milestone=(
+                streak.next_milestone if streak is not None else None
+            ),
+            streak_days_to_next=(
+                streak.days_to_next if streak is not None else None
+            ),
         )
 
     # ------------------------------------------------------------------

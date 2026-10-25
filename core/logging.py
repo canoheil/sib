@@ -8,6 +8,8 @@ from typing import Any, Dict, Optional
 class Events:
     """Standard structured audit events for sib bot."""
     USER_REGISTERED = "USER_REGISTERED"
+    REMINDERS_SENT = "REMINDERS_SENT"
+    DAILY_STREAK = "DAILY_STREAK"
     GROUP_REGISTERED = "GROUP_REGISTERED"
     MEMBERSHIP_VERIFIED = "MEMBERSHIP_VERIFIED"
     MEMBERSHIP_REJECTED = "MEMBERSHIP_REJECTED"

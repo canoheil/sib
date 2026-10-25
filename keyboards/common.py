@@ -396,8 +396,15 @@ def get_cards_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
 
 
-def get_profile_keyboard(origin: Optional[str] = None) -> InlineKeyboardMarkup:
+def get_profile_keyboard(
+    origin: Optional[str] = None, *, reminders_on: Optional[bool] = None
+) -> InlineKeyboardMarkup:
     """'پروفایل من' panel keyboard (contextual Back).
+
+    ``reminders_on`` adds the «🔔/🔕 یادآوری‌ها» switch with the player's
+    CURRENT state in the label. ``None`` omits the row entirely, so every
+    call site that has no reminder state (and every test that predates the
+    switch) keeps the previous keyboard.
 
     The profile is the ONE home of card ownership features: My Cards and
     Card Trading live here (they are no longer duplicated in the group main
@@ -451,6 +458,15 @@ def get_profile_keyboard(origin: Optional[str] = None) -> InlineKeyboardMarkup:
             ],
         ]
     )
+    if reminders_on is not None:
+        label = "🔔 یادآوری‌ها: روشن" if reminders_on else "🔕 یادآوری‌ها: خاموش"
+        keyboard.inline_keyboard.append(
+            [
+                success_button(label, "reminders_toggle")
+                if reminders_on
+                else primary_button(label, "reminders_toggle")
+            ]
+        )
     keyboard.inline_keyboard.extend(nav_back_row(back_label_for(origin), back_target(origin)))
     return keyboard
 
