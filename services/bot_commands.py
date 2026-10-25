@@ -30,6 +30,7 @@ PUBLIC_COMMANDS: tuple[tuple[str, str], ...] = (
     ("shop", "فروشگاه"),
     ("trade", "مبادله کارت"),
     ("leaderboard", "جدول رتبه‌بندی"),
+    ("league", "لیگ هفتگی گروه‌ها"),
     ("wiki", "ویکی کاراکترها"),
     ("help", "راهنمای بازی"),
 )

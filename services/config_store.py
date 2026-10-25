@@ -376,6 +376,17 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     # is DERIVED from daily_chest_claims (services/daily_streak.py), so the
     # whole ladder is this one config value: rebalance it without a deploy.
     "daily_streak_rewards": {"3": 30, "7": 100, "14": 250},
+    # Weekly group league (services/group_league.py). Scores are DERIVED from
+    # matches, so the whole feature is these four keys. Built-in default is
+    # OFF so a checkout without migration 064 never pays a prize; the
+    # migration seeds league_enabled=true for a real install.
+    "league_enabled": False,
+    # Apples per PARTICIPATING player of the rank (not per group).
+    "league_rewards": {"1": 300, "2": 150, "3": 100},
+    "league_min_points": 3,
+    # Never finalize a week that started before this key (the migration seeds
+    # it with its own week, so the first deploy pays no retroactive prize).
+    "league_first_week": "",
     # "بغل سیبی" (Sib Hug): both participants receive the amount; only the
     # sender's successful hugs start the cooldown (see services/sib_hug.py).
     "sib_hug_amount": 10,

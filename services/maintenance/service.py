@@ -55,6 +55,18 @@ class MaintenanceService:
             return True
         return (now - last).total_seconds() >= cls.REMINDER_SWEEP_INTERVAL_SECONDS
 
+    #: The weekly league only needs a look once an hour (it finalizes at most
+    #: one week, and only after that week has ended).
+    LEAGUE_SWEEP_INTERVAL_SECONDS = 3600
+    _last_league_sweep_at: Optional[datetime] = None
+
+    @classmethod
+    def _league_sweep_due(cls, now: datetime) -> bool:
+        last = cls._last_league_sweep_at
+        if last is None:
+            return True
+        return (now - last).total_seconds() >= cls.LEAGUE_SWEEP_INTERVAL_SECONDS
+
     _bot = None
 
     @classmethod
@@ -591,6 +603,24 @@ class MaintenanceService:
                 await ReminderService.run_tick(cls._bot, now=sweep_now)
         except Exception:
             logger.exception("Maintenance task failed: come-back reminders")
+
+        # Weekly group league (services/group_league.py): pay every finished
+        # week that is still unsettled (bounded look-back, so an outage never
+        # drops a prize), once, and tell the podium's groups. Its own guard,
+        # its own session and its own transactions - a league problem can
+        # never affect gameplay work. Throttled to once an hour: a settled
+        # week costs one primary-key lookup.
+        try:
+            from sib.services.group_league import GroupLeagueService
+
+            league_now = datetime.now(timezone.utc)
+            if cls._league_sweep_due(league_now):
+                cls._last_league_sweep_at = league_now
+                await GroupLeagueService.finalize_due_weeks(
+                    cls._bot, now=league_now
+                )
+        except Exception:
+            logger.exception("Maintenance task failed: group league")
 
         # V2 is the only production invasion cycle. The feature-flag read is
         # inside the guard too: it must never be able to abort the cycle.

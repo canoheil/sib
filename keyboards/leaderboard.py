@@ -24,6 +24,9 @@ def get_leaderboard_keyboard(is_group: bool = True) -> InlineKeyboardMarkup:
     refresh_row = [primary_button(text="🔄 بروزرسانی", callback_data="show_leaderboard")]
     if is_group:
         refresh_row.append(primary_button(text="📊 آمار گروه ما", callback_data="group_win_stats"))
+    buttons.append(
+        [primary_button(text="🏆 لیگ هفته", callback_data="league_open")]
+    )
     buttons.append(refresh_row)
     buttons.append(
         [danger_button(text="↩️ بازگشت به منوی اصلی", callback_data="main_menu")]

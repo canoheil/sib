@@ -89,6 +89,37 @@ Alembic migrations (`database/`).
   («🔔/🔕 یادآوری‌ها», `handlers/reminders.py`); the label always shows
   the current state and the toggle answers with an alert.
 
+### Weekly group league (the reason to play *this* week)
+
+- The all-time leaderboard ranks by total wins, so a group that arrives
+  late can never catch up and stops trying. `/league` («🏆 لیگ هفته»)
+  resets every **Saturday 00:00 Asia/Tehran** and ranks groups by the
+  week's points: **win = 3, draw = 1, loss = 0**
+  (`services/group_league.py`).
+- Nothing on the hot path changed: the score is **derived** from
+  `matches` (normal, non-bot, finished, inside the week), exactly like
+  the streak is derived from the chest ledger. Bot matches and friendly
+  matches never count, so the table cannot be farmed.
+- Tie-breaks are deterministic — points, wins, draws, then group id —
+  and never rely on `GROUP BY` ordering.
+- Payout: every player who **actually played** for a top-3 group that
+  week is paid (not every member — presence is not participation), with
+  one auditable wallet transaction per player keyed
+  `league:<week>:<group>:<user>`. The ladder is one config value,
+  `league_rewards` (`{"1": 300, "2": 150, "3": 100}` by default), and a
+  group must reach `league_min_points` (3) to be paid at all, so a quiet
+  week has no champion instead of a 0-point winner.
+- `group_league_weeks` (PK `week_key`) is the atomic "this week is paid"
+  claim and `group_league_awards` is the frozen podium; both are created
+  by migration `064_group_league`. `league_first_week` is seeded with
+  the migration's own week, so the first deploy never pays a retroactive
+  prize for a week that ended before the league existed.
+- The maintenance cycle finalizes the week that just ended, once an hour
+  behind its own `try/except`, and announces the result in the podium's
+  groups (best effort — being removed from a group is not an error).
+- Kill switch: `league_enabled` (built-in default **off**, seeded **on**
+  by the migration).
+
 ### First session (starter pack and the private home screen)
 
 - A brand-new account is never created empty. `/start` pays a
