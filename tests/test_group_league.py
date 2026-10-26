@@ -707,6 +707,7 @@ def _row(rank, group_id, title, points=3, wins=1, draws=0, losses=0, matches=1):
         draws=draws,
         losses=losses,
         matches=matches,
+        match_points=points,
     )
 
 
@@ -724,7 +725,22 @@ def test_panel_shows_the_table_the_ladder_and_our_rank():
     assert "🥇" in text and "🥈" in text
     assert "رتبهٔ **۲**" in text
     assert "۳۰۰ سیب" in text  # the ladder
-    assert "امتیاز از چهار جا می‌آد" in text
+    assert "فعالیت دوئل" in text
+
+
+def test_zero_score_group_status_is_not_repeated():
+    group = _row(1, -100, "گروه ما", points=0, wins=0, draws=0, losses=0, matches=0)
+    text = format_panel(
+        now=EVENING_UTC,
+        key=CURRENT_WEEK,
+        rows=[group],
+        own=group,
+        rewards={},
+    )
+
+    assert "📍 گروه شما: رتبهٔ **۱** · **۰** امتیاز" in text
+    assert "هنوز امتیازی جمع نشده" not in text
+    assert "۰ بازی گروهی" not in text
 
 
 def test_private_panel_has_no_own_group_line_but_the_table():
@@ -742,8 +758,8 @@ def test_private_panel_has_no_own_group_line_but_the_table():
     assert "قهرمان" in text
 
 
-def test_an_empty_week_invites_the_first_match():
-    assert "اولین نبرد" in format_table([])
+def test_an_empty_week_says_no_scoring_activity_has_been_recorded():
+    assert "فعالیت امتیازآوری ثبت نشده" in format_table([])
 
 
 def test_group_titles_cannot_break_the_parse_mode():
@@ -762,7 +778,7 @@ def test_open_weeks_are_counted_down_in_persian():
         own=None,
         rewards={},
     )
-    assert "تا پایان لیگ این هفته" in text
+    assert "تا پایان" in text
     assert not any(ch in "0123456789" for ch in text.split("\n")[2])
 
 

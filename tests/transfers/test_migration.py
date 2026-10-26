@@ -99,10 +99,10 @@ def test_migration_062_revises_061_and_is_the_only_head():
     parents = [parent for parent in revisions.values() if parent]
     assert len(parents) == len(set(parents)), "forked migration history"
     # 062 is no longer the head: 063_reminders (come-back reminders) and then
-    # 064_group_league (weekly group league) and 065_league_points (its
-    # multi-source scoring table) revise it, and the history stays linear with
-    # exactly one head.
-    assert set(revisions) - set(parents) == {"065_league_points"}
+    # 064_group_league (weekly group league), 065_league_points (its
+    # multi-source scoring table), and 066_daily_channel_digest revise it;
+    # the history stays linear with exactly one head.
+    assert set(revisions) - set(parents) == {"066_daily_channel_digest"}
 
 
 # ---------------------------------------------------------------------------

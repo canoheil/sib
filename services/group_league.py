@@ -1094,49 +1094,59 @@ PANEL_TITLE = f"{MERIT_BADGE} **لیگ هفتگی گروه‌ها**"
 def format_countdown(now: datetime, key: str) -> str:
     remaining = time_left(now, key)
     if remaining.total_seconds() <= 0:
-        return "لیگ این هفته تموم شده؛ نتایج به‌زودی نهایی می‌شه."
+        return "⏳ لیگ این هفته به پایان رسیده."
+
     days = remaining.days
-    hours = remaining.seconds // 3600
-    if days:
-        return f"⏳ {fa_digits(days)} روز و {fa_digits(hours)} ساعت تا پایان لیگ این هفته."
-    return f"⏳ {fa_digits(hours)} ساعت تا پایان لیگ این هفته."
+    hours, remainder = divmod(remaining.seconds, 3600)
+    minutes = remainder // 60
+    if days and hours:
+        label = f"{fa_digits(days)} روز و {fa_digits(hours)} ساعت"
+    elif days:
+        label = f"{fa_digits(days)} روز"
+    elif hours and minutes:
+        label = f"{fa_digits(hours)} ساعت و {fa_digits(minutes)} دقیقه"
+    elif hours:
+        label = f"{fa_digits(hours)} ساعت"
+    else:
+        label = f"{fa_digits(max(1, minutes))} دقیقه"
+    return f"⏳ {label} تا پایان"
 
 
 def format_table(rows: Sequence[LeagueRow], *, limit: int = LEAGUE_TABLE_LIMIT) -> str:
     if not rows:
-        return "این هفته هنوز هیچ بازی واقعی‌ای ثبت نشده. اولین نبرد رو شروع کن!"
+        return "این هفته هنوز فعالیت امتیازآوری ثبت نشده."
+
     medals = {1: "🥇", 2: "🥈", 3: "🥉"}
     lines = []
     for row in rows[:limit]:
         badge = medals.get(row.rank, f"**{fa_digits(row.rank)}.**")
-        record = f"{fa_digits(row.wins)} برد، {fa_digits(row.draws)} مساوی"
-        if row.wars:
-            record += f"، {fa_digits(row.war_wins)} جنگ‌برد"
-        lines.append(
+        line = (
             f"{badge} **{escape_markdown(row.title)}** — "
-            f"{fa_digits(row.points)} امتیاز ({record})"
+            f"**{fa_digits(row.points)}** امتیاز"
         )
+        if any((row.match_points, row.war_points, row.mine_points, row.duel_points)):
+            line += f" · {format_breakdown(row)}"
+        lines.append(line)
     return "\n".join(lines)
 
 
 def format_breakdown(row: LeagueRow) -> str:
-    """«🎮 بازی ۱۸ + ⚔️ جنگ ۱۹ + ⛏ معدن ۲ + 🥊 دوئل ۴» — where points came from.
-
-    Only the sources that actually scored are shown, so a pure-match week
-    stays one short line instead of four empty ones.
-    """
+    """Show only the scoring sources that contributed to this group's total."""
     parts = []
     if row.match_points:
-        parts.append(f"🎮 بازی {fa_digits(row.match_points)}")
+        parts.append(f"🎮 نبرد {fa_digits(row.match_points)}")
     if row.war_points:
-        parts.append(f"⚔️ جنگ {fa_digits(row.war_points)}")
+        war = f"⚔️ جنگ {fa_digits(row.war_points)}"
+        if row.war_wins:
+            war += f" ({fa_digits(row.war_wins)} برد)"
+        parts.append(war)
     if row.mine_points:
         parts.append(f"⛏ معدن {fa_digits(row.mine_points)}")
     if row.duel_points:
         parts.append(f"🥊 دوئل {fa_digits(row.duel_points)}")
     if not parts:
         return "هنوز امتیازی جمع نشده"
-    return " + ".join(parts)
+    return " · ".join(parts)
 
 
 def format_reward_ladder(rewards: dict[int, int], champion_card_name: str = "") -> str:
@@ -1150,13 +1160,12 @@ def format_reward_ladder(rewards: dict[int, int], champion_card_name: str = "") 
         return ""
     lines = []
     if parts:
-        lines.append(
-            "🎁 جایزهٔ هر بازیکنِ بازی‌کردهٔ گروه‌های برتر: " + " | ".join(parts)
-        )
+        lines.append("🎁 پاداش هر بازیکنِ شرکت‌کننده در گروه‌های برتر:")
+        lines.append(" · ".join(parts))
     if champion_card_name:
         lines.append(
-            f"🏆 کارت قهرمان (**{escape_markdown(champion_card_name)}**) هم "
-            "فقط برای بازیکن‌های گروه اول — یک‌بار برای همیشه."
+            f"🏆 کارت **{escape_markdown(champion_card_name)}** فقط به "
+            "بازیکن‌های شرکت‌کننده در گروه اول می‌رسد؛ هر بازیکن فقط یک‌بار."
         )
     return "\n".join(lines)
 
@@ -1179,14 +1188,19 @@ def format_panel(
 
     if is_group:
         if own is not None:
-            lines.append(
-                f"📍 گروه ما: رتبهٔ **{fa_digits(own.rank)}** با "
-                f"**{fa_digits(own.points)}** امتیاز "
-                f"({fa_digits(own.matches)} بازی)"
+            match_count = (
+                f" · {fa_digits(own.matches)} بازی گروهی" if own.matches else ""
             )
-            lines.append(f"└ {format_breakdown(own)}")
+            lines.append(
+                f"📍 گروه شما: رتبهٔ **{fa_digits(own.rank)}** · "
+                f"**{fa_digits(own.points)}** امتیاز{match_count}"
+            )
+            if any(
+                (own.match_points, own.war_points, own.mine_points, own.duel_points)
+            ):
+                lines.append(f"└ سهم امتیاز: {format_breakdown(own)}")
         else:
-            lines.append("📍 گروه ما این هفته هنوز بازی‌ای نکرده.")
+            lines.append("📍 گروه شما هنوز در جدول این هفته نیست.")
         lines.append("")
 
     lines.append("**جدول این هفته**")
@@ -1213,15 +1227,13 @@ def format_panel(
     lines.extend(
         [
             "",
-            "ℹ️ امتیاز از چهار جا می‌آد: نبرد گروهی (برد ۳، مساوی ۱)، جنگ "
-            "گروه‌ها (برد ۱۰ + دمیج)، معدن سیب داخل گروه، و دوئل اعضا. "
-            "برد از بات و بازی دوستانه حساب نمی‌شه.",
+            "ℹ️ امتیاز از نبرد گروهی، جنگ، معدن و فعالیت دوئل جمع می‌شود؛ "
+            "بازی بات و دوستانه حساب نمی‌شود.",
         ]
     )
     if min_points > 0:
         lines.append(
-            f"ℹ️ برای گرفتن جایزه، گروه باید حداقل {fa_digits(min_points)} "
-            "امتیاز در همین هفته بگیره."
+            f"🎯 شرط دریافت جایزه: حداقل {fa_digits(min_points)} امتیاز در همین هفته."
         )
     return "\n".join(lines)
 

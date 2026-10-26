@@ -54,6 +54,7 @@ from sib.database.models.marriage import (
 )
 from sib.database.models.friendship import AppleFriendship, FriendshipStatus
 from sib.database.models.daily_chest import DailyChestClaim
+from sib.database.models.daily_channel_post import DailyChannelPost
 from sib.database.models.transfer import (
     PendingTransfer,
     PendingTransferState,
@@ -123,6 +124,7 @@ __all__ = [
     "AppleFriendship",
     "FriendshipStatus",
     "DailyChestClaim",
+    "DailyChannelPost",
     "TransferLog",
     "PendingTransfer",
     "PendingTransferState",

@@ -28,6 +28,7 @@ from sib.handlers.apple_battle import router as apple_battle_router
 from sib.handlers.admin_meta import router as admin_meta_router
 from sib.handlers.assets import router as assets_router
 from sib.handlers.admin_center import router as admin_center_router
+from sib.handlers.admin_daily_digest import router as admin_daily_digest_router
 from sib.handlers.friendly import router as friendly_router
 from sib.handlers.marriage import router as marriage_router
 from sib.handlers.friendship import router as friendship_router
@@ -75,6 +76,7 @@ def register_all_handlers(dp: Dispatcher) -> None:
     dp.include_router(admin_meta_router)
     dp.include_router(assets_router)
     dp.include_router(admin_center_router)
+    dp.include_router(admin_daily_digest_router)
     dp.include_router(party_router)
     dp.include_router(friendly_router)
     dp.include_router(marriage_router)

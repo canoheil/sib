@@ -409,6 +409,12 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     # string disables the card without touching the Apple prizes; the card
     # itself is ``shop_enabled: false`` so the league is its only source.
     "league_champion_card_code": "hero",
+    # One compact, activity-backed official-channel digest per Tehran day.
+    # Migration 066 enables it for existing installs; the code default stays
+    # OFF for unmigrated/test databases. A blank target uses OFFICIAL_CHANNEL_ID.
+    "daily_digest_enabled": False,
+    "daily_digest_hour": 20,
+    "daily_digest_channel_id": "",
     # "بغل سیبی" (Sib Hug): both participants receive the amount; only the
     # sender's successful hugs start the cooldown (see services/sib_hug.py).
     "sib_hug_amount": 10,

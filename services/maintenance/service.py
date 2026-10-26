@@ -3,7 +3,7 @@
 import asyncio
 import json
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 
@@ -66,6 +66,19 @@ class MaintenanceService:
         if last is None:
             return True
         return (now - last).total_seconds() >= cls.LEAGUE_SWEEP_INTERVAL_SECONDS
+
+    #: The channel digest is due once an evening; one-minute checks are enough
+    #: to catch 20:00 Tehran without querying config on every 30s tick.
+    DAILY_DIGEST_SWEEP_INTERVAL_SECONDS = 60
+    _last_daily_digest_sweep_at: Optional[datetime] = None
+    _last_daily_digest_decision_day: Optional[date] = None
+
+    @classmethod
+    def _daily_digest_sweep_due(cls, now: datetime) -> bool:
+        last = cls._last_daily_digest_sweep_at
+        if last is None:
+            return True
+        return (now - last).total_seconds() >= cls.DAILY_DIGEST_SWEEP_INTERVAL_SECONDS
 
     _bot = None
 
@@ -725,6 +738,31 @@ class MaintenanceService:
             await PlayerXPService.deliver_pending_notifications(cls._bot)
         except Exception:  # pragma: no cover - background presentation
             logger.exception("Could not deliver pending XP level-up notices")
+
+        # One curated official-channel digest at the configured Tehran hour.
+        # This is presentation only, runs after gameplay/XP work, and has its
+        # own durable once-per-day claim inside the service.
+        try:
+            if cls._bot is not None:
+                digest_now = datetime.now(timezone.utc)
+                from sib.services.daily_channel_digest import (
+                    DailyChannelDigestService,
+                    TEHRAN as DIGEST_TEHRAN,
+                )
+
+                local_digest_day = digest_now.astimezone(DIGEST_TEHRAN).date()
+                if (
+                    cls._last_daily_digest_decision_day != local_digest_day
+                    and cls._daily_digest_sweep_due(digest_now)
+                ):
+                    cls._last_daily_digest_sweep_at = digest_now
+                    result = await DailyChannelDigestService.run_scheduled(
+                        cls._bot, now=digest_now
+                    )
+                    if result.status in {"sent", "skipped", "failed", "sending"}:
+                        cls._last_daily_digest_decision_day = result.day
+        except Exception:
+            logger.exception("Maintenance task failed: daily channel digest")
 
     @classmethod
     async def _announce_war_results(cls, bot, outcomes: list) -> None:

@@ -1393,8 +1393,8 @@ def sib_shortcut_target(text: Optional[str]) -> Optional[str]:
     return SIB_SHORTCUT_TARGETS.get(parts[1])
 
 
-#: New exact menu phrases, mapped to existing menu entry paths. The two
-#: spellings of the Wiki shortcut intentionally share one destination.
+#: Exact menu phrases, mapped to the existing entry paths. Paired spellings
+#: such as the Wiki and weekly-league aliases share one destination.
 MENU_ALIAS_TARGETS = {
     "ویکی سیبی": "wiki",
     "سیب ویکی": "wiki",
@@ -1404,6 +1404,8 @@ MENU_ALIAS_TARGETS = {
     "شاپ سیبی": "shop",
     "لیدربرد سیبی": "leaderboard",
     "صندوق سیبی": "daily_chest",
+    "سیب لیگ": "league",
+    "لیگ سیبی": "league",
 }
 
 # The regex remains anchored to the whole message like the existing
@@ -1591,6 +1593,12 @@ async def _open_leaderboard_menu_alias(message: Message, bot: Bot) -> None:
     await _open_leaderboard_entry(message, bot)
 
 
+async def _open_league_menu_alias(message: Message, bot: Bot) -> None:
+    from sib.handlers.league import cmd_league
+
+    await cmd_league(message, bot)
+
+
 async def _open_daily_chest_menu_alias(message: Message, bot: Bot) -> None:
     from sib.handlers.daily_chest import handle_chest_shortcut
 
@@ -1606,6 +1614,7 @@ MENU_ALIAS_OPENERS = {
     "shop": _open_shop_menu_alias,
     "leaderboard": _open_leaderboard_menu_alias,
     "daily_chest": _open_daily_chest_menu_alias,
+    "league": _open_league_menu_alias,
 }
 
 
