@@ -764,6 +764,21 @@ class MaintenanceService:
         except Exception:
             logger.exception("Maintenance task failed: daily channel digest")
 
+        # Group-wide Golden Hour delivery comes after gameplay, bot-turn
+        # recovery, and the official-channel digest. Invasion presentation above
+        # gets first chance to include the note in its caption; groups without
+        # a live invasion receive a standalone message after the spawn window.
+        try:
+            from sib.services.golden_hour_announcement import (
+                GoldenHourGroupAnnouncementService,
+            )
+
+            await GoldenHourGroupAnnouncementService.run_due(
+                cls._bot, now=datetime.now(timezone.utc)
+            )
+        except Exception:
+            logger.exception("Maintenance task failed: Golden Hour group notices")
+
     @classmethod
     async def _announce_war_results(cls, bot, outcomes: list) -> None:
         """Send the final message of every war settled in this cycle.

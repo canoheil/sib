@@ -1421,7 +1421,19 @@ class AppleBattleService:
     # Completion + rewards (idempotent)
     # ------------------------------------------------------------------
     @classmethod
-    async def complete(cls, session: AsyncSession, battle_id: int) -> AppleBattle:
+    async def complete(
+        cls,
+        session: AsyncSession,
+        battle_id: int,
+        *,
+        occurred_at: datetime | None = None,
+    ) -> AppleBattle:
+        """Atomically award the seedling and Apple payout, then complete.
+
+        ``occurred_at`` preserves the source action's timestamp (notably a
+        direct Apple Duel acceptance) so the Golden Hour multiplier and ledger
+        timestamp describe the same event.
+        """
         battle = await session.get(AppleBattle, battle_id)
         if not battle:
             raise BattleError("نبرد پیدا نشد.")
@@ -1442,7 +1454,7 @@ class AppleBattleService:
         # Winner reward: +5 base apples (doubled during golden hour). Loser: nothing.
         from sib.services.apple_wallet import AppleWalletService
 
-        awarded_at = datetime.now(timezone.utc)
+        awarded_at = occurred_at or datetime.now(timezone.utc)
         multiplier = golden_hour_multiplier("apple_battle_win", now=awarded_at)
         await AppleWalletService.earn(
             session,

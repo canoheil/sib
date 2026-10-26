@@ -116,7 +116,7 @@ def test_migration_chain_head():
     cfg = Config()
     cfg.set_main_option("script_location", str(ROOT / "database/migrations"))
     scripts = ScriptDirectory.from_config(cfg)
-    assert scripts.get_current_head() == "068_golden_hour_apple_rewards"
+    assert scripts.get_current_head() == "069_golden_hour_notices"
     assert _migration().down_revision == "039_archive_inv1_tables"
     chain = {
         "041_inv2_announcement_narrative": "040_inv2_difficulty_default",
@@ -147,6 +147,7 @@ def test_migration_chain_head():
         "066_daily_channel_digest": "065_league_points",
         "067_invasion_daily_20_schedule": "066_daily_channel_digest",
         "068_golden_hour_apple_rewards": "067_invasion_daily_20_schedule",
+        "069_golden_hour_notices": "068_golden_hour_apple_rewards",
     }
     for revision, parent in chain.items():
         path = ROOT / f"database/migrations/versions/{revision}.py"
