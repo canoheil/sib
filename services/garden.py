@@ -46,6 +46,7 @@ from sib.database.models import (
 )
 from sib.services.apple_wallet import AppleWalletService, InsufficientFundsException
 from sib.services.config_store import ConfigService
+from sib.services.golden_hour import reward_multiplier as golden_hour_multiplier
 from sib.services.lock_order import lock_user_row
 from sib.services.seedling import SeedlingService
 
@@ -319,6 +320,7 @@ class GardenService:
         garden: Garden,
         plot: GardenPlot,
         rng=None,
+        now: Optional[datetime] = None,
     ) -> HarvestOutcome:
         """Collect one ripe plot: ONE roll on the level's drop table.
 
@@ -328,7 +330,7 @@ class GardenService:
         """
         from sib.services.items import DropService, ItemService, item_label
 
-        now = datetime.now(timezone.utc)
+        now = cls._as_utc(now) or datetime.now(timezone.utc)
         if bool(plot.is_withered):
             raise ValueError(WITHERED_REFUSAL)
         if cls._derive_state(plot, now) != PlotState.FRUIT_READY:
@@ -342,6 +344,8 @@ class GardenService:
 
         if key == CURRENCY_OUTCOME:
             # Normal Apples: currency credit (idempotent per cycle).
+            multiplier = golden_hour_multiplier("garden_harvest", now=now)
+            awarded_amount = amount * multiplier
             await AppleWalletService.earn(
                 session,
                 user_id=user_id,
@@ -350,11 +354,13 @@ class GardenService:
                 ref_type="garden_plot",
                 ref_id=plot.id,
                 idempotency_key=f"garden:{plot.id}:{plot.cycle_count}",
+                reward_multiplier=multiplier,
+                occurred_at=now,
             )
             outcome = HarvestOutcome(
                 plot_index=plot.plot_index,
                 magic_level=plot.magic_level,
-                apples=amount,
+                apples=awarded_amount,
                 message=entry.get("message"),
             )
         else:
@@ -407,17 +413,26 @@ class GardenService:
         user_id: int,
         plot_index: int,
         rng=None,
+        now: Optional[datetime] = None,
     ) -> HarvestOutcome:
         """Harvest a single plot (see ``_harvest_plot``)."""
         garden = await cls.get_or_create(session, user_id, for_update=True)
         plot = await cls._get_plot(session, garden, plot_index)
-        return await cls._harvest_plot(session, user_id, garden, plot, rng=rng)
+        return await cls._harvest_plot(
+            session, user_id, garden, plot, rng=rng, now=now
+        )
 
     @classmethod
-    async def harvest_all(cls, session: AsyncSession, user_id: int, rng=None) -> List[HarvestOutcome]:
+    async def harvest_all(
+        cls,
+        session: AsyncSession,
+        user_id: int,
+        rng=None,
+        now: Optional[datetime] = None,
+    ) -> List[HarvestOutcome]:
         """Harvest every ripe plot in ONE transaction (one re-render)."""
         garden = await cls.get_or_create(session, user_id, for_update=True)
-        now = datetime.now(timezone.utc)
+        now = cls._as_utc(now) or datetime.now(timezone.utc)
         ready = sorted(
             (p for p in garden.plots if cls._derive_state(p, now) == PlotState.FRUIT_READY),
             key=lambda p: p.plot_index,
@@ -428,7 +443,9 @@ class GardenService:
         for plot in ready:
             plot = await cls._get_plot(session, garden, plot.plot_index)
             outcomes.append(
-                await cls._harvest_plot(session, user_id, garden, plot, rng=rng)
+                await cls._harvest_plot(
+                    session, user_id, garden, plot, rng=rng, now=now
+                )
             )
         return outcomes
 

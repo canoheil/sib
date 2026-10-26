@@ -267,7 +267,7 @@ async def test_read_commands_mute_unmute_reset_and_bad_inputs_audited(db):
     assert "یورش‌های اخیر" in await handler._run(1, "inv2_invasions", [])
     status_text = await handler._run(1, "inv2_status", [])
     assert "وضعیت یورش" in status_text
-    assert "ساعت‌های اسپان (تهران): 00:00، 12:00، 16:00، 20:00" in status_text
+    assert "ساعت‌های اسپان (تهران): 20:00" in status_text
     assert "پنجره هر اسلات: 30 دقیقه" in status_text
     assert "فاصله" not in status_text  # dead interval reading was removed
     assert "ورودی" in await handler._run(1, "inv2_toggle", [])
@@ -282,7 +282,7 @@ async def test_status_falls_back_to_default_schedule_when_config_missing(db):
     # fixture's system_config table at all: the status text must still show
     # the scheduler's own defaults instead of raising or printing blanks.
     status_text = await handler._run(1, "inv2_status", [])
-    assert "ساعت‌های اسپان (تهران): 00:00، 12:00، 16:00، 20:00" in status_text
+    assert "ساعت‌های اسپان (تهران): 20:00" in status_text
     assert "پنجره هر اسلات: 30 دقیقه" in status_text
 
 
@@ -291,11 +291,11 @@ async def test_status_renders_custom_schedule_config(db):
     factory, _ = db
     async with factory.begin() as s:
         s.add_all([
-            SystemConfig(key="invasion_spawn_hours", value="0,12,16,20"),
+            SystemConfig(key="invasion_spawn_hours", value="18,20"),
             SystemConfig(key="invasion_slot_window_minutes", value="120"),
         ])
     status_text = await handler._run(1, "inv2_status", [])
-    assert "ساعت‌های اسپان (تهران): 00:00، 12:00، 16:00، 20:00" in status_text
+    assert "ساعت‌های اسپان (تهران): 18:00، 20:00" in status_text
     assert "پنجره هر اسلات: 120 دقیقه" in status_text
 
 

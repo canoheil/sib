@@ -512,6 +512,53 @@ async def test_friendly_result_pays_apples_and_never_rank(mode, humans, db_sessi
 
 
 @pytest.mark.asyncio
+@pytest.mark.golden_hour
+async def test_golden_hour_friendly_reward_doubles_without_exceeding_daily_cap(
+    db_session, monkeypatch
+):
+    # Policy boundaries are covered in test_golden_hour.py; pin the service's
+    # policy result here so this integration test is clock-independent.
+    monkeypatch.setattr(
+        "sib.services.friendly.golden_hour_multiplier",
+        lambda reason, now=None: 2,
+    )
+    monkeypatch.setattr(
+        "sib.services.apple_wallet.golden_hour_multiplier",
+        lambda reason, now=None: 2,
+    )
+    await ConfigService.set(db_session, "friendly_reward_max_matches_per_day", 3)
+    await ConfigService.set(db_session, "friendly_reward_apples_per_match", 20)
+    await ConfigService.set(db_session, "friendly_reward_daily_apple_cap", 50)
+    group = await create_test_group(db_session, "گروه رفیقانه ساعت طلایی")
+    users = [await create_test_user(db_session, f"رفیق طلایی {i}") for i in range(2)]
+
+    balances = []
+    for _ in range(3):
+        party = await _friendly_party(db_session, group, users, "solo")
+        await db_session.commit()
+        match = await FriendlyMatchService.start_friendly_match(
+            db_session, party.id, users[0].id
+        )
+        await db_session.commit()
+        await _finish(db_session, match, winner_team=1)
+        balances.append(await AppleWalletService.get_balance(db_session, users[0].id))
+
+    rows = (
+        await db_session.scalars(
+            select(AppleTransaction).where(
+                AppleTransaction.reason == FRIENDLY_REWARD_REASON
+            )
+        )
+    ).all()
+    assert balances == [40, 50, 50]
+    assert len(rows) == 4  # Two human players were paid in the first two matches.
+    assert {row.amount for row in rows} == {10, 40}
+    assert {row.reward_multiplier for row in rows} == {2}
+    for user in users:
+        assert await AppleWalletService.get_balance(db_session, user.id) == 50
+
+
+@pytest.mark.asyncio
 async def test_friendly_reward_daily_caps_and_duplicate_prevention(db_session):
     """≤N matches/day, ≤cap apples/day, and never the same match twice."""
     await ConfigService.set(db_session, "friendly_reward_max_matches_per_day", 3)

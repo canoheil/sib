@@ -39,6 +39,7 @@ from __future__ import annotations
 import random
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from fractions import Fraction
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -67,6 +68,7 @@ from sib.services.apple_wallet import (
     LedgerKeyConflictError,
     savepoints_supported,
 )
+from sib.services.golden_hour import reward_multiplier as golden_hour_multiplier
 from sib.services.items import ITEM_CATALOG, ItemService
 from sib.services.lock_order import lock_user_row
 from sib.services.player_cards import CardError, PlayerCardService, is_shop_eligible
@@ -632,6 +634,7 @@ class ShopChestService:
         *,
         rng: Any = None,
         expected_version: Optional[int] = None,
+        now: Optional[datetime] = None,
     ) -> ChestOpenResult:
         """Open ``chest_id`` once per ``operation_key``. Caller commits.
 
@@ -656,6 +659,7 @@ class ShopChestService:
         replay = await cls._replay_if_recorded(session, user_id, chest_id, operation_key)
         if replay is not None:
             return replay
+        awarded_at = now or datetime.now(timezone.utc)
 
         # 3. the chest must be active and fully valid (read-only).
         chest = await session.get(ShopChest, chest_id)
@@ -691,6 +695,13 @@ class ShopChestService:
                 duplicate = True
                 compensation = chest.duplicate_apples
 
+        reward_multiplier = (
+            golden_hour_multiplier(REASON_REWARD, now=awarded_at)
+            if reward.kind == REWARD_KIND_APPLES
+            else 1
+        )
+        awarded_apples = apples * reward_multiplier
+
         # 5. funds pre-check, still before any write. The debit below stays
         #    the authoritative check; this only keeps a refused opening from
         #    writing anything when a caller commits after the refusal.
@@ -722,7 +733,7 @@ class ShopChestService:
                 chest_version=chest.version,
                 price_apples=chest.price_apples,
                 reward_kind=reward.kind,
-                reward_apples=apples,
+                reward_apples=awarded_apples,
                 reward_item_key=reward.item_key,
                 reward_character_id=reward.character_id,
                 duplicate_converted=duplicate,
@@ -765,6 +776,8 @@ class ShopChestService:
                     ref_type=OPENING_REF_TYPE,
                     ref_id=opening.id,
                     idempotency_key=f"{base_key}:reward",
+                    reward_multiplier=reward_multiplier,
+                    occurred_at=awarded_at,
                 )
             elif duplicate and compensation > 0:
                 await AppleWalletService.earn(
@@ -814,7 +827,7 @@ class ShopChestService:
                 image_key=chest.image_key,
                 operation_key=operation_key,
                 reward_kind=reward.kind,
-                apples_awarded=apples,
+                apples_awarded=awarded_apples,
                 item_key=reward.item_key,
                 character_id=reward.character_id,
                 character_name=character_name,
@@ -858,6 +871,7 @@ class ShopChestService:
         rng: Any = None,
         attempts: int = 2,
         expected_version: Optional[int] = None,
+        now: Optional[datetime] = None,
     ) -> ChestOpenResult:
         """Open a chest in its own transaction, surviving an ambiguous commit.
 
@@ -866,6 +880,7 @@ class ShopChestService:
         outcome is returned; not found means it did not commit, and the open
         is retried with the SAME key (the key is never regenerated).
         """
+        awarded_at = now or datetime.now(timezone.utc)
         for attempt in range(attempts):
             try:
                 return await _run_in_transaction(
@@ -876,6 +891,7 @@ class ShopChestService:
                         operation_key,
                         rng=rng,
                         expected_version=expected_version,
+                        now=awarded_at,
                     )
                 )
             except ShopChestCommitUnknown as exc:

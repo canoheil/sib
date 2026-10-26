@@ -26,6 +26,7 @@ from sib.services.apple_wallet import (
     InsufficientFundsException,
 )
 from sib.services.config_store import ConfigService
+from sib.services.golden_hour import reward_multiplier as golden_hour_multiplier
 from sib.services.items import ItemService
 from sib.services.lock_order import lock_user_row
 
@@ -368,7 +369,13 @@ async def perform_shift(
 
     pickaxe_level = await get_pickaxe_level(session, user_id)
     reward_row = await reward_table_for_level(session, pickaxe_level)
-    outcome_code, item_code, amount = _roll_shift(reward_row)
+    outcome_code, item_code, base_amount = _roll_shift(reward_row)
+    multiplier = (
+        golden_hour_multiplier("apple_mine", now=now)
+        if item_code == NORMAL_OUTCOME[1]
+        else 1
+    )
+    amount = base_amount * multiplier
 
     shift = AppleMineShift(
         user_id=user_id,
@@ -387,11 +394,13 @@ async def perform_shift(
         await AppleWalletService.earn(
             session,
             user_id=user_id,
-            amount=amount,
+            amount=base_amount,
             reason="apple_mine",
             ref_type="apple_mine_shift",
             ref_id=shift.id,
             idempotency_key=f"apple_mine:{shift.id}",
+            reward_multiplier=multiplier,
+            occurred_at=now,
         )
     else:
         await ItemService.grant(session, user_id, item_code, quantity=amount)

@@ -42,6 +42,7 @@ owns the transaction: any exception raised here discards both rewards.
 import math
 import random
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import func, select
@@ -51,6 +52,7 @@ from sib.database.models import AppleTransaction, User
 from sib.services.apple_wallet import AppleWalletService
 from sib.services.config_store import ConfigService
 from sib.services.friendship import FriendshipService
+from sib.services.golden_hour import reward_multiplier as golden_hour_multiplier
 from sib.services.sib_claim import fa_digits
 
 KISS_REASON = "sib_kiss"
@@ -182,6 +184,7 @@ class SibKissService:
         sender_id: int,
         target_id: int,
         message_key: str,
+        now: Optional[datetime] = None,
     ) -> KissResult:
         """Run one kiss inside the caller's transaction.
 
@@ -260,7 +263,10 @@ class SibKissService:
         bonus = (
             await ConfigService.get_int(session, KISS_FRIEND_BONUS_KEY) if friends else 0
         )
-        amount = amount + max(0, bonus)
+        base_amount = amount + max(0, bonus)
+        awarded_at = now or datetime.now(timezone.utc)
+        multiplier = golden_hour_multiplier(KISS_REASON, now=awarded_at)
+        amount = base_amount * multiplier
 
         # 5) Both rewards, in ascending user-id order (wallet lock order).
         rewards = [
@@ -271,11 +277,13 @@ class SibKissService:
             await AppleWalletService.earn(
                 session,
                 user_id=user_id,
-                amount=amount,
+                amount=base_amount,
                 reason=reason,
                 ref_type=KISS_REF_TYPE,
                 ref_id=ref_id,
                 idempotency_key=key,
+                reward_multiplier=multiplier,
+                occurred_at=awarded_at,
             )
 
         # 6) Verify both expected ledger records exist inside this transaction.

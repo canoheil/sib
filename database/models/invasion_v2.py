@@ -155,8 +155,8 @@ class Inv2GroupState(Base):
     total_defeats: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0", nullable=False
     )
-    # UTC instant of the fixed daily slot (e.g. 00:00/12:00/16:00/20:00
-    # Asia/Tehran, converted to UTC) this group last spawned an invasion in.
+    # UTC instant of the fixed daily slot (20:00 Asia/Tehran by default,
+    # converted to UTC) this group last spawned an invasion in.
     # Compared against InvasionScheduler._current_slot(...) to guarantee at
     # most one spawn per group per slot, even across overlapping/retried
     # maintenance ticks.

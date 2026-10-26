@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects import mysql, sqlite
 from sib.database.models import Group, GroupCastle, CastleDonation, CastleIncomeClaim
 from sib.services.apple_wallet import AppleWalletService
+from sib.services.golden_hour import reward_multiplier as golden_hour_multiplier
 from sib.services.lock_order import lock_user_row, lock_user_rows_in_order
 
 THRESHOLDS = (
@@ -219,8 +220,13 @@ class CastleService:
         if previous:
             raise CastleError("درآمد قلعه را امروز دریافت کرده‌اید.")
         amount = castle.level * DAILY_INCOME_PER_LEVEL
+        multiplier = golden_hour_multiplier("castle_spring", now=now)
+        awarded_amount = amount * multiplier
         claim = CastleIncomeClaim(
-            user_id=user_id, group_id=group_id, claim_day=day, amount=amount
+            user_id=user_id,
+            group_id=group_id,
+            claim_day=day,
+            amount=awarded_amount,
         )
         session.add(claim)
         await session.flush()
@@ -232,5 +238,7 @@ class CastleService:
             ref_type="castle_income",
             ref_id=claim.id,
             idempotency_key=f"castle:spring:{user_id}:{day}",
+            reward_multiplier=multiplier,
+            occurred_at=now,
         )
-        return amount
+        return awarded_amount

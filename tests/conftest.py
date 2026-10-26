@@ -27,6 +27,21 @@ requires_row_locks = pytest.mark.skipif(
     "SQLite cannot exercise this race",
 )
 
+@pytest.fixture(autouse=True)
+def golden_hour_off_by_default(request, monkeypatch):
+    """Keep legacy reward assertions independent of the wall clock.
+
+    Tests that intentionally cover the golden-hour feature opt in with the
+    ``golden_hour`` marker and pass an explicit event timestamp.
+    """
+    if request.node.get_closest_marker("golden_hour") is not None:
+        return
+
+    import sib.services.golden_hour as golden_hour
+
+    monkeypatch.setattr(golden_hour, "is_golden_hour", lambda now=None: False)
+
+
 @pytest.fixture(scope="session")
 def test_settings():
     """Fixture providing settings configured for testing."""

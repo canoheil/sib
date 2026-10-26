@@ -13,6 +13,7 @@ Pins the audited/locked decisions:
 """
 
 import json
+from datetime import datetime, timezone
 
 import pytest
 
@@ -22,6 +23,7 @@ from sqlalchemy import select
 
 from sib.database.models import (
     AppleBattle,
+    AppleTransaction,
     AppleBattleQueueEntry,
     AppleBattleStatus,
     Match,
@@ -359,6 +361,30 @@ def test_staged_narrative_is_short_bold_and_markdown_safe():
     assert "**کارت\\[ویژه**" in escaped[0]["text"]
 
 
+@pytest.mark.golden_hour
+def test_battle_finale_snapshots_the_golden_hour_apple_amount():
+    moment = datetime(2026, 10, 26, 16, 45, tzinfo=timezone.utc)
+    plan = AppleBattleService._compose_plan(
+        player1_id=1,
+        player2_id=2,
+        name1="آرین",
+        name2="سارا",
+        card_name1="شمشیر",
+        card_name2="سپر",
+        winner_id=1,
+        seed="golden-hour",
+        is_bot_match=True,
+    )
+    state = {"battle": {"winner_id": 1}, "plan": plan}
+
+    multiplier = AppleBattleService._set_apple_reward_state(state, moment)
+
+    assert multiplier == 2
+    assert state["battle"]["apple_reward_multiplier"] == 2
+    assert state["battle"]["apple_reward_at"] == moment.isoformat()
+    assert "🎁 پاداش پیروزی: **۱۰ سیب** 🍏" in state["plan"][-1]["text"]
+
+
 # ---------------------------------------------------------------------------
 # Engine: staged advance → finish with precomputed winner
 # ---------------------------------------------------------------------------
@@ -514,8 +540,24 @@ async def test_winner_gets_one_seedling_and_five_apples_idempotent(db_session):
 
 
 @pytest.mark.asyncio
-async def test_finalize_match_awards_via_shared_match_result(db_session):
-    """Full-flow reward: shared apply_match_result + apples (idempotent)."""
+@pytest.mark.parametrize(("multiplier", "expected_amount"), [(1, 5), (2, 10)])
+async def test_finalize_match_awards_via_shared_match_result(
+    db_session, monkeypatch, multiplier, expected_amount
+):
+    """Full-flow reward: shared apply_match_result + correctly reported apples."""
+    from sib.services import apple_battle as apple_battle_module
+    from sib.services import apple_wallet as apple_wallet_module
+
+    monkeypatch.setattr(
+        apple_battle_module,
+        "golden_hour_multiplier",
+        lambda reason, now=None: multiplier,
+    )
+    monkeypatch.setattr(
+        apple_wallet_module,
+        "golden_hour_multiplier",
+        lambda reason, now=None: multiplier,
+    )
     from sib.database.models import Game
     from sib.services.group import GroupService
     from sib.services.player_xp import PlayerXPService
@@ -559,8 +601,20 @@ async def test_finalize_match_awards_via_shared_match_result(db_session):
 
     assert await SeedlingService.get_total(db_session, winner_id) == 1
     assert await SeedlingService.get_total(db_session, loser_id) == 0
-    assert await AppleWalletService.get_balance(db_session, winner_id) == 5
+    assert await AppleWalletService.get_balance(db_session, winner_id) == expected_amount
     assert await AppleWalletService.get_balance(db_session, loser_id) == 0
+    transaction = await db_session.scalar(
+        select(AppleTransaction).where(
+            AppleTransaction.user_id == winner_id,
+            AppleTransaction.reason == "apple_battle_win",
+        )
+    )
+    assert transaction is not None
+    assert transaction.amount == expected_amount
+    assert transaction.reward_multiplier == multiplier
+    match_state = json.loads((await _reload_match(db_session, match.id)).game_state)
+    expected_digits = "۱۰" if multiplier == 2 else "۵"
+    assert f"**{expected_digits} سیب**" in match_state["plan"][-1]["text"]
     assert (await PlayerXPService.get_progress(db_session, winner_id)).total_xp == 125
     assert (await PlayerXPService.get_progress(db_session, loser_id)).total_xp == 100
 
@@ -572,7 +626,7 @@ async def test_finalize_match_awards_via_shared_match_result(db_session):
     await AppleBattleService.finalize_match(db_session, match, battle_row.id)
     await db_session.commit()
     assert await SeedlingService.get_total(db_session, winner_id) == 1
-    assert await AppleWalletService.get_balance(db_session, winner_id) == 5
+    assert await AppleWalletService.get_balance(db_session, winner_id) == expected_amount
 
 
 # ---------------------------------------------------------------------------

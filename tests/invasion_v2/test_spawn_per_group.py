@@ -3,7 +3,7 @@
 Previously the scheduler spawned at most one invasion per global interval
 (round-robin across groups), so with 7 groups and a 2h interval a group saw
 an invasion only every ~14h. These tests pin the new policy: spawning is
-gated by the fixed Asia/Tehran daily schedule (00:00/12:00/16:00/20:00, see
+gated by the fixed Asia/Tehran daily schedule (20:00 by default, see
 `InvasionScheduler._current_slot`) instead of a global interval, but a
 single due tick still iterates all active groups in id order and spawns for
 each one that is unmuted, below `invasion_max_active_per_group` live
@@ -37,7 +37,7 @@ from sib.services.invasion_v2.power_resolver import set_power_resolver
 from sib.services.invasion_v2.scheduler import InvasionScheduler
 
 
-NOW = datetime(2026, 10, 14, 8, 30, tzinfo=timezone.utc)  # Tehran local 12:00:00 (a spawn slot)
+NOW = datetime(2026, 10, 14, 16, 30, tzinfo=timezone.utc)  # Tehran local 20:00:00 (the daily spawn slot)
 
 
 class FakeResolver:
@@ -172,8 +172,7 @@ async def test_skip_groups_with_active_invasion(db, caplog):
 
 @pytest.mark.asyncio
 async def test_no_spawn_outside_slot_window(db, caplog):
-    # NOW + 1h lands at 13:00 Tehran local, which is not one of the
-    # configured invasion_spawn_hours (0, 12, 16, 20): no group spawns.
+    # NOW + 1h lands at 21:00 Tehran local, outside the default 20:00 slot.
     set_power_resolver(FakeResolver({1: 500.0, 2: 500.0, 3: 500.0}))
     with caplog.at_level(logging.INFO, logger="sib"):
         await InvasionScheduler.tick(now=NOW + timedelta(hours=1), rng=Random(4))

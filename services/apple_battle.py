@@ -9,7 +9,7 @@ uses the REAL shared matchmaking pipeline end to end:
     → find_and_create_match (cross-group, atomic) → shared Match + acceptance
     → precomputed battle plan in match.game_state → staged narrative
     → MatchResultService.apply_match_result (seedling/stats/parties)
-    → +5 apples for the winner → cleanup
+    → +5 base apples for the winner (10 in golden hour) → cleanup
 
 The win formula is UNCHANGED (locked decision):
 
@@ -64,6 +64,7 @@ from sib.services.card_progression import (
     attributes_at_level,
     card_attributes,
 )
+from sib.services.golden_hour import reward_multiplier as golden_hour_multiplier
 from sib.services.sib_claim import fa_digits
 
 
@@ -239,6 +240,33 @@ class AppleBattleService:
             {"phase": "round", "round": 3, "text": rng.choice(rounds_c)},
             {"phase": "finale", "text": finale_text},
         ]
+
+    @staticmethod
+    def _set_apple_reward_state(
+        state: Dict[str, Any], awarded_at: datetime
+    ) -> int:
+        """Persist the reward moment and make the finale match its payout."""
+        multiplier = golden_hour_multiplier("apple_battle_win", now=awarded_at)
+        battle = state.get("battle")
+        if isinstance(battle, dict):
+            battle["apple_reward_at"] = awarded_at.isoformat()
+            battle["apple_reward_multiplier"] = multiplier
+
+        plan = state.get("plan")
+        if isinstance(plan, list):
+            for beat in reversed(plan):
+                if not isinstance(beat, dict) or beat.get("phase") != "finale":
+                    continue
+                text = str(beat.get("text", ""))
+                amount = fa_digits(5 * multiplier)
+                for old_amount in (5, 10):
+                    text = text.replace(
+                        f"**{fa_digits(old_amount)} سیب**",
+                        f"**{amount} سیب**",
+                    )
+                beat["text"] = text
+                break
+        return multiplier
 
     @classmethod
     async def build_match_state(cls, session, match: Match) -> Optional[Dict[str, Any]]:
@@ -775,7 +803,7 @@ class AppleBattleService:
         - Outcome/statistics/seedling/party release go through the SHARED
           ``MatchResultService.apply_match_result`` (exactly ONE seedling via
           the normal match-win ledger).
-        - Winner additionally receives +5 apples (idempotent per battle).
+        - Winner receives 5 base apples (doubled during golden hour).
         - Loser receives nothing (locked decision).
         """
         from sib.games.apple_battle.engine import AppleBattleEngine
@@ -809,13 +837,35 @@ class AppleBattleService:
 
         engine = AppleBattleEngine()
         result = engine.get_result(state)
+        winner_id = (state.get("battle") or {}).get("winner_id") or (
+            battle.winner_id if battle is not None else None
+        )
 
         # Lock order (see services/lock_order.py): the winner's apples (wallet,
         # rank 6) are paid BEFORE the match progression/XP award (rank 7).
         # apply_match_result runs after the payout block below.
+        awarded_at: Optional[datetime] = None
+        multiplier = 1
+        if winner_id is not None and battle_id is not None:
+            battle_state = state.get("battle") or {}
+            raw_awarded_at = battle_state.get("apple_reward_at")
+            if isinstance(raw_awarded_at, datetime):
+                awarded_at = raw_awarded_at
+            elif isinstance(raw_awarded_at, str):
+                try:
+                    awarded_at = datetime.fromisoformat(raw_awarded_at)
+                except ValueError:
+                    awarded_at = None
+            if awarded_at is None and battle is not None:
+                awarded_at = getattr(battle, "completed_at", None)
+            if awarded_at is None:
+                awarded_at = datetime.now(timezone.utc)
+            multiplier = cls._set_apple_reward_state(state, awarded_at)
+            match.game_state = json.dumps(state, ensure_ascii=False)
 
         if battle is not None:
-            now_ts = datetime.now(timezone.utc)
+            completed_at = awarded_at or getattr(battle, "completed_at", None)
+            completed_at = completed_at or datetime.now(timezone.utc)
             seedlings_awarded = 0 if match.is_bot_match else 1
             if battle.status != AppleBattleStatus.COMPLETED:
                 await session.execute(
@@ -826,18 +876,14 @@ class AppleBattleService:
                     )
                     .values(
                         status=AppleBattleStatus.COMPLETED,
-                        completed_at=now_ts,
+                        completed_at=completed_at,
                         seedlings_awarded=seedlings_awarded,
                     )
                 )
                 battle.status = AppleBattleStatus.COMPLETED
-                battle.completed_at = now_ts
+                battle.completed_at = completed_at
                 battle.seedlings_awarded = seedlings_awarded
                 await session.flush()
-
-        winner_id = (state.get("battle") or {}).get("winner_id") or (
-            battle.winner_id if battle is not None else None
-        )
         if winner_id and battle_id is not None:
             battle_ids_for_match = list(
                 (
@@ -862,6 +908,11 @@ class AppleBattleService:
                 .limit(1)
             )
             if existing_apple_tx is None:
+                if awarded_at is None:
+                    awarded_at = datetime.now(timezone.utc)
+                    multiplier = golden_hour_multiplier(
+                        "apple_battle_win", now=awarded_at
+                    )
                 await AppleWalletService.earn(
                     session,
                     user_id=int(winner_id),
@@ -870,6 +921,8 @@ class AppleBattleService:
                     ref_type="apple_battle",
                     ref_id=battle_id,
                     idempotency_key=f"apple_battle_win:{battle_id}",
+                    reward_multiplier=multiplier,
+                    occurred_at=awarded_at,
                 )
                 log_event(
                     Events.APPLE_BATTLE_EVENT,
@@ -1090,6 +1143,9 @@ class AppleBattleService:
                     # beat and the same beat is never sent twice.
                     state = engine.apply_action(state, 0, {"type": "advance"})
                     beat_index = current_cursor
+                    plan = state.get("plan") or []
+                    if beat_index == len(plan) - 1:
+                        cls._set_apple_reward_state(state, datetime.now(timezone.utc))
                     beat_state = state
                     last_cursor = int(state.get("cursor", 0))
                     match.game_state = json.dumps(state, ensure_ascii=False)
@@ -1383,9 +1439,11 @@ class AppleBattleService:
             awarded = await cls._award_seedling(session, battle.id, winner_id)
             battle.seedlings_awarded = 1
 
-        # Winner reward: +5 apples (idempotent per battle). Loser: nothing.
+        # Winner reward: +5 base apples (doubled during golden hour). Loser: nothing.
         from sib.services.apple_wallet import AppleWalletService
 
+        awarded_at = datetime.now(timezone.utc)
+        multiplier = golden_hour_multiplier("apple_battle_win", now=awarded_at)
         await AppleWalletService.earn(
             session,
             user_id=winner_id,
@@ -1394,10 +1452,12 @@ class AppleBattleService:
             ref_type="apple_battle",
             ref_id=battle.id,
             idempotency_key=f"apple_battle_win:{battle.id}",
+            reward_multiplier=multiplier,
+            occurred_at=awarded_at,
         )
 
         battle.status = AppleBattleStatus.COMPLETED
-        battle.completed_at = datetime.now(timezone.utc)
+        battle.completed_at = awarded_at
         await session.flush()
 
         log_event(

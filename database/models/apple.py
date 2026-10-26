@@ -6,7 +6,14 @@ duplicates are prevented through unique idempotency keys.
 """
 
 from typing import Optional
-from sqlalchemy import BigInteger, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    ForeignKey,
+    Integer,
+    SmallInteger,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sib.database.base import Base, TimestampMixin
 
@@ -45,6 +52,12 @@ class AppleTransaction(Base, TimestampMixin):
     ref_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     ref_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     idempotency_key: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    # Effective multiplier for a credited gameplay reward; 1 for ordinary
+    # credits and all debits. Stored so an idempotent retry after the golden
+    # hour keeps validating against the multiplier used by the original event.
+    reward_multiplier: Mapped[int] = mapped_column(
+        SmallInteger, default=1, server_default="1", nullable=False
+    )
     balance_after: Mapped[int] = mapped_column(Integer, nullable=False)
 
     def __repr__(self) -> str:

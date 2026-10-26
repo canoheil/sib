@@ -18,7 +18,7 @@ edit, not a deploy.
 """
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 from sqlalchemy import select
@@ -28,6 +28,7 @@ from sib.core.logging import Events, log_event, logger
 from sib.database.models import DailyChestClaim
 from sib.services.apple_wallet import AppleWalletService
 from sib.services.daily_chest import utc_day
+from sib.services.golden_hour import reward_multiplier as golden_hour_multiplier
 
 #: Configuration key (JSON object: milestone day -> extra Apples).
 STREAK_REWARDS_KEY = "daily_streak_rewards"
@@ -157,6 +158,7 @@ class DailyStreakService:
         *,
         day: Optional[str] = None,
         pay_bonus: bool = False,
+        now: Optional[datetime] = None,
     ) -> StreakSummary:
         """Streak + milestone state. Pays the bonus only when asked.
 
@@ -165,7 +167,8 @@ class DailyStreakService:
         bonus is paid on is exactly the streak the player is about to see.
         Every other caller (screen rendering, reminders) reads only.
         """
-        day = day or utc_day()
+        moment = now or datetime.now(timezone.utc)
+        day = day or utc_day(moment)
         rewards = await cls.rewards(session)
         streak = await cls.count_streak(session, user_id, day=day)
 
@@ -173,16 +176,23 @@ class DailyStreakService:
         if pay_bonus and streak > 0 and streak in rewards:
             apples = rewards[streak]
             if apples > 0:
+                idempotency_key = STREAK_KEY_FORMAT.format(
+                    user_id=user_id, day=day
+                )
+                multiplier = golden_hour_multiplier(STREAK_REASON, now=moment)
                 await AppleWalletService.earn(
                     session,
                     user_id,
                     apples,
                     reason=STREAK_REASON,
-                    idempotency_key=STREAK_KEY_FORMAT.format(
-                        user_id=user_id, day=day
-                    ),
+                    idempotency_key=idempotency_key,
+                    reward_multiplier=multiplier,
+                    occurred_at=moment,
                 )
-                bonus = apples
+                transaction = await AppleWalletService.get_transaction_by_idempotency_key(
+                    session, idempotency_key, for_update=True
+                )
+                bonus = int(transaction.amount) if transaction is not None else apples * multiplier
             log_event(
                 Events.DAILY_STREAK,
                 {

@@ -128,8 +128,8 @@ class InvasionScheduler:
         """Return the UTC instant of the active Asia/Tehran slot hour, or None.
 
         Pure: no DB/session access, so every edge of the fixed daily schedule
-        (``00:00``, ``12:00``, ``16:00``, ``20:00`` Asia/Tehran by default) is
-        unit-testable without a database. ``now_utc`` must already be
+        (``20:00`` Asia/Tehran by default; additional hours may be configured)
+        is unit-testable without a database. ``now_utc`` must already be
         timezone-aware; only ``Asia/Tehran`` is consulted, never the server's
         own local timezone. A tick is "in slot H" when the local hour equals
         H and the local minute is still below ``slot_window_minutes``.

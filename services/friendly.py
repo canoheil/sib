@@ -50,6 +50,7 @@ from sib.bots.service import GameBotService
 from sib.games.registry import get_game_engine
 from sib.services.apple_wallet import AppleWalletService
 from sib.services.config_store import ConfigService
+from sib.services.golden_hour import reward_multiplier as golden_hour_multiplier
 from sib.services.party import PartyService
 from sib.services.session import SessionService
 
@@ -516,9 +517,15 @@ class FriendlyRewardService:
 
     @classmethod
     async def reward_for_player(
-        cls, session: AsyncSession, user_id: int
+        cls,
+        session: AsyncSession,
+        user_id: int,
+        *,
+        reward_multiplier: int = 1,
     ) -> int:
-        """Apples this player still earns on one more friendly match today."""
+        """Base Apples available before applying the reward multiplier."""
+        if isinstance(reward_multiplier, bool) or reward_multiplier not in (1, 2):
+            raise ValueError("reward_multiplier must be 1 or 2")
         max_matches = int(
             await ConfigService.get(session, "friendly_reward_max_matches_per_day")
         )
@@ -527,7 +534,11 @@ class FriendlyRewardService:
         used_matches, earned_today = await cls.usage_today(session, user_id)
         if used_matches >= max_matches:
             return 0
-        return max(0, min(per_match, daily_cap - earned_today))
+        remaining = max(0, daily_cap - earned_today)
+        # The configured daily cap applies to the actual wallet credit, not
+        # the unmultiplied base. Divide before the wallet applies the boost so
+        # a doubled match reward cannot overshoot that cap.
+        return max(0, min(per_match, remaining // reward_multiplier))
 
     @classmethod
     async def award_match_rewards(
@@ -562,15 +573,22 @@ class FriendlyRewardService:
         if not human_ids:
             return {}
 
+        awarded_at = datetime.now(timezone.utc)
+        multiplier = golden_hour_multiplier(
+            FRIENDLY_REWARD_REASON, now=awarded_at
+        )
         paid: Dict[int, int] = {}
         for user_id in human_ids:
-            amount = await cls.reward_for_player(session, user_id)
+            amount = await cls.reward_for_player(
+                session, user_id, reward_multiplier=multiplier
+            )
             if amount <= 0:
                 log_event(
                     Events.FRIENDLY_REWARD_CAPPED,
                     {"match_id": match.id, "user_id": user_id},
                 )
                 continue
+            idempotency_key = f"friendly_reward:{match.id}:{user_id}"
             await AppleWalletService.earn(
                 session,
                 user_id=user_id,
@@ -578,15 +596,25 @@ class FriendlyRewardService:
                 reason=FRIENDLY_REWARD_REASON,
                 ref_type="match",
                 ref_id=match.id,
-                idempotency_key=f"friendly_reward:{match.id}:{user_id}",
+                idempotency_key=idempotency_key,
+                reward_multiplier=multiplier,
+                occurred_at=awarded_at,
             )
-            paid[user_id] = amount
+            transaction = await AppleWalletService.get_transaction_by_idempotency_key(
+                session, idempotency_key, for_update=True
+            )
+            awarded_amount = (
+                int(transaction.amount)
+                if transaction is not None
+                else amount * multiplier
+            )
+            paid[user_id] = awarded_amount
             log_event(
                 Events.FRIENDLY_REWARD_PAID,
                 {
                     "match_id": match.id,
                     "user_id": user_id,
-                    "amount": amount,
+                    "amount": awarded_amount,
                 },
             )
         return paid
