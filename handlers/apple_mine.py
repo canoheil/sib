@@ -58,6 +58,9 @@ MINE_COMMAND_PATTERN = r"^\s*معدن\s+سیبی\s*$"
 MINE_IMAGE_PATH = Path(__file__).resolve().parents[1] / "assets" / "apple_mine" / "mine.jpg"
 
 MINE_FAILURE_TEXT = "معدن اکنون در دسترس نیست. کمی بعد دوباره تلاش کن."
+GOLDEN_HOUR_MINE_HINT = (
+    "🕗 ساعت طلایی تهران (۲۰:۰۰ تا پیش از ۲۱:۰۰): سیب معمولی دوبرابر می‌شود."
+)
 _EMPTY_KEYBOARD = InlineKeyboardMarkup(inline_keyboard=[])
 
 
@@ -135,6 +138,7 @@ def _panel_caption(view: MineView, user_id: int) -> str:
         f"🔨 کلنگ: **سطح {fa_digits(view.level)}**",
         f"🎁 هر شیفت: **{_range_text(view.reward)} سیب**",
         f"✨ شانس سیب ویژه: **{_pct_text(view.reward.special_pct)}**",
+        GOLDEN_HOUR_MINE_HINT,
         "",
     ]
     if view.cooldown > 0:
@@ -175,6 +179,7 @@ def _pickaxe_caption(view: MineView) -> str:
         )
     else:
         lines.extend(["", f"🍎 موجودی شما: **{fa_digits(view.balance)} سیب**"])
+    lines.extend(["", GOLDEN_HOUR_MINE_HINT])
     return "\n".join(lines)
 
 

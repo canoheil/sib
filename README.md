@@ -36,7 +36,13 @@ Alembic migrations (`database/`).
 
 - Scheduled, per-group battles against «شیاسیب» in the regions of
   Ovarya, with five enemy types of increasing strength (see
-  `services/invasion_v2/enemy.py`).
+  `services/invasion_v2/enemy.py`). By default, one invasion is scheduled
+  at **20:00 Asia/Tehran per eligible group**—not one global invasion.
+  Existing per-group eligibility, active-invasion limits, the 30-minute
+  slot window, and no-backfill behavior are unchanged. Migration
+  `067_invasion_daily_20_schedule` updates only the previous default
+  (`0,12,16,20`) in `system_config`; an operator's custom schedule is kept.
+  `invasion_spawn_hours` remains configurable.
 - Each defender joins once with their main card; group power is the
   average main-card power resolved from observed group members
   (`services/invasion_v2/power_resolver_impl.py`).

@@ -49,6 +49,7 @@ from sib.database.models import (
 )
 from sib.services.apple_wallet import AppleWalletService
 from sib.services.config_store import ConfigService
+from sib.services.golden_hour import reward_multiplier as golden_hour_multiplier
 from sib.services.items import ItemService
 from sib.services.sib_claim import fa_digits
 
@@ -718,6 +719,12 @@ class InvasionEventScheduler:
             return LootClaimResult("missing", "این جایزه تعریف نشده است.", event_id)
 
         amount = int(event.loot_amount or loot.default_amount)
+        multiplier = (
+            golden_hour_multiplier("inv2_event_loot", now=moment)
+            if loot.is_wallet
+            else 1
+        )
+        awarded_amount = amount * multiplier
         # Grant through the canonical service BEFORE the claim row is flushed
         # so a reward failure rolls the counter increment back with it.
         if loot.is_wallet:
@@ -729,6 +736,8 @@ class InvasionEventScheduler:
                 ref_type="inv2_random_event",
                 ref_id=event.id,
                 idempotency_key=f"inv2evt:{event.id}:{user_id}",
+                reward_multiplier=multiplier,
+                occurred_at=moment,
             )
         else:
             await ItemService.grant(session, user_id, loot.reward_type, amount)
@@ -738,15 +747,15 @@ class InvasionEventScheduler:
             user_id=user_id,
             slot_no=claimed,
             reward_type=loot.reward_type,
-            reward_amount=amount,
+            reward_amount=awarded_amount,
             claimed_at=moment,
         ))
         await session.flush()
         event.loot_claimed = claimed
 
         label = (
-            f"{fa_digits(amount)} سیب" if loot.is_wallet
-            else f"{fa_digits(amount)} {loot.label_fa}"
+            f"{fa_digits(awarded_amount)} سیب" if loot.is_wallet
+            else f"{fa_digits(awarded_amount)} {loot.label_fa}"
         )
         return LootClaimResult(
             "ok",

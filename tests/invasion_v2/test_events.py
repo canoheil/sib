@@ -34,6 +34,7 @@ from sib.handlers import inv2_join
 from sib.services.invasion_v2 import event_catalog as catalog
 from sib.services.invasion_v2 import event_scheduler, presentation
 from sib.services.invasion_v2.enums import InvasionStatus
+from sib.services.apple_wallet import AppleWalletService
 from sib.services.invasion_v2.event_scheduler import (
     APPLIED, CLOSED, PLANNED, SKIPPED, InvasionEventScheduler, Modifiers,
     PlanConfig, build_plan, choose_templates, claim_loot, load_active_modifiers,
@@ -43,6 +44,7 @@ from sib.services.maintenance.service import MaintenanceService
 
 ROOT = Path(__file__).resolve().parents[2]
 NOW = datetime.now(timezone.utc)
+GOLDEN_MOMENT = NOW.replace(hour=16, minute=45, second=0, microsecond=0)
 TABLES = [
     GroupCastle.__table__, User.__table__, Group.__table__, Character.__table__,
     PlayerCard.__table__, Inv2Region.__table__, Inv2Invasion.__table__,
@@ -382,6 +384,54 @@ async def test_chest_first_three_then_empty_and_never_twice(db):
         assert len(ledger) == 3 and all(row.amount == 40 for row in ledger)
         wallet = await session.scalar(select(func.sum(AppleWallet.balance)))
         assert wallet == 120
+
+
+@pytest.mark.asyncio
+@pytest.mark.golden_hour
+async def test_golden_hour_loot_claim_doubles_and_snapshots_actual_reward(db):
+    inv_id = await create_inv(
+        db,
+        started_ago=-4 * 60 * 60,
+        window=10 * 60 * 60,
+    )
+    event_id = await add_event(
+        db,
+        inv_id,
+        "loot_apple_sack",
+        status="ACTIVE",
+        duration=10 * 60 * 60,
+    )
+    async with db.begin() as session:
+        event = await session.get(Inv2RandomEvent, event_id)
+        event.starts_at = GOLDEN_MOMENT - timedelta(seconds=5)
+        event.ends_at = GOLDEN_MOMENT + timedelta(minutes=1)
+
+    async with db() as session:
+        result = await claim_loot(
+            session,
+            event_id,
+            1,
+            group_id=-100,
+            message_id=777,
+            now=GOLDEN_MOMENT,
+        )
+        await session.commit()
+
+    async with db() as session:
+        claim = await session.scalar(
+            select(Inv2EventClaim).where(Inv2EventClaim.event_id == event_id)
+        )
+        transaction = await session.scalar(
+            select(AppleTransaction).where(
+                AppleTransaction.user_id == 1,
+                AppleTransaction.reason == "inv2_event_loot",
+            )
+        )
+        assert result.ok and result.reward_label == "۸۰ سیب"
+        assert claim is not None and claim.reward_amount == 80
+        assert transaction is not None and transaction.amount == 80
+        assert transaction.reward_multiplier == 2
+        assert await AppleWalletService.get_balance(session, 1) == 80
 
 
 @pytest.mark.asyncio

@@ -21,7 +21,7 @@ DEFAULT_INVASION_JOIN_WINDOW_SECONDS = 1800
 # compatibility with any external tooling/admin display that still reads it.
 DEFAULT_INVASION_INTERVAL_SECONDS = 14400
 # Fixed daily spawn schedule (Asia/Tehran local hours), comma-separated.
-DEFAULT_INVASION_SPAWN_HOURS = "0,12,16,20"
+DEFAULT_INVASION_SPAWN_HOURS = "20"
 # A tick counts as "in slot H" while local minute < this value.
 DEFAULT_INVASION_SLOT_WINDOW_MINUTES = "30"
 

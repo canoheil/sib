@@ -4,8 +4,9 @@ Saying the exact word "سیب" in a group adds apples to the user's wallet
 (random 5–10 reward, per-user cooldown — Phase N7). The cooldown is
 derived from the AppleTransaction ledger (reason='sib_claim'), so no
 schema change is needed and every award stays auditable. All clock math
-uses the MariaDB clock (SQL NOW()) on BOTH sides, so naive DATETIME
-values never mix with Python local time.
+uses the MariaDB clock (SQL NOW()) on BOTH sides. Reward timestamps are
+normalized explicitly to UTC for the Tehran golden-hour check; naive database
+timestamps are never interpreted as server-local time.
 
 Messages are short, friendly and in the Sib character voice (task spec #5);
 the success line is drawn at random from the N7 narrative pool
@@ -14,6 +15,7 @@ the success line is drawn at random from the N7 narrative pool
 
 import math
 import random
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple
 
 from sqlalchemy import func, select
@@ -24,6 +26,7 @@ from sib.core.logging import Events, log_event, logger
 from sib.database.models import AppleTransaction, User
 from sib.services.apple_wallet import AppleWalletService
 from sib.services.config_store import ConfigService
+from sib.services.golden_hour import reward_multiplier as golden_hour_multiplier
 from sib.services.sib_claim_narrative import pick_claim_narrative
 
 CLAIM_REASON = "sib_claim"
@@ -63,12 +66,12 @@ def fa_count(value: int) -> str:
     return _NUM_WORDS.get(value, fa_digits(value))
 
 
-def format_cooldown_message(remaining_seconds: int) -> str:
-    """Dynamic, friendly cooldown text (see task spec #5 for tone).
-
-    The next claim pays a RANDOM 5–10, so the wait line advertises the
-    range instead of a fixed count.
-    """
+def format_cooldown_message(
+    remaining_seconds: int,
+    *,
+    now: Optional[datetime] = None,
+) -> str:
+    """Describe the wait and the reward range available when it ends."""
     remaining = max(1, int(math.ceil(remaining_seconds)))
 
     if remaining <= 15:
@@ -87,10 +90,17 @@ def format_cooldown_message(remaining_seconds: int) -> str:
         wait = f"{fa_digits(minutes)} دقیقه"
     else:
         wait = f"{fa_digits(minutes)} دقیقه و {fa_digits(seconds)} ثانیه"
+    actual_remaining = max(0.0, float(remaining_seconds))
+    available_at = (now or datetime.now(timezone.utc)) + timedelta(
+        seconds=actual_remaining
+    )
+    multiplier = golden_hour_multiplier(CLAIM_REASON, now=available_at)
+    min_amount = MIN_CLAIM_AMOUNT * multiplier
+    max_amount = MAX_CLAIM_AMOUNT * multiplier
     return (
         f"🍎 هنوز زوده 😄\n\n"
-        f"{wait} دیگه دوباره می‌تونی از {fa_digits(MIN_CLAIM_AMOUNT)} "
-        f"تا {fa_digits(MAX_CLAIM_AMOUNT)} سیب بگیری."
+        f"{wait} دیگه دوباره می‌تونی از {fa_digits(min_amount)} "
+        f"تا {fa_digits(max_amount)} سیب بگیری."
     )
 
 
@@ -117,7 +127,13 @@ class SibClaimService:
         )
 
     @classmethod
-    async def claim(cls, session: AsyncSession, user_id: int) -> Tuple[str, bool]:
+    async def claim(
+        cls,
+        session: AsyncSession,
+        user_id: int,
+        *,
+        now: Optional[datetime] = None,
+    ) -> Tuple[str, bool]:
         """Try to claim. Returns (message, awarded).
 
         On success the award is persisted to the AppleWallet and recorded
@@ -131,10 +147,13 @@ class SibClaimService:
         cooldown = (
             await ConfigService.get_int(session, "sib_claim_cooldown_seconds") or 300
         )
+        awarded_at = now or datetime.now(timezone.utc)
 
         for attempt in range(2):
             try:
-                return await cls._claim_once(session, user_id, amount, cooldown)
+                return await cls._claim_once(
+                    session, user_id, amount, cooldown, awarded_at
+                )
             except (IntegrityError, OperationalError) as exc:
                 # Lost a lock/unique race; roll back and retry on a fresh
                 # snapshot - the second attempt sees the winner's claim and
@@ -145,7 +164,12 @@ class SibClaimService:
 
     @classmethod
     async def _claim_once(
-        cls, session: AsyncSession, user_id: int, amount: int, cooldown: int
+        cls,
+        session: AsyncSession,
+        user_id: int,
+        amount: int,
+        cooldown: int,
+        awarded_at: datetime,
     ) -> Tuple[str, bool]:
         # Serialize claims per user: the row lock on the (existing) user row
         # makes concurrent "سیب" messages queue up instead of deadlocking on
@@ -158,7 +182,10 @@ class SibClaimService:
         if last_at is not None:
             elapsed = (db_now - last_at).total_seconds()
             if elapsed < cooldown:
-                return format_cooldown_message(cooldown - elapsed), False
+                return format_cooldown_message(cooldown - elapsed, now=db_now), False
+
+        multiplier = golden_hour_multiplier(CLAIM_REASON, now=awarded_at)
+        awarded_amount = amount * multiplier
 
         # Atomic award gate: the idempotency key names the PREVIOUS claim
         # (its ledger id). Two concurrent claims compute the same key and
@@ -172,14 +199,15 @@ class SibClaimService:
         key = f"{CLAIM_REASON}:{user_id}:{prev_id or 0}"
 
         wallet = await AppleWalletService._get_or_create(session, user_id)
-        wallet.balance += amount
+        wallet.balance += awarded_amount
         session.add(
             AppleTransaction(
                 user_id=user_id,
-                amount=amount,
+                amount=awarded_amount,
                 reason=CLAIM_REASON,
                 ref_type="wake_word",
                 idempotency_key=key,
+                reward_multiplier=multiplier,
                 balance_after=wallet.balance,
             )
         )
@@ -190,8 +218,8 @@ class SibClaimService:
             {
                 "user_id": user_id,
                 "action": "sib_claim",
-                "amount": amount,
+                "amount": awarded_amount,
                 "balance": wallet.balance,
             },
         )
-        return format_claim_success(amount, cooldown), True
+        return format_claim_success(awarded_amount, cooldown), True

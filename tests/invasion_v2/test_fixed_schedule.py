@@ -1,7 +1,7 @@
-"""Fixed daily invasion v2 spawn schedule (Asia/Tehran): 00:00/12:00/16:00/20:00.
+"""Fixed daily invasion v2 spawn schedule (Asia/Tehran): 20:00 by default.
 
 Covers the pure slot helper (``InvasionScheduler._current_slot``) exhaustively,
-then a handful of integration ticks (isolated SQLite session, exactly like
+then integration ticks (isolated SQLite session, exactly like
 `test_scheduler.py`) to prove the per-group "already spawned this slot" gate
 and the no-backfill-after-downtime behaviour end to end.
 """
@@ -30,8 +30,8 @@ from sib.services.invasion_v2.power_resolver import set_power_resolver
 from sib.services.invasion_v2.scheduler import InvasionScheduler
 
 
-# Tehran local 2026-10-14 12:00:00 == 2026-10-14 08:30:00 UTC (UTC+03:30).
-NOON_TEHRAN_UTC = datetime(2026, 10, 14, 8, 30, tzinfo=timezone.utc)
+# Tehran local 2026-10-14 20:00:00 == 2026-10-14 16:30:00 UTC (UTC+03:30).
+DAILY_SLOT_TEHRAN_UTC = datetime(2026, 10, 14, 16, 30, tzinfo=timezone.utc)
 # Tehran local 2026-10-14 00:00:00 == 2026-10-13 20:30:00 UTC.
 MIDNIGHT_TEHRAN_UTC = datetime(2026, 10, 13, 20, 30, tzinfo=timezone.utc)
 
@@ -41,29 +41,40 @@ MIDNIGHT_TEHRAN_UTC = datetime(2026, 10, 13, 20, 30, tzinfo=timezone.utc)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("offset_minutes", [0, 5, 29])
-def test_slot_fires_within_window_at_noon(offset_minutes):
-    now = NOON_TEHRAN_UTC + timedelta(minutes=offset_minutes)
+def test_slot_fires_within_window_at_20_tehran(offset_minutes):
+    now = DAILY_SLOT_TEHRAN_UTC + timedelta(minutes=offset_minutes)
     slot = InvasionScheduler._current_slot(now)
-    assert slot == NOON_TEHRAN_UTC
+    assert slot == DAILY_SLOT_TEHRAN_UTC
 
 
 @pytest.mark.parametrize("offset_minutes", [-1, 31])
-def test_slot_does_not_fire_outside_window_at_noon(offset_minutes):
-    now = NOON_TEHRAN_UTC + timedelta(minutes=offset_minutes)
+def test_slot_does_not_fire_outside_window_at_20_tehran(offset_minutes):
+    now = DAILY_SLOT_TEHRAN_UTC + timedelta(minutes=offset_minutes)
     assert InvasionScheduler._current_slot(now) is None
 
 
-def test_slot_fires_at_midnight():
-    assert InvasionScheduler._current_slot(MIDNIGHT_TEHRAN_UTC) == MIDNIGHT_TEHRAN_UTC
-    assert InvasionScheduler._current_slot(MIDNIGHT_TEHRAN_UTC + timedelta(minutes=10)) == MIDNIGHT_TEHRAN_UTC
+def test_midnight_slot_remains_available_as_an_explicit_custom_schedule():
+    assert InvasionScheduler._current_slot(
+        MIDNIGHT_TEHRAN_UTC, spawn_hours="0"
+    ) == MIDNIGHT_TEHRAN_UTC
+    assert InvasionScheduler._current_slot(
+        MIDNIGHT_TEHRAN_UTC + timedelta(minutes=10), spawn_hours="0"
+    ) == MIDNIGHT_TEHRAN_UTC
 
 
 @pytest.mark.parametrize("hour", [0, 12, 16, 20])
-def test_all_four_configured_hours_trigger(hour):
+def test_explicitly_configured_hours_trigger(hour):
     # "local hour :00:00 Tehran" -> UTC, built from the midnight anchor.
     anchor = MIDNIGHT_TEHRAN_UTC + timedelta(hours=hour)
-    slot = InvasionScheduler._current_slot(anchor)
+    slot = InvasionScheduler._current_slot(anchor, spawn_hours="0,12,16,20")
     assert slot == anchor
+
+
+def test_default_schedule_has_only_the_20_tehran_slot():
+    assert InvasionScheduler._current_slot(DAILY_SLOT_TEHRAN_UTC) == DAILY_SLOT_TEHRAN_UTC
+    for hour in (0, 12, 16):
+        anchor = MIDNIGHT_TEHRAN_UTC + timedelta(hours=hour)
+        assert InvasionScheduler._current_slot(anchor, spawn_hours=None) is None
 
 
 @pytest.mark.parametrize("hour", [1, 11, 13, 23])
@@ -74,10 +85,9 @@ def test_non_configured_hours_never_trigger(hour):
 
 
 def test_missing_spawn_hours_config_falls_back_to_default():
-    # spawn_hours=None means "use DEFAULT_INVASION_SPAWN_HOURS" (0,12,16,20).
-    assert InvasionScheduler._current_slot(NOON_TEHRAN_UTC, spawn_hours=None) == NOON_TEHRAN_UTC
-    anchor = MIDNIGHT_TEHRAN_UTC + timedelta(hours=13)
-    assert InvasionScheduler._current_slot(anchor, spawn_hours=None) is None
+    # spawn_hours=None means "use DEFAULT_INVASION_SPAWN_HOURS" (20).
+    assert InvasionScheduler._current_slot(DAILY_SLOT_TEHRAN_UTC, spawn_hours=None) == DAILY_SLOT_TEHRAN_UTC
+    assert InvasionScheduler._current_slot(MIDNIGHT_TEHRAN_UTC, spawn_hours=None) is None
 
 
 def test_custom_spawn_hours_and_window_are_honoured():
@@ -104,14 +114,16 @@ def test_server_timezone_is_never_consulted(monkeypatch):
         if hasattr(time, "tzset"):
             time.tzset()
         monkeypatch.setattr(time, "tzname", ("EST", "EDT"))
-        assert InvasionScheduler._current_slot(NOON_TEHRAN_UTC) == NOON_TEHRAN_UTC
-        assert InvasionScheduler._current_slot(NOON_TEHRAN_UTC + timedelta(minutes=31)) is None
+        assert InvasionScheduler._current_slot(DAILY_SLOT_TEHRAN_UTC) == DAILY_SLOT_TEHRAN_UTC
+        assert InvasionScheduler._current_slot(
+            DAILY_SLOT_TEHRAN_UTC + timedelta(minutes=31)
+        ) is None
         for hour in (0, 12, 16, 20):
             anchor = MIDNIGHT_TEHRAN_UTC + timedelta(hours=hour)
-            assert InvasionScheduler._current_slot(anchor) == anchor
+            assert InvasionScheduler._current_slot(anchor, spawn_hours="0,12,16,20") == anchor
         for hour in (1, 11, 13, 23):
             anchor = MIDNIGHT_TEHRAN_UTC + timedelta(hours=hour)
-            assert InvasionScheduler._current_slot(anchor) is None
+            assert InvasionScheduler._current_slot(anchor, spawn_hours="0,12,16,20") is None
     finally:
         if previous_tz is None:
             os.environ.pop("TZ", None)
@@ -165,22 +177,22 @@ async def _count(sessions) -> int:
 
 @pytest.mark.asyncio
 async def test_two_ticks_in_same_slot_spawn_only_once(db):
-    await InvasionScheduler.tick(now=NOON_TEHRAN_UTC, rng=Random(1))
+    await InvasionScheduler.tick(now=DAILY_SLOT_TEHRAN_UTC, rng=Random(1))
     assert await _count(db) == 1
-    await InvasionScheduler.tick(now=NOON_TEHRAN_UTC + timedelta(minutes=10), rng=Random(1))
+    await InvasionScheduler.tick(now=DAILY_SLOT_TEHRAN_UTC + timedelta(minutes=10), rng=Random(1))
     assert await _count(db) == 1  # still just the one spawn for this slot
     async with db() as session:
         state = await session.get(Inv2GroupState, 1)
         assert state is not None and state.last_spawn_slot is not None
-        assert state.last_spawn_slot.replace(tzinfo=timezone.utc) == NOON_TEHRAN_UTC
+        assert state.last_spawn_slot.replace(tzinfo=timezone.utc) == DAILY_SLOT_TEHRAN_UTC
 
 
 @pytest.mark.asyncio
 async def test_offline_across_a_slot_does_not_backfill(db):
-    """Bot down for 2h spanning the 00:00 slot: the next tick at 02:00 must
-    NOT retroactively spawn the missed midnight invasion."""
-    missed_slot_window_end = MIDNIGHT_TEHRAN_UTC + timedelta(minutes=45)  # bot still down
-    back_online = MIDNIGHT_TEHRAN_UTC + timedelta(hours=2)  # 02:00 Tehran, no configured slot
+    """After missing 20:00, a tick at 22:00 must not backfill the invasion."""
+    missed_slot_window_end = DAILY_SLOT_TEHRAN_UTC + timedelta(minutes=45)  # bot still down
+    back_online = DAILY_SLOT_TEHRAN_UTC + timedelta(hours=2)  # 22:00 Tehran, no spawn slot
+    assert missed_slot_window_end < back_online
     await InvasionScheduler.tick(now=back_online, rng=Random(2))
     assert await _count(db) == 0
     async with db() as session:
@@ -188,14 +200,13 @@ async def test_offline_across_a_slot_does_not_backfill(db):
 
 
 @pytest.mark.asyncio
-async def test_spawns_again_in_a_later_slot_same_day(db):
-    await InvasionScheduler.tick(now=NOON_TEHRAN_UTC, rng=Random(3))
+async def test_spawns_again_at_20_tehran_the_next_day(db):
+    await InvasionScheduler.tick(now=DAILY_SLOT_TEHRAN_UTC, rng=Random(3))
     assert await _count(db) == 1
     async with db.begin() as session:
         for invasion in (await session.scalars(select(Inv2Invasion))).all():
             invasion.status = "DEFEAT"
-    sixteen_hundred = MIDNIGHT_TEHRAN_UTC + timedelta(hours=16)
-    await InvasionScheduler.tick(now=sixteen_hundred, rng=Random(3))
+    await InvasionScheduler.tick(now=DAILY_SLOT_TEHRAN_UTC + timedelta(days=1), rng=Random(3))
     assert await _count(db) == 2
 
 
@@ -203,9 +214,9 @@ async def test_spawns_again_in_a_later_slot_same_day(db):
 async def test_missing_spawn_hours_db_row_uses_code_default(db):
     # No invasion_spawn_hours/invasion_slot_window_minutes row exists in
     # system_config; ConfigService.get(...) returns None and the scheduler
-    # falls back to CONFIG_DEFAULTS ("0,12,16,20" / "30").
+    # falls back to CONFIG_DEFAULTS ("20" / "30").
     async with db() as session:
-        assert await ConfigService.get(session, "invasion_spawn_hours") == "0,12,16,20"
+        assert await ConfigService.get(session, "invasion_spawn_hours") == "20"
         assert await ConfigService.get(session, "invasion_slot_window_minutes") == "30"
-    await InvasionScheduler.tick(now=NOON_TEHRAN_UTC, rng=Random(5))
+    await InvasionScheduler.tick(now=DAILY_SLOT_TEHRAN_UTC, rng=Random(5))
     assert await _count(db) == 1

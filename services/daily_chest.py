@@ -52,6 +52,7 @@ from sib.database.models.daily_chest import (
 )
 from sib.services.apple_wallet import AppleWalletService
 from sib.services.config_store import ConfigService
+from sib.services.golden_hour import reward_multiplier as golden_hour_multiplier
 from sib.services.items import ItemService, roll_drop
 from sib.services.sib_claim import fa_count, fa_digits
 
@@ -669,6 +670,18 @@ class DailyChestService:
             player_level = progress.level
             level_bonus = progression_apples_bonus(progress.level, config)
 
+        base_level_bonus = level_bonus
+        reward_multiplier = (
+            golden_hour_multiplier(CLAIM_REASON, now=now)
+            if reward_type == REWARD_APPLES
+            else 1
+        )
+        if reward_type == REWARD_APPLES:
+            level_bonus *= reward_multiplier
+            claim_quantity = (quantity + base_level_bonus) * reward_multiplier
+        else:
+            claim_quantity = quantity
+
         # The durable claim row: inserting it is the award gate (unique on
         # user_id+claim_day). Written first so delivery can reference it;
         # any delivery failure rolls the insert back with the reward.
@@ -676,7 +689,7 @@ class DailyChestService:
             user_id=user_id,
             claim_day=day,
             reward_type=reward_type,
-            quantity=quantity + level_bonus if reward_type == REWARD_APPLES else quantity,
+            quantity=claim_quantity,
         )
         session.add(claim)
         await session.flush()
@@ -687,11 +700,13 @@ class DailyChestService:
             await AppleWalletService.earn(
                 session,
                 user_id,
-                quantity + level_bonus,
+                quantity + base_level_bonus,
                 reason=CLAIM_REASON,
                 ref_type="daily_chest",
                 ref_id=claim.id,
                 idempotency_key=f"{CLAIM_REASON}:{user_id}:{day}",
+                reward_multiplier=reward_multiplier,
+                occurred_at=now,
             )
         elif reward_type == REWARD_SEEDLINGS:
             from sib.services.seedling import SeedlingService
@@ -740,7 +755,7 @@ class DailyChestService:
         streak = None
         try:
             streak = await DailyStreakService.summary(
-                session, user_id, day=day, pay_bonus=True
+                session, user_id, day=day, pay_bonus=True, now=now
             )
         except Exception:  # pragma: no cover - defensive
             logger.exception("daily streak failed user=%s day=%s", user_id, day)

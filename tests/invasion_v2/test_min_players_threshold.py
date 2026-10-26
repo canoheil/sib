@@ -36,10 +36,10 @@ from sib.services.invasion_v2.scheduler import InvasionScheduler
 from sib.services.maintenance.service import MaintenanceService
 
 MIN_KEY = "invasion_min_players_with_card"
-# Fixed Tehran-local 12:00 spawn slot (see InvasionScheduler._current_slot)
+# Fixed Tehran-local 20:00 spawn slot (see InvasionScheduler._current_slot)
 # instead of the real wall clock, so scheduler ticks below land in a slot
 # deterministically regardless of when this suite runs.
-NOW = datetime(2026, 10, 14, 8, 30, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 14, 16, 30, tzinfo=timezone.utc)
 
 # One shared character: level 1 -> power 20, every further level adds 10.
 CHARACTER_ID = 10

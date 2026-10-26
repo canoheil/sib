@@ -468,6 +468,37 @@ async def test_normal_currency_uses_wallet_credit_once(monkeypatch):
         ref_type="apple_mine_shift",
         ref_id=1,
         idempotency_key="apple_mine:1",
+        reward_multiplier=1,
+        occurred_at=NOW,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.golden_hour
+async def test_normal_mine_reward_doubles_and_reports_paid_amount(monkeypatch):
+    session = _ShiftSession()
+    _shift_fixtures(monkeypatch, level=1, roll="normal")
+    golden_at = datetime(2026, 10, 26, 16, 45, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        mine_service, "_database_now", AsyncMock(return_value=golden_at)
+    )
+    earn = AsyncMock(return_value=30)
+    monkeypatch.setattr(mine_service.AppleWalletService, "earn", earn)
+
+    result = await mine_service.perform_shift(session, user_id=110, group_id=None)
+
+    assert result.amount == 30
+    assert session.shifts[0].amount == 30
+    earn.assert_awaited_once_with(
+        session,
+        user_id=110,
+        amount=15,
+        reason="apple_mine",
+        ref_type="apple_mine_shift",
+        ref_id=1,
+        idempotency_key="apple_mine:1",
+        reward_multiplier=2,
+        occurred_at=golden_at,
     )
 
 
@@ -792,7 +823,8 @@ def test_panel_caption_shows_pickaxe_level_and_ready_state():
         "⛏ **معدن سیبی**\n"
         "🔨 کلنگ: **سطح ۱**\n"
         "🎁 هر شیفت: **۱۰ تا ۱۵ سیب**\n"
-        "✨ شانس سیب ویژه: **۱۰٪**\n\n"
+        "✨ شانس سیب ویژه: **۱۰٪**\n"
+        "🕗 ساعت طلایی تهران (۲۰:۰۰ تا پیش از ۲۱:۰۰): سیب معمولی دوبرابر می‌شود.\n\n"
         "✅ **معدن آماده‌ست! کلنگ بزن.**"
     )
     assert re.search(r"[0-9]", caption) is None
@@ -819,7 +851,8 @@ def test_pickaxe_caption_shows_preview_and_cost():
         "⛏ استخراج: **۲۱ تا ۳۰ سیب**\n"
         "✨ شانس سیب ویژه: **۱۹٪**\n\n"
         "💰 هزینه ارتقا: **۶۰۰ سیب**\n"
-        "🍎 موجودی شما: **۳۵۰ سیب**"
+        "🍎 موجودی شما: **۳۵۰ سیب**\n\n"
+        "🕗 ساعت طلایی تهران (۲۰:۰۰ تا پیش از ۲۱:۰۰): سیب معمولی دوبرابر می‌شود."
     )
     assert re.search(r"[0-9]", caption) is None
 

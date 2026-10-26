@@ -8,6 +8,7 @@ Every balance-changing operation:
 """
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import select
@@ -16,6 +17,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sib.core.logging import logger, log_event, Events
 from sib.database.models import AppleTransaction, AppleWallet
+from sib.services.golden_hour import (
+    GOLDEN_HOUR_APPLE_REASONS,
+    reward_multiplier as golden_hour_multiplier,
+)
 
 
 class InsufficientFundsException(Exception):
@@ -119,6 +124,21 @@ class AppleWalletService:
             stmt = stmt.with_for_update().execution_options(populate_existing=True)
         return await session.scalar(stmt)
 
+    @classmethod
+    async def get_transaction_by_idempotency_key(
+        cls,
+        session: AsyncSession,
+        idempotency_key: str,
+        *,
+        for_update: bool = False,
+    ) -> Optional[AppleTransaction]:
+        """Return the ledger entry owning a key, if any.
+
+        Use ``for_update=True`` when resolving a concurrent idempotent credit
+        under InnoDB REPEATABLE READ, so the read sees the committed winner.
+        """
+        return await cls._find_ledger(session, idempotency_key, lock=for_update)
+
     @staticmethod
     def _assert_same_operation(
         existing: AppleTransaction,
@@ -158,6 +178,8 @@ class AppleWalletService:
         ref_type: Optional[str] = None,
         ref_id: Optional[int] = None,
         idempotency_key: Optional[str] = None,
+        reward_multiplier: Optional[int] = None,
+        occurred_at: Optional[datetime] = None,
     ) -> int:
         """Credit apples. Returns the new balance.
 
@@ -167,35 +189,60 @@ class AppleWalletService:
         any different parameter raises :class:`LedgerKeyConflictError`. A key
         owned by another user is a conflict, never a silent no-op.
 
+        Eligible gameplay rewards use the Tehran golden-hour multiplier. A
+        caller may pass the event timestamp and precomputed multiplier so its
+        displayed outcome matches the credit. The applied multiplier is saved
+        in the ledger and reused by idempotent retries, even after the hour ends.
+
         The ledger lookup is by key only, because ``uq_apple_tx_idempotency``
         is global; the owner is then compared explicitly.
         """
         if amount < 0:
             raise ValueError("earn amount must be positive")
-        params = dict(
-            user_id=user_id,
-            signed_amount=amount,
-            reason=reason,
-            ref_type=ref_type,
-            ref_id=ref_id,
-        )
+        base_amount = int(amount)
+
         if idempotency_key:
             existing = await cls._find_ledger(session, idempotency_key)
             if existing is not None:
-                cls._assert_same_operation(existing, **params)
+                # Never recompute the factor from retry time: this request may
+                # be a redelivery of a reward first earned before 21:00 Tehran.
+                stored_multiplier = int(getattr(existing, "reward_multiplier", 1) or 1)
+                cls._assert_same_operation(
+                    existing,
+                    user_id=user_id,
+                    signed_amount=base_amount * stored_multiplier,
+                    reason=reason,
+                    ref_type=ref_type,
+                    ref_id=ref_id,
+                )
                 return await cls.get_balance(session, user_id)
 
+        expected_multiplier = golden_hour_multiplier(reason, now=occurred_at)
+        if reward_multiplier is None:
+            reward_multiplier = expected_multiplier
+        if isinstance(reward_multiplier, bool) or reward_multiplier not in (1, 2):
+            raise ValueError("reward_multiplier must be 1 or 2")
+        if reward_multiplier != expected_multiplier:
+            raise ValueError(
+                f"reward_multiplier {reward_multiplier} does not match golden-hour "
+                f"policy {expected_multiplier} for {reason!r}"
+            )
+        if reward_multiplier == 2 and reason not in GOLDEN_HOUR_APPLE_REASONS:
+            raise ValueError(f"golden-hour multiplier is not allowed for {reason!r}")
+
+        credited_amount = base_amount * reward_multiplier
         async def credit_and_flush() -> AppleWallet:
             wallet = await cls._get_or_create(session, user_id)
-            wallet.balance += amount
+            wallet.balance += credited_amount
             session.add(
                 AppleTransaction(
                     user_id=user_id,
-                    amount=amount,
+                    amount=credited_amount,
                     reason=reason,
                     ref_type=ref_type,
                     ref_id=ref_id,
                     idempotency_key=idempotency_key,
+                    reward_multiplier=reward_multiplier,
                     balance_after=wallet.balance,
                 )
             )
@@ -213,7 +260,15 @@ class AppleWalletService:
                 winner = await cls._find_ledger(session, idempotency_key, lock=True)
                 if winner is None:
                     raise  # not a duplicate-key race; let the caller decide
-                cls._assert_same_operation(winner, **params)
+                winner_multiplier = int(getattr(winner, "reward_multiplier", 1) or 1)
+                cls._assert_same_operation(
+                    winner,
+                    user_id=user_id,
+                    signed_amount=base_amount * winner_multiplier,
+                    reason=reason,
+                    ref_type=ref_type,
+                    ref_id=ref_id,
+                )
                 logger.warning(f"Duplicate apple transaction key={idempotency_key}")
                 return await cls.get_balance(session, user_id)
         elif idempotency_key:
@@ -224,15 +279,16 @@ class AppleWalletService:
             # Unkeyed: unchanged path. Unkeyed rows cannot collide on the key;
             # any other integrity error propagates and the caller decides.
             wallet = await cls._get_or_create(session, user_id)
-            wallet.balance += amount
+            wallet.balance += credited_amount
             session.add(
                 AppleTransaction(
                     user_id=user_id,
-                    amount=amount,
+                    amount=credited_amount,
                     reason=reason,
                     ref_type=ref_type,
                     ref_id=ref_id,
                     idempotency_key=None,
+                    reward_multiplier=reward_multiplier,
                     balance_after=wallet.balance,
                 )
             )
@@ -240,7 +296,7 @@ class AppleWalletService:
 
         log_event(
             Events.APPLE_TRANSACTION,
-            {"user_id": user_id, "amount": amount, "reason": reason, "balance": wallet.balance},
+            {"user_id": user_id, "amount": credited_amount, "reason": reason, "balance": wallet.balance},
         )
         return wallet.balance
 

@@ -26,7 +26,7 @@ from sib.services.invasion_v2.power_resolver import set_power_resolver
 from sib.services.invasion_v2.scheduler import InvasionScheduler
 
 
-NOW = datetime(2026, 10, 14, 8, 30, tzinfo=timezone.utc)  # Tehran local 12:00:00 (a spawn slot)
+NOW = datetime(2026, 10, 14, 16, 30, tzinfo=timezone.utc)  # Tehran local 20:00:00 (the daily spawn slot)
 
 
 @pytest.fixture
@@ -126,10 +126,10 @@ async def test_resolved_power_spawns_for_each_eligible_group_with_formula(db, mo
         assert first.ends_at is None and first.started_at is None  # Phase 5 sends first
         assert first.occurrence_key.startswith("inv2:v1:group:1:region:")
         assert (await session.get(Inv2Region, first.region_code)).last_invasion_id == first.id
-    # Later intervals spawn nothing new: both groups still hold a live
-    # PENDING invasion, so they are skipped as already active.
-    await InvasionScheduler.tick(now=NOW + timedelta(hours=4, seconds=1), rng=Random(6))
-    await InvasionScheduler.tick(now=NOW + timedelta(hours=8, seconds=2), rng=Random(6))
+    # At the next daily 20:00 slots, both groups still hold a live PENDING
+    # invasion, so the active-invasion guard prevents another spawn.
+    await InvasionScheduler.tick(now=NOW + timedelta(days=1, seconds=1), rng=Random(6))
+    await InvasionScheduler.tick(now=NOW + timedelta(days=2, seconds=2), rng=Random(6))
     async with db() as session:
         rows = list((await session.scalars(select(Inv2Invasion).order_by(Inv2Invasion.id))).all())
         assert [row.group_id for row in rows] == [1, 2]  # no overlapping PENDING
@@ -252,22 +252,21 @@ async def test_recovery_expires_only_overdue_active_with_warning(db, caplog):
 
 
 @pytest.mark.asyncio
-async def test_fixed_slot_blocks_same_slot_repeat_but_allows_next_slot(db):
+async def test_fixed_slot_blocks_same_slot_repeat_but_allows_next_day(db):
     # Replaces the old "wait invasion_interval_seconds" cadence test: the
-    # scheduler now gates on the fixed Asia/Tehran daily schedule
-    # (00:00/12:00/16:00/20:00) instead of elapsed seconds since the last
-    # spawn. NOW is the 12:00 Tehran slot.
+    # scheduler gates on the fixed daily 20:00 Asia/Tehran slot, not elapsed
+    # seconds since the last spawn. NOW is the 20:00 Tehran slot.
     set_power_resolver(SimpleNamespace(average_main_card_power=AsyncMock(return_value=500.0)))
     await InvasionScheduler.tick(now=NOW, rng=Random(4))
     async with db.begin() as session:
         for invasion in (await session.scalars(select(Inv2Invasion))).all():
             invasion.status = InvasionStatus.DEFEAT.value
-    # Still inside the 12:00 slot window (20 minutes later): must NOT
-    # spawn again, even though both prior invasions already finalized.
+    # Still inside the 20:00 slot window (20 minutes later): do not spawn
+    # again, even though both prior invasions have already finalized.
     await InvasionScheduler.tick(now=NOW + timedelta(minutes=20), rng=Random(4))
     async with db() as session:
         assert await session.scalar(select(func.count()).select_from(Inv2Invasion)) == 2
-    # The next scheduled slot (16:00 Tehran, NOW + 4h) is a new slot: spawns again.
-    await InvasionScheduler.tick(now=NOW + timedelta(hours=4), rng=Random(4))
+    # At 20:00 the next day, both groups are due again.
+    await InvasionScheduler.tick(now=NOW + timedelta(days=1), rng=Random(4))
     async with db() as session:
         assert await session.scalar(select(func.count()).select_from(Inv2Invasion)) == 4

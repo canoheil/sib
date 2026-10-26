@@ -7,6 +7,7 @@ against MariaDB.
 
 import asyncio
 import json
+from datetime import datetime, timezone
 from fractions import Fraction
 
 import pytest
@@ -350,6 +351,57 @@ async def test_apple_reward_is_paid_once_with_one_charge(db_session):
         assert "shop_chest_purchase" in reasons and "shop_chest_reward" in reasons
         openings = await _openings(session, user_id)
         assert len(openings) == 1 and openings[0].balance_after == 57
+
+
+@pytest.mark.asyncio
+@pytest.mark.golden_hour
+async def test_golden_hour_doubles_apple_chest_and_replay_keeps_original_amount(db_session):
+    user_id = await _user_with_apples(db_session, 100)
+    chest = await _chest(
+        db_session,
+        price=50,
+        rewards=[RewardSpec(kind="apples", weight=1, apples=7)],
+    )
+    golden_at = datetime(2026, 10, 26, 16, 45, tzinfo=timezone.utc)
+    operation_key = "golden-chest-1"
+
+    result = await ShopChestService.open_chest(
+        db_session,
+        user_id,
+        chest.id,
+        operation_key,
+        rng=FixedRng([0]),
+        now=golden_at,
+    )
+    await db_session.commit()
+
+    transaction = await db_session.scalar(
+        select(AppleTransaction).where(
+            AppleTransaction.user_id == user_id,
+            AppleTransaction.reason == "shop_chest_reward",
+        )
+    )
+    opening = await db_session.scalar(
+        select(ShopChestOpening).where(
+            ShopChestOpening.user_id == user_id,
+            ShopChestOpening.operation_key == operation_key,
+        )
+    )
+    assert result.apples_awarded == 14
+    assert transaction is not None and transaction.amount == 14
+    assert transaction.reward_multiplier == 2
+    assert opening is not None and opening.reward_apples == 14
+    assert await AppleWalletService.get_balance(db_session, user_id) == 64
+
+    replay = await ShopChestService.open_chest(
+        db_session,
+        user_id,
+        chest.id,
+        operation_key,
+        now=datetime(2026, 10, 26, 17, 30, tzinfo=timezone.utc),
+    )
+    assert replay.replayed is True and replay.apples_awarded == 14
+    assert await AppleWalletService.get_balance(db_session, user_id) == 64
 
 
 @pytest.mark.asyncio

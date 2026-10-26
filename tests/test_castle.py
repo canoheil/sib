@@ -94,6 +94,22 @@ async def test_castle_daily_income_claim(castle_session):
     assert await AppleWalletService.get_balance(s, 1) == 10200
 
 
+@pytest.mark.golden_hour
+async def test_golden_hour_doubles_daily_castle_income(castle_session):
+    s = castle_session
+    now = datetime(2026, 10, 26, 16, 45, tzinfo=timezone.utc)
+
+    assert await CastleService.claim_daily_income(s, 1, -1, now=now) == 200
+    claim = await s.scalar(select(CastleIncomeClaim))
+    transaction = await s.scalar(
+        select(AppleTransaction).where(AppleTransaction.reason == "castle_spring")
+    )
+    assert claim is not None and claim.amount == 200
+    assert transaction is not None and transaction.amount == 200
+    assert transaction.reward_multiplier == 2
+    assert await AppleWalletService.get_balance(s, 1) == 10_200
+
+
 async def test_invasion_buff_applied_correctly(castle_session):
     s = castle_session
     assert await CastleService.get_invasion_buff(s, -1) == 0
