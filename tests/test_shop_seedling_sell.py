@@ -493,7 +493,7 @@ def test_migration_061_revises_060_and_keeps_one_head():
     # Every other revision still has at most one child: 061 is revised by
     # 062_transfers -> 063_reminders -> 064_group_league -> 065_league_points
     # -> 066_daily_channel_digest -> 067_invasion_daily_20_schedule
-    # -> 068_golden_hour_apple_rewards, the single head of the one linear history.
+    # -> 068_golden_hour_apple_rewards -> 069_golden_hour_notices, the single head.
     versions = REPO_ROOT / "database/migrations/versions"
     revisions = {}
     for path in versions.glob("*.py"):
@@ -504,7 +504,7 @@ def test_migration_061_revises_060_and_keeps_one_head():
     parents = [parent for parent in revisions.values() if parent]
     assert len(parents) == len(set(parents)), "forked migration history"
     heads = set(revisions) - set(parents)
-    assert heads == {"068_golden_hour_apple_rewards"}
+    assert heads == {"069_golden_hour_notices"}
 
 
 def test_migration_061_seeds_the_default_price_and_is_idempotent(tmp_path):

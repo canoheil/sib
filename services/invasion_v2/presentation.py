@@ -18,6 +18,14 @@ from sib.database.models import (
 from sib.keyboards.common import success_button
 from sib.services.character_art import artwork_path
 from sib.services.config_store import ConfigService, DEFAULT_INVASION_JOIN_WINDOW_SECONDS
+from sib.services import golden_hour as golden_hour_policy
+from sib.services.golden_hour_announcement import (
+    GOLDEN_HOUR_NOTICE_TEXT,
+    claim_golden_hour_notice,
+    mark_golden_hour_notice_failed,
+    mark_golden_hour_notice_sent,
+    tehran_day,
+)
 from sib.services.sib_claim import fa_digits
 from . import narrative
 from .circuit_breaker import is_group_available, record_send_failure, record_send_success
@@ -171,8 +179,16 @@ def announcement_hp_line(current_hp: int, total_hp: int) -> str:
 
 
 def build_announcement_caption(narrative_text: str, current_hp: int, total_hp: int) -> str:
-    """Announcement caption: narrative, blank line, then the live HP line."""
-    return _fit_caption(narrative_text, announcement_hp_line(current_hp, total_hp))
+    """Announcement caption with optional Golden Hour notice and live HP."""
+    has_golden_hour_notice = GOLDEN_HOUR_NOTICE_TEXT in narrative_text
+    narrative_body = narrative_text.replace(
+        f"\n\n{GOLDEN_HOUR_NOTICE_TEXT}", ""
+    ).replace(GOLDEN_HOUR_NOTICE_TEXT, "")
+    suffix = ""
+    if has_golden_hour_notice:
+        suffix += f"\n\n{GOLDEN_HOUR_NOTICE_TEXT}"
+    suffix += announcement_hp_line(current_hp, total_hp)
+    return _fit_caption(narrative_body, suffix)
 
 
 def build_join_caption(narrative_text: str, damage: int, *, is_crit: bool, is_kill: bool) -> str:
@@ -199,7 +215,7 @@ def join_keyboard(invasion_id: int) -> InlineKeyboardMarkup:
 
 async def _edit_announcement_caption(
     bot, group_id, chat_id, message_id, caption, reply_markup=None
-) -> None:
+) -> bool:
     """One metered announcement caption edit.
 
     reply_markup is re-sent for a live battle and deliberately omitted (None)
@@ -217,18 +233,19 @@ async def _edit_announcement_caption(
     except TelegramBadRequest as exc:
         if _is_not_modified(exc):
             logger.debug("inv2 HP edit unchanged, skipping group=%s message=%s", group_id, message_id)
-            return
+            return True
         logger.warning("inv2 HP edit rejected group=%s message=%s: %s", group_id, message_id, exc.message)
         await _breaker_failure(group_id)
-        return
+        return False
     except Exception:
         logger.warning("inv2 HP edit failed group=%s message=%s", group_id, message_id, exc_info=True)
         await _breaker_failure(group_id)
-        return
+        return False
     await _breaker_success(group_id)
+    return True
 
 
-async def _apply_hp_edit(bot, invasion_id: int, *, allow_victory: bool = False) -> None:
+async def _apply_hp_edit(bot, invasion_id: int, *, allow_victory: bool = False) -> bool:
     """Rebuild the announcement caption from the latest committed HP and edit once.
 
     Only a live (ACTIVE) battle gets a debounced HP edit: once the battle is
@@ -237,18 +254,18 @@ async def _apply_hp_edit(bot, invasion_id: int, *, allow_victory: bool = False) 
     finalize rewrites the caption with the victory narrative.
     """
     if bot is None:
-        return
+        return False
     try:
         async with get_session() as session:
             inv = await session.get(Inv2Invasion, invasion_id)
             if inv is None or inv.message_id is None:
-                return
+                return False
             if inv.status == InvasionStatus.PENDING.value:
-                return  # announcement was never sent
+                return False  # announcement was never sent
             if inv.status == InvasionStatus.DEFEAT.value:
-                return  # defeat narrative owns the caption
+                return False  # defeat narrative owns the caption
             if inv.status == InvasionStatus.VICTORY.value and not allow_victory:
-                return  # victory narrative owns the caption (no edit after finalize)
+                return False  # victory narrative owns the caption (no edit after finalize)
             narrative_text = inv.announcement_narrative
             if narrative_text is None:
                 # Legacy row announced before the narrative column existed:
@@ -269,10 +286,15 @@ async def _apply_hp_edit(bot, invasion_id: int, *, allow_victory: bool = False) 
                             if inv.status == InvasionStatus.ACTIVE.value else None)
     except Exception:
         logger.exception("inv2 HP edit state read failed invasion=%s", invasion_id)
-        return
-    await _edit_announcement_caption(bot, group_id, chat_id, message_id,
-                                     format_html_caption(caption),
-                                     reply_markup=reply_markup)
+        return False
+    return await _edit_announcement_caption(
+        bot,
+        group_id,
+        chat_id,
+        message_id,
+        format_html_caption(caption),
+        reply_markup=reply_markup,
+    )
 
 
 # Per-invasion coalescing of announcement HP edits: rapid joins within the
@@ -434,18 +456,40 @@ class InvasionPresentation:
                 narrative_text = narrative.render_announcement(
                     username="نگهبانان", card_name="کارت‌های اصلی", region_name=region.name_fa,
                     enemy_name=inv.enemy_name_fa, rng=random.Random(inv.id), invasion_id=inv.id)
-                caption = build_announcement_caption(narrative_text, inv.enemy_hp_remaining, inv.enemy_hp)
-                kb = join_keyboard(inv.id)
                 raw_window = await ConfigService.get(session, "invasion_join_window_seconds")
                 window = int(DEFAULT_INVASION_JOIN_WINDOW_SECONDS if raw_window is None else raw_window)
                 if window <= 0:
                     raise ValueError("Invalid join window")
+
+                now = datetime.now(timezone.utc)
+                golden_notice_claimed = False
+                if golden_hour_policy.is_golden_hour(now):
+                    golden_notice_claimed = await claim_golden_hour_notice(
+                        session,
+                        group_id,
+                        source="invasion",
+                        now=now,
+                        invasion_id=inv.id,
+                    )
+                    if golden_notice_claimed:
+                        narrative_text = f"{narrative_text}\n\n{GOLDEN_HOUR_NOTICE_TEXT}"
+
+                caption = build_announcement_caption(
+                    narrative_text, inv.enemy_hp_remaining, inv.enemy_hp
+                )
+                kb = join_keyboard(inv.id)
                 message = await _telegram(group_id, bot.send_photo, chat_id=group_id,
                     photo=FSInputFile(path), caption=format_html_caption(caption),
                     reply_markup=kb, parse_mode="HTML")
                 if message is None:
+                    if golden_notice_claimed:
+                        await mark_golden_hour_notice_failed(
+                            session,
+                            group_id,
+                            day=tehran_day(now),
+                            error="Telegram rejected the invasion announcement",
+                        )
                     return
-                now = datetime.now(timezone.utc)
                 inv.message_chat_id = message.chat.id
                 inv.message_id = message.message_id
                 inv.announcement_narrative = narrative_text
@@ -453,6 +497,14 @@ class InvasionPresentation:
                 inv.started_at = now
                 inv.ends_at = now + timedelta(seconds=window)
                 inv.status = InvasionStatus.ACTIVE.value
+                if golden_notice_claimed:
+                    await mark_golden_hour_notice_sent(
+                        session,
+                        group_id,
+                        day=tehran_day(now),
+                        message_id=message.message_id,
+                        now=now,
+                    )
             # Outside the transaction on purpose: pinning is best-effort and
             # must never undo a committed, already-delivered announcement.
             await pin_announcement(bot, invasion_id)
@@ -531,12 +583,24 @@ class InvasionPresentation:
                 narrative_text = _caption(render(username="نگهبانان", card_name="کارت‌های نگهبانان",
                     region_name=region.name_fa, enemy_name=inv.enemy_name_fa, rng=random.Random(inv.id),
                     **narrative_context))
+                has_golden_hour_notice = GOLDEN_HOUR_NOTICE_TEXT in (
+                    inv.announcement_narrative or ""
+                )
+                finalized_caption = (
+                    _fit_caption(
+                        narrative_text,
+                        f"\n\n{GOLDEN_HOUR_NOTICE_TEXT}",
+                        limit=1020,
+                    )
+                    if has_golden_hour_notice
+                    else narrative_text
+                )
                 # Telegram caption edit and photo send are separate metered calls.
                 await _telegram(inv.group_id, bot.edit_message_caption,
                     chat_id=inv.message_chat_id or inv.group_id, message_id=inv.message_id,
-                    caption=format_html_caption(narrative_text), reply_markup=None,
+                    caption=format_html_caption(finalized_caption), reply_markup=None,
                     parse_mode="HTML")
-                caption = narrative_text
+                caption = finalized_caption
                 reward_lines = ()
                 if inv.status == InvasionStatus.VICTORY.value:
                     rewards = (await session.execute(select(Inv2Reward.reward_type, Inv2Reward.reward_amount)
@@ -556,8 +620,14 @@ class InvasionPresentation:
                         # Blank line before the reward block, matching the HP and
                         # damage lines. Fitting the narrative instead of appending
                         # keeps the reward line itself from being cut by Telegram.
-                        caption = _fit_caption(narrative_text,
-                                               "\n\n🎁 پاداش مدافعان: **" + summary + "**", limit=1020)
+                        reward_suffix = "\n\n🎁 پاداش مدافعان: **" + summary + "**"
+                        if has_golden_hour_notice:
+                            reward_suffix = (
+                                f"\n\n{GOLDEN_HOUR_NOTICE_TEXT}" + reward_suffix
+                            )
+                        caption = _fit_caption(
+                            narrative_text, reward_suffix, limit=1020
+                        )
                 image_args = (inv.status.lower(), region.name_fa, inv.enemy_type, reward_lines)
                 path = await asyncio.to_thread(cached_image,
                     ("compose-v4", "result", inv.id, *image_args),

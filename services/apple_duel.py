@@ -309,12 +309,13 @@ class AppleDuelService:
                 battle.result_json = json.dumps(result, ensure_ascii=False)
             if battle.winner_id not in (duel.inviter_id, duel.recipient_id):
                 raise BattleError("نتیجهٔ نبرد معتبر نیست.")
-            await AppleBattleService._award_seedling(
-                session, battle.id, battle.winner_id
+            # Use the shared completion path so the Duel's promised seedling
+            # and five-Apple winner payout are committed together, with the
+            # same ledger idempotency key and Golden Hour timestamp as other
+            # Apple Battles.
+            await AppleBattleService.complete(
+                session, battle.id, occurred_at=now
             )
-            battle.seedlings_awarded = 1
-            battle.status = AppleBattleStatus.COMPLETED
-            battle.completed_at = now
             duel.status = "ACCEPTED"
             duel.battle_id = battle.id
             duel.snapshot_json = json.dumps(

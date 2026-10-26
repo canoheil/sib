@@ -425,6 +425,7 @@ async def test_maintenance_cycle_sweeps_old_parties_but_keeps_new_lobbies(db_ses
 # (owner, attribute) pair the cycle calls.
 def _task_table():
     from sib.services.apple_duel_presentation import AppleDuelPresentation
+    from sib.services.golden_hour_announcement import GoldenHourGroupAnnouncementService
     from sib.services.invasion_v2.scheduler import InvasionScheduler
     from sib.services.match_result import MatchResultService
     from sib.services.player_xp import PlayerXPService
@@ -447,6 +448,10 @@ def _task_table():
         "retry_pending_xp_awards": (MatchResultService, "retry_pending_xp_awards"),
         "run_marriage_love_cycle": (MaintenanceService, "run_marriage_love_cycle"),
         "invasion_tick": (InvasionScheduler, "tick"),
+        "golden_hour_group_notices": (
+            GoldenHourGroupAnnouncementService,
+            "run_due",
+        ),
         "resume_pending_bot_turns": (MaintenanceService, "_resume_pending_bot_turns"),
         "apple_duel_recovery": (AppleDuelPresentation, "recover_and_publish"),
         "present_bot_fallbacks": (MaintenanceService, "_present_bot_fallbacks"),

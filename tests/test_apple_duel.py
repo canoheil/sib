@@ -2,7 +2,7 @@
 
 import hashlib
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -279,13 +279,86 @@ async def test_result_reward_atomic_and_idempotent(db_session):
     assert not await AppleBattleService._award_seedling(db_session, battle.id, winner)
     assert await SeedlingService.get_total(db_session, winner) == 1
     assert battle.result_json == result
-    from sib.database.models import AppleTransaction, Match, PlayerStats
+    from sib.database.models import AppleTransaction, AppleWallet, Match, PlayerStats
 
-    for table in (AppleTransaction, Match, PlayerStats):
+    transactions = list(
+        (
+            await db_session.scalars(
+                select(AppleTransaction).where(
+                    AppleTransaction.reason == "apple_battle_win",
+                    AppleTransaction.ref_type == "apple_battle",
+                    AppleTransaction.ref_id == battle.id,
+                )
+            )
+        ).all()
+    )
+    assert len(transactions) == 1
+    assert transactions[0].user_id == winner
+    assert transactions[0].amount == 5
+    assert transactions[0].idempotency_key == f"apple_battle_win:{battle.id}"
+    assert transactions[0].reward_multiplier == 1
+    assert (await db_session.get(AppleWallet, winner)).balance == 5
+    assert await db_session.get(AppleWallet, loser) is None
+    for table in (Match, PlayerStats):
         assert await db_session.scalar(select(func.count()).select_from(table)) == 0
     assert not await Service.expire(
         db_session, duel.id, now=duel.expires_at + timedelta(days=1)
     )
+
+
+@pytest.mark.golden_hour
+async def test_result_reward_uses_golden_hour_multiplier(db_session):
+    from sib.database.models import AppleTransaction, AppleWallet
+    from sib.services.golden_hour import TEHRAN
+
+    duel, *_ = await setup_duel(db_session)
+    when = datetime(2026, 10, 26, 20, 30, tzinfo=TEHRAN).astimezone(timezone.utc)
+    duel.expires_at = when + timedelta(minutes=5)
+    await db_session.commit()
+
+    await Service.act(
+        db_session,
+        duel.id,
+        duel.recipient_id,
+        duel.group_id,
+        "accept",
+        message_id=90,
+        now=when,
+    )
+    await db_session.commit()
+
+    battle = await db_session.get(AppleBattle, duel.battle_id)
+    transaction = await db_session.scalar(
+        select(AppleTransaction).where(
+            AppleTransaction.reason == "apple_battle_win",
+            AppleTransaction.ref_id == battle.id,
+        )
+    )
+    assert transaction is not None
+    assert transaction.user_id == battle.winner_id
+    assert transaction.amount == 10
+    assert transaction.reward_multiplier == 2
+    assert (await db_session.get(AppleWallet, battle.winner_id)).balance == 10
+
+
+async def test_apple_payment_failure_rolls_back_duel_acceptance(db_session, monkeypatch):
+    from sib.database.models import AppleTransaction
+    from sib.services.apple_wallet import AppleWalletService
+
+    duel, *_ = await setup_duel(db_session)
+
+    async def fail_earn(*args, **kwargs):
+        raise RuntimeError("apple credit unavailable")
+
+    monkeypatch.setattr(AppleWalletService, "earn", fail_earn)
+    with pytest.raises(RuntimeError, match="apple credit unavailable"):
+        await accept(db_session, duel)
+
+    await db_session.refresh(duel)
+    assert duel.status == "PENDING" and duel.battle_id is None
+    assert await db_session.scalar(select(func.count()).select_from(AppleBattle)) == 0
+    assert await db_session.scalar(select(func.count()).select_from(SeedlingAward)) == 0
+    assert await db_session.scalar(select(func.count()).select_from(AppleTransaction)) == 0
 
 
 async def test_payment_failure_rolls_back_acceptance(db_session, monkeypatch):
