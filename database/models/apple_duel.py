@@ -4,12 +4,24 @@ from datetime import datetime
 from typing import Optional
 
 from sib.database.base import Base, TimestampMixin
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 
 class AppleDuel(Base, TimestampMixin):
     __tablename__ = "apple_duels"
+    __table_args__ = (
+        # Weekly league: "who duelled inside this group this week".
+        Index("ix_apple_duels_group_created", "group_id", "created_at"),
+    )
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     group_id: Mapped[int] = mapped_column(BigInteger, nullable=False)

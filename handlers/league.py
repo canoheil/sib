@@ -57,7 +57,9 @@ async def _render_panel(chat) -> tuple[str, InlineKeyboardMarkup]:
                 is_group=is_group, enabled=False
             )
 
-        rows = await GroupLeagueService.standings(session, key)
+        rows = await GroupLeagueService.standings(
+            session, key, points=conf["points"]
+        )
         own = None
         group_id = getattr(chat, "id", None)
         if is_group and group_id:

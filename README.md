@@ -102,12 +102,20 @@ Alembic migrations (`database/`).
   matches never count, so the table cannot be farmed.
 - Tie-breaks are deterministic — points, wins, draws, then group id —
   and never rely on `GROUP BY` ordering.
+- **Multi-source scoring (Phase 1):** a group is scored for the week it
+  actually had. Group matches: win 3 / draw 1, cap 45. Group wars: win 10,
+  presence 3, plus 1 per 100 damage dealt, cap 30. Apple mine inside a
+  group: 1 per 25 normal apples, cap 10. Apple duels inside a group: 1 per
+  distinct member, cap 5 (a duel is always inside ONE group, so it can only
+  be activity, never a competitive result). Theoretical maximum 90, and the
+  panel prints the breakdown: `🎮 بازی ۱۸ + ⚔️ جنگ ۱۹ + ⛏ معدن ۲ + 🥊 دوئل ۴`.
+  The whole table is one config row, `league_points`.
 - Payout: every player who **actually played** for a top-3 group that
   week is paid (not every member — presence is not participation), with
   one auditable wallet transaction per player keyed
   `league:<week>:<group>:<user>`. The ladder is one config value,
   `league_rewards` (`{"1": 300, "2": 150, "3": 100}` by default), and a
-  group must reach `league_min_points` (3) to be paid at all, so a quiet
+  group must reach `league_min_points` (15) to be paid at all, so a quiet
   week has no champion instead of a 0-point winner.
 - `group_league_weeks` (PK `week_key`) is the atomic "this week is paid"
   claim and `group_league_awards` is the frozen podium; both are created

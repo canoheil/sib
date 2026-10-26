@@ -724,7 +724,7 @@ def test_panel_shows_the_table_the_ladder_and_our_rank():
     assert "🥇" in text and "🥈" in text
     assert "رتبهٔ **۲**" in text
     assert "۳۰۰ سیب" in text  # the ladder
-    assert "فقط نبردهای واقعیِ گروه با گروه" in text
+    assert "امتیاز از چهار جا می‌آد" in text
 
 
 def test_private_panel_has_no_own_group_line_but_the_table():

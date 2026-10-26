@@ -95,6 +95,8 @@ class WarAttack(Base):
     __table_args__ = (
         Index("ix_war_attacks_war_user", "war_id", "user_id"),
         Index("ix_war_attacks_war_source_group", "war_id", "source_group_id"),
+        # Weekly league: damage dealt by each group inside a week.
+        Index("ix_war_attacks_created_at", "created_at"),
     )
 
     id: Mapped[int] = mapped_column(_ID, primary_key=True, autoincrement=True)
