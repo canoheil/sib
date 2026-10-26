@@ -71,6 +71,8 @@ NEW_MENU_ALIASES = {
     "شاپ سیبی": "shop",
     "لیدربرد سیبی": "leaderboard",
     "صندوق سیبی": "daily_chest",
+    "سیب لیگ": "league",
+    "لیگ سیبی": "league",
 }
 
 #: Every OTHER exact-match text trigger registered in the bot (wake words
@@ -334,6 +336,11 @@ def _patch_menu_alias_entry(monkeypatch, target, message, bot):
 
         monkeypatch.setattr(chest_module, "handle_chest_shortcut", spy)
         expected_args = (message, bot)
+    elif target == "league":
+        from sib.handlers import league as league_module
+
+        monkeypatch.setattr(league_module, "cmd_league", spy)
+        expected_args = (message, bot)
     else:  # pragma: no cover - test table must cover every destination
         raise AssertionError(f"unhandled menu alias target: {target}")
     return spy, expected_args
@@ -364,6 +371,7 @@ async def test_new_menu_alias_opens_its_existing_entry(monkeypatch, phrase, targ
         ("وی\u200cکی سیبی", "wiki"),
         ("\u200c ویکی\u200c سیبی", "wiki"),
         ("  صندوق سیبی\u200c  ", "daily_chest"),
+        ("ل\u200cیگ سیبی", "league"),
     ],
 )
 def test_menu_alias_matching_folds_typed_persian_variants(phrase, target):
@@ -379,7 +387,8 @@ def test_menu_aliases_are_exact_and_do_not_collide():
                  for phrase in NEW_MENU_ALIASES]
     assert len(canonical) == len(set(canonical)) == len(NEW_MENU_ALIASES)
     assert set(MENU_ALIAS_TARGETS.values()) == {
-        "wiki", "garden", "party", "cards", "shop", "leaderboard", "daily_chest"
+        "wiki", "garden", "party", "cards", "shop", "leaderboard",
+        "daily_chest", "league",
     }
     assert MENU_ALIAS_TARGETS["ویکی سیبی"] == MENU_ALIAS_TARGETS["سیب ویکی"] == "wiki"
 

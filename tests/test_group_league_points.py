@@ -511,19 +511,45 @@ def test_format_breakdown_lists_only_the_sources_that_scored():
             LeagueRow(
                 rank=1, group_id=1, title="گروه", points=43,
                 match_points=18, war_points=19, mine_points=2, duel_points=4,
+                war_wins=1,
             )
         )
-        == "🎮 بازی ۱۸ + ⚔️ جنگ ۱۹ + ⛏ معدن ۲ + 🥊 دوئل ۴"
+        == "🎮 نبرد ۱۸ · ⚔️ جنگ ۱۹ (۱ برد) · ⛏ معدن ۲ · 🥊 دوئل ۴"
     )
     assert (
         format_breakdown(
             LeagueRow(rank=1, group_id=1, title="گروه", points=13, match_points=13)
         )
-        == "🎮 بازی ۱۳"
+        == "🎮 نبرد ۱۳"
     )
     assert "امتیازی" in format_breakdown(
         LeagueRow(rank=1, group_id=1, title="گروه", points=0)
     )
+
+
+def test_league_table_hides_zero_records_and_shows_only_scoring_sources():
+    from sib.services.group_league import format_table
+
+    text = format_table(
+        [
+            LeagueRow(
+                rank=1,
+                group_id=1,
+                title="قهرمان",
+                points=20,
+                war_points=20,
+                wars=1,
+                war_wins=1,
+            ),
+            LeagueRow(rank=2, group_id=2, title="گروه بی‌امتیاز", points=0),
+        ]
+    )
+
+    assert "⚔️ جنگ ۲۰ (۱ برد)" in text
+    assert "گروه بی‌امتیاز" in text and "**۰** امتیاز" in text
+    assert "۰ برد" not in text
+    assert "۰ مساوی" not in text
+    assert "جنگ‌برد" not in text
 
 
 def test_the_panel_prints_the_breakdown_for_our_group():
@@ -543,5 +569,8 @@ def test_the_panel_prints_the_breakdown_for_our_group():
         rewards=DEFAULT_REWARDS,
         min_points=15,
     )
-    assert "└ 🎮 بازی ۱۸ + ⚔️ جنگ ۱۹ + ⛏ معدن ۲ + 🥊 دوئل ۴" in panel
-    assert "۱ جنگ‌برد" in panel  # the table row shows the war record too
+    assert (
+        "└ سهم امتیاز: 🎮 نبرد ۱۸ · ⚔️ جنگ ۱۹ (۱ برد) · "
+        "⛏ معدن ۲ · 🥊 دوئل ۴"
+    ) in panel
+    assert "⚔️ جنگ ۱۹ (۱ برد)" in panel

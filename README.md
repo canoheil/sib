@@ -135,6 +135,18 @@ Alembic migrations (`database/`).
   blocks the Apple payout.
 - Kill switch: `league_enabled` (built-in default **off**, seeded **on**
   by the migration).
+- **Daily channel digest (Phase 3):** one short post at **20:00 Asia/Tehran**
+  at most, and only on days with real group activity. It shows daily match/war/
+  mine/duel activity and the live top three; quiet days are recorded as
+  skipped instead of receiving filler. It never posts one message per game.
+  The default destination is `OFFICIAL_CHANNEL_ID` (`@sib_official`), and the
+  bot must be an admin with permission to post there. Migration
+  `066_daily_channel_digest` enables the feature and creates
+  `daily_channel_posts`, the durable per-day idempotency/delivery log. The
+  admin menu's **پست روزانهٔ کانال** screen provides a kill switch, preview,
+  and manual retry after a known send failure; `/daily_digest` opens the same
+  screen. `daily_digest_hour` and `daily_digest_channel_id` can be overridden
+  in `system_config` (blank channel uses `OFFICIAL_CHANNEL_ID`).
 
 ### First session (starter pack and the private home screen)
 
@@ -330,6 +342,7 @@ contains one of these phrases does not trigger it:
 - «سیب باغ» / «باغ من» — your garden
 - «سیب کارت» — your cards; «سیب اسکین» — profile skin picker
 - «سیب شاپ» — shop; «سیب لیدربرد» / «سیب لیدربورد» — leaderboard
+- «سیب لیگ» / «لیگ سیبی» — weekly group league
 - «سیب راهنما» — help index; «سیب صندوق» — daily chest
 - «معدن سیبی» — Apple Mine; «دوئل سیبی» (as a reply) — Apple Duel
 - «ازدواج سیبی», «طلاق سیبی», «گل سیبی», «بغل سیبی», «بوس سیبی» —
@@ -500,14 +513,13 @@ game timeouts, rate-limit settings, and `LOG_LEVEL`.
   because exact text shortcuts («سیب», «سیب کارت», ...) are plain
   messages, not commands.
 - **Allow Groups → ON**: the game is played in groups.
-- **Commands menu**: no command list is registered from code
-  (`set_my_commands` is never called), so set the menu manually in
-  BotFather to match the user-facing commands actually registered
-  in `handlers/`: `/start`, `/games`, `/battle`, `/profile`,
-  `/cards`, `/garden`, `/shop`, `/trade`, `/wiki`, `/mine`,
-  `/chest`, `/leaderboard` (`/top`), `/stats`. Admin-only commands
-  (`/admin`, `/users`, `/broadcast`, `/setasset`, `/inv2_*`) do not
-  belong in the public menu.
+- **Commands menu**: the public list is registered at startup by
+  `services/bot_commands.py`. Admin-only commands (`/admin`,
+  `/daily_digest`, `/users`, `/broadcast`, `/setasset`, `/inv2_*`) are
+  deliberately absent from the public menu. If Telegram does not accept the
+  startup update, the player commands are `/start`, `/games`, `/battle`,
+  `/profile`, `/cards`, `/garden`, `/shop`, `/trade`, `/wiki`, `/mine`,
+  `/chest`, `/leaderboard` (`/top`), `/league`, `/stats`, and `/help`.
 
 ## Performance
 

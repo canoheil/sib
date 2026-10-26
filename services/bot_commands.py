@@ -7,7 +7,8 @@ Persian phrases like «سیب» and «سیب باغ». This module registers the
 public list from code, once at startup.
 
 Only commands that exist in ``handlers/`` are listed; admin-only commands
-(``/admin``, ``/users``, ``/broadcast``, ``/setasset``, ``/inv2_*``) are
+(``/admin``, ``/daily_digest``, ``/users``, ``/broadcast``, ``/setasset``,
+``/inv2_*``) are
 deliberately absent — they are announced to admins through the admin centre,
 never to players.
 """
