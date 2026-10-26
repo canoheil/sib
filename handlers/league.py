@@ -57,13 +57,18 @@ async def _render_panel(chat) -> tuple[str, InlineKeyboardMarkup]:
                 is_group=is_group, enabled=False
             )
 
-        rows = await GroupLeagueService.standings(session, key)
+        rows = await GroupLeagueService.standings(
+            session, key, points=conf["points"]
+        )
         own = None
         group_id = getattr(chat, "id", None)
         if is_group and group_id:
             own = next((row for row in rows if row.group_id == group_id), None)
 
         podium = await GroupLeagueService.recent_podium(session, weeks=1)
+        champion = await GroupLeagueService.champion_card(
+            session, conf["champion_card"]
+        )
 
     text = format_panel(
         now=now,
@@ -75,6 +80,7 @@ async def _render_panel(chat) -> tuple[str, InlineKeyboardMarkup]:
         last_awards=podium,
         is_group=is_group,
         min_points=conf["min_points"],
+        champion_card_name=champion.name_fa if champion is not None else "",
     )
     if not is_group:
         text = f"{text}\n\n{PRIVATE_INVITE_LINE}"

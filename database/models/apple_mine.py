@@ -14,6 +14,10 @@ class AppleMineShift(Base):
     __tablename__ = "apple_mine_shift"
     __table_args__ = (
         Index("ix_apple_mine_shift_user_worked_at", "user_id", "worked_at"),
+        # Weekly league: normal apples dug inside ONE group, by time window.
+        Index(
+            "ix_apple_mine_shift_group_worked_at", "group_id", "worked_at"
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)

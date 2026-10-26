@@ -207,6 +207,8 @@ class BotMatchService:
                     select(Character)
                     .where(Character.is_active == True)
                     .where(Character.release_status == ReleaseStatus.RELEASED)
+                    # The league champion card is a trophy: bots never wear it.
+                    .where(Character.shop_enabled == True)  # noqa: E712
                     .order_by(Character.id.asc())
                 )
             ).all()

@@ -383,10 +383,32 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     "league_enabled": False,
     # Apples per PARTICIPATING player of the rank (not per group).
     "league_rewards": {"1": 300, "2": 150, "3": 100},
-    "league_min_points": 3,
+    # The whole scoring table (see services/group_league.py::DEFAULT_POINTS).
+    # Every value is a per-week cap or a rate, so rebalancing the league is
+    # one config row and never a deploy.
+    "league_points": {
+        "match_win": 3,
+        "match_draw": 1,
+        "match_cap": 45,
+        "war_win": 10,
+        "war_presence": 3,
+        "war_damage_step": 100,
+        "war_cap": 30,
+        "mine_apples_step": 25,
+        "mine_cap": 10,
+        "duel_member": 1,
+        "duel_cap": 5,
+    },
+    # A group must earn at least this many points to be crowned at all. With
+    # the multi-source table ~15 means "four match wins or one war".
+    "league_min_points": 15,
     # Never finalize a week that started before this key (the migration seeds
     # it with its own week, so the first deploy pays no retroactive prize).
     "league_first_week": "",
+    # Trophy card for rank 1 (see services/group_league.py::_award). Empty
+    # string disables the card without touching the Apple prizes; the card
+    # itself is ``shop_enabled: false`` so the league is its only source.
+    "league_champion_card_code": "hero",
     # "بغل سیبی" (Sib Hug): both participants receive the amount; only the
     # sender's successful hugs start the cooldown (see services/sib_hug.py).
     "sib_hug_amount": 10,

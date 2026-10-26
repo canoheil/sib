@@ -102,12 +102,20 @@ Alembic migrations (`database/`).
   matches never count, so the table cannot be farmed.
 - Tie-breaks are deterministic — points, wins, draws, then group id —
   and never rely on `GROUP BY` ordering.
+- **Multi-source scoring (Phase 1):** a group is scored for the week it
+  actually had. Group matches: win 3 / draw 1, cap 45. Group wars: win 10,
+  presence 3, plus 1 per 100 damage dealt, cap 30. Apple mine inside a
+  group: 1 per 25 normal apples, cap 10. Apple duels inside a group: 1 per
+  distinct member, cap 5 (a duel is always inside ONE group, so it can only
+  be activity, never a competitive result). Theoretical maximum 90, and the
+  panel prints the breakdown: `🎮 بازی ۱۸ + ⚔️ جنگ ۱۹ + ⛏ معدن ۲ + 🥊 دوئل ۴`.
+  The whole table is one config row, `league_points`.
 - Payout: every player who **actually played** for a top-3 group that
   week is paid (not every member — presence is not participation), with
   one auditable wallet transaction per player keyed
   `league:<week>:<group>:<user>`. The ladder is one config value,
   `league_rewards` (`{"1": 300, "2": 150, "3": 100}` by default), and a
-  group must reach `league_min_points` (3) to be paid at all, so a quiet
+  group must reach `league_min_points` (15) to be paid at all, so a quiet
   week has no champion instead of a 0-point winner.
 - `group_league_weeks` (PK `week_key`) is the atomic "this week is paid"
   claim and `group_league_awards` is the frozen podium; both are created
@@ -117,6 +125,14 @@ Alembic migrations (`database/`).
 - The maintenance cycle finalizes the week that just ended, once an hour
   behind its own `try/except`, and announces the result in the podium's
   groups (best effort — being removed from a group is not an error).
+- **Champion card:** rank 1 also hands the trophy card
+  `league_champion_card_code` (`hero` — «هیرو», drawn with his white wolf
+  «سپیدچنگ») to every player who actually played for the winning group.
+  The card is `shop_enabled: false`, so the weekly shop, the daily chest
+  and the starter pack can never grant it: the league is its only source.
+  Winning again never duplicates it (one card per character per player);
+  the repeat prize stays the Apples. A missing or disabled card never
+  blocks the Apple payout.
 - Kill switch: `league_enabled` (built-in default **off**, seeded **on**
   by the migration).
 
@@ -176,6 +192,15 @@ Alembic migrations (`database/`).
   `034_card_affiliations`); adding a faction needs no code change.
 - Profile skins change a card/profile's appearance only, never its
   stats (`services/profile_skin.py`, migration `029_profile_skins`).
+- **Card art is delivered, not generated:** the image at
+  `assets/characters/{code}.jpg` *is* the card — the artist bakes the
+  frame, the name plate and the crown into the picture.
+  `services/character_art.py` resolves that path and hands the file to
+  Telegram; nothing crops, resizes, re-encodes or frames it at runtime.
+  The old golden-frame pipeline (`scripts/frame_card.py`) is retired and
+  a test fails if any runtime code starts using it again. The house
+  format is a 4:5 portrait (912×1136 … 1850×2304) under Telegram's 10 MB
+  photo limit.
 
 ### Chests and shop
 

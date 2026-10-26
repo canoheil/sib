@@ -3,8 +3,10 @@
 Resolution order (no DB writes, no migrations):
 
 1. ``characters.artwork`` as an /setasset asset key → file_id from AssetService.
-2. Bundled artwork file: ``assets/characters/{code}.jpg`` (the framed cards
-   built by ``scripts/frame_card.py``).
+2. Bundled artwork file: ``assets/characters/{code}.jpg`` — the delivered card
+   itself. The artist bakes the frame and the name plate into the picture, so
+   this module resolves a path and never composites, crops, resizes or
+   re-encodes anything.
 3. None → screens fall back to text-only rendering.
 
 Art lives in the repository (versioned, permanent). The AssetService

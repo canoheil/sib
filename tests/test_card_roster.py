@@ -3,8 +3,8 @@ stats, budget, shop.
 
 The suite began as the 11-card delivery and is append-only like the roster
 it pins: the later cards («محمود» / `mahmud`, «طیفان» / `tifun`) joined the
-same tables, so counts and pagination below cover 17 characters
-(4 audited + 13 supplied).
+same tables, so counts and pagination below cover 18 characters
+(4 audited + 13 supplied + 1 league trophy).
 
 Covers the whole delivery end to end:
 
@@ -105,8 +105,12 @@ OFFICIAL_NEW_TEXT = {
 
 # Event-exclusive cards (`shop_enabled=False`): full roster & wiki members,
 # deliberately excluded from the 300-Apple weekly shop rotation.
+# ``hero`` is the league champion trophy: it is granted by the weekly podium
+# (services/group_league.py), never sold, drawn or handed out by the starter
+# pack, so it can never appear in a rotation.
 EXCLUSIVE_CARDS: dict[str, dict] = {
     "amber": {"name_en": "Amber", "power": 15, "speed": 20, "intelligence": 25},
+    "hero": {"name_en": "Hero", "power": 16, "speed": 34, "intelligence": 10},
 }
 
 # The four pre-existing cards: pinned so the new delivery cannot have
@@ -186,7 +190,8 @@ def test_seed_entries_carry_exactly_the_delivered_stats_and_no_invented_metadata
 @pytest.mark.asyncio
 async def test_seed_registers_all_new_characters_with_unique_ids(db_session):
     characters = await _seeded(db_session)
-    assert len(characters) == 18
+    # 4 audited + 14 supplied/exclusive + 1 league trophy (`hero`).
+    assert len(characters) == 19
     ids = [character.id for character in characters.values()]
     assert len(ids) == len(set(ids))
 

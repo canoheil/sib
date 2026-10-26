@@ -116,7 +116,7 @@ def test_migration_chain_head():
     cfg = Config()
     cfg.set_main_option("script_location", str(ROOT / "database/migrations"))
     scripts = ScriptDirectory.from_config(cfg)
-    assert scripts.get_current_head() == "064_group_league"
+    assert scripts.get_current_head() == "065_league_points"
     assert _migration().down_revision == "039_archive_inv1_tables"
     chain = {
         "041_inv2_announcement_narrative": "040_inv2_difficulty_default",
@@ -143,6 +143,7 @@ def test_migration_chain_head():
         "062_transfers": "061_seedling_sell_price",
         "063_reminders": "062_transfers",
         "064_group_league": "063_reminders",
+        "065_league_points": "064_group_league",
     }
     for revision, parent in chain.items():
         path = ROOT / f"database/migrations/versions/{revision}.py"

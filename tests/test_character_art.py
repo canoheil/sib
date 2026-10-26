@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from PIL import Image, ImageFilter
+from PIL import Image
 
 from sib.core.text import escape_markdown
 
@@ -32,21 +32,6 @@ async def _shop_character(db_session, code: str):
     character.is_active = True
     await db_session.commit()
     return character
-
-
-def test_framed_card_assets_exist():
-    """All released characters ship framed card art + the canonical frame."""
-    from pathlib import Path
-
-    from sib.services.character_art import ASSETS_DIR
-
-    root = Path(__file__).resolve().parent.parent
-    frame = root / "assets" / "frames" / "card_frame_gold.jpg"
-    assert frame.exists(), "canonical golden frame asset is missing"
-    for code in ("sib_sorkh", "sib_sabz", "sib_talayi", "sib_mahi"):
-        assert (ASSETS_DIR / f"{code}.jpg").exists(), f"missing framed card for {code}"
-    # Framing is deterministic + reusable: the script must ship with the repo.
-    assert (root / "scripts" / "frame_card.py").exists()
 
 
 @pytest.mark.asyncio
@@ -249,100 +234,99 @@ async def test_profile_shows_favorite_card_art(db_session):
 
 
 # ---------------------------------------------------------------------------
-# Framed card assets: ONE cohesive frame for the whole collection
+# Delivered card art is the card — no frame, no crop, no re-encode
 # ---------------------------------------------------------------------------
+# The images in ``assets/characters/`` ARE the cards: the artist bakes the
+# frame, the name plate and the crown into the picture. The game only resolves
+# the path and hands it to Telegram, so these tests pin the *delivery* contract
+# (a 4:5 portrait that Telegram accepts), never a processing step. The old
+# golden-frame pipeline (``scripts/frame_card.py``) belonged to an early
+# version of the game and must not touch these files.
 
-CARD_NAMES = ("sib_sorkh", "sib_sabz", "sib_talayi", "sib_mahi")
+SEED_FILE = Path(__file__).resolve().parent.parent / "data" / "characters_seed.json"
+
+#: Every single card in the collection is drawn at 4:5 (the artists' house
+#: format); 0.8 is the target and the tolerance only absorbs rounding.
+CARD_RATIO = 4 / 5
+CARD_RATIO_TOLERANCE = 0.006
+#: Telegram's own limit for a bot photo; anything bigger cannot be sent.
+MAX_CARD_BYTES = 10 * 1024 * 1024
+#: Below this the card looks soft on a phone screen.
+MIN_CARD_SIDE = 800
 
 
-def _openings():
-    """The frame's true opening geometry, from the pipeline itself."""
-    from scripts.frame_card import FRAME_PATH, opening_mask
+def _seed_codes() -> list[str]:
+    import json
 
-    frame = Image.open(FRAME_PATH).convert("RGB")
-    mask = opening_mask(frame)
-    return frame, mask
+    with open(SEED_FILE, encoding="utf-8") as handle:
+        return [row["code"] for row in json.load(handle)]
 
 
-def test_all_character_cards_exist_with_same_dimensions():
+def test_every_seeded_card_ships_art():
+    """A card without art would render as a text-only wiki/profile screen."""
     from sib.services.character_art import artwork_path
 
-    for name in CARD_NAMES:
-        path = artwork_path(SimpleNamespace(code=name, artwork=None))
-        assert path is not None and Path(path).is_file(), f"missing card art for {name}"
-        assert Image.open(path).size == (896, 1200), f"{name}: card must be 896x1200"
+    codes = _seed_codes()
+    assert codes, "the roster seed is empty"
+    missing = [
+        code
+        for code in codes
+        if artwork_path(SimpleNamespace(code=code, artwork=None)) is None
+    ]
+    assert not missing, f"missing card art: {missing}"
 
 
-def test_character_cards_share_one_frame_no_double_frame():
-    """Every card keeps the SAME outer frame pixels (the frame asset
-    itself) outside the opening — a second inner frame, pasted-image
-    borders or white deckle margins inside the opening are regressions."""
+def test_card_art_matches_the_house_format():
+    """4:5 portrait, sharp enough, small enough — exactly as delivered."""
     from sib.services.character_art import artwork_path
 
-    frame, mask = _openings()
-    # Region outside the opening, plus a 3px seam tolerance ring.
-    ring = mask.filter(ImageFilter.MaxFilter(7))  # dilate ~3px
-    fp = frame.load()
-
-    cards = []
-    for name in CARD_NAMES:
-        path = artwork_path(SimpleNamespace(code=name, artwork=None))
-        cards.append(Image.open(path).convert("RGB"))
-
-    for name, card in zip(CARD_NAMES, cards):
-        assert card.size == frame.size
-        cp = card.load()
-        diff_sum = 0
-        count = 0
-        for y in range(0, card.height, 3):
-            for x in range(0, card.width, 3):
-                if ring.getpixel((x, y)) == 0:  # outside opening + seam
-                    a, b = fp[x, y], cp[x, y]
-                    diff_sum += abs(a[0] - b[0]) + abs(a[1] - b[1]) + abs(a[2] - b[2])
-                    count += 1
-        mean_diff = diff_sum / max(count, 1)
-        assert mean_diff < 12, f"{name}: outer frame altered (mean diff {mean_diff:.1f})"
+    problems = []
+    for code in _seed_codes():
+        path = artwork_path(SimpleNamespace(code=code, artwork=None))
+        assert path is not None and Path(path).is_file(), code
+        size = Path(path).stat().st_size
+        with Image.open(path) as image:
+            width, height = image.size
+            image_format = image.format
+        if image_format not in ("JPEG", "PNG"):
+            problems.append(f"{code}: {image_format} is not a Telegram photo")
+        ratio = width / height
+        if abs(ratio - CARD_RATIO) > CARD_RATIO_TOLERANCE:
+            problems.append(f"{code}: ratio {ratio:.4f} is not 4:5")
+        if min(width, height) < MIN_CARD_SIDE:
+            problems.append(f"{code}: {width}x{height} is too small")
+        if size > MAX_CARD_BYTES:
+            problems.append(f"{code}: {size / 1024:.0f}KB exceeds Telegram's limit")
+    assert not problems, "card art delivery problems: " + "; ".join(problems)
 
 
-def test_character_cards_fill_the_opening_without_margins():
-    """The art must reach the opening's lip: no paper/white margin band
-    between the art and the frame (the 'pasted-in-image' look)."""
+def test_artwork_resolution_returns_the_delivered_file_untouched():
+    """``artwork_path`` is a filesystem lookup, never a transform step."""
     from sib.services.character_art import artwork_path
 
-    frame, mask = _openings()
-    ox0, oy0, ox1, oy1 = mask.getbbox()
-    matte = frame.convert("RGB").getpixel((frame.width // 2, frame.height // 2))
-    inner_ring = mask.filter(ImageFilter.MinFilter(13)).filter(
-        ImageFilter.MaxFilter(7)
-    )  # a band just inside the opening lip
-
-    for name in CARD_NAMES:
-        path = artwork_path(SimpleNamespace(code=name, artwork=None))
-        card = Image.open(path).convert("RGB")
-        cp = card.load()
-        far = 0
-        total = 0
-        for y in range(oy0, oy1):
-            for x in range(ox0, ox1):
-                if inner_ring.getpixel((x, y)):
-                    c = cp[x, y]
-                    total += 1
-                    if abs(c[0] - matte[0]) + abs(c[1] - matte[1]) + abs(c[2] - matte[2]) > 40:
-                        far += 1
-        assert total > 0
-        assert far / total > 0.95, (
-            f"{name}: art does not reach the frame lip ({far}/{total})"
-        )
+    for code in ("hero", "sib_sorkh", "igris"):
+        resolved = artwork_path(SimpleNamespace(code=code, artwork=None))
+        assert Path(resolved).name == f"{code}.jpg"
+        assert Path(resolved).parent.name == "characters"
 
 
-def test_frame_card_pipeline_reproduces_the_collection(tmp_path):
-    """The pipeline itself rebuilds a coherent card from raw art: exact
-    frame size, untouched outer frame, art filled into the opening."""
-    from scripts.frame_card import RAW_DIR, FRAME_PATH, frame_card, opening_mask
+def test_seed_never_overrides_artwork_with_a_processed_asset():
+    """``artwork`` stays null so resolution is always ``{code}.jpg``."""
+    import json
 
-    out = tmp_path / "rebuilt.jpg"
-    raws = sorted(RAW_DIR.glob("*.jpg"))
-    assert raws
-    frame_card(raws[0], out)
-    rebuilt = Image.open(out).convert("RGB")
-    assert rebuilt.size == (896, 1200)
+    with open(SEED_FILE, encoding="utf-8") as handle:
+        rows = json.load(handle)
+    overridden = [row["code"] for row in rows if row.get("artwork") is not None]
+    assert not overridden, f"cards may not override their art: {overridden}"
+
+
+def test_no_product_code_composites_a_frame_over_the_art():
+    """The golden-frame pipeline is retired: no runtime code may use it."""
+    root = Path(__file__).resolve().parent.parent
+    offenders = []
+    for directory in ("services", "handlers", "keyboards", "games"):
+        for path in (root / directory).rglob("*.py"):
+            text = path.read_text(encoding="utf-8")
+            if "card_frame" in text or "frame_card" in text:
+                offenders.append(str(path.relative_to(root)))
+    assert not offenders, f"retired frame pipeline still referenced: {offenders}"
