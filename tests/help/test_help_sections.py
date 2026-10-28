@@ -8,8 +8,8 @@ These tests pin:
 * the shape of the tree (every expected section is reachable);
 * the copy rules (Persian only, non-empty, under one Telegram page);
 * the navigation (section -> index -> section, no new messages);
-* the coverage (every text shortcut, the invasion, the apple mine, the
-  chests and the support handle must be mentioned).
+* the coverage (every text shortcut, the current onboarding and invasion
+  cadence, Golden Hour, Apple Duel rewards, the apple mine, chests and support).
 """
 
 import re
@@ -39,6 +39,11 @@ from sib.services.help_content import (
     get_section,
     render_index_text,
     render_section_text,
+)
+from sib.services.golden_hour import (
+    GOLDEN_HOUR_END_HOUR,
+    GOLDEN_HOUR_MULTIPLIER,
+    GOLDEN_HOUR_START_HOUR,
 )
 from sib.services.sib_claim import fa_digits
 
@@ -373,14 +378,29 @@ def test_help_contains_profile_reply_shortcut():
 
 
 def test_help_mentions_invasion():
-    """The Invasion v2 is explained: how to join, what it deals, what it pays."""
+    """The Invasion v2 is explained: cadence, eligibility, join, hit and reward."""
     body = get_section("invasion").body_fa
     assert "شیاسیب" in body
     assert "یورش" in body
     assert "کارت اصلی" in body
     assert "سیب طلایی" in body
+    assert "در هر گروه واجدشرایطی" in body
+    assert "روزی یک‌بار" in body
+    assert f"ساعت {fa_digits(20)}:۰۰ تهران" in body
+    assert "هر چند ساعت" not in body
     # The guaranteed golden apple reward (3) with the Persian digits.
     assert fa_digits(3) in body
+
+
+def test_help_quick_start_matches_the_starter_pack_and_soft_gate():
+    """New players are told about the actual gift and optional channel gate."""
+    body = get_section("quick_start").body_fa
+    assert fa_digits(100) in body
+    assert "اگر کارت شروع را نداشته باشی، یک کارت هم می‌گیری" in body
+    assert "خودکار کارت اصلی می‌شود" in body
+    assert "برای شروع لازم نیست کارت بخری" in body
+    assert "عضویت در کانال رسمی برای گرفتن هدیه یا شروع بازی اجباری نیست" in body
+    assert "سیب روزانه‌ات" not in body
 
 
 def test_help_mentions_apple_mine():
@@ -404,6 +424,44 @@ def test_help_mentions_chests():
         assert fa_digits(price) in body, name
     # The daily chest is a different system and is named as such.
     assert "صندوقچهٔ گنج روزانه" in body
+
+
+def test_help_explains_golden_hour_schedule_and_exclusions():
+    """The guide names the live Tehran window and limits the multiplier."""
+    body = get_section("apples").body_fa
+    assert (
+        f"{fa_digits(GOLDEN_HOUR_START_HOUR)}:۰۰ تا پیش از "
+        f"{fa_digits(GOLDEN_HOUR_END_HOUR)}:۰۰ تهران"
+    ) in body
+    assert f"{fa_digits(GOLDEN_HOUR_MULTIPLIER)} برابر" in body
+    for excluded in (
+        "انتقال",
+        "فروش",
+        "تبدیل موجودی",
+        "تغییر موجودی مدیر",
+        "جبران",
+        "بازپرداخت",
+        "معرفی دوست",
+        "جایزهٔ لیگ هفتگی",
+    ):
+        assert excluded in body, excluded
+    assert "پاداش بوس و بغل دوستانه هم مشمول است" in body
+
+
+def test_help_explains_apple_duel_payout():
+    """The winner's seedling and apples, plus the Golden Hour rule, are clear."""
+    body = get_section("games").body_fa
+    assert "دوئل سیبی" in body
+    assert "برنده یک نهال و ۵ سیب می‌گیرد" in body
+    assert "در ساعت طلایی فقط پاداش سیب دوبرابر می‌شود" in body
+    assert "بازنده چیزی از دست نمی‌دهد" in body
+
+
+def test_help_support_does_not_treat_channel_membership_as_a_game_gate():
+    """The support page reflects the optional membership prompt."""
+    body = get_section("support").body_fa
+    assert "عضویت در کانال رسمی برای دریافت هدیهٔ شروع یا بازی اجباری نیست" in body
+    assert "دکمهٔ بررسی عضویت را بزن" in body
 
 
 def test_help_mentions_support_handle():
