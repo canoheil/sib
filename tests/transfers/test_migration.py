@@ -101,9 +101,10 @@ def test_migration_062_revises_061_and_is_the_only_head():
     # 062 is no longer the head: 063_reminders (come-back reminders) and then
     # 064_group_league (weekly group league), 065_league_points (its
     # multi-source scoring table), 066_daily_channel_digest,
-    # 067_invasion_daily_20_schedule, 068_golden_hour_apple_rewards, and
-    # 069_golden_hour_notices revise it; history stays linear with one head.
-    assert set(revisions) - set(parents) == {"069_golden_hour_notices"}
+    # 067_invasion_daily_20_schedule, 068_golden_hour_apple_rewards,
+    # 069_golden_hour_notices, and 070_disease_system revise it; history
+    # stays linear with one head.
+    assert set(revisions) - set(parents) == {"070_disease_system"}
 
 
 # ---------------------------------------------------------------------------
