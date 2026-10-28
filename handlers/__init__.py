@@ -43,6 +43,7 @@ from sib.handlers.castle import router as castle_router
 from sib.handlers.war import router as war_router
 from sib.handlers.daily_chest import router as daily_chest_router
 from sib.handlers.apple_mine import router as apple_mine_router
+from sib.handlers.disease import router as disease_router
 from sib.handlers.halloween import router as halloween_router
 from sib.handlers.transfers import router as transfers_router
 from sib.handlers.reminders import router as reminders_router
@@ -86,6 +87,7 @@ def register_all_handlers(dp: Dispatcher) -> None:
     dp.include_router(sib_kiss_router)
     dp.include_router(daily_chest_router)
     dp.include_router(apple_mine_router)
+    dp.include_router(disease_router)
     dp.include_router(halloween_router)
     dp.include_router(transfers_router)
     dp.include_router(inv2_controls_router)
@@ -119,5 +121,6 @@ __all__ = [
     "leaderboard_router",
     "league_router",
     "apple_mine_router",
+    "disease_router",
     "transfers_router",
 ]

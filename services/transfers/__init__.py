@@ -7,6 +7,8 @@ handlers on top of :func:`execute_transfer` and :func:`parse_transfer_command`.
 from sib.services.transfers.parser import (
     ITEM_APPLE,
     ITEM_DIAMOND,
+    ITEM_DISEASE_PLANT,
+    ITEM_DISEASE_ANTIDOTE,
     ITEM_GOLD,
     ITEM_OBSIDIAN,
     TRANSFER_ITEM_TYPES,
@@ -28,6 +30,8 @@ __all__ = [
     "ITEM_APPLE",
     "ITEM_GOLD",
     "ITEM_DIAMOND",
+    "ITEM_DISEASE_PLANT",
+    "ITEM_DISEASE_ANTIDOTE",
     "ITEM_OBSIDIAN",
     "TRANSFER_ITEM_TYPES",
     "TransferCommand",

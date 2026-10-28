@@ -411,7 +411,7 @@ def _buyable_keys(buy_prices: dict) -> list[str]:
 async def _goods_view(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
     async with get_session() as session:
         balance = await AppleWalletService.get_balance(session, user_id)
-        buy_prices = await ConfigService.get(session, "item_buy_prices") or {}
+        buy_prices = await ItemService.buy_prices(session)
         owned = await ItemService.list_items(session, user_id)
 
     lines = [

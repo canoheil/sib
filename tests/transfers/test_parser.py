@@ -9,6 +9,8 @@ import pytest
 from sib.services.transfers.parser import (
     ITEM_APPLE,
     ITEM_DIAMOND,
+    ITEM_DISEASE_PLANT,
+    ITEM_DISEASE_ANTIDOTE,
     ITEM_GOLD,
     ITEM_OBSIDIAN,
     MAX_RAW_AMOUNT,
@@ -30,6 +32,8 @@ from sib.services.transfers.parser import (
         ("انتقال سیب طلایی 10", ITEM_GOLD, 10),
         ("انتقال سیب الماسی 69", ITEM_DIAMOND, 69),
         ("انتقال سیب ابسیدینی 5", ITEM_OBSIDIAN, 5),
+        ("انتقال گیاه ویژه 1", ITEM_DISEASE_PLANT, 1),
+        ("انتقال پادزهر آماده ۲", ITEM_DISEASE_ANTIDOTE, 2),
         # Persian digits (۰۱۲۳۴۵۶۷۸۹).
         ("انتقال سیب ۱۰۰", ITEM_APPLE, 100),
         ("انتقال سیب طلایی ۱۰", ITEM_GOLD, 10),

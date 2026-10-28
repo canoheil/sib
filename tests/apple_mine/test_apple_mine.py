@@ -91,7 +91,8 @@ class _ShiftSession:
 
 
 def _shift_fixtures(monkeypatch, *, level: int, roll: str) -> None:
-    """Pin the pickaxe level, the level's reward row and the RNG."""
+    """Pin the primary reward independently of the optional plant drop."""
+    monkeypatch.setattr(mine_service, "_plant_drop_chance", AsyncMock(return_value=0))
     monkeypatch.setattr(mine_service, "lock_user_row", AsyncMock())
     monkeypatch.setattr(mine_service, "_database_now", AsyncMock(return_value=NOW))
     monkeypatch.setattr(

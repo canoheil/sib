@@ -213,12 +213,13 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     # costs a whole ranked win, while a friendly (casual) win already pays 10
     # Apples (friendly_reward_apples_per_match).
     "seedling_sell_price": 20,
-    # Disease & infection (migration 070); values can be overridden at runtime.
+    # Disease & infection (migrations 070/071); values can be overridden at runtime.
     "disease_enabled": True,
     "disease_immunity_hours": 24,
     "disease_initial_infection_percent": 15,
     "disease_daily_infection_chance": 10,
     "disease_mine_infection_chance": 2,
+    "disease_mine_plant_drop_chance": 15,
     "disease_duel_infection_chance": 5,
     "disease_demon_power_chance": 15,
     "disease_antidote_shop_price": 2000,

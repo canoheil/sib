@@ -17,7 +17,7 @@ from sib.services.sib_claim import fa_digits
 #: Seconds a confirmation stays valid (the pending row's TTL).
 PENDING_TTL_SECONDS = 60
 
-#: ``item_type`` -> (Persian name, emoji). The four transferable currencies;
+#: ``item_type`` -> (Persian name, emoji). Transferable currencies and items;
 #: ``apple`` is the regular-Apple wallet currency, the rest are inventory
 #: items (``user_items.item_key``).
 TYPE_DISPLAY: dict[str, tuple[str, str]] = {
@@ -25,6 +25,8 @@ TYPE_DISPLAY: dict[str, tuple[str, str]] = {
     "apple_gold": ("سیب طلایی", "🌟"),
     "apple_diamond": ("سیب الماسی", "💎"),
     "apple_obsidian": ("سیب ابسیدینی", "⬛"),
+    "disease_plant": ("گیاه ویژه", "🌿"),
+    "disease_antidote": ("پادزهر آماده", "💊"),
 }
 
 #: Service reason code -> Persian message. ``amount_out_of_bounds`` carries
