@@ -113,6 +113,7 @@ class ShiftResult:
     amount: int
     narrative: str
     pickaxe_level: int = MIN_PICKAXE_LEVEL
+    plant_dropped: bool = False
 
 
 @dataclass(frozen=True)
@@ -347,13 +348,22 @@ def _roll_shift(row: RewardRow) -> tuple[str, str, int]:
     )
 
 
+async def _plant_drop_chance(session: AsyncSession) -> int:
+    key = "disease_mine_plant_drop_chance"
+    try:
+        chance = await ConfigService.get_int(session, key)
+    except (TypeError, ValueError, OverflowError):
+        chance = int(ConfigService.default(key))
+    return min(100, max(0, chance))
+
+
 async def perform_shift(
     session: AsyncSession,
     *,
     user_id: int,
     group_id: int | None,
 ) -> ShiftResult:
-    """Complete one atomic shift, grant exactly one reward, and audit it.
+    """Complete one atomic shift, its primary reward and an optional plant.
 
     The user-row lock serializes concurrent taps across groups and workers.
     The reward is rolled from the player's pickaxe level (M2-RECON); card
@@ -376,6 +386,8 @@ async def perform_shift(
         else 1
     )
     amount = base_amount * multiplier
+    plant_chance = await _plant_drop_chance(session)
+    plant_dropped = plant_chance > 0 and random.random() * 100 < plant_chance
 
     shift = AppleMineShift(
         user_id=user_id,
@@ -389,6 +401,16 @@ async def perform_shift(
     )
     session.add(shift)
     await session.flush()
+
+    if plant_dropped:
+        # Pre-lock inventory before the wallet, and in key order when the
+        # primary reward is also an inventory item. The user row above also
+        # serializes creation when one of these rows does not yet exist.
+        inventory_keys = {"disease_plant"}
+        if item_code != NORMAL_OUTCOME[1]:
+            inventory_keys.add(item_code)
+        for key in sorted(inventory_keys):
+            await ItemService._lock_inventory_row(session, user_id, key)
 
     if item_code == NORMAL_OUTCOME[1]:
         await AppleWalletService.earn(
@@ -405,10 +427,14 @@ async def perform_shift(
     else:
         await ItemService.grant(session, user_id, item_code, quantity=amount)
 
+    if plant_dropped:
+        await ItemService.grant(session, user_id, "disease_plant", quantity=1)
+
     return ShiftResult(
         outcome_code=outcome_code,
         item_code=item_code,
         amount=amount,
         narrative=pick_narrative(outcome_code, user_id),
         pickaxe_level=pickaxe_level,
+        plant_dropped=plant_dropped,
     )

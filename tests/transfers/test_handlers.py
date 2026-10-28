@@ -28,7 +28,10 @@ from sib.handlers import transfers as transfer_handlers
 from sib.services.apple_wallet import AppleWalletService
 from sib.services.config_store import ConfigService
 from sib.services.items import ItemService
-from sib.services.transfers import ITEM_APPLE, ITEM_DIAMOND, ITEM_GOLD, ITEM_OBSIDIAN
+from sib.services.transfers import (
+    ITEM_APPLE, ITEM_DIAMOND, ITEM_GOLD, ITEM_OBSIDIAN,
+    ITEM_DISEASE_PLANT, ITEM_DISEASE_ANTIDOTE,
+)
 from sib.services.transfers.service import cleanup_expired_pending
 from sib.tests.test_parties import create_test_user
 
@@ -255,7 +258,9 @@ async def test_regular_apple_transfer_end_to_end(session):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("item_key", [ITEM_GOLD, ITEM_DIAMOND, ITEM_OBSIDIAN])
+@pytest.mark.parametrize(
+    "item_key", [ITEM_GOLD, ITEM_DIAMOND, ITEM_OBSIDIAN, ITEM_DISEASE_PLANT, ITEM_DISEASE_ANTIDOTE]
+)
 async def test_special_apple_transfers_end_to_end(session, item_key):
     sender = await create_test_user(session, f"فرستنده {item_key}")
     receiver = await create_test_user(session, f"گیرنده {item_key}")
@@ -288,6 +293,8 @@ def transfer_name(item_key: str) -> str:
         ITEM_GOLD: "سیب طلایی",
         ITEM_DIAMOND: "سیب الماسی",
         ITEM_OBSIDIAN: "سیب ابسیدینی",
+        ITEM_DISEASE_PLANT: "گیاه ویژه",
+        ITEM_DISEASE_ANTIDOTE: "پادزهر آماده",
     }[item_key]
 
 

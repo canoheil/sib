@@ -4,7 +4,9 @@ Items live in the ``user_items`` table (one row per user+key). Item
 economy properties are CONFIG-DRIVEN (``ConfigService``):
 
 - ``item_buy_prices``  — key -> price; presence means purchasable.
-- ``item_sell_prices`` — key -> price; presence means sellable.
+- ``item_sell_prices`` — key -> price; presence means sellable, except for
+  permanently unsellable disease items.
+- ``disease_antidote_shop_price`` — dedicated purchase price for the antidote.
 - ``garden_drop_entries``  — per-key presentation (message/asset).
 - ``garden_drop_weights``  — per-magic-level relative drop weights.
 
@@ -31,8 +33,8 @@ from sib.services.lock_order import lock_user_row
 #
 # NOTE: normal Apples (🍎) are the game's CURRENCY (apple_wallets) and are
 # deliberately NOT an inventory item. Special Apples and Magic Powder are
-# real inventory items (user_items). Buyability/sellability and prices are
-# CONFIG-driven (item_buy_prices / item_sell_prices), not catalog flags.
+# real inventory items (user_items). Prices are normally CONFIG-driven;
+# the antidote uses its own setting and disease items are never sellable.
 ITEM_CATALOG: Dict[str, Dict[str, str]] = {
     "magic_powder": {
         "emoji": "✨",
@@ -84,7 +86,21 @@ ITEM_CATALOG: Dict[str, Dict[str, str]] = {
         "label": "دونه کدو",
         "description": "مهمات جادویی نبرد با سیبومورتیس؛ قابل فروش همیشگی در فروشگاه.",
     },
+    "disease_plant": {
+        "emoji": "🌿",
+        "label": "گیاه ویژه",
+        "description": "گیاهی کمیاب از معدن که برای ساخت پادزهر استفاده می‌شه.",
+    },
+    "disease_antidote": {
+        "emoji": "💊",
+        "label": "پادزهر آماده",
+        "description": "پادزهری برای درمان بیماری؛ با `/use_antidote` مصرف می‌شه.",
+    },
 }
+
+# These items may be transferred, but must never be sold back for Apples,
+# even if an operator accidentally adds them to item_sell_prices.
+NON_SELLABLE_ITEMS = frozenset({"disease_plant", "disease_antidote"})
 
 
 def item_description(key: str) -> str:
@@ -228,21 +244,44 @@ class ItemService:
     # ------------------------------------------------------------------
     @staticmethod
     async def buy_price(session: AsyncSession, item_key: str) -> Optional[int]:
+        if item_key == "disease_antidote":
+            raw = await ConfigService.get(session, "disease_antidote_shop_price")
+            try:
+                price = int(raw)
+            except (TypeError, ValueError, OverflowError):
+                price = int(ConfigService.default("disease_antidote_shop_price"))
+            return price if price > 0 else None
         prices = await ConfigService.get(session, "item_buy_prices") or {}
         price = prices.get(item_key)
         return int(price) if price is not None else None
 
+    @classmethod
+    async def buy_prices(cls, session: AsyncSession) -> Dict[str, int]:
+        """Shop listing prices, including the antidote's dedicated setting."""
+        prices = dict(await ConfigService.get(session, "item_buy_prices") or {})
+        price = await cls.buy_price(session, "disease_antidote")
+        if price is None:
+            prices.pop("disease_antidote", None)
+        else:
+            prices["disease_antidote"] = price
+        return prices
+
     @staticmethod
     async def sell_price(session: AsyncSession, item_key: str) -> Optional[int]:
+        if item_key in NON_SELLABLE_ITEMS:
+            return None
         prices = await ConfigService.get(session, "item_sell_prices") or {}
         price = prices.get(item_key)
         return int(price) if price is not None else None
 
     @staticmethod
     async def sell_prices(session: AsyncSession) -> Dict[str, int]:
-        """All configured sell prices (key -> price)."""
+        """All configured sell prices, excluding permanently unsellable items."""
         prices = await ConfigService.get(session, "item_sell_prices") or {}
-        return {key: int(value) for key, value in prices.items()}
+        return {
+            key: int(value) for key, value in prices.items()
+            if key not in NON_SELLABLE_ITEMS
+        }
 
     @classmethod
     async def sellable_inventory(
@@ -250,7 +289,7 @@ class ItemService:
     ) -> List[Tuple[str, int, int]]:
         """Owned sellable items as ``(item_key, quantity, unit_price)``.
 
-        Sellability is CONFIG-driven (``item_sell_prices``) exactly like
+        Sellability uses the same config and permanent exclusions as
         :meth:`sell`, so the Sell screen can never offer something the
         service layer would refuse — and the currency (normal Apples,
         which is a wallet balance and not an inventory row) can never

@@ -8,6 +8,8 @@ Accepted grammar (Persian, case-sensitive phrases; Latin or Persian digits):
     انتقال سیب طلایی 10
     انتقال سیب الماسی ۶۹
     انتقال  سیب  ابسیدینی  5
+    انتقال گیاه ویژه 1
+    انتقال پادزهر آماده ۱
 
 * ``انتقال`` must be the first token; the amount must be the LAST token.
   Anything after it (``انتقال سیب 100 به علی``) is rejected - no trailing
@@ -28,18 +30,22 @@ from dataclasses import dataclass
 from typing import Optional
 
 # Canonical ``item_type`` values (the keys stored in transfer_log.item_type).
-# ``apple`` is the normal Apple CURRENCY (apple_wallets.balance); the other
-# three are real inventory items (user_items.item_key).
+# ``apple`` is the normal Apple CURRENCY (apple_wallets.balance); the others
+# are real inventory items (user_items.item_key).
 ITEM_APPLE = "apple"
 ITEM_GOLD = "apple_gold"
 ITEM_DIAMOND = "apple_diamond"
 ITEM_OBSIDIAN = "apple_obsidian"
+ITEM_DISEASE_PLANT = "disease_plant"
+ITEM_DISEASE_ANTIDOTE = "disease_antidote"
 
 TRANSFER_ITEM_TYPES: tuple[str, ...] = (
     ITEM_APPLE,
     ITEM_GOLD,
     ITEM_DIAMOND,
     ITEM_OBSIDIAN,
+    ITEM_DISEASE_PLANT,
+    ITEM_DISEASE_ANTIDOTE,
 )
 
 # Persian (Extended Arabic-Indic) digits -> Latin. Only the Persian set is
@@ -55,13 +61,15 @@ TYPE_PHRASES: dict[str, str] = {
     "سیب طلایی": ITEM_GOLD,
     "سیب الماسی": ITEM_DIAMOND,
     "سیب ابسیدینی": ITEM_OBSIDIAN,
+    "گیاه ویژه": ITEM_DISEASE_PLANT,
+    "پادزهر آماده": ITEM_DISEASE_ANTIDOTE,
 }
 
 # The whole command, anchored on both ends. ``[0-9]+`` (post-translation)
 # excludes signs, decimals and separators. ``\s+`` allows single or repeated
 # spaces between every token.
 _TRANSFER_RE = re.compile(
-    r"^انتقال\s+(?P<phrase>سیب(?:\s+(?:ابسیدینی|الماسی|طلایی))?)"
+    r"^انتقال\s+(?P<phrase>سیب(?:\s+(?:ابسیدینی|الماسی|طلایی))?|گیاه\s+ویژه|پادزهر\s+آماده)"
     r"\s+(?P<amount>[0-9]+)$"
 )
 

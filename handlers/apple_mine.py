@@ -195,7 +195,8 @@ def _result_caption(result: ShiftResult) -> str:
     return (
         f"{result.narrative}\n"
         f"⛏ **{fa_digits(result.amount)} سیب {reward_type}** گیرت اومد!\n"
-        f"🔨 سطح کلنگ: **{fa_digits(result.pickaxe_level)}**؛ "
+        + ("🌿 یک گیاه ویژه پیدا کردی!\n" if result.plant_dropped else "")
+        + f"🔨 سطح کلنگ: **{fa_digits(result.pickaxe_level)}**؛ "
         f"شیفت بعدی: **{fa_digits(minutes)} دقیقه دیگه**"
     )
 
