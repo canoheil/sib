@@ -246,7 +246,7 @@ def test_alembic_single_head_and_upgrade_from_069(tmp_path):
     assert migration.revision == "070_disease_system"
     assert migration.down_revision == "069_golden_hour_notices"
     scripts = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["072_disease_ui"]
+    assert scripts.get_heads() == ["073_disease_started_flag"]
 
     database = tmp_path / "migration.db"
     engine = sa.create_engine(f"sqlite:///{database}")
@@ -264,7 +264,7 @@ def test_alembic_single_head_and_upgrade_from_069(tmp_path):
         assert result.returncode == 0, result.stdout + result.stderr
         return result.stdout.strip()
 
-    assert alembic("heads") == "072_disease_ui (head)"
+    assert alembic("heads") == "073_disease_started_flag (head)"
     alembic("stamp", "069_golden_hour_notices")
     alembic("upgrade", "070_disease_system")
     alembic("upgrade", "070_disease_system")

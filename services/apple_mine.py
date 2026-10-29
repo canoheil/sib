@@ -26,11 +26,13 @@ from sib.services.apple_wallet import (
     InsufficientFundsException,
 )
 from sib.services.config_store import ConfigService
+from sib.services import disease_service
 from sib.services.golden_hour import reward_multiplier as golden_hour_multiplier
 from sib.services.items import ItemService
 from sib.services.lock_order import lock_user_row
 
 WORK_COOLDOWN_SECONDS = 900
+MINE_INFECTION_WARNING = "⚠️ گرد و غبار معدن باعث شد به بیماری مبتلا شوی!"
 
 MIN_PICKAXE_LEVEL = 1
 MAX_PICKAXE_LEVEL = 5
@@ -357,6 +359,10 @@ async def _plant_drop_chance(session: AsyncSession) -> int:
     return min(100, max(0, chance))
 
 
+async def _mine_infection_chance(session: AsyncSession) -> int:
+    return await disease_service._percent(session, "disease_mine_infection_chance")
+
+
 async def perform_shift(
     session: AsyncSession,
     *,
@@ -430,11 +436,17 @@ async def perform_shift(
     if plant_dropped:
         await ItemService.grant(session, user_id, "disease_plant", quantity=1)
 
+    narrative = pick_narrative(outcome_code, user_id)
+    chance = await _mine_infection_chance(session)
+    if chance > 0 and disease_service._roll(chance):
+        if await disease_service.infect_user(session, user_id, "mine"):
+            narrative += f"\n{MINE_INFECTION_WARNING}"
+
     return ShiftResult(
         outcome_code=outcome_code,
         item_code=item_code,
         amount=amount,
-        narrative=pick_narrative(outcome_code, user_id),
+        narrative=narrative,
         pickaxe_level=pickaxe_level,
         plant_dropped=plant_dropped,
     )

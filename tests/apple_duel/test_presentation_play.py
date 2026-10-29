@@ -6,6 +6,7 @@ from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
 from aiogram.types import CallbackQuery, Chat, Message
 from aiogram.types import User as TelegramUser
 from sib.database.models import AppleBattle, AppleDuel
@@ -16,6 +17,14 @@ from sib.services.apple_duel_presentation import scene_text
 from sib.services.player_cards import PlayerCardService
 from sib.tests.test_apple_battle import _card
 from sqlalchemy import update
+
+
+@pytest.fixture(autouse=True)
+def _disable_incidental_infections(monkeypatch):
+    # The scene-player contract here is independent of the new disease roll.
+    from sib.services import apple_duel
+
+    monkeypatch.setattr(apple_duel, "_duel_infection_chance", AsyncMock(return_value=0))
 
 
 async def create_test_user(session, user_id):

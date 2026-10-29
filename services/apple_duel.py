@@ -18,6 +18,7 @@ from sib.database.models import (
     User,
 )
 from sib.services.apple_battle import AppleBattleService, BattleError
+from sib.services import disease_service
 from sib.services.player_cards import PlayerCardService
 from sib.services.session import SessionService
 from sqlalchemy import delete, select, update
@@ -25,6 +26,24 @@ from sqlalchemy import delete, select, update
 
 class DuelError(ValueError):
     pass
+
+
+SICK_DUEL_MESSAGE = "🦠 شما بیمار هستید و نمی‌توانید در دوئل شرکت کنید. ابتدا درمان شوید."
+SICK_OPPONENT_MESSAGE = "🦠 حریف شما بیمار است و نمی‌تواند در دوئل شرکت کند. ابتدا باید درمان شود."
+
+
+async def _require_healthy(session, user_id, *, opponent=False):
+    # Keep the current locked row alive for is_sick's session.get. Both duel
+    # user rows are already locked, in ascending order, by the caller.
+    locked_disease = await disease_service._disease_for_update(session, user_id)
+    sick = await disease_service.is_sick(session, user_id)
+    del locked_disease
+    if sick:
+        raise DuelError(SICK_OPPONENT_MESSAGE if opponent else SICK_DUEL_MESSAGE)
+
+
+async def _duel_infection_chance(session):
+    return await disease_service._percent(session, "disease_duel_infection_chance")
 
 
 def utc(value):
@@ -86,6 +105,7 @@ class AppleDuelService:
         now = now or now_utc()
         async with session.begin_nested():
             await cls._lock_users(session, [inviter_id, recipient_id])
+            await _require_healthy(session, inviter_id)
             for uid in (inviter_id, recipient_id):
                 old = await session.get(AppleDuelSlot, uid)
                 if old:
@@ -185,6 +205,10 @@ class AppleDuelService:
                 await cls._release(session, duel.id)
             await session.refresh(duel)
             return duel
+        # Both may have become sick since the invitation was created. Reject
+        # remains available, but neither sick player may enter the battle.
+        await _require_healthy(session, duel.recipient_id)
+        await _require_healthy(session, duel.inviter_id, opponent=True)
         # Savepoint makes catching a payment/validation error safe for callers.
         async with session.begin_nested():
             for uid in (duel.inviter_id, duel.recipient_id):
@@ -316,12 +340,20 @@ class AppleDuelService:
             await AppleBattleService.complete(
                 session, battle.id, occurred_at=now
             )
+            # Settle infection in the same transaction as the outcome and
+            # persist only actual infections for retryable result presentation.
+            snapshot = {"cards": snapshots, "events": [], "engine": "apple_battle_v1"}
+            chance = await _duel_infection_chance(session)
+            if chance > 0 and disease_service._roll(chance):
+                loser_id = (
+                    duel.recipient_id if battle.winner_id == duel.inviter_id
+                    else duel.inviter_id
+                )
+                if await disease_service.infect_user(session, loser_id, "duel"):
+                    snapshot["disease_infected_user_id"] = loser_id
             duel.status = "ACCEPTED"
             duel.battle_id = battle.id
-            duel.snapshot_json = json.dumps(
-                {"cards": snapshots, "events": [], "engine": "apple_battle_v1"},
-                ensure_ascii=False,
-            )
+            duel.snapshot_json = json.dumps(snapshot, ensure_ascii=False)
             duel.cursor = 0
             duel.next_scene_at = now
             await session.flush()

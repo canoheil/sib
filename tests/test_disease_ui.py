@@ -33,6 +33,7 @@ from sib.database.models import (
     AppleTransaction, AppleWallet, Group, Inv2GroupMember, PanelOwner,
     SystemConfig, User, UserDisease, UserItem,
 )
+from sib.handlers import admin as admin_handler
 from sib.handlers import disease as handler
 from sib.handlers import start as start_handler
 from sib.services import disease_service as disease
@@ -637,7 +638,8 @@ def _migration():
 
 def test_migration_072_single_head_and_real_round_trip(tmp_path):
     scripts = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["072_disease_ui"]
+    assert scripts.get_heads() == ["073_disease_started_flag"]
+    assert scripts.get_revision("073_disease_started_flag").down_revision == "072_disease_ui"
     assert scripts.get_revision("072_disease_ui").down_revision == "071_disease_items"
     db_path = tmp_path / "ui_migration.db"
     engine = sa.create_engine(f"sqlite:///{db_path}")
@@ -651,18 +653,18 @@ def test_migration_072_single_head_and_real_round_trip(tmp_path):
                                 text=True, capture_output=True, check=True)
         return result.stdout.strip()
 
-    assert alembic("heads") == "072_disease_ui (head)"
+    assert alembic("heads") == "073_disease_started_flag (head)"
     alembic("stamp", "071_disease_items")
-    alembic("upgrade", "head")
-    alembic("upgrade", "head")
-    assert "072_disease_ui (head)" in alembic("current")
+    alembic("upgrade", "072_disease_ui")
+    alembic("upgrade", "072_disease_ui")
+    assert "072_disease_ui" in alembic("current")
     with engine.connect() as connection:
         assert connection.execute(sa.text("SELECT `value` FROM system_config WHERE `key`=:key"),
                                   {"key": handler.DOCTOR_STATE_KEY}).scalar_one() == handler.DOCTOR_STATE_DEFAULT
     alembic("downgrade", "071_disease_items")
     with engine.connect() as connection:
         assert connection.execute(sa.text("SELECT count(*) FROM system_config")).scalar_one() == 0
-    alembic("upgrade", "head")
+    alembic("upgrade", "072_disease_ui")
     with engine.begin() as connection:
         connection.execute(sa.text("UPDATE system_config SET `value`='operator-state'"))
     alembic("downgrade", "071_disease_items")
@@ -941,3 +943,289 @@ async def test_delayed_worker_cannot_rewind_doctor_selection_across_midnight(db,
         state = json.loads((await session.get(SystemConfig, handler.DOCTOR_STATE_KEY)).value)
         assert state == {"day": "2026-10-29", "user_id": 1, "heals": 0}
     choice.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# One-time initial disease wave and migration 073.
+# ---------------------------------------------------------------------------
+
+_WAVE_FLAG = "disease_initial_wave_triggered"
+_WAVE_WARNING = "⚠️ موج اولیه بیماری قبلاً اجرا شده است."
+
+
+@pytest.fixture
+def wave_db(db, monkeypatch):
+    @asynccontextmanager
+    async def session_context():
+        async with db.begin() as session:
+            yield session
+
+    monkeypatch.setattr(admin_handler, "get_session", session_context)
+    monkeypatch.setattr(admin_handler, "is_admin", lambda user_id: user_id == 99)
+    return db
+
+
+async def _seed_wave(db, flag=None):
+    async with db.begin() as session:
+        session.add_all([
+            Group(id=GROUP, title="group"), Group(id=OTHER_GROUP, title="other"),
+            User(id=1, first_name="one"), User(id=2, first_name="two"),
+        ])
+        if flag is not None:
+            session.add(SystemConfig(key=_WAVE_FLAG, value=flag))
+        await ConfigService.set(session, "disease_initial_infection_percent", 100)
+        await session.flush()
+        now = datetime.now(timezone.utc)
+        session.add_all(Inv2GroupMember(user_id=user_id, group_id=GROUP, last_seen_at=now)
+                        for user_id in (1, 2))
+
+
+@pytest.mark.parametrize("flag", [None, "false"])
+async def test_initial_wave_runs_once_and_persists_flag(wave_db, monkeypatch, flag):
+    from sib.core.text import format_html
+
+    await _seed_wave(wave_db, flag)
+    seed = AsyncMock(wraps=disease.process_initial_infection)
+    monkeypatch.setattr(disease, "process_initial_infection", seed)
+    first, second, bot = _message(99), _message(99), _bot()
+    during_broadcast = []
+
+    async def verify_before_send(*args, **kwargs):
+        async with wave_db() as session:
+            during_broadcast.append((
+                (await session.get(SystemConfig, _WAVE_FLAG)).value,
+                await disease.is_sick(session, 1), await disease.is_sick(session, 2),
+            ))
+
+    bot.send_message.side_effect = verify_before_send
+    await admin_handler.handle_disease_start(first, bot)
+    first.reply.assert_awaited_once_with(
+        "✅ موج اولیه بیماری با موفقیت شروع شد. تعداد مبتلایان: 2"
+    )
+    assert seed.await_count == 1 and seed.await_args.args[1] == [1, 2]
+    # Infections and the durable claim precede broadcast; true follows it.
+    assert during_broadcast == [('"in_progress"', True, True)] * 2
+    assert [call.args[0] for call in bot.send_message.await_args_list] == [OTHER_GROUP, GROUP]
+    for call in bot.send_message.await_args_list:
+        assert call.args[1] == format_html(admin_handler.DISEASE_START_ANNOUNCEMENT)
+        assert call.kwargs == {"parse_mode": "HTML"}
+
+    async with wave_db.begin() as session:
+        assert (await session.get(SystemConfig, _WAVE_FLAG)).value == "true"
+        # Make a player susceptible again: a second command must not reinfect.
+        await session.delete(await session.get(UserDisease, 1))
+    await admin_handler.handle_disease_start(second, bot)
+    second.reply.assert_awaited_once_with(_WAVE_WARNING)
+    assert seed.await_count == 1 and bot.send_message.await_count == 2
+    async with wave_db() as session:
+        assert not await disease.is_sick(session, 1)
+        assert (await session.get(SystemConfig, _WAVE_FLAG)).value == "true"
+
+
+@pytest.mark.parametrize("flag", ["true", '"in_progress"', "invalid"])
+async def test_initial_wave_existing_or_interrupted_claim_refuses(wave_db, monkeypatch, flag):
+    await _seed_wave(wave_db, flag)
+    seed = AsyncMock()
+    monkeypatch.setattr(disease, "process_initial_infection", seed)
+    msg, bot = _message(99), _bot()
+    await admin_handler.handle_disease_start(msg, bot)
+    msg.reply.assert_awaited_once_with(_WAVE_WARNING)
+    seed.assert_not_awaited()
+    bot.send_message.assert_not_awaited()
+    async with wave_db() as session:
+        assert (await session.get(SystemConfig, _WAVE_FLAG)).value == flag
+
+
+@pytest.mark.parametrize("user_id", [98, None])
+async def test_initial_wave_refuses_non_admin_without_accessing_db(wave_db, monkeypatch, user_id):
+    monkeypatch.setattr(admin_handler, "get_session", Mock(side_effect=AssertionError("database accessed")))
+    seed = AsyncMock()
+    monkeypatch.setattr(disease, "process_initial_infection", seed)
+    msg, bot = _message(user_id or 98), _bot()
+    if user_id is None:
+        msg.from_user = None
+    await admin_handler.handle_disease_start(msg, bot)
+    seed.assert_not_awaited()
+    bot.send_message.assert_not_awaited()
+    msg.reply.assert_not_awaited()
+
+
+@pytest.mark.parametrize("dialect_name", ["mysql", "mariadb"])
+async def test_initial_wave_claim_compiles_for_mysql(dialect_name, monkeypatch):
+    statements = []
+
+    class Session:
+        def get_bind(self):
+            return SimpleNamespace(dialect=SimpleNamespace(name=dialect_name))
+
+        async def execute(self, statement):
+            statements.append(str(statement.compile(
+                dialect=mysql.dialect(), compile_kwargs={"literal_binds": True}
+            )))
+            return SimpleNamespace(rowcount=0)
+
+    @asynccontextmanager
+    async def session_context():
+        yield Session()
+
+    monkeypatch.setattr(admin_handler, "get_session", session_context)
+    monkeypatch.setattr(admin_handler, "is_admin", lambda user_id: user_id == 99)
+    msg, bot = _message(99), _bot()
+    await admin_handler.handle_disease_start(msg, bot)
+    msg.reply.assert_awaited_once_with(_WAVE_WARNING)
+    bot.send_message.assert_not_awaited()
+    assert "ON DUPLICATE KEY UPDATE" in statements[0]
+    assert _WAVE_FLAG in statements[0] and _WAVE_FLAG in statements[1]
+    assert "'false'" in statements[1] and "in_progress" in statements[1]
+
+
+@pytest.mark.parametrize("flag", [None, "false"])
+async def test_initial_wave_serializes_concurrent_claims_and_broadcasts(wave_db, monkeypatch, flag):
+    await _seed_wave(wave_db, flag)
+    infection_started, release_infection = asyncio.Event(), asyncio.Event()
+    second_started, broadcast_started, release_broadcast = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    sessions = 0
+
+    @asynccontextmanager
+    async def tracked_session():
+        nonlocal sessions
+        sessions += 1
+        if sessions == 2:
+            second_started.set()
+        async with wave_db.begin() as session:
+            yield session
+
+    async def seed_once(session, ids):
+        infection_started.set()
+        await release_infection.wait()
+        return 0
+
+    async def send_once(*args, **kwargs):
+        broadcast_started.set()
+        await release_broadcast.wait()
+
+    monkeypatch.setattr(admin_handler, "get_session", tracked_session)
+    seed = AsyncMock(side_effect=seed_once)
+    monkeypatch.setattr(disease, "process_initial_infection", seed)
+    first_msg, second_msg, bot = _message(99), _message(99), _bot()
+    bot.send_message.side_effect = send_once
+    first = asyncio.create_task(admin_handler.handle_disease_start(first_msg, bot))
+    second = None
+    try:
+        await asyncio.wait_for(infection_started.wait(), timeout=5)
+        second = asyncio.create_task(admin_handler.handle_disease_start(second_msg, bot))
+        await asyncio.wait_for(second_started.wait(), timeout=5)
+        await asyncio.sleep(0.1)
+        assert not second.done() and seed.await_count == 1
+        release_infection.set()
+        await asyncio.wait_for(broadcast_started.wait(), timeout=5)
+        await asyncio.wait_for(second, timeout=5)
+        second_msg.reply.assert_awaited_once_with(_WAVE_WARNING)
+        assert seed.await_count == 1 and bot.send_message.await_count == 1
+        async with wave_db() as session:
+            assert (await session.get(SystemConfig, _WAVE_FLAG)).value == '"in_progress"'
+        release_broadcast.set()
+        await asyncio.wait_for(first, timeout=5)
+    finally:
+        release_infection.set()
+        release_broadcast.set()
+        for task in (first, second):
+            if task and not task.done():
+                task.cancel()
+        await asyncio.gather(*(task for task in (first, second) if task), return_exceptions=True)
+    assert bot.send_message.await_count == 2
+    async with wave_db() as session:
+        assert (await session.get(SystemConfig, _WAVE_FLAG)).value == "true"
+
+
+@pytest.mark.skipif(not _ROW_LOCK_DATABASE, reason="MySQL/MariaDB race requires a live server")
+@pytest.mark.parametrize("flag", [None, "false"])
+async def test_initial_wave_serializes_mysql_claims(db_session, monkeypatch, flag):
+    from sib.database.connection import get_async_sessionmaker
+
+    monkeypatch.setattr(admin_handler, "is_admin", lambda user_id: user_id == 99)
+    await test_initial_wave_serializes_concurrent_claims_and_broadcasts(
+        get_async_sessionmaker(), monkeypatch, flag
+    )
+
+
+@pytest.mark.parametrize("flag", [None, "false"])
+async def test_initial_wave_infection_failure_rolls_back_claim(wave_db, monkeypatch, flag):
+    await _seed_wave(wave_db, flag)
+
+    async def fail(session, ids):
+        session.add(UserDisease(user_id=1, infection_level=10))
+        await session.flush()
+        raise RuntimeError("infection failed")
+
+    monkeypatch.setattr(disease, "process_initial_infection", fail)
+    msg, bot = _message(99), _bot()
+    with pytest.raises(RuntimeError, match="infection failed"):
+        await admin_handler.handle_disease_start(msg, bot)
+    bot.send_message.assert_not_awaited()
+    msg.reply.assert_not_awaited()
+    async with wave_db() as session:
+        row = await session.get(SystemConfig, _WAVE_FLAG)
+        assert (row.value if row else None) == flag
+        assert not await disease.is_sick(session, 1)
+
+
+async def test_initial_wave_broadcast_error_does_not_allow_a_repeat(wave_db, monkeypatch):
+    await _seed_wave(wave_db, "false")
+    broadcast = AsyncMock(side_effect=RuntimeError("ambiguous delivery"))
+    monkeypatch.setattr(admin_handler, "_broadcast_to_active_groups", broadcast)
+    first, second, bot = _message(99), _message(99), _bot()
+    with pytest.raises(RuntimeError, match="ambiguous delivery"):
+        await admin_handler.handle_disease_start(first, bot)
+    async with wave_db() as session:
+        assert (await session.get(SystemConfig, _WAVE_FLAG)).value == "true"
+    await admin_handler.handle_disease_start(second, bot)
+    second.reply.assert_awaited_once_with(_WAVE_WARNING)
+    broadcast.assert_awaited_once()
+
+
+def test_migration_073_is_idempotent_and_preserves_claims():
+    from io import StringIO
+
+    path = ROOT / "database/migrations/versions/073_disease_started_flag.py"
+    spec = importlib.util.spec_from_file_location("migration_073", path)
+    assert spec and spec.loader
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    assert (migration.revision, migration.down_revision) == ("073_disease_started_flag", "072_disease_ui")
+    engine = sa.create_engine("sqlite:///:memory:")
+    try:
+        with engine.begin() as connection:
+            connection.execute(sa.text("CREATE TABLE system_config (`key` VARCHAR(64) PRIMARY KEY, `value` TEXT NOT NULL)"))
+            with Operations.context(MigrationContext.configure(connection)):
+                migration.upgrade()
+                migration.upgrade()
+                def value():
+                    return connection.execute(sa.text(
+                        "SELECT `value` FROM system_config WHERE `key`=:key"
+                    ), {"key": _WAVE_FLAG}).scalar_one_or_none()
+
+                assert value() == "false"
+                for saved in ("true", '"in_progress"'):
+                    connection.execute(sa.text("UPDATE system_config SET `value`=:value"), {"value": saved})
+                    migration.upgrade()
+                    migration.downgrade()
+                    assert value() == saved
+                connection.execute(sa.text("UPDATE system_config SET `value`='false'"))
+                migration.downgrade()
+                migration.downgrade()
+                assert value() is None
+    finally:
+        engine.dispose()
+
+    output = StringIO()
+    context = MigrationContext.configure(dialect_name="mysql", opts={
+        "as_sql": True, "output_buffer": output, "literal_binds": True,
+    })
+    with Operations.context(context):
+        migration.upgrade()
+        migration.downgrade()
+    sql = output.getvalue()
+    assert "ON DUPLICATE KEY UPDATE `key` = `key`" in sql
+    assert "BINARY `value` = BINARY" in sql
+    assert _WAVE_FLAG in sql

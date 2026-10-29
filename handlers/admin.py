@@ -1,6 +1,6 @@
 """Admin panel handlers."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import inspect
 from typing import Optional
 
@@ -8,14 +8,19 @@ from aiogram import Bot, Router, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update
+from sqlalchemy.dialects import mysql, sqlite
 from sib.admin.auth import IsAdminFilter, is_admin
 from sib.core.logging import log_event, Events
 from sib.core.text import format_html
 from sib.database.connection import get_session
-from sib.database.models import AdminLog, User, Group, Game, Match, AdCampaign, SponsorChannel
+from sib.database.models import (
+    AdminLog, User, Group, Game, Match, AdCampaign, SponsorChannel, Inv2GroupMember,
+    SystemConfig,
+)
 from sib.keyboards.common import get_admin_main_keyboard, danger_button, primary_button
 from sib.services.ad.service import AdService
+from sib.services import disease_service
 from sib.services.halloween import (
     END_ANNOUNCEMENT,
     END_TEST_CONFIRMATION,
@@ -280,6 +285,89 @@ async def _broadcast_to_active_groups(
         except Exception:
             continue
     return sent_count
+
+
+DISEASE_START_ANNOUNCEMENT = (
+    "🦠 **پایان سیبومورتیس، آغاز یک کابوس جدید!**\n\n"
+    "با نابودی سیبومورتیس، انرژی شیطانی در سراسر اواریا پخش شده است. بیماری مرموزی در حال شیوع است!\n\n"
+    "وضعیت خود را با دستور «سیب من» بررسی کنید و هرچه سریع‌تر درمان شوید."
+)
+
+
+_DISEASE_WAVE_FLAG = "disease_initial_wave_triggered"
+_DISEASE_WAVE_IN_PROGRESS = '"in_progress"'
+
+
+@router.message(Command("disease_start"))
+async def handle_disease_start(message: Message, bot: Optional[Bot] = None) -> None:
+    """Seed and announce the initial disease wave at most once."""
+    if not message.from_user or not is_admin(message.from_user.id):
+        return
+
+    async with get_session() as session:
+        # The upsert serializes even a missing flag across processes. Only a
+        # literal false can be claimed; true and in-progress both fail closed.
+        values = {"key": _DISEASE_WAVE_FLAG, "value": "false"}
+        dialect = session.get_bind().dialect.name
+        if dialect in ("mysql", "mariadb"):
+            seed = mysql.insert(SystemConfig).values(**values)
+            seed = seed.on_duplicate_key_update(key=SystemConfig.key)
+        elif dialect == "sqlite":
+            seed = sqlite.insert(SystemConfig).values(**values).on_conflict_do_nothing(
+                index_elements=["key"]
+            )
+        else:
+            raise RuntimeError(f"Unsupported disease wave flag dialect: {dialect}")
+        await session.execute(seed)
+        claim = await session.execute(
+            update(SystemConfig)
+            .where(SystemConfig.key == _DISEASE_WAVE_FLAG, SystemConfig.value == "false")
+            .values(value=_DISEASE_WAVE_IN_PROGRESS)
+        )
+        claimed = claim.rowcount == 1
+        if claimed:
+            now = datetime.now(timezone.utc)
+            # Match the six-hour tick: the available activity tracker observes
+            # groups, so private-only interactions are not included.
+            active_user_ids = list((await session.scalars(
+                select(User.id)
+                .join(Inv2GroupMember, Inv2GroupMember.user_id == User.id)
+                .join(Group, Group.id == Inv2GroupMember.group_id)
+                .where(
+                    Inv2GroupMember.last_seen_at >= now - timedelta(hours=24),
+                    Inv2GroupMember.last_seen_at <= now,
+                    User.is_active.is_(True), User.is_bot.is_(False),
+                    User.is_banned.is_(False), Group.is_active.is_(True),
+                )
+                .distinct().order_by(User.id)
+            )).all())
+            count = await disease_service.process_initial_infection(session, active_user_ids)
+            group_ids = tuple((await session.scalars(
+                select(Group.id).where(Group.is_active.is_(True)).order_by(Group.id)
+            )).all())
+
+    if not claimed:
+        await message.reply("⚠️ موج اولیه بیماری قبلاً اجرا شده است.")
+        return
+
+    # The claim and infections are committed before Telegram I/O. If the
+    # process stops mid-broadcast, the claim remains and prevents a repeat.
+    try:
+        await _broadcast_to_active_groups(bot, message, group_ids, DISEASE_START_ANNOUNCEMENT)
+    finally:
+        async with get_session() as session:
+            finalized = await session.execute(
+                update(SystemConfig)
+                .where(
+                    SystemConfig.key == _DISEASE_WAVE_FLAG,
+                    SystemConfig.value == _DISEASE_WAVE_IN_PROGRESS,
+                )
+                .values(value="true")
+            )
+            if finalized.rowcount != 1:
+                raise RuntimeError("Disease initial wave flag changed during broadcast")
+
+    await message.reply(f"✅ موج اولیه بیماری با موفقیت شروع شد. تعداد مبتلایان: {count}")
 
 
 @router.message(Command("hw_start"))

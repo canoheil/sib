@@ -133,7 +133,11 @@ async def build_war_status_screen(group_id: int, user_id: int):
 
 async def send_war_status(message: Message, group_id: int, user_id: int):
     """Send a NEW war status menu (the «وضعیت جنگ» text entry only)."""
-    screen = await build_war_status_screen(group_id, user_id)
+    try:
+        screen = await build_war_status_screen(group_id, user_id)
+    except WarError as exc:
+        await message.answer(str(exc))
+        return
     if screen is None:
         await message.answer(NO_WAR_TEXT)
         return
@@ -158,7 +162,11 @@ async def edit_war_status(callback: CallbackQuery, group_id: int, user_id: int) 
     of posting another status photo into the group. When the war is over
     the clicker just gets the no-war alert.
     """
-    screen = await build_war_status_screen(group_id, user_id)
+    try:
+        screen = await build_war_status_screen(group_id, user_id)
+    except WarError as exc:
+        await safe_answer_callback(callback, str(exc), show_alert=True)
+        return False
     if screen is None:
         await safe_answer_callback(callback, NO_WAR_TEXT, show_alert=True)
         return False
@@ -231,6 +239,10 @@ async def _send_dispatch(bot, chat_id: int, photo_bytes: bytes, caption: str):
 async def war_status_entry(message: Message):
     if not message.from_user:
         return
+    # Status implicitly enrolls the viewer, so the user row must exist for
+    # the health check's lock and the participant's foreign key.
+    async with get_session() as session:
+        await UserService.get_or_create_user(session, message.from_user)
     await send_war_status(message, message.chat.id, message.from_user.id)
 
 

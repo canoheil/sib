@@ -247,6 +247,8 @@ async def castle_callback(callback: CallbackQuery):
             # C2-6: a shielded group is warned first - attacking breaks the
             # shield immediately. The target list only opens after confirmation.
             async with get_session() as session:
+                actor = await UserService.get_or_create_user(session, callback.from_user)
+                await WarService.require_healthy_user(session, actor.id)
                 shield_until = await WarService.active_shield(session, group_id)
             if shield_until is not None:
                 warning_markup = InlineKeyboardMarkup(
@@ -275,6 +277,8 @@ async def castle_callback(callback: CallbackQuery):
                 )
                 return
             async with get_session() as session:
+                actor = await UserService.get_or_create_user(session, callback.from_user)
+                await WarService.require_healthy_user(session, actor.id)
                 broken = await WarService.break_shield(session, group_id)
             if broken:
                 await safe_answer_callback(callback, "🛡 سپر صلح شکسته شد")
@@ -324,7 +328,10 @@ async def castle_callback(callback: CallbackQuery):
                 return
             target_id = int(parts[3])
             async with get_session() as session:
-                war = await WarService.declare_war(session, group_id, target_id)
+                actor = await UserService.get_or_create_user(session, callback.from_user)
+                war = await WarService.declare_war(
+                    session, group_id, target_id, user_id=actor.id
+                )
                 attacker_group = await session.get(Group, group_id)
                 defender_group = await session.get(Group, target_id)
                 attacker_title = attacker_group.title if attacker_group else f"گروه {group_id}"

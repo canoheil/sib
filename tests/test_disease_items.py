@@ -154,6 +154,8 @@ async def test_plant_drop_config_is_typed_clamped_and_defaults(db, stored, expec
 ])
 async def test_mine_rolls_independent_plant_after_primary_reward(db, monkeypatch, rolls, outcome, dropped):
     await _player(db)
+    async with db.begin() as session:
+        await ConfigService.set(session, "disease_mine_infection_chance", 0)
     rng = Mock(side_effect=rolls)
     monkeypatch.setattr(mine.random, "random", rng)
     monkeypatch.setattr(mine.random, "randint", lambda low, high: low)
@@ -178,6 +180,7 @@ async def test_mine_zero_chance_skips_extra_roll_and_cooldown_never_drops(db, mo
     await _player(db)
     async with db.begin() as session:
         await ConfigService.set(session, "disease_mine_plant_drop_chance", 0)
+        await ConfigService.set(session, "disease_mine_infection_chance", 0)
     monkeypatch.setattr(mine, "_roll_shift", lambda _: ("normal", "apple_normal", 10))
     rng = Mock(return_value=0)
     monkeypatch.setattr(mine.random, "random", rng)
@@ -493,7 +496,7 @@ def test_migration_mysql_sql_is_non_destructive():
 
 def test_alembic_real_upgrade_and_downgrade_from_070(tmp_path):
     scripts = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["072_disease_ui"]
+    assert scripts.get_heads() == ["073_disease_started_flag"]
     assert scripts.get_revision("071_disease_items").down_revision == "070_disease_system"
     database = tmp_path / "migration.db"
     engine = sa.create_engine(f"sqlite:///{database}")
@@ -509,7 +512,7 @@ def test_alembic_real_upgrade_and_downgrade_from_070(tmp_path):
         assert result.returncode == 0, result.stdout + result.stderr
         return result.stdout.strip()
 
-    assert alembic("heads") == "072_disease_ui (head)"
+    assert alembic("heads") == "073_disease_started_flag (head)"
     alembic("stamp", "070_disease_system")
     alembic("upgrade", "071_disease_items")
     alembic("upgrade", "071_disease_items")

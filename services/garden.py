@@ -4,6 +4,7 @@ Growth model (all timings configurable via system_config):
 - plant:      EMPTY   + 1 seedling        -> GROWING   (planted_at, mature_at)
 - mature:     t >= mature_at              -> MATURE    (fruit cycle starts)
 - fruit:      t >= fruit_ready_at         -> FRUIT_READY (one harvest ready)
+- sick plant: first fruit takes 150% of the normal planting-to-fruit time
 - harvest:    FRUIT_READY                 -> ONE roll on the magic-level
               drop table: Normal Apple = currency credit, special Apple
               (Golden/Diamond/Obsidian) = inventory item. The tree then
@@ -46,6 +47,7 @@ from sib.database.models import (
 )
 from sib.services.apple_wallet import AppleWalletService, InsufficientFundsException
 from sib.services.config_store import ConfigService
+from sib.services import disease_service
 from sib.services.golden_hour import reward_multiplier as golden_hour_multiplier
 from sib.services.lock_order import lock_user_row
 from sib.services.seedling import SeedlingService
@@ -262,6 +264,11 @@ class GardenService:
         plot_index: int,
     ) -> GardenPlot:
         """Plant one seedling into an empty plot (consumes the seedling)."""
+        # Keep the refreshed row alive for is_sick's session.get. Lock the user
+        # before garden rows, serializing this decision with infection/cure.
+        locked_disease = await disease_service._disease_for_update(session, user_id)
+        sick = await disease_service.is_sick(session, user_id)
+        del locked_disease
         garden = await cls.get_or_create(session, user_id, for_update=True)
         plot = await cls._get_plot(session, garden, plot_index)
         if bool(plot.is_withered):
@@ -279,7 +286,13 @@ class GardenService:
 
         plot.planted_at = now
         plot.mature_at = now + timedelta(seconds=growth)
-        plot.fruit_ready_at = plot.mature_at + timedelta(seconds=fruit)
+        # Slow only the time from a NEW planting to its first fruit. Tree
+        # maturation, existing timers and later harvest cycles stay unchanged.
+        # Round odd seconds up so the 50% slowdown is never shortened.
+        first_fruit_seconds = growth + fruit
+        if sick:
+            first_fruit_seconds = (first_fruit_seconds * 3 + 1) // 2
+        plot.fruit_ready_at = now + timedelta(seconds=first_fruit_seconds)
 
         # Consume exactly one seedling (auditable, transactional).
         from sib.database.models import SeedlingInventory
@@ -416,6 +429,7 @@ class GardenService:
         now: Optional[datetime] = None,
     ) -> HarvestOutcome:
         """Harvest a single plot (see ``_harvest_plot``)."""
+        await lock_user_row(session, user_id)
         garden = await cls.get_or_create(session, user_id, for_update=True)
         plot = await cls._get_plot(session, garden, plot_index)
         return await cls._harvest_plot(
@@ -431,6 +445,7 @@ class GardenService:
         now: Optional[datetime] = None,
     ) -> List[HarvestOutcome]:
         """Harvest every ripe plot in ONE transaction (one re-render)."""
+        await lock_user_row(session, user_id)
         garden = await cls.get_or_create(session, user_id, for_update=True)
         now = cls._as_utc(now) or datetime.now(timezone.utc)
         ready = sorted(
@@ -477,6 +492,8 @@ class GardenService:
         """
         from sib.services.items import ItemService
 
+        # Match planting's user-before-garden order to avoid a lock inversion.
+        await lock_user_row(session, user_id)
         garden = await cls.get_or_create(session, user_id, for_update=True)
         plot = await cls._get_plot(session, garden, plot_index)
         if bool(plot.is_withered):

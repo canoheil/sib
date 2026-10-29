@@ -36,6 +36,15 @@ from sib.tests.test_apple_battle import _card
 from sqlalchemy import func, select, update
 
 
+@pytest.fixture(autouse=True)
+def _disable_incidental_infections(monkeypatch):
+    # These legacy tests exercise duel mechanics independently of the new
+    # random disease roll; disease-specific scenarios live in integration tests.
+    from sib.services import apple_duel
+
+    monkeypatch.setattr(apple_duel, "_duel_infection_chance", AsyncMock(return_value=0))
+
+
 async def create_test_user(session, user_id):
     from sib.database.models import User
 

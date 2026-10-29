@@ -24,6 +24,7 @@ from sib.services.castle_service import (
 )
 from sib.services.invasion_v2.damage import compute_damage
 from sib.services.items import ItemService
+from sib.services import disease_service
 from sib.services.lock_order import lock_user_row
 from sib.services.player_cards import PlayerCardService
 
@@ -49,6 +50,7 @@ ATTACK_LIMIT_MESSAGE = "🛑 شما به سقف حداکثر ۱۰ حمله در 
 COOLDOWN_MESSAGE = "⏳ لطفاً ۳۰ ثانیه صبر کنید."
 ENERGY_MESSAGE = "⚡️ انرژی جنگی کافی ندارید!"
 FULL_ENERGY_MESSAGE = "⚡️ انرژی شما در حال حاضر کامل است!"
+SICK_WAR_MESSAGE = "🦠 شما بیمار هستید و نمی‌توانید در جنگ شرکت کنید. ابتدا درمان شوید."
 
 
 def _utc(value: datetime) -> datetime:
@@ -129,6 +131,17 @@ class WarOutcome:
 
 
 class WarService:
+    @staticmethod
+    async def require_healthy_user(session, user_id: int) -> None:
+        """Serialize the health check with infection/cure before war actions."""
+        # Keep the refreshed row alive for is_sick's session.get under MySQL's
+        # repeatable-read isolation, even if the session saw an older snapshot.
+        locked_disease = await disease_service._disease_for_update(session, user_id)
+        sick = await disease_service.is_sick(session, user_id)
+        del locked_disease
+        if sick:
+            raise WarError(SICK_WAR_MESSAGE)
+
     @staticmethod
     async def active_shield(
         session, group_id: int, *, now: Optional[datetime] = None
@@ -212,6 +225,7 @@ class WarService:
         attacker_group_id: int,
         defender_group_id: int,
         *,
+        user_id: Optional[int] = None,
         now: Optional[datetime] = None,
     ) -> GroupWar:
         """Lock both castles in ASC order, verify availability, set in_war, and create the war.
@@ -221,6 +235,10 @@ class WarService:
         now = now or datetime.now(timezone.utc)
         if attacker_group_id == defender_group_id:
             raise WarError("امکان اعلان جنگ به گروه خودی وجود ندارد.")
+        # Internal callers with no actor retain their existing behavior; the
+        # Telegram declaration path always supplies the initiating user.
+        if user_id is not None:
+            await WarService.require_healthy_user(session, user_id)
 
         first_id, second_id = sorted([attacker_group_id, defender_group_id])
         castles = list(
@@ -434,6 +452,9 @@ class WarService:
         actually stored - never on a stale in-memory copy. The ``FOR UPDATE``
         lock is what serializes concurrent attack clicks for the same player.
         """
+        # Status screens enroll implicitly, and existing participants can
+        # become sick mid-war, so check both new and existing participants.
+        await WarService.require_healthy_user(session, user_id)
         part = await session.scalar(
             select(WarParticipant)
             .where(
@@ -594,7 +615,7 @@ class WarService:
 
         Returns the updated war energy.
         """
-        await lock_user_row(session, user_id)
+        await WarService.require_healthy_user(session, user_id)
         potion_count = await ItemService.get_total(
             session, user_id, "healing_potion", for_update=True
         )
