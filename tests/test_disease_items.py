@@ -493,7 +493,7 @@ def test_migration_mysql_sql_is_non_destructive():
 
 def test_alembic_real_upgrade_and_downgrade_from_070(tmp_path):
     scripts = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["071_disease_items"]
+    assert scripts.get_heads() == ["072_disease_ui"]
     assert scripts.get_revision("071_disease_items").down_revision == "070_disease_system"
     database = tmp_path / "migration.db"
     engine = sa.create_engine(f"sqlite:///{database}")
@@ -509,11 +509,11 @@ def test_alembic_real_upgrade_and_downgrade_from_070(tmp_path):
         assert result.returncode == 0, result.stdout + result.stderr
         return result.stdout.strip()
 
-    assert alembic("heads") == "071_disease_items (head)"
+    assert alembic("heads") == "072_disease_ui (head)"
     alembic("stamp", "070_disease_system")
-    alembic("upgrade", "head")
-    alembic("upgrade", "head")
-    assert "071_disease_items (head)" in alembic("current")
+    alembic("upgrade", "071_disease_items")
+    alembic("upgrade", "071_disease_items")
+    assert "071_disease_items" in alembic("current")
     engine = sa.create_engine(f"sqlite:///{database}")
     with engine.connect() as connection:
         assert connection.execute(sa.text("SELECT `value` FROM system_config")).scalar() == "15"
@@ -523,7 +523,7 @@ def test_alembic_real_upgrade_and_downgrade_from_070(tmp_path):
     with engine.connect() as connection:
         assert connection.execute(sa.text("SELECT COUNT(*) FROM system_config")).scalar() == 0
     engine.dispose()
-    alembic("upgrade", "head")
+    alembic("upgrade", "071_disease_items")
 
 
 _ROW_LOCK_DATABASE = any(
