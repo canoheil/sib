@@ -16,6 +16,14 @@ from sib.services.timeout import TimeoutService
 # A party younger than this is never swept: players need time to invite friends.
 ZOMBIE_PARTY_MIN_AGE = timedelta(hours=2)
 
+DISEASE_NOTICE_TEXT = (
+    "⚠️ یادآوری: شما به بیماری آلوده هستید.\n"
+    "برای درمان، دستور /disease را بزنید یا از پزشک گروه کمک بگیرید."
+)
+DISEASE_NOTICE_GAP = timedelta(hours=4)
+DISEASE_NOTICE_WINDOW_MINUTES = 5
+DISEASE_DM_TIMEOUT_SECONDS = 10
+
 _INVASION_FLAG_TTL_SECONDS = 60
 _invasion_flag_value = False
 _invasion_flag_expires_at = 0.0
@@ -81,6 +89,166 @@ class MaintenanceService:
         return (now - last).total_seconds() >= cls.DAILY_DIGEST_SWEEP_INTERVAL_SECONDS
 
     _bot = None
+    _last_doctor_selection_day: Optional[date] = None
+    _last_disease_notice_slot: Optional[tuple[date, int]] = None
+
+    @staticmethod
+    def _disease_notice_slot(now: datetime) -> Optional[tuple[date, int]]:
+        """A five-minute catch-up window for each scheduled Tehran reminder."""
+        from sib.services.disease_service import TEHRAN, _as_utc
+
+        local = _as_utc(now).astimezone(TEHRAN)
+        if local.hour in (14, 22) and local.minute < DISEASE_NOTICE_WINDOW_MINUTES:
+            return local.date(), local.hour
+        return None
+
+    @classmethod
+    async def _notify_sick_user(cls, bot, user_id: int, now: datetime) -> bool:
+        """Claim the cooldown before delivery so concurrent workers cannot double-send."""
+        from aiogram.exceptions import TelegramForbiddenError
+        from sqlalchemy import or_, select, update
+        from sib.database.models import UserDisease
+        from sib.services.disease_service import _as_utc
+
+        reference = _as_utc(now)
+        started = time.monotonic()
+
+        def elapsed_utc() -> datetime:
+            return reference + timedelta(seconds=time.monotonic() - started)
+
+        def ceil_second(value: datetime) -> datetime:
+            # MySQL DATETIME may drop microseconds; never round a delivery DOWN.
+            return value.replace(microsecond=0) + timedelta(seconds=bool(value.microsecond))
+
+        async with get_session() as session:
+            row = await session.scalar(
+                select(UserDisease).where(UserDisease.user_id == user_id)
+                .with_for_update().execution_options(populate_existing=True)
+            )
+            if row is None or row.infection_level <= 0:
+                return False
+            previous = row.last_notified_at
+            decision_at = elapsed_utc()
+            cutoff = decision_at - DISEASE_NOTICE_GAP
+            if previous is not None and _as_utc(previous) > cutoff:
+                return False
+            # Reserve through the maximum send time. Even an ambiguous timeout
+            # cannot let a later worker notify within four hours of delivery.
+            claim_at = ceil_second(decision_at + timedelta(seconds=DISEASE_DM_TIMEOUT_SECONDS))
+            # The conditional write also guards SQLite, where FOR UPDATE is a
+            # no-op; only one worker can advance the cooldown from a due value.
+            result = await session.execute(
+                update(UserDisease).where(
+                    UserDisease.user_id == user_id,
+                    UserDisease.infection_level > 0,
+                    or_(UserDisease.last_notified_at.is_(None),
+                        UserDisease.last_notified_at <= cutoff),
+                ).values(last_notified_at=claim_at).execution_options(synchronize_session=False)
+            )
+            if result.rowcount != 1:
+                return False
+
+        try:
+            await asyncio.wait_for(
+                bot.send_message(user_id, DISEASE_NOTICE_TEXT, parse_mode=None),
+                timeout=DISEASE_DM_TIMEOUT_SECONDS,
+            )
+        except TelegramForbiddenError:
+            # Telegram definitively refused this DM. Restore only our own claim.
+            try:
+                async with get_session() as session:
+                    await session.execute(
+                        update(UserDisease).where(
+                            UserDisease.user_id == user_id,
+                            UserDisease.last_notified_at == claim_at,
+                        ).values(last_notified_at=previous)
+                    )
+            except Exception:
+                logger.exception("Could not release blocked disease reminder claim user=%s", user_id)
+            return False
+        except Exception:
+            # A timeout/network failure can occur AFTER Telegram delivered the
+            # message. Keep the claim rather than risk a duplicate notification.
+            logger.debug("Disease reminder delivery uncertain user=%s", user_id, exc_info=True)
+            return False
+
+        # Record the actual completion time (rounded up to DB precision). If
+        # this update fails, the conservative future claim is still safe.
+        try:
+            async with get_session() as session:
+                await session.execute(
+                    update(UserDisease).where(
+                        UserDisease.user_id == user_id,
+                        UserDisease.last_notified_at == claim_at,
+                    ).values(last_notified_at=ceil_second(elapsed_utc()))
+                )
+        except Exception:
+            logger.exception("Could not finalize disease reminder claim user=%s", user_id)
+        return True
+
+    @classmethod
+    async def run_disease_notifications(cls, bot, *, now: datetime) -> int:
+        """Send one private reminder per eligible sick player in a due slot."""
+        if bot is None or cls._disease_notice_slot(now) is None:
+            return 0
+        from sqlalchemy import or_, select
+        from sib.database.models import UserDisease
+        from sib.services.disease_service import _as_utc
+
+        now_utc = _as_utc(now)
+        cutoff = now_utc - DISEASE_NOTICE_GAP
+        started = time.monotonic()
+        cursor = -1
+        sent = 0
+        semaphore = asyncio.Semaphore(10)
+
+        async def deliver(user_id: int) -> bool:
+            async with semaphore:
+                try:
+                    delivery_now = now_utc + timedelta(seconds=time.monotonic() - started)
+                    return await cls._notify_sick_user(bot, user_id, delivery_now)
+                except Exception:
+                    logger.exception("Disease reminder failed user=%s", user_id)
+                    return False
+
+        while True:
+            async with get_session() as session:
+                ids = list((await session.scalars(
+                    select(UserDisease.user_id).where(
+                        UserDisease.user_id > cursor,
+                        UserDisease.infection_level > 0,
+                        or_(UserDisease.last_notified_at.is_(None),
+                            UserDisease.last_notified_at <= cutoff),
+                    ).order_by(UserDisease.user_id).limit(100)
+                )).all())
+            if not ids:
+                break
+            sent += sum(await asyncio.gather(*(deliver(user_id) for user_id in ids)))
+            cursor = ids[-1]
+        return sent
+
+    @classmethod
+    async def run_disease_cycle(cls, bot, *, now: Optional[datetime] = None) -> None:
+        """Select the daily doctor and run due reminders in isolated work."""
+        from sib.handlers.disease import select_daily_doctor
+        from sib.services.disease_service import TEHRAN, _as_utc
+
+        now_utc = _as_utc(now or datetime.now(timezone.utc))
+        today = now_utc.astimezone(TEHRAN).date()
+        if cls._last_doctor_selection_day != today:
+            try:
+                async with get_session() as session:
+                    await select_daily_doctor(session, now=now_utc)
+                cls._last_doctor_selection_day = today
+            except Exception:
+                logger.exception("Maintenance task failed: daily doctor selection")
+        slot = cls._disease_notice_slot(now_utc)
+        if bot is not None and slot is not None and cls._last_disease_notice_slot != slot:
+            try:
+                await cls.run_disease_notifications(bot, now=now_utc)
+                cls._last_disease_notice_slot = slot
+            except Exception:
+                logger.exception("Maintenance task failed: disease reminders")
 
     @classmethod
     async def _invasion_enabled(cls) -> bool:
@@ -778,6 +946,13 @@ class MaintenanceService:
             )
         except Exception:
             logger.exception("Maintenance task failed: Golden Hour group notices")
+
+        # Disease selection and reminders have their own sessions and cannot
+        # roll back gameplay. Telegram delivery comes after bot-turn recovery.
+        try:
+            await cls.run_disease_cycle(cls._bot, now=datetime.now(timezone.utc))
+        except Exception:
+            logger.exception("Maintenance task failed: disease cycle")
 
     @classmethod
     async def _announce_war_results(cls, bot, outcomes: list) -> None:

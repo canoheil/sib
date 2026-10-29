@@ -679,6 +679,9 @@ async def handle_apple_profile(callback: CallbackQuery, bot: Bot):
         from sib.services.reminders import ReminderService
 
         reminders_on = not await ReminderService.is_opted_out(session, user.id)
+        from sib.services.disease_service import get_status as get_disease_status
+
+        disease_status = await get_disease_status(session, user.id)
 
     lines = [
         f"👤 **پروفایل سیبی {safe_name(user.first_name, 'شما')}** 🍏",
@@ -692,6 +695,9 @@ async def handle_apple_profile(callback: CallbackQuery, bot: Bot):
         f"⚔️ نبردهای سیبی: `{battles or 0}` | برد: `{wins or 0}`",
     ]
     lines.extend(marriage_lines)
+    from sib.handlers.disease import disease_profile_lines
+
+    lines.extend(disease_profile_lines(disease_status))
     from sib.services.friendship import profile_friend_count_line
 
     lines.append(profile_friend_count_line(friend_count))
@@ -1082,6 +1088,9 @@ async def _open_sender_profile(message: Message) -> None:
         marriage_lines = await profile_marriage_lines(session, user.id)
         account_progress = await PlayerXPService.get_progress(session, user.id)
         selected_skin = await ProfileSkinService.get_selected_skin(session, user.id)
+        from sib.services.disease_service import get_status as get_disease_status
+
+        disease_status = await get_disease_status(session, user.id)
 
     lines = [
         f"👤 **پروفایل سیبی {safe_name(user.first_name, 'شما')}** 🍏",
@@ -1095,6 +1104,9 @@ async def _open_sender_profile(message: Message) -> None:
         f"⚔️ نبردهای سیبی: `{battles or 0}` | برد: `{wins or 0}`",
     ]
     lines.extend(marriage_lines)
+    from sib.handlers.disease import disease_profile_lines
+
+    lines.extend(disease_profile_lines(disease_status))
     profile_text = "\n".join(lines)
     profile_kb = get_profile_keyboard()
 
