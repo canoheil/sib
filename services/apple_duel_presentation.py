@@ -62,10 +62,10 @@ def scene_text(duel, battle, index):
 
     Player-facing narration only: internal identifiers (the duel UUID,
     the battle row id, the RNG seed) are never rendered into the group
-    message. Scene 5 is the terminal result - winner plus the reward lines,
-    and nothing else.
+    message. Scene 5 is the terminal result, including any actual infection.
     """
-    cards = json.loads(duel.snapshot_json)["cards"]
+    snapshot = json.loads(duel.snapshot_json)
+    cards = snapshot["cards"]
     for card in cards:
         card["player_name"] = safe_name(card["player_name"])
         card["name"] = safe_name(card["name"])
@@ -84,6 +84,8 @@ def scene_text(duel, battle, index):
         "🎁 **۱ نهال** و **۵ سیب** برای برنده؛ در ساعت طلایی، پاداش سیب دوبرابر می‌شه. "
         "بازنده چیزی از دست نداد.",
     ]
+    if snapshot.get("disease_infected_user_id") is not None:
+        scenes[5] += "\n⚠️ بازنده پس از دوئل به بیماری مبتلا شد."
     return scenes[index]
 
 

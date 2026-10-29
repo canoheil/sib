@@ -23,6 +23,9 @@ DISEASE_NOTICE_TEXT = (
 DISEASE_NOTICE_GAP = timedelta(hours=4)
 DISEASE_NOTICE_WINDOW_MINUTES = 5
 DISEASE_DM_TIMEOUT_SECONDS = 10
+DISEASE_INFECTION_INTERVAL = timedelta(hours=6)
+DISEASE_INFECTION_STATE_KEY = "disease_last_infection_tick_at"
+DISEASE_INFECTION_CHECK_SECONDS = 60
 
 _INVASION_FLAG_TTL_SECONDS = 60
 _invasion_flag_value = False
@@ -91,6 +94,73 @@ class MaintenanceService:
     _bot = None
     _last_doctor_selection_day: Optional[date] = None
     _last_disease_notice_slot: Optional[tuple[date, int]] = None
+    _last_disease_infection_check_at: Optional[datetime] = None
+
+    @classmethod
+    async def run_disease_infection_tick(cls, *, now: Optional[datetime] = None) -> int:
+        """Infect recently observed group users at most once per six hours.
+
+        The persistent config row is a worker mutex and last-successful-run
+        timestamp. Its update and every infection commit together, so a crash,
+        another worker, or a restart cannot duplicate a successful tick.
+        Private-only activity is not tracked by the existing membership data.
+        """
+        from sqlalchemy import select
+        from sqlalchemy.dialects import mysql, sqlite
+        from sib.database.models import Group, Inv2GroupMember, SystemConfig, User
+        from sib.services import disease_service
+
+        now_utc = disease_service._as_utc(now or datetime.now(timezone.utc))
+        previous_check = cls._last_disease_infection_check_at
+        if previous_check is not None:
+            elapsed = (now_utc - previous_check).total_seconds()
+            if 0 <= elapsed < DISEASE_INFECTION_CHECK_SECONDS:
+                return 0
+
+        infected = 0
+        async with get_session() as session:
+            values = {"key": DISEASE_INFECTION_STATE_KEY, "value": "null"}
+            dialect = session.get_bind().dialect.name
+            if dialect in ("mysql", "mariadb"):
+                stmt = mysql.insert(SystemConfig).values(**values)
+                stmt = stmt.on_duplicate_key_update(key=SystemConfig.key)
+            elif dialect == "sqlite":
+                stmt = sqlite.insert(SystemConfig).values(**values).on_conflict_do_nothing(
+                    index_elements=["key"]
+                )
+            else:
+                raise RuntimeError(f"Unsupported infection tick dialect: {dialect}")
+            await session.execute(stmt)
+            state = await session.scalar(
+                select(SystemConfig).where(SystemConfig.key == DISEASE_INFECTION_STATE_KEY)
+                .with_for_update().execution_options(populate_existing=True)
+            )
+            try:
+                stored = json.loads(state.value)
+                last_run = disease_service._as_utc(datetime.fromisoformat(stored))
+            except (TypeError, ValueError, OverflowError):
+                last_run = None
+            if last_run is None or now_utc - last_run >= DISEASE_INFECTION_INTERVAL:
+                active_user_ids = list((await session.scalars(
+                    select(User.id)
+                    .join(Inv2GroupMember, Inv2GroupMember.user_id == User.id)
+                    .join(Group, Group.id == Inv2GroupMember.group_id)
+                    .where(
+                        Inv2GroupMember.last_seen_at >= now_utc - timedelta(hours=24),
+                        Inv2GroupMember.last_seen_at <= now_utc,
+                        User.is_active.is_(True), User.is_bot.is_(False),
+                        User.is_banned.is_(False), Group.is_active.is_(True),
+                    )
+                    .distinct().order_by(User.id)
+                )).all())
+                infected = await disease_service.process_daily_infection_tick(
+                    session, active_user_ids
+                )
+                state.value = json.dumps(now_utc.isoformat())
+                await session.flush()
+        # Only throttle after a successful commit; failures are retried next cycle.
+        cls._last_disease_infection_check_at = now_utc
+        return infected
 
     @staticmethod
     def _disease_notice_slot(now: datetime) -> Optional[tuple[date, int]]:
@@ -946,6 +1016,13 @@ class MaintenanceService:
             )
         except Exception:
             logger.exception("Maintenance task failed: Golden Hour group notices")
+
+        # Infection scheduling is independent of doctor selection/reminders
+        # and uses a separate transaction and persistent six-hour mutex.
+        try:
+            await cls.run_disease_infection_tick(now=datetime.now(timezone.utc))
+        except Exception:
+            logger.exception("Maintenance task failed: disease infection tick")
 
         # Disease selection and reminders have their own sessions and cannot
         # roll back gameplay. Telegram delivery comes after bot-turn recovery.

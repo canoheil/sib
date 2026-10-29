@@ -448,6 +448,7 @@ def _task_table():
         "retry_pending_xp_awards": (MatchResultService, "retry_pending_xp_awards"),
         "run_marriage_love_cycle": (MaintenanceService, "run_marriage_love_cycle"),
         "run_disease_cycle": (MaintenanceService, "run_disease_cycle"),
+        "run_disease_infection_tick": (MaintenanceService, "run_disease_infection_tick"),
         "invasion_tick": (InvasionScheduler, "tick"),
         "golden_hour_group_notices": (
             GoldenHourGroupAnnouncementService,
