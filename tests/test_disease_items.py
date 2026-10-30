@@ -453,8 +453,16 @@ async def test_command_router_is_registered_and_filters_both_commands():
             chat=Chat(id=1, type="private"),
             from_user=TelegramUser(id=1, first_name="player", is_bot=False), text=command,
         )
-        registered = next(h for h in handler.router.message.handlers if h.callback is callback)
-        assert all([await f.call(event, bot=None) for f in registered.filters])
+        # The command may be registered more than once (it also has a Persian
+        # plain-text alias), so ANY registration matching the slash command is
+        # enough - exactly what aiogram's dispatcher does.
+        registered = [h for h in handler.router.message.handlers if h.callback is callback]
+        matched = False
+        for entry in registered:
+            if all([await f.call(event, bot=None) for f in entry.filters]):
+                matched = True
+                break
+        assert matched
 
 
 def test_migration_idempotence_and_override_preservation():

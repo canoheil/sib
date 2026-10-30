@@ -5,6 +5,7 @@ SELECT FOR UPDATE races are separately marked for MySQL/MariaDB.
 """
 
 import asyncio
+import functools
 import importlib.util
 import json
 import os
@@ -524,6 +525,174 @@ async def test_disease_menu_is_owned_and_reuses_transactional_craft_and_use(db, 
     assert answer.await_args.args[1] == handler.NOT_SICK
     await handler.handle_craft_antidote_menu(_callback(2, "craft_antidote_menu"), bot)
     assert answer.await_args.args[1] == handler.MISSING_PLANT
+
+
+# ---------------------------------------------------------------------------
+# Slash-less Persian aliases: «بیماری»/«درمان», «دکتر»/«پزشک» and
+# «پادزهر»/«مصرف پادزهر». They must reach the very same handler functions as
+# /disease, /doctor and /use_antidote and must never swallow a normal sentence.
+# ---------------------------------------------------------------------------
+
+#: Every alias and the command whose handler it must reach.
+PLAIN_TEXT_ALIASES = {
+    "/disease": ("handle_disease_menu", ("بیماری", "درمان")),
+    "/doctor": ("handle_doctor", ("دکتر", "پزشک")),
+    "/use_antidote": ("handle_use_antidote", ("پادزهر", "مصرف پادزهر")),
+}
+
+
+@functools.lru_cache(maxsize=1)
+def _included_routers():
+    """Top-level routers ``register_all_handlers`` includes, in include order.
+
+    Recorded through a patched ``include_router``: aiogram refuses to attach one
+    router to two dispatchers, so nothing is attached here.
+    """
+    from unittest.mock import patch as _patch
+
+    from aiogram import Dispatcher
+
+    from sib.handlers import register_all_handlers
+
+    included: list = []
+    with _patch.object(Dispatcher, "include_router", side_effect=included.append):
+        register_all_handlers(Dispatcher())
+    return tuple(included)
+
+
+def _walk_routers(router):
+    yield router
+    for sub in router.sub_routers:
+        yield from _walk_routers(sub)
+
+
+async def _reached_handler(text, *, kind="private"):
+    """The handler function aiogram dispatches ``text`` to (first match wins)."""
+    event = Message(
+        message_id=1, date=datetime.now(timezone.utc),
+        chat=Chat(id=1, type=kind),
+        from_user=TelegramUser(id=1, first_name="player", is_bot=False), text=text,
+    )
+    for root in _included_routers():
+        for router in _walk_routers(root):
+            for registered in router.message.handlers:
+                matched = True
+                for flt in registered.filters:
+                    try:
+                        if not await flt.call(event, bot=None):
+                            matched = False
+                            break
+                    except Exception:
+                        matched = False
+                        break
+                if matched:
+                    return registered.callback
+    return None
+
+
+@pytest.mark.parametrize("command,aliases", [
+    (command, aliases) for command, (_, aliases) in PLAIN_TEXT_ALIASES.items()
+])
+@pytest.mark.parametrize("kind", ["private", "supergroup"])
+@pytest.mark.asyncio
+async def test_plain_text_aliases_reach_the_exact_command_handler(command, aliases, kind):
+    expected = getattr(handler, PLAIN_TEXT_ALIASES[command][0])
+    assert await _reached_handler(command, kind=kind) is expected
+    for alias in aliases:
+        assert await _reached_handler(alias, kind=kind) is expected
+        assert await _reached_handler(f"  {alias}  ", kind=kind) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text,expected_name", [
+    ("بيماري", "handle_disease_menu"),   # Arabic Yeh (U+064A)
+    ("درمان", "handle_disease_menu"),
+    ("دكتر", "handle_doctor"),           # Arabic Kaf (U+0643)
+    ("پزشك", "handle_doctor"),
+    ("پادزهر", "handle_use_antidote"),
+    ("مصرف پادزهر", "handle_use_antidote"),
+])
+async def test_aliases_fold_typed_persian_variants(text, expected_name):
+    assert await _reached_handler(text) is getattr(handler, expected_name)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", [
+    "من بیمارم",
+    "بیماری مرموزی در حال شیوع است",
+    "درمان بیمار",
+    "دکتر کیست",
+    "پنل پزشک روز",
+    "پادزهر آماده",
+    "می‌خواهم پادزهر مصرف کنم",
+    "انتقال پادزهر آماده ۱",
+])
+async def test_sentences_containing_the_words_are_not_shortcuts(text):
+    # The transfer phrase reaches the transfer handler, never an antidote use.
+    assert await _reached_handler(text) is not handler.handle_use_antidote
+    assert await _reached_handler(text) is not handler.handle_disease_menu
+    assert await _reached_handler(text) is not handler.handle_doctor
+
+
+def test_alias_patterns_are_anchored_and_disjoint():
+    cases = (
+        (handler.DISEASE_TEXT_PATTERN, ("بیماری", "درمان"),
+         ("پزشک", "پادزهر", "من بیمارم", "/disease")),
+        (handler.DOCTOR_TEXT_PATTERN, ("دکتر", "پزشک"),
+         ("بیماری", "درمان", "دکتر کیست", "/doctor")),
+        (handler.USE_ANTIDOTE_TEXT_PATTERN, ("پادزهر", "مصرف پادزهر"),
+         ("پادزهر آماده", "پزشک", "مصرف", "/use_antidote")),
+    )
+    for pattern, accepted, rejected in cases:
+        for text in accepted:
+            assert handler.is_plain_text_trigger(pattern, text), text
+        for text in rejected:
+            assert not handler.is_plain_text_trigger(pattern, text), text
+
+
+@pytest.mark.asyncio
+async def test_disease_menu_alias_renders_the_same_panel_as_the_command(db):
+    await _seed(db, now=datetime.now(timezone.utc))
+    command_msg, alias_msg = _message(2, message_id=70), _message(2, message_id=80)
+    await handler.handle_disease_menu(command_msg)
+    alias_msg.text = "بیماری"
+    await handler.handle_disease_menu(alias_msg)
+    assert alias_msg.reply.await_args.args[0] == command_msg.reply.await_args.args[0]
+    assert (_callbacks(alias_msg.reply.await_args.kwargs["reply_markup"])
+            == _callbacks(command_msg.reply.await_args.kwargs["reply_markup"])
+            == ["craft_antidote_menu", "use_antidote"])
+
+
+@pytest.mark.asyncio
+async def test_doctor_alias_serves_the_doctor_and_refuses_everyone_else(db):
+    await _seed(db, now=datetime.now(timezone.utc))
+    doctor_msg, other_msg = _message(1, message_id=80), _message(2, message_id=81)
+    doctor_msg.text, other_msg.text = "پزشک", "دکتر"
+    await handler.handle_doctor(doctor_msg)
+    await handler.handle_doctor(other_msg)
+    assert doctor_msg.reply.await_args.args[0] == "🩺 پنل پزشک روز"
+    assert _callbacks(doctor_msg.reply.await_args.kwargs["reply_markup"]) == ["doc_heal_list"]
+    assert other_msg.reply.await_args.args[0] == handler.DOCTOR_ONLY
+
+
+@pytest.mark.asyncio
+async def test_antidote_alias_uses_the_same_transactional_path(db):
+    await _seed(db)
+    async with db.begin() as session:
+        session.add(UserItem(user_id=2, item_key=handler.ANTIDOTE, quantity=1))
+    message = _message(2)
+    message.text = "مصرف پادزهر"
+    await handler.handle_use_antidote(message)
+    assert message.reply.await_args.args[0] == handler.USE_SUCCESS
+    async with db() as session:
+        assert not await disease.is_sick(session, 2)
+        assert await ItemService.get_total(session, 2, handler.ANTIDOTE) == 0
+
+    # The bare alias answers exactly like /use_antidote for a healthy player.
+    again = _message(2)
+    again.text = "پادزهر"
+    await handler.handle_use_antidote(again)
+    assert again.reply.await_args.args[0] == handler.NOT_SICK
 
 
 # ---------------------------------------------------------------------------
