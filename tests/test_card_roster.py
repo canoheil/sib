@@ -2,9 +2,8 @@
 stats, budget, shop.
 
 The suite began as the 11-card delivery and is append-only like the roster
-it pins: the later cards («محمود» / `mahmud`, «طیفان» / `tifun`) joined the
-same tables, so counts and pagination below cover 18 characters
-(4 audited + 13 supplied + 1 league trophy).
+it pins: later cards joined the same tables, so counts and pagination
+cover all 21 released characters, including two event exclusives.
 
 Covers the whole delivery end to end:
 
@@ -55,6 +54,8 @@ from sib.tests.test_card_lore_mmung import MMUNG_AFFILIATIONS, MMUNG_STORY
 from sib.tests.test_card_lore_moon_knight import MOON_KNIGHT_AFFILIATIONS, MOON_KNIGHT_STORY
 from sib.tests.test_card_lore_moon_lily import MOON_LILY_AFFILIATIONS, MOON_LILY_STORY
 from sib.tests.test_card_lore_sage_king import SAGE_KING_AFFILIATIONS, SAGE_KING_STORY
+from sib.tests.test_card_lore_dr_daxibe import DAXIBE_AFFILIATIONS, DAXIBE_STORY
+from sib.tests.test_card_lore_nekro import NEKRO_AFFILIATIONS, NEKRO_STORY
 from sib.tests.test_card_lore_tifun import TIFUN_AFFILIATIONS, TIFUN_STORY
 from sib.tests.test_card_lore_treyni import TREYNI_AFFILIATIONS, TREYNI_STORY
 from sib.tests.test_card_lore_wizard import WIZARD_AFFILIATIONS, WIZARD_STORY
@@ -69,11 +70,13 @@ SEED_PATH = REPO_ROOT / "data" / "characters_seed.json"
 # stats are pinned; official text appears only for cards explicitly submitted
 # so far. No role or gameplay ability is inferred from any story.
 NEW_CARDS: dict[str, dict] = {
+    "dr_daxibe": {"name_en": "Dr. Daxibe", "power": 18, "speed": 16, "intelligence": 26},
     "filo": {"name_en": "Filo", "power": 7, "speed": 13, "intelligence": 40},
     "goje": {"name_en": "Goje", "power": 20, "speed": 20, "intelligence": 20},
     "green_knight": {"name_en": "Green Knight", "power": 27, "speed": 19, "intelligence": 14},
     "igris": {"name_en": "Igris", "power": 32, "speed": 17, "intelligence": 11},
     "mahmud": {"name_en": "Mahmoud", "power": 18, "speed": 17, "intelligence": 25},
+    "nekro": {"name_en": "Nekro", "power": 20, "speed": 12, "intelligence": 28},
     "mmung": {"name_en": "Mmung", "power": 14, "speed": 36, "intelligence": 10},
     "moon_knight": {"name_en": "Moon Knight", "power": 30, "speed": 20, "intelligence": 10},
     "moon_lily": {"name_en": "Moon Lily", "power": 8, "speed": 12, "intelligence": 40},
@@ -88,11 +91,13 @@ NEW_CODES = tuple(NEW_CARDS)
 # Only explicitly received official text is allowed on this later roster.
 # It is keyed by card: every entry below is verbatim supplied content.
 OFFICIAL_NEW_TEXT = {
+    "dr_daxibe": (DAXIBE_AFFILIATIONS, DAXIBE_STORY, "sages"),
     "filo": (FILO_AFFILIATIONS, FILO_STORY, "empire"),
     "goje": (GOJE_AFFILIATIONS, GOJE_STORY, "empire"),
     "green_knight": (KNIGHT_AFFILIATIONS, KNIGHT_STORY, "sages"),
     "igris": (IGRIS_AFFILIATIONS, IGRIS_STORY, "empire"),
     "mahmud": (MAHMUD_AFFILIATIONS, MAHMUD_STORY, "empire"),
+    "nekro": (NEKRO_AFFILIATIONS, NEKRO_STORY, "moon_descendants"),
     "mmung": (MMUNG_AFFILIATIONS, MMUNG_STORY, "moon_descendants"),
     "moon_knight": (MOON_KNIGHT_AFFILIATIONS, MOON_KNIGHT_STORY, "moon_descendants"),
     "moon_lily": (MOON_LILY_AFFILIATIONS, MOON_LILY_STORY, "moon_descendants"),
@@ -190,8 +195,8 @@ def test_seed_entries_carry_exactly_the_delivered_stats_and_no_invented_metadata
 @pytest.mark.asyncio
 async def test_seed_registers_all_new_characters_with_unique_ids(db_session):
     characters = await _seeded(db_session)
-    # 4 audited + 14 supplied/exclusive + 1 league trophy (`hero`).
-    assert len(characters) == 19
+    # Four original cards, supplied cards, and event exclusives.
+    assert len(characters) == 21
     ids = [character.id for character in characters.values()]
     assert len(ids) == len(set(ids))
 
@@ -435,7 +440,7 @@ async def test_shop_card_list_shows_every_new_card_for_300_apples(db_session):
     entries = await ShopService.list_entries(db_session, user_id=user_id)
     total_pages = (len(entries) + SHOP_CARDS_PAGE_SIZE - 1) // SHOP_CARDS_PAGE_SIZE
     await db_session.commit()  # _cards_view reads through the handler's own session
-    assert len(entries) == 17 and total_pages == 4
+    assert len(entries) == 19 and total_pages == 4
 
     all_text = []
     all_labels = []

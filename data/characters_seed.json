@@ -308,5 +308,35 @@
     "faction_role_fa": "شوالیهٔ سرگردان؛ قهرمان لیگ هفتگی",
     "release_status": "RELEASED",
     "shop_enabled": false
+  },
+  {
+    "code": "nekro",
+    "name_fa": "نکرو",
+    "name_en": "Nekro",
+    "affiliations_fa": "فرزندان ماه🌙 - پنجه‌های ماه🐾",
+    "lore_fa": "تا پیش از ورود این موجود که حضورش در دنیای اواریا تابو محسوب می‌شود، امبر تنها کسی بود که برای مقابله با سیبومورتیس از جادوی سیاه استفاده کرده بود؛ اما ملکهٔ ماه که در برابر نیروی اهریمن هالووینی مستأصل شده بود، نکرومنسر را از میان خرابه‌های قبرستانی قدیمی احضار کرد و با وجود بی‌اعتمادی و تردید دربارهٔ نیت و مقاصد این موجود، او را به عضویت پنجه‌های ماه درآورد.",
+    "artwork": null,
+    "power": 20,
+    "speed": 12,
+    "intelligence": 28,
+    "faction": "moon_descendants",
+    "sync_faction": true,
+    "release_status": "RELEASED",
+    "shop_enabled": true
+  },
+  {
+    "code": "dr_daxibe",
+    "name_fa": "دکتر داکسیب",
+    "name_en": "Dr. Daxibe",
+    "affiliations_fa": "فرزانگان🔮",
+    "lore_fa": "دکتر داکسیب، کیمیاگر مرموز فرزانگان، سال‌ها از عمر خود را صرف مطالعه بیماری‌ها و ساخت داروهای کمیاب کرده است. او باور دارد هر بیماری رازی در دل طبیعت پنهان کرده و هیچ درمانی بدون شناخت عمیق آن ممکن نیست.",
+    "artwork": null,
+    "power": 18,
+    "speed": 16,
+    "intelligence": 26,
+    "faction": "sages",
+    "sync_faction": true,
+    "release_status": "RELEASED",
+    "shop_enabled": true
   }
 ]
