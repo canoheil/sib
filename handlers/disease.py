@@ -3,6 +3,7 @@
 import json
 import math
 import random
+import re
 from datetime import date, datetime, timedelta, timezone
 
 from aiogram import Bot, F, Router
@@ -42,6 +43,37 @@ MISSING_ANTIDOTE = "💊 پادزهر آماده نداری!"
 USE_SUCCESS = "✅ درمان شدی! پادزهر مصرف شد."
 UNKNOWN_USER = "ابتدا با /start ثبت‌نام کن."
 GENERIC_ERROR = "خطایی رخ داد. لطفاً دوباره تلاش کن."
+
+
+# ---------------------------------------------------------------------------
+# Slash-less aliases for the three disease commands.
+#
+# Each pattern is anchored to the WHOLE message, like every other wake word in
+# this bot, so an ordinary sentence that merely contains one of these words
+# stays normal conversation. Arabic/Persian Yeh and Kaf variants and the ZWNJ /
+# bidi marks players type are folded, following handlers/start.py and
+# handlers/theft.py. The three phrase sets are disjoint from each other and
+# from every other text shortcut in the project.
+# ---------------------------------------------------------------------------
+_YEH = "[\u06cc\u064a]"              # ی / ي
+_KEH = "[\u06a9\u0643]"              # ک / ك
+_PAD = r"[\s\u200c\u200e\u200f]*"  # whitespace, ZWNJ, bidi marks
+
+#: «بیماری» / «درمان» -> /disease
+DISEASE_TEXT_PATTERN = (
+    r"^" + _PAD + r"(?:ب" + _YEH + r"مار" + _YEH + r"|درمان)" + _PAD + r"$"
+)
+#: «دکتر» / «پزشک» -> /doctor
+DOCTOR_TEXT_PATTERN = r"^" + _PAD + r"(?:د" + _KEH + r"تر|پزش" + _KEH + r")" + _PAD + r"$"
+#: «پادزهر» / «مصرف پادزهر» -> /use_antidote
+USE_ANTIDOTE_TEXT_PATTERN = (
+    r"^" + _PAD + r"(?:مصرف" + _PAD + r"پادزهر|پادزهر)" + _PAD + r"$"
+)
+
+
+def is_plain_text_trigger(pattern: str, text: str | None) -> bool:
+    """Whether ``text`` is exactly one of the configured plain-text aliases."""
+    return bool(text) and re.match(pattern, text) is not None
 
 
 class DiseaseItemError(ValueError):
@@ -130,6 +162,7 @@ async def handle_craft_antidote(message: Message) -> None:
 
 
 @router.message(Command("use_antidote"))
+@router.message(F.text.regexp(USE_ANTIDOTE_TEXT_PATTERN))
 async def handle_use_antidote(message: Message) -> None:
     if message.from_user is None:
         return
@@ -337,6 +370,7 @@ async def disease_menu_view(session: AsyncSession, user_id: int) -> tuple[str, I
 
 
 @router.message(Command("disease"))
+@router.message(F.text.regexp(DISEASE_TEXT_PATTERN))
 async def handle_disease_menu(message: Message) -> None:
     if message.from_user is None:
         return
@@ -415,6 +449,7 @@ def _doctor_keyboard() -> InlineKeyboardMarkup:
 
 
 @router.message(Command("doctor"))
+@router.message(F.text.regexp(DOCTOR_TEXT_PATTERN))
 async def handle_doctor(message: Message) -> None:
     if message.from_user is None:
         return
