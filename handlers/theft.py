@@ -59,7 +59,7 @@ ARREST_PATTERN = r"^\s*دستگیری\s*$"
 
 CLEAN_STATUS_TEXT = "شما هیچ ستاره‌ای ندارید. وضعیت: پاک ⭐0\nشانس دزدی بعدی: 100%"
 WANTED_STATUS_TEXT = (
-    "وضعیت تعقیب: {stars} ⭐\n"
+    "وضعیت تعقیب: {stars}\n"
     "شانس موفقیت در دزدی بعدی: {rate}%\n"
     "زمان سوختن ستاره‌ها: {remaining} باقی‌مانده"
 )
@@ -157,7 +157,8 @@ def render_status(
             moment = now or datetime.now(timezone.utc)
             remaining = (expires - moment).total_seconds()
         text = WANTED_STATUS_TEXT.format(
-            stars=fa_digits(level),
+            # One ⭐ per star of the wanted level, not a digit.
+            stars="⭐" * min(level, theft_service.MAX_WANTED_LEVEL),
             rate=fa_digits(next_theft_success_chance(level)),
             remaining=format_remaining(remaining),
         )

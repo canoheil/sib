@@ -226,7 +226,9 @@ async def test_wanted_for_a_wanted_player_shows_rate_and_expiry(db, monkeypatch,
     await handler.handle_wanted(message)
 
     text = message.reply.await_args.args[0]
-    assert f"وضعیت تعقیب: {handler.fa_digits(level)} ⭐" in text
+    # Visual stars: one ⭐ per star of the wanted level, no digit.
+    assert f"وضعیت تعقیب: {'⭐' * level}" in text
+    assert f"وضعیت تعقیب: {handler.fa_digits(level)} ⭐" not in text
     assert f"شانس موفقیت در دزدی بعدی: {handler.fa_digits(rate)}%" in text
     assert "زمان سوختن ستاره‌ها: ۳ ساعت و ۳۰ دقیقه باقی‌مانده" in text
     assert "زندان" not in text
@@ -280,6 +282,21 @@ def test_render_status_is_pure_and_formats_durations():
 
     expired = handler.render_status(wanted, wanted_expires_at=now - timedelta(minutes=1), now=now)
     assert "۰ ثانیه باقی‌مانده" in expired
+
+    # One ⭐ per star, capped at five, and never a digit.
+    for level in (1, 2, 3, 4, 5):
+        line = handler.render_status(
+            {"wanted_level": level, "is_jailed": False, "jail_remaining_seconds": 0},
+            wanted_expires_at=now + timedelta(hours=1), now=now,
+        ).splitlines()[0]
+        assert line == f"وضعیت تعقیب: {'⭐' * level}"
+    assert handler.render_status(
+        {"wanted_level": 9, "is_jailed": False, "jail_remaining_seconds": 0},
+        wanted_expires_at=now + timedelta(hours=1), now=now,
+    ).splitlines()[0] == "وضعیت تعقیب: ⭐⭐⭐⭐⭐"
+
+    # A clean player keeps the plain text.
+    assert handler.render_status(clean, wanted_expires_at=None) == handler.CLEAN_STATUS_TEXT
 
 
 # ---------------------------------------------------------------------------
