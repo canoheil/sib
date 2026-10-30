@@ -430,8 +430,9 @@ async def test_cooldown_expires_after_the_configured_minutes(session, now):
     )
 
     result = await theft.initiate_theft(session, 2, 1)
-    assert result["status"] == "success"
-    assert await _balance(session, 1) == 3800
+    # One star: the cooldown is over, but the heist now waits for the window.
+    assert result == {"status": "pending", "amount": 200, "window_seconds": 10}
+    assert await _balance(session, 1) == 4000
 
 
 async def test_poor_victim_cannot_be_robbed(session, now):
@@ -452,8 +453,91 @@ async def test_theft_refuses_self_targets_and_unknown_users(session, now):
 
 
 # ---------------------------------------------------------------------------
-# initiate_theft: level 0/1 settles instantly
+# The exact behaviour the theft fix locks in (bugs 1 and 2):
+#   level 0 -> instant, 100 %      level 1 -> pending, 90 %
+#   level 2 -> pending, 80 %       level 3 -> pending, 70 %
+#   level 4 -> pending, 60 %       level 5 -> pending, 50 %
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "level,expected_chance", [(0, 100), (1, 90), (2, 80), (3, 70), (4, 60), (5, 50)]
+)
+def test_success_percent_drops_ten_points_per_star(level, expected_chance):
+    assert theft.success_percent(level) == expected_chance
+    # Wanted thieves never fall below the 50 % floor above the five stars.
+    assert theft.success_percent(level + 7) == 50
+    assert theft.success_percent(99) == 50
+
+
+async def test_wanted_level_zero_is_an_instant_guaranteed_theft(session, now):
+    """Test 1: a clean thief always succeeds and no window opens."""
+    await _users(session, 1, 2)
+    await _wallet(session, 1, 4000)
+    await _wallet(session, 2, 0)
+    await _state(session, 2, wanted_level=0)
+
+    result = await theft.initiate_theft(session, 2, 1)
+
+    assert result == {"status": "success", "amount": 200, "wanted_level": 1}
+    assert "window_seconds" not in result
+    assert await _balance(session, 2) == 200
+
+
+async def test_wanted_level_one_opens_the_window_and_rolls_ninety(
+    session, now, monkeypatch
+):
+    """Test 2: one star is a pending heist that rolls the 90 % row."""
+    await _users(session, 1, 2)
+    await _wallet(session, 1, 4000)
+    await _wallet(session, 2, 0)
+    await _state(
+        session, 2, wanted_level=1, wanted_expires_at=_utc(now) + timedelta(hours=5)
+    )
+
+    started = await theft.initiate_theft(session, 2, 1)
+
+    assert started == {"status": "pending", "amount": 200, "window_seconds": 10}
+    assert await _balance(session, 1) == 4000  # nothing moves before the window
+
+    rolled: list[int] = []
+
+    def spy(percent: int) -> bool:
+        rolled.append(percent)
+        return True
+
+    monkeypatch.setattr(theft, "_roll", spy)
+    result = await theft.resolve_pending_theft(session, 2, 1, 200, caught_by_id=None)
+
+    assert rolled == [90], "a one-star heist must roll 90 %"
+    assert result == {"status": "success", "amount": 200, "wanted_level": 2}
+
+
+async def test_wanted_level_five_rolls_fifty(session, now, monkeypatch):
+    """Test 3: the rate really reaches 50 % at five stars (bug 2)."""
+    await _users(session, 1, 2)
+    await _wallet(session, 1, 4000)
+    await _wallet(session, 2, 0)
+    await _state(
+        session, 2, wanted_level=5, wanted_expires_at=_utc(now) + timedelta(hours=5)
+    )
+
+    started = await theft.initiate_theft(session, 2, 1)
+    assert started["status"] == "pending"
+
+    rolled: list[int] = []
+
+    def spy(percent: int) -> bool:
+        rolled.append(percent)
+        return False
+
+    monkeypatch.setattr(theft, "_roll", spy)
+    result = await theft.resolve_pending_theft(session, 2, 1, 200, caught_by_id=None)
+
+    assert rolled == [50]
+    assert result == {"status": "failed"}
+    assert await _balance(session, 1) == 4000
+
 
 async def test_level_zero_theft_settles_instantly(session, now):
     await _users(session, 1, 2)
@@ -492,7 +576,8 @@ async def test_missing_state_is_created_by_the_first_theft(session, now):
     ) == 1
 
 
-async def test_level_one_theft_raises_the_level_to_two(session, now):
+async def test_only_a_clean_thief_settles_instantly(session, now):
+    """Regression (bug 1): one star already forces the arrest window."""
     await _users(session, 1, 2)
     await _wallet(session, 1, 4000)
     await _wallet(session, 2, 0)
@@ -502,8 +587,11 @@ async def test_level_one_theft_raises_the_level_to_two(session, now):
 
     result = await theft.initiate_theft(session, 2, 1)
 
-    assert result == {"status": "success", "amount": 200, "wanted_level": 2}
-    assert (await session.get(UserWantedState, 2)).jailed_until is None
+    assert result == {"status": "pending", "amount": 200, "window_seconds": 10}
+    assert await _balance(session, 1) == 4000
+    assert await _balance(session, 2) == 0
+    assert (await session.get(UserWantedState, 2)).wanted_level == 1
+    assert theft.INSTANT_THEFT_MAX_LEVEL == 0
 
 
 @pytest.mark.parametrize(
@@ -681,9 +769,11 @@ async def test_no_arrest_failed_roll_moves_nothing(session, now, monkeypatch):
 @pytest.mark.parametrize(
     "level,roll,expected",
     [
-        (2, 0.899, "success"), (2, 0.9, "failed"),
-        (3, 0.799, "success"), (3, 0.8, "failed"),
-        (4, 0.699, "success"), (4, 0.7, "failed"),
+        # Bug 2: 100 % (L0) - 90 (L1) - 80 (L2) - 70 (L3) - 60 (L4) - 50 (L5).
+        (1, 0.899, "success"), (1, 0.9, "failed"),
+        (2, 0.799, "success"), (2, 0.8, "failed"),
+        (3, 0.699, "success"), (3, 0.7, "failed"),
+        (4, 0.599, "success"), (4, 0.6, "failed"),
         (5, 0.499, "success"), (5, 0.5, "failed"),
     ],
 )
