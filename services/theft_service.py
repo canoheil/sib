@@ -14,10 +14,11 @@ path. ``user_wanted_states`` therefore needs no rank of its own in
 
 Lifecycle
 ---------
-* Wanted level 0-1: a theft settles instantly and raises the level by one.
-* Wanted level 2-5: a theft is *pending*; the caller opens the arrest window
-  and later calls :func:`resolve_pending_theft`. Level 2 steals reliably, the
-  chance drops with every extra star.
+* Wanted level 0 (a clean thief): the FIRST theft settles instantly, 100 %
+  guaranteed, and raises the level to one star.
+* Wanted level 1-5: a theft is *pending*; the caller opens the arrest window
+  and later calls :func:`resolve_pending_theft`. The chance drops by 10 % per
+  star (L1 90 %, L2 80 %, L3 70 %, L4 60 %, L5 50 %).
 * Being arrested pays the arrester a bot-funded bounty per star and jails the
   thief for ``theft_jail_hours``; the victim keeps their apples.
 """
@@ -42,12 +43,14 @@ TEHRAN = ZoneInfo("Asia/Tehran")
 logger = logging.getLogger(__name__)
 
 MAX_WANTED_LEVEL = 5
-# A theft at wanted level 0 or 1 settles instantly; 2+ is a pending heist.
-INSTANT_THEFT_MAX_LEVEL = 1
+# Only a CLEAN thief (0 stars) settles instantly. From one star on, every theft
+# is a pending heist whose arrest window must open first.
+INSTANT_THEFT_MAX_LEVEL = 0
 # Wanted stars reset this long after the last successful theft.
 WANTED_EXPIRY_HOURS = 24
-# Chance a pending theft succeeds when nobody arrests the thief in time.
-SUCCESS_PERCENT_BY_LEVEL = {2: 90, 3: 80, 4: 70, 5: 50}
+# Chance a pending theft succeeds when nobody arrests the thief in time:
+# one star destroys 10 % of the odds, L1 90 % ... L5 50 %.
+SUCCESS_PERCENT_BY_LEVEL = {1: 90, 2: 80, 3: 70, 4: 60, 5: 50}
 # Wallet ledger reasons. Neither is golden-hour eligible.
 REASON_STOLEN = "theft_stolen"
 REASON_ARREST_REWARD = "theft_arrest_reward"
@@ -65,6 +68,17 @@ def _as_utc(value: datetime) -> datetime:
 
 def _roll(percent: int) -> bool:
     return random.random() * 100 < percent
+
+
+def success_percent(level: int) -> int:
+    """Payout chance of a pending theft at ``level`` wanted stars.
+
+    A clean thief (0 stars) never waits for the window and always succeeds, so
+    the rate above ``MAX_WANTED_LEVEL`` never drops below 50 %.
+    """
+    if int(level) <= 0:
+        return 100
+    return SUCCESS_PERCENT_BY_LEVEL[min(int(level), MAX_WANTED_LEVEL)]
 
 
 async def _config_int(session: AsyncSession, key: str) -> int:
@@ -295,8 +309,7 @@ async def resolve_pending_theft(
         )
         return {"status": "caught", "reward": reward}
 
-    chance = SUCCESS_PERCENT_BY_LEVEL.get(min(level, MAX_WANTED_LEVEL))
-    if chance is None or not _roll(chance):
+    if not _roll(success_percent(level)):
         # Nothing moves: the victim keeps their apples and the level stands.
         return {"status": "failed"}
 

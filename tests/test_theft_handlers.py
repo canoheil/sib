@@ -213,7 +213,7 @@ async def test_wanted_alias_سیب_جرم_matches_the_same_handler():
     assert not handler.is_valid_trigger(handler.WANTED_PATTERN, "سیب جرم من")
 
 
-@pytest.mark.parametrize("level,rate", [(1, 100), (2, 90), (3, 80), (4, 70), (5, 50)])
+@pytest.mark.parametrize("level,rate", [(1, 90), (2, 80), (3, 70), (4, 60), (5, 50)])
 async def test_wanted_for_a_wanted_player_shows_rate_and_expiry(db, monkeypatch, level, rate):
     moment = datetime(2026, 10, 30, 12, 0, tzinfo=timezone.utc)
     await _seed(
@@ -226,7 +226,9 @@ async def test_wanted_for_a_wanted_player_shows_rate_and_expiry(db, monkeypatch,
     await handler.handle_wanted(message)
 
     text = message.reply.await_args.args[0]
-    assert f"وضعیت تعقیب: {handler.fa_digits(level)} ⭐" in text
+    # Visual stars: one ⭐ per star of the wanted level, no digit.
+    assert f"وضعیت تعقیب: {'⭐' * level}" in text
+    assert f"وضعیت تعقیب: {handler.fa_digits(level)} ⭐" not in text
     assert f"شانس موفقیت در دزدی بعدی: {handler.fa_digits(rate)}%" in text
     assert "زمان سوختن ستاره‌ها: ۳ ساعت و ۳۰ دقیقه باقی‌مانده" in text
     assert "زندان" not in text
@@ -280,6 +282,21 @@ def test_render_status_is_pure_and_formats_durations():
 
     expired = handler.render_status(wanted, wanted_expires_at=now - timedelta(minutes=1), now=now)
     assert "۰ ثانیه باقی‌مانده" in expired
+
+    # One ⭐ per star, capped at five, and never a digit.
+    for level in (1, 2, 3, 4, 5):
+        line = handler.render_status(
+            {"wanted_level": level, "is_jailed": False, "jail_remaining_seconds": 0},
+            wanted_expires_at=now + timedelta(hours=1), now=now,
+        ).splitlines()[0]
+        assert line == f"وضعیت تعقیب: {'⭐' * level}"
+    assert handler.render_status(
+        {"wanted_level": 9, "is_jailed": False, "jail_remaining_seconds": 0},
+        wanted_expires_at=now + timedelta(hours=1), now=now,
+    ).splitlines()[0] == "وضعیت تعقیب: ⭐⭐⭐⭐⭐"
+
+    # A clean player keeps the plain text.
+    assert handler.render_status(clean, wanted_expires_at=None) == handler.CLEAN_STATUS_TEXT
 
 
 # ---------------------------------------------------------------------------
@@ -347,7 +364,8 @@ async def test_insufficient_victim_wallet_is_reported(db):
 # Theft: instant success (level 0-1)
 # ---------------------------------------------------------------------------
 
-async def test_level_one_theft_succeeds_instantly_with_artwork(db):
+async def test_clean_thief_theft_succeeds_instantly_with_artwork(db):
+    # Zero stars: the only instant theft left after the fix (bug 1).
     await _seed(db)
     message = _message(target=VICTIM_ID)
 
@@ -371,6 +389,28 @@ async def test_level_one_theft_succeeds_instantly_with_artwork(db):
 # ---------------------------------------------------------------------------
 # Theft: pending window (level 2+)
 # ---------------------------------------------------------------------------
+
+async def test_second_theft_opens_the_window_instead_of_paying_out(db, monkeypatch):
+    """Regression (bug 1): a one-star thief's theft must wait for the window."""
+    await _seed(db, thief_level=1, wanted_expires_at=datetime.utcnow() + timedelta(hours=6))
+    window = WindowFake()
+    monkeypatch.setattr(handler, "_arrest_window", window)
+    message = _message(target=VICTIM_ID)
+
+    task = asyncio.create_task(handler.handle_theft(message))
+    await asyncio.sleep(0.05)
+
+    message.reply_photo.assert_awaited_once()
+    caption = message.reply_photo.await_args.kwargs["caption"]
+    assert "دزدی در جریان است" in caption
+    assert window.calls == [(200, 10)]
+    assert await _balance(db, VICTIM_ID) == 4000  # no instant payout
+    assert await _balance(db, THIEF_ID) == 0
+    assert (await _state(db, THIEF_ID)).wanted_level == 1
+
+    window.release.set()
+    await task
+
 
 async def test_pending_theft_moves_no_money_and_opens_the_window(db, monkeypatch):
     await _seed(db, thief_level=2, wanted_expires_at=datetime.utcnow() + timedelta(hours=6))

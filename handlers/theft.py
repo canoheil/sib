@@ -5,7 +5,8 @@ only decides what a player sees and when.
 
 Arrest window
 -------------
-A level-2+ theft is *pending*: no apple moves yet. The handler posts the
+A theft by a wanted thief (1+ stars) is *pending*: no apple moves yet. Only
+a clean thief's first theft settles instantly. The handler posts the
 robbery message and keeps an :class:`ActiveTheft` entry in memory keyed by
 ``(chat_id, message_id)`` of that message. Anyone in the group who is neither
 the thief nor the victim can reply «دستگیری» to it; the first one wins and sets
@@ -58,7 +59,7 @@ ARREST_PATTERN = r"^\s*دستگیری\s*$"
 
 CLEAN_STATUS_TEXT = "شما هیچ ستاره‌ای ندارید. وضعیت: پاک ⭐0\nشانس دزدی بعدی: 100%"
 WANTED_STATUS_TEXT = (
-    "وضعیت تعقیب: {stars} ⭐\n"
+    "وضعیت تعقیب: {stars}\n"
     "شانس موفقیت در دزدی بعدی: {rate}%\n"
     "زمان سوختن ستاره‌ها: {remaining} باقی‌مانده"
 )
@@ -120,10 +121,10 @@ ACTIVE_THEFTS: dict[tuple[int, int], ActiveTheft] = {}
 def next_theft_success_chance(level: int) -> int:
     """Chance the thief's *next* theft pays out, in percent.
 
-    A theft is attempted at the current level and only settles yes/no once the
-    thief already has 2+ stars, so 0-1 star thieves always succeed.
+    A clean thief (0 stars) settles instantly, so 100 %. From one star on the
+    heist waits for the arrest window and the odds drop 10 % per star.
     """
-    return theft_service.SUCCESS_PERCENT_BY_LEVEL.get(int(level), 100)
+    return theft_service.success_percent(level)
 
 
 def format_remaining(seconds: float) -> str:
@@ -156,7 +157,8 @@ def render_status(
             moment = now or datetime.now(timezone.utc)
             remaining = (expires - moment).total_seconds()
         text = WANTED_STATUS_TEXT.format(
-            stars=fa_digits(level),
+            # One ⭐ per star of the wanted level, not a digit.
+            stars="⭐" * min(level, theft_service.MAX_WANTED_LEVEL),
             rate=fa_digits(next_theft_success_chance(level)),
             remaining=format_remaining(remaining),
         )
