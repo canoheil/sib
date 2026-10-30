@@ -3,6 +3,7 @@
 from sib.database.base import Base, TimestampMixin
 from sib.database.models.user import User
 from sib.database.models.disease import UserDisease
+from sib.database.models.theft import UserWantedState
 from sib.database.models.group import Group
 from sib.database.models.game import Game
 from sib.database.models.match import Match, MatchState, MatchType
@@ -73,6 +74,7 @@ __all__ = [
     "TimestampMixin",
     "User",
     "UserDisease",
+    "UserWantedState",
     "Group",
     "Game",
     "Match",

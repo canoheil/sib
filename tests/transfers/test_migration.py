@@ -103,9 +103,9 @@ def test_migration_062_revises_061_and_is_the_only_head():
     # multi-source scoring table), 066_daily_channel_digest,
     # 067_invasion_daily_20_schedule, 068_golden_hour_apple_rewards,
     # 069_golden_hour_notices, 070_disease_system, 071_disease_items, and
-    # 072_disease_ui and 073_disease_started_flag revise it; history
-    # stays linear with one head.
-    assert set(revisions) - set(parents) == {"073_disease_started_flag"}
+    # 072_disease_ui, 073_disease_started_flag and 074_theft_system revise
+    # it; history stays linear with one head.
+    assert set(revisions) - set(parents) == {"074_theft_system"}
 
 
 # ---------------------------------------------------------------------------

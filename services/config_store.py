@@ -575,6 +575,19 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     "transfer_cooldown_seconds": 0,
     # Master switch. "false" makes every transfer return reason="disabled".
     "transfer_enabled": True,
+    # Apple theft & wanted level (migration 074).
+    # Cooldown between two successful thefts of the same thief.
+    "theft_cooldown_minutes": 20,
+    # Jail time served when an arrester catches the thief.
+    "theft_jail_hours": 2,
+    # Stolen amount = victim wallet x percent, clamped to [min, max].
+    "theft_amount_percent": 5,
+    "theft_min_amount": 50,
+    "theft_max_amount": 500,
+    # Seconds another player has to arrest a 2+ star thief in the act.
+    "theft_arrest_window_seconds": 10,
+    # Bot-paid bounty per wanted star, credited to the arrester.
+    "theft_arrest_reward_per_star": 100,
 }
 
 
