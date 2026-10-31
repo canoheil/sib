@@ -71,21 +71,52 @@ def generate_boom_image(crash_point: float) -> bytes:
 
     text = f"{float(crash_point):.1f}x"
     draw = ImageDraw.Draw(image)
-    font_size = max(24, int(image.height * 0.12))
-    font = None
-    for font_path in (
+    font_size = max(24, int(image.height * 0.20))
+    common_fonts = (
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+        "arial.ttf",
         "DejaVuSans-Bold.ttf",
-    ):
+    )
+    font = None
+    for font_path in common_fonts:
         try:
             font = ImageFont.truetype(font_path, font_size)
             break
-        except OSError:
+        except (OSError, ValueError):
             continue
-    if font is None:
-        font = ImageFont.load_default()
 
-    stroke_width = max(2, font_size // 18)
+    if font is None:
+        font_roots = (
+            Path("/usr/share/fonts"),
+            Path("/usr/local/share/fonts"),
+            Path.home() / ".fonts",
+        )
+        available_fonts = set()
+        for root in font_roots:
+            if root.is_dir():
+                available_fonts.update(root.rglob("*.ttf"))
+                available_fonts.update(root.rglob("*.TTF"))
+
+        def font_rank(path: Path) -> tuple[int, int, str]:
+            name = path.name.lower()
+            is_bold = any(token in name for token in ("bold", "black", "heavy"))
+            is_sans = any(token in name for token in ("sans", "arial", "dejavu"))
+            return (not is_bold, not is_sans, str(path))
+
+        for font_path in sorted(available_fonts, key=font_rank):
+            try:
+                font = ImageFont.truetype(str(font_path), font_size)
+                break
+            except (OSError, ValueError):
+                continue
+
+    if font is None:
+        raise RuntimeError("No usable TrueType font is installed for the boom image")
+
+    stroke_width = max(8, font_size // 20)
     bounds = draw.textbbox((0, 0), text, font=font, stroke_width=stroke_width)
     text_width = bounds[2] - bounds[0]
     text_height = bounds[3] - bounds[1]
