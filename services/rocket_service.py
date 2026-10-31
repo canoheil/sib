@@ -7,10 +7,13 @@ are credited after the animation through :func:`settle_rocket`.
 
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_FLOOR
+from io import BytesIO
 import math
+from pathlib import Path
 import secrets
 import uuid
 
+from PIL import Image, ImageDraw, ImageFont
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,30 +28,83 @@ DEFAULT_MIN_BET = 50
 DEFAULT_MAX_BET = 5000
 DEFAULT_COOLDOWN_SECONDS = 30
 DEFAULT_HOUSE_EDGE_PERCENT = 5
+MAX_CRASH_MULTIPLIER = 100.0
+BOOM_IMAGE_PATH = (
+    Path(__file__).resolve().parents[1] / "assets" / "rocket" / "rocket_boom.jpg"
+)
 
 BET_REASON = "rocket_bet"
 PAYOUT_REASON = "rocket_payout"
 
 
 def generate_crash_point(house_edge_percent: float = 5, *, rng=None) -> float:
-    """Roll a crash multiplier using ``max(1, (1-edge)/(1-U))``.
+    """Roll a crash point using the standard ``(1-H)/(1-U)`` formula.
 
-    ``U`` is drawn from the operating system's cryptographic RNG by default.
-    Injecting a zero-argument ``rng`` makes the formula deterministic in tests.
-    The survival probability for any target ``x > 1`` is approximately
-    ``(1 - house_edge) / x``.
+    ``house_edge_percent`` is configured as a percentage (5 means 5%). A
+    draw below that edge crashes at 1.0x. Otherwise, the point is capped at
+    100x and rounded down to one decimal. Before that cap/rounding,
+    ``P(crash >= x) = (1-H)/x`` for ``x > 1``. ``U`` uses the OS RNG by
+    default; an injected draw function keeps the formula deterministic in tests.
     """
     try:
-        edge = float(house_edge_percent)
+        edge_percent = float(house_edge_percent)
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError("house edge must be a number from 0 to 100") from exc
-    if not math.isfinite(edge) or not 0 <= edge <= 100:
+    if not math.isfinite(edge_percent) or not 0 <= edge_percent <= 100:
         raise ValueError("house edge must be a number from 0 to 100")
+    edge = edge_percent / 100.0
 
     draw = (rng if rng is not None else secrets.SystemRandom().random)()
     if not math.isfinite(draw) or not 0 <= draw < 1:
         raise ValueError("random draw must be in [0, 1)")
-    return max(1.0, (100.0 - edge) / (100.0 * (1.0 - draw)))
+    if draw < edge:
+        return 1.0
+
+    point = min((1.0 - edge) / (1.0 - draw), MAX_CRASH_MULTIPLIER)
+    return math.floor(point * 10.0) / 10.0
+
+
+def generate_boom_image(crash_point: float) -> bytes:
+    """Return the rocket crash artwork with its multiplier overlaid."""
+    with Image.open(BOOM_IMAGE_PATH) as source:
+        image = source.convert("RGB")
+
+    text = f"{float(crash_point):.1f}x"
+    draw = ImageDraw.Draw(image)
+    font_size = max(24, int(image.height * 0.12))
+    font = None
+    for font_path in (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "DejaVuSans-Bold.ttf",
+    ):
+        try:
+            font = ImageFont.truetype(font_path, font_size)
+            break
+        except OSError:
+            continue
+    if font is None:
+        font = ImageFont.load_default()
+
+    stroke_width = max(2, font_size // 18)
+    bounds = draw.textbbox((0, 0), text, font=font, stroke_width=stroke_width)
+    text_width = bounds[2] - bounds[0]
+    text_height = bounds[3] - bounds[1]
+    position = (
+        (image.width - text_width) / 2 - bounds[0],
+        (image.height - text_height) / 2 - bounds[1],
+    )
+    draw.text(
+        position,
+        text,
+        font=font,
+        fill="white",
+        stroke_width=stroke_width,
+        stroke_fill="black",
+    )
+
+    output = BytesIO()
+    image.save(output, format="JPEG", quality=92)
+    return output.getvalue()
 
 
 def _decimal(value) -> Decimal | None:
