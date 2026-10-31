@@ -8,6 +8,7 @@ are credited after the animation through :func:`settle_rocket`.
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_FLOOR
 from io import BytesIO
+import logging
 import math
 from pathlib import Path
 import secrets
@@ -21,6 +22,8 @@ from sib.database.models import UserRocketState
 from sib.services.apple_wallet import AppleWalletService, InsufficientFundsException
 from sib.services.config_store import ConfigService
 from sib.services.lock_order import lock_user_row
+
+logger = logging.getLogger(__name__)
 
 MIN_TARGET_MULTIPLIER = Decimal("1.1")
 MAX_TARGET_MULTIPLIER = Decimal("100")
@@ -72,52 +75,21 @@ def generate_boom_image(crash_point: float) -> bytes:
     text = f"{float(crash_point):.1f}x"
     draw = ImageDraw.Draw(image)
     font_size = max(24, int(image.height * 0.20))
-    common_fonts = (
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
-        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
-        "arial.ttf",
-        "DejaVuSans-Bold.ttf",
+    font_path = (
+        Path(__file__).resolve().parents[1]
+        / "assets"
+        / "fonts"
+        / "Roboto-Bold.ttf"
     )
-    font = None
-    for font_path in common_fonts:
-        try:
-            font = ImageFont.truetype(font_path, font_size)
-            break
-        except (OSError, ValueError):
-            continue
-
-    if font is None:
-        font_roots = (
-            Path("/usr/share/fonts"),
-            Path("/usr/local/share/fonts"),
-            Path.home() / ".fonts",
+    try:
+        font = ImageFont.truetype(str(font_path), font_size)
+    except (OSError, ValueError) as exc:
+        logger.warning(
+            "Could not load bundled Rocket font %s; using Pillow default: %s",
+            font_path,
+            exc,
         )
-        available_fonts = set()
-        for root in font_roots:
-            if root.is_dir():
-                available_fonts.update(root.rglob("*.ttf"))
-                available_fonts.update(root.rglob("*.TTF"))
-
-        def font_rank(path: Path) -> tuple[int, int, str]:
-            name = path.name.lower()
-            is_bold = any(token in name for token in ("bold", "black", "heavy"))
-            is_sans = any(token in name for token in ("sans", "arial", "dejavu"))
-            return (not is_bold, not is_sans, str(path))
-
-        for font_path in sorted(available_fonts, key=font_rank):
-            try:
-                font = ImageFont.truetype(str(font_path), font_size)
-                break
-            except (OSError, ValueError):
-                continue
-
-    if font is None:
-        try:
-            font = ImageFont.load_default(size=font_size)
-        except TypeError:  # Compatibility with Pillow versions before sized defaults.
-            font = ImageFont.load_default()
+        font = ImageFont.load_default()
 
     stroke_width = max(8, font_size // 20)
     bounds = draw.textbbox((0, 0), text, font=font, stroke_width=stroke_width)
