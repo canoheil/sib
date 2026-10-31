@@ -83,10 +83,10 @@ async def test_localized_digit_command_starts_rocket_game(
             self.reply_to_message = None
             self.from_user = SimpleNamespace(id=7, is_bot=False)
             self.text = text
-            self.video_calls = []
+            self.animation_calls = []
 
-        async def reply_video(self, **kwargs):
-            self.video_calls.append(kwargs)
+        async def reply_animation(self, **kwargs):
+            self.animation_calls.append(kwargs)
             return SimpleNamespace(
                 chat=SimpleNamespace(id=-100), message_id=99
             )
@@ -99,7 +99,10 @@ async def test_localized_digit_command_starts_rocket_game(
     await rocket_handler.handle_rocket(message, bot)
 
     assert play_calls == [(session, 7, expected_target, expected_bet)]
-    assert len(message.video_calls) == 1
+    assert len(message.animation_calls) == 1
+    assert message.animation_calls[0]["animation"].path == str(
+        rocket_handler.LAUNCH_VIDEO
+    )
     assert len(animation_calls) == 1
     assert animation_calls[0][0] is bot
     assert animation_calls[0][1]["game"]["target"] == expected_target

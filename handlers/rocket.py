@@ -260,8 +260,8 @@ async def handle_rocket(message: Message, bot: Bot) -> None:
         return
 
     try:
-        launch_message = await message.reply_video(
-            video=FSInputFile(str(LAUNCH_VIDEO)),
+        launch_message = await message.reply_animation(
+            animation=FSInputFile(str(LAUNCH_VIDEO)),
             caption="🚀 در حال اوج‌گیری... (1.0x)",
             parse_mode=None,
         )
@@ -269,7 +269,9 @@ async def handle_rocket(message: Message, bot: Bot) -> None:
         # A send timeout can occur after Telegram accepted the upload. The
         # idempotent settlement key makes it safe to resolve even if the
         # caller cannot learn the message id and show the animation.
-        logger.exception("Apple Rocket launch video send failed (user=%s)", sender.id)
+        logger.exception(
+            "Apple Rocket launch animation send failed (user=%s)", sender.id
+        )
         try:
             outcome = await _settle_round(sender.id, game)
             await message.reply(_final_caption(game, outcome), parse_mode=None)
