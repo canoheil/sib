@@ -16,16 +16,34 @@ router = Router(name="rocket")
 
 ROCKET_PATTERN = r"^سیب\s+([0-9.]+)\s+([0-9]+)$"
 _ROCKET_RE = re.compile(ROCKET_PATTERN)
+_ROCKET_DIGIT_TRANSLATION = str.maketrans(
+    "۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "0123456789" * 2
+)
 ASSET_DIR = Path(__file__).resolve().parents[1] / "assets" / "rocket"
 LAUNCH_VIDEO = ASSET_DIR / "rocket_launch.mp4"
 MAX_PROGRESS_EDITS = 4  # plus one final video-to-photo edit
+
+
+def _normalize_rocket_digits(text: str) -> str:
+    """Translate Persian and Arabic-Indic digits to ASCII before parsing."""
+    return text.translate(_ROCKET_DIGIT_TRANSLATION)
+
+
+def _matches_rocket_pattern(text: str | None) -> bool:
+    """Match the command filter against text with normalized digits."""
+    return isinstance(text, str) and _ROCKET_RE.fullmatch(
+        _normalize_rocket_digits(text)
+    ) is not None
+
+
+_ROCKET_MESSAGE_FILTER = F.text.func(_matches_rocket_pattern)
 
 
 def parse_rocket_command(text: str | None) -> tuple[Decimal, int] | None:
     """Parse ``سیب <multiplier> <bet>`` without accepting replies or aliases."""
     if not isinstance(text, str):
         return None
-    match = _ROCKET_RE.fullmatch(text)
+    match = _ROCKET_RE.fullmatch(_normalize_rocket_digits(text))
     if match is None:
         return None
     try:
@@ -204,7 +222,7 @@ def _refusal_text(result: dict) -> str:
     )
 
 
-@router.message(F.text.regexp(ROCKET_PATTERN))
+@router.message(_ROCKET_MESSAGE_FILTER)
 async def handle_rocket(message: Message, bot: Bot) -> None:
     """Start a group round from ``سیب 2.5 200`` (never from a reply)."""
     if not _is_group(message) or message.reply_to_message is not None:

@@ -114,7 +114,10 @@ def generate_boom_image(crash_point: float) -> bytes:
                 continue
 
     if font is None:
-        raise RuntimeError("No usable TrueType font is installed for the boom image")
+        try:
+            font = ImageFont.load_default(size=font_size)
+        except TypeError:  # Compatibility with Pillow versions before sized defaults.
+            font = ImageFont.load_default()
 
     stroke_width = max(8, font_size // 20)
     bounds = draw.textbbox((0, 0), text, font=font, stroke_width=stroke_width)
