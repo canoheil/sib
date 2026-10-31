@@ -22,6 +22,7 @@ from sib.core.logging import logger
 PUBLIC_COMMANDS: tuple[tuple[str, str], ...] = (
     ("start", "🍏 شروع بازی و منوی اصلی"),
     ("games", "🎮 بازی‌ها و پارتی"),
+    ("leave_party", "🚪 ترک پارتی"),
     ("battle", "⚔️ نبرد سیبی"),
     ("mine", "⛏️ معدن سیب"),
     ("chest", "🎁 صندوق روزانه"),

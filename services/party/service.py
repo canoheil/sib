@@ -325,8 +325,13 @@ class PartyService:
     ) -> Tuple[Optional[Party], bool]:
         """
         User leaves party.
+        If the user is the leader (creator_user_id) and other human members
+        remain, leadership transfers to the oldest remaining member; if no
+        human member remains, the party is disbanded (CANCELLED).
         Returns (party, was_cancelled).
         """
+        from sib.database.models import MatchmakingQueue
+
         stmt = (
             select(Party)
             .where(Party.id == party_id)
@@ -347,15 +352,49 @@ class PartyService:
         if not member:
             raise InvalidActionException("شما عضو این پارتی نیستید 🍏")
 
+        was_leader = party.creator_user_id == user_id
+
         await session.delete(member)
         party.current_players_count = max(0, party.current_players_count - 1)
+        await session.flush()
+
+        next_leader_id = await session.scalar(
+            select(PartyMember.user_id)
+            .join(User, User.id == PartyMember.user_id)
+            .where(PartyMember.party_id == party_id)
+            .where(User.is_bot == False)  # noqa: E712
+            .order_by(PartyMember.joined_at.asc(), PartyMember.id.asc())
+            .limit(1)
+        )
 
         was_cancelled = False
-        if party.current_players_count == 0:
+        if party.current_players_count == 0 or next_leader_id is None:
+            if party.current_players_count > 0:
+                bot_members = list(
+                    (
+                        await session.scalars(
+                            select(PartyMember).where(PartyMember.party_id == party_id)
+                        )
+                    ).all()
+                )
+                for bot_member in bot_members:
+                    await session.delete(bot_member)
+                party.current_players_count = 0
             party.status = PartyStatus.CANCELLED
             was_cancelled = True
         else:
+            if was_leader:
+                party.creator_user_id = next_leader_id
             party.status = PartyStatus.OPEN
+
+        await session.execute(
+            update(MatchmakingQueue)
+            .where(
+                MatchmakingQueue.party_id == party.id,
+                MatchmakingQueue.is_active == True,  # noqa: E712
+            )
+            .values(is_active=False)
+        )
 
         await session.flush()
 
@@ -366,11 +405,74 @@ class PartyService:
                 "user_id": user_id,
                 "remaining_players": party.current_players_count,
                 "was_cancelled": was_cancelled,
+                "new_leader_id": (
+                    party.creator_user_id if (was_leader and not was_cancelled) else None
+                ),
             },
         )
 
         refreshed_party = await cls.get_party_by_id(session, party.id) if not was_cancelled else None
         return refreshed_party, was_cancelled
+
+    @classmethod
+    async def leave_all_parties(
+        cls,
+        session: AsyncSession,
+        user_id: int,
+    ) -> List[dict]:
+        """Leave all active parties the user is currently a member of.
+
+        Reuses ``leave_party`` so membership removal, leadership transfer,
+        party disbanding, and matchmaking queue cleanup share one code path.
+        """
+        from sib.database.models import Match
+
+        await SessionService.lock_user(session, user_id)
+
+        stmt = (
+            select(Party)
+            .join(PartyMember, PartyMember.party_id == Party.id)
+            .where(PartyMember.user_id == user_id)
+            .where(Party.status.in_(SessionService.ACTIVE_PARTY_STATUSES))
+            .order_by(Party.id.asc())
+            .with_for_update()
+        )
+        active_parties = list((await session.scalars(stmt)).all())
+
+        outcomes: List[dict] = []
+        for party in active_parties:
+            if party.status == PartyStatus.IN_MATCH:
+                live_match_id = await session.scalar(
+                    select(Match.id)
+                    .where(
+                        ((Match.party1_id == party.id) | (Match.party2_id == party.id))
+                        & (Match.state.in_(SessionService.ACTIVE_MATCH_STATES))
+                    )
+                    .limit(1)
+                )
+                if live_match_id is not None:
+                    continue
+                await SessionService._restore_party(party)
+                await session.flush()
+
+            was_leader = party.creator_user_id == user_id
+            updated_party, was_cancelled = await cls.leave_party(
+                session, party.id, user_id
+            )
+            outcomes.append(
+                {
+                    "party_id": party.id,
+                    "was_leader": was_leader,
+                    "was_cancelled": was_cancelled,
+                    "new_leader_id": (
+                        updated_party.creator_user_id
+                        if (was_leader and not was_cancelled and updated_party is not None)
+                        else None
+                    ),
+                }
+            )
+
+        return outcomes
 
     @classmethod
     async def cancel_party(

@@ -83,6 +83,43 @@ async def cmd_group_games(message: Message):
         await send_screen_reply(message, "games", text, kb)
 
 
+LEAVE_PARTY_TRIGGERS = {"ترک پارتی", "خروج از پارتی"}
+NOT_IN_PARTY_TEXT = "شما در حال حاضر در هیچ پارتی‌ای نیستید."
+LEFT_PARTY_TEXT = "✅ با موفقیت از پارتی خارج شدید."
+LEADER_TRANSFERRED_TEXT = "شما لیدر بودید. لیدری به نفر بعدی منتقل شد و شما خارج شدید."
+PARTY_DISBANDED_TEXT = "پارتی منحل شد."
+
+
+@router.message(Command("leave_party"))
+@router.message(F.text.in_({"ترک پارتی", "خروج از پارتی"}))
+async def cmd_leave_party(message: Message):
+    """Leave all active parties the user is currently a member of."""
+    if not message.from_user:
+        return
+
+    async with get_session() as session:
+        outcomes = await PartyService.leave_all_parties(
+            session, message.from_user.id
+        )
+
+    if not outcomes:
+        await message.reply(NOT_IN_PARTY_TEXT)
+        return
+
+    replies: list[str] = []
+    for outcome in outcomes:
+        if outcome["was_cancelled"]:
+            reply_text = PARTY_DISBANDED_TEXT
+        elif outcome["was_leader"]:
+            reply_text = LEADER_TRANSFERRED_TEXT
+        else:
+            reply_text = LEFT_PARTY_TEXT
+        if reply_text not in replies:
+            replies.append(reply_text)
+
+    await message.reply("\n".join(replies))
+
+
 @router.callback_query(F.data == "group_games_panel")
 async def handle_games_panel(callback: CallbackQuery, bot: Bot):
     """Screen: the games menu ('منوی بازی‌ها')."""
