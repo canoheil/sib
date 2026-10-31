@@ -588,6 +588,11 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     "theft_arrest_window_seconds": 10,
     # Bot-paid bounty per wanted star, credited to the arrester.
     "theft_arrest_reward_per_star": 100,
+    # Apple Rocket (migration 075).
+    "rocket_min_bet": 50,
+    "rocket_max_bet": 5000,
+    "rocket_cooldown_seconds": 30,
+    "rocket_house_edge": 5,
 }
 
 
