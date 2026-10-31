@@ -29,6 +29,7 @@ from sib.database.connection import get_session
 from sib.database.models import Character, PlayerCard, Trade, TradeStatus
 from sib.services.card_progression import card_attributes
 from sib.services.nav import back_label_for, back_target, parse_callback
+from sib.services.panel import PanelOwnershipService
 from sib.services.player_cards import PlayerCardService
 from sib.services.telegram_ui import safe_answer_callback, safe_edit_callback_message
 from sib.services.trading import TradeError, TradeService

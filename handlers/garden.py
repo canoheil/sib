@@ -179,7 +179,9 @@ async def cmd_garden(message: Message, bot: Bot):
 
     async with get_session() as session:
         from sib.services.banner import send_screen_reply
+        from sib.services.user import UserService
 
+        await UserService.get_or_create_user(session, user)
         text, kb = await _render_garden(user.id, session)
         sent = await send_screen_reply(message, "garden", text, kb)
         if sent is not None and sent.message_id:

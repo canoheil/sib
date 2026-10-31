@@ -245,9 +245,6 @@ async def handle_wiki_char_full(callback: CallbackQuery, bot: Bot):
 
 @router.message(Command("cards"))
 async def cmd_cards(message: Message, bot: Bot):
-    user = message.from_user
-    if not user:
-        return
-    async with get_session() as session:
-        text = await CollectionService.render_collection(session, user.id)
-    await message.reply(text, parse_mode="Markdown")
+    from sib.handlers.start import _open_sender_cards
+
+    await _open_sender_cards(message, bot)
