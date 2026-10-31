@@ -7,9 +7,11 @@ import sys
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from decimal import Decimal
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 
+from PIL import Image
 import pytest
 import pytest_asyncio
 import sqlalchemy as sa
@@ -109,9 +111,19 @@ async def _seed_player(session, user_id=1, balance=1000):
 
 
 def test_crash_point_rng_formula_is_mockable():
-    assert rocket_service.generate_crash_point(5, rng=lambda: 0) == 1.0
+    assert rocket_service.generate_crash_point(5, rng=lambda: 0.049) == 1.0
     assert rocket_service.generate_crash_point(5, rng=lambda: 0.5) == pytest.approx(1.9)
-    assert rocket_service.generate_crash_point(0, rng=lambda: 0.5) == pytest.approx(2.0)
+    assert rocket_service.generate_crash_point(5, rng=lambda: 0.6) == 2.3
+    assert rocket_service.generate_crash_point(5, rng=lambda: 0.9999) == 100.0
+    assert rocket_service.generate_crash_point(0, rng=lambda: 0.5) == 2.0
+
+
+def test_generate_boom_image_returns_a_valid_jpeg():
+    data = rocket_service.generate_boom_image(22.3)
+    assert isinstance(data, bytes)
+    with Image.open(BytesIO(data)) as image:
+        assert image.format == "JPEG"
+        image.verify()
 
 
 @pytest.mark.asyncio

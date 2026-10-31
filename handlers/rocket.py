@@ -6,7 +6,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from aiogram import Bot, F, Router
-from aiogram.types import FSInputFile, InputMediaPhoto, Message
+from aiogram.types import BufferedInputFile, FSInputFile, InputMediaPhoto, Message
 
 from sib.core.logging import logger
 from sib.database.connection import get_session
@@ -18,7 +18,6 @@ ROCKET_PATTERN = r"^سیب\s+([0-9.]+)\s+([0-9]+)$"
 _ROCKET_RE = re.compile(ROCKET_PATTERN)
 ASSET_DIR = Path(__file__).resolve().parents[1] / "assets" / "rocket"
 LAUNCH_VIDEO = ASSET_DIR / "rocket_launch.mp4"
-BOOM_IMAGE = ASSET_DIR / "rocket_boom.jpg"
 MAX_PROGRESS_EDITS = 4  # plus one final video-to-photo edit
 
 
@@ -153,7 +152,10 @@ async def run_rocket_animation(
                 chat_id=chat_id,
                 message_id=message_id,
                 media=InputMediaPhoto(
-                    media=FSInputFile(str(BOOM_IMAGE)),
+                    media=BufferedInputFile(
+                        rocket_service.generate_boom_image(crash_point),
+                        filename="rocket_boom.jpg",
+                    ),
                     caption=caption,
                     parse_mode=None,
                 ),
