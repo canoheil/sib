@@ -411,9 +411,15 @@ async def test_public_commands_are_registered():
     bot = AsyncMock()
     assert await register_bot_commands(bot) is True
 
-    sent = bot.set_my_commands.await_args.args[0]
-    assert [(c.command, c.description) for c in sent] == list(PUBLIC_COMMANDS)
-    assert len(sent) == len(PUBLIC_COMMANDS)
+    # set_my_commands is called twice: once for default scope, once for groups.
+    assert bot.set_my_commands.call_count == 2
+    for call in bot.set_my_commands.call_args_list:
+        sent = call.args[0]
+        assert [(c.command, c.description) for c in sent] == list(PUBLIC_COMMANDS)
+        assert len(sent) == len(PUBLIC_COMMANDS)
+    # The two calls use different scopes.
+    assert bot.set_my_commands.call_args_list[0].kwargs["scope"].__class__.__name__ == "BotCommandScopeDefault"
+    assert bot.set_my_commands.call_args_list[1].kwargs["scope"].__class__.__name__ == "BotCommandScopeAllGroupChats"
     # Every listed command is a real player command, never an admin one.
     names = [name for name, _description in PUBLIC_COMMANDS]
     for admin_only in ("admin", "users", "broadcast", "setasset"):

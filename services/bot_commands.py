@@ -14,26 +14,30 @@ never to players.
 """
 
 from aiogram import Bot
-from aiogram.types import BotCommand, BotCommandScopeDefault
+from aiogram.types import BotCommand, BotCommandScopeAllGroupChats, BotCommandScopeDefault
 
 from sib.core.logging import logger
 
 #: Player-facing commands, in the order Telegram shows them.
 PUBLIC_COMMANDS: tuple[tuple[str, str], ...] = (
-    ("start", "شروع بازی و منوی اصلی"),
-    ("games", "بازی‌ها و پارتی"),
-    ("battle", "نبرد سیبی"),
-    ("mine", "معدن سیب"),
-    ("chest", "صندوق روزانه"),
-    ("profile", "پروفایل من"),
-    ("cards", "کارت‌های من"),
-    ("garden", "باغ من"),
-    ("shop", "فروشگاه"),
-    ("trade", "مبادله کارت"),
-    ("leaderboard", "جدول رتبه‌بندی"),
-    ("league", "لیگ هفتگی گروه‌ها"),
-    ("wiki", "ویکی کاراکترها"),
-    ("help", "راهنمای بازی"),
+    ("start", "🍏 شروع بازی و منوی اصلی"),
+    ("games", "🎮 بازی‌ها و پارتی"),
+    ("battle", "⚔️ نبرد سیبی"),
+    ("mine", "⛏️ معدن سیب"),
+    ("chest", "🎁 صندوق روزانه"),
+    ("profile", "👤 پروفایل من"),
+    ("cards", "🃏 کارت‌های من"),
+    ("garden", "🌳 باغ من"),
+    ("shop", "🛒 فروشگاه"),
+    ("trade", "🤝 مبادله کارت"),
+    ("leaderboard", "🏆 جدول رتبه‌بندی"),
+    ("league", "🛡️ لیگ هفتگی گروه‌ها"),
+    ("wiki", "📚 ویکی کاراکترها"),
+    ("help", "❓ راهنمای بازی"),
+    ("disease", "🦠 وضعیت بیماری و درمان"),
+    ("doctor", "🩺 پنل پزشک روز"),
+    ("wanted", "⭐ وضعیت تعقیب و جرم"),
+    ("use_antidote", "💊 مصرف پادزهر"),
 )
 
 
@@ -45,10 +49,9 @@ async def register_bot_commands(bot: Bot) -> bool:
     still works, the menu is just not published.
     """
     try:
-        await bot.set_my_commands(
-            [BotCommand(command=name, description=description) for name, description in PUBLIC_COMMANDS],
-            scope=BotCommandScopeDefault(),
-        )
+        commands = [BotCommand(command=name, description=description) for name, description in PUBLIC_COMMANDS]
+        await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
+        await bot.set_my_commands(commands, scope=BotCommandScopeAllGroupChats())
     except Exception:  # pragma: no cover - depends on Telegram, not on us
         logger.warning("could not publish the bot command menu", exc_info=True)
         return False
