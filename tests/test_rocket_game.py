@@ -265,7 +265,9 @@ async def test_handler_ignores_private_chats_and_replies():
 
 
 @pytest.mark.asyncio
-async def test_animation_edits_caption_and_replaces_video_with_boom_photo(monkeypatch):
+async def test_animation_edits_caption_and_replaces_launch_animation_with_boom_photo(
+    monkeypatch,
+):
     class BotStub:
         def __init__(self):
             self.captions = []
