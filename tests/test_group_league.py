@@ -829,7 +829,7 @@ async def test_league_is_wired_into_the_maintenance_cycle():
 def test_league_command_is_published_to_players():
     from sib.services.bot_commands import PUBLIC_COMMANDS
 
-    assert ("league", "لیگ هفتگی گروه‌ها") in PUBLIC_COMMANDS
+    assert ("league", "🛡️ لیگ هفتگی گروه‌ها") in PUBLIC_COMMANDS
 
 
 def test_leaderboard_has_a_league_button():
