@@ -2,8 +2,10 @@
 
 from contextlib import asynccontextmanager
 from decimal import Decimal
+from io import BytesIO
 from types import SimpleNamespace
 
+from PIL import Image
 import pytest
 
 from sib.handlers import rocket as rocket_handler
@@ -160,3 +162,142 @@ async def test_cooldown_is_silent(monkeypatch):
     await rocket_handler.handle_rocket(message, object())
     message.reply.assert_not_awaited()
     message.reply_animation.assert_not_awaited()
+
+
+class _ImagePathRecorder:
+    """Wrap ``PIL.Image.open`` to record which artwork file was loaded."""
+
+    def __init__(self, monkeypatch):
+        self.paths = []
+        self._real_open = Image.open
+        monkeypatch.setattr(rocket_service.Image, "open", self)
+
+    def __call__(self, path, *args, **kwargs):
+        self.paths.append(str(path))
+        return self._real_open(path, *args, **kwargs)
+
+
+@pytest.mark.parametrize(
+    ("is_win", "expected_name"),
+    [(True, "rocket_win.jpg"), (False, "rocket_boom.jpg")],
+)
+def test_boom_image_uses_the_win_or_crash_artwork(monkeypatch, is_win, expected_name):
+    recorder = _ImagePathRecorder(monkeypatch)
+
+    data = rocket_service.generate_boom_image(2.5, is_win=is_win)
+
+    assert recorder.paths == [
+        str(rocket_service.WIN_IMAGE_PATH if is_win else rocket_service.BOOM_IMAGE_PATH)
+    ]
+    assert recorder.paths[0].endswith(expected_name)
+
+
+@pytest.mark.parametrize(
+    ("is_win", "expected_name"),
+    [(True, "rocket_win.jpg"), (False, "rocket_boom.jpg")],
+)
+def test_generate_boom_image_returns_a_valid_jpeg_for_both_outcomes(
+    is_win, expected_name
+):
+    selected = (
+        rocket_service.WIN_IMAGE_PATH if is_win else rocket_service.BOOM_IMAGE_PATH
+    )
+    assert selected.name == expected_name
+    assert selected.is_file()
+
+    data = rocket_service.generate_boom_image(22.3, is_win=is_win)
+
+    assert isinstance(data, bytes)
+    assert data.startswith(b"\xff\xd8")  # JPEG SOI marker
+    with Image.open(BytesIO(data)) as image:
+        assert image.format == "JPEG"
+        assert image.size == (1024, 1024)
+        image.verify()
+
+
+@pytest.mark.parametrize(
+    ("crash_point", "target", "expected_win"),
+    [
+        (3.0, Decimal("2.5"), True),
+        (Decimal("2.5"), Decimal("2.5"), True),  # equality wins
+        (1.2, Decimal("2.5"), False),
+        (2.4, Decimal("2.5"), False),
+    ],
+)
+def test_handler_win_condition_matches_settlement(crash_point, target, expected_win):
+    game = {"crash_point": crash_point, "target": target}
+    assert rocket_handler._is_winning_round(game) is expected_win
+
+
+class _AnimationBot:
+    def __init__(self):
+        self.captions = []
+        self.media = []
+
+    async def edit_message_caption(self, **kwargs):
+        self.captions.append(kwargs)
+
+    async def edit_message_media(self, **kwargs):
+        self.media.append(kwargs)
+
+    async def send_message(self, **_kwargs):  # pragma: no cover - not expected
+        raise AssertionError("the launch message should stay editable")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("crash_point", "target", "is_win", "expected_name"),
+    [
+        (3.0, Decimal("2.5"), True, "rocket_win.jpg"),
+        (Decimal("2.5"), Decimal("2.5"), True, "rocket_win.jpg"),
+        (1.4, Decimal("2.5"), False, "rocket_boom.jpg"),
+    ],
+)
+async def test_animation_sends_win_artwork_only_for_winning_rounds(
+    monkeypatch, crash_point, target, is_win, expected_name
+):
+    bot = _AnimationBot()
+    image_calls = []
+
+    def fake_generate_boom_image(actual_crash_point, is_win):
+        image_calls.append((actual_crash_point, is_win))
+        return b"\xff\xd8fake-jpeg"
+
+    async def no_wait(_seconds):
+        return None
+
+    async def settle(_user_id, _game):
+        return (
+            {"status": "win", "payout": 500}
+            if is_win
+            else {"status": "loss", "payout": 0}
+        )
+
+    monkeypatch.setattr(rocket_service, "generate_boom_image", fake_generate_boom_image)
+    monkeypatch.setattr(rocket_handler, "_settle_round", settle)
+
+    game = {
+        "game_id": "artwork-round",
+        "bet": 200,
+        "target": target,
+        "crash_point": crash_point,
+    }
+    caption = await rocket_handler.run_rocket_animation(
+        bot,
+        chat_id=-123,
+        message_id=45,
+        user_id=7,
+        game=game,
+        sleep=no_wait,
+    )
+
+    assert len(image_calls) == 1
+    assert image_calls[0][1] is is_win
+    assert len(bot.media) == 1
+    assert bot.media[0]["media"].media.filename == expected_name
+    assert bot.media[0]["media"].caption == caption
+    if is_win:
+        assert "چتر نجات" in caption
+        assert "(+500 سیب)" in caption
+    else:
+        assert "باختید" in caption

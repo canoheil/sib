@@ -32,9 +32,9 @@ DEFAULT_MAX_BET = 5000
 DEFAULT_COOLDOWN_SECONDS = 30
 DEFAULT_HOUSE_EDGE_PERCENT = 5
 MAX_CRASH_MULTIPLIER = 100.0
-BOOM_IMAGE_PATH = (
-    Path(__file__).resolve().parents[1] / "assets" / "rocket" / "rocket_boom.jpg"
-)
+ASSET_DIR = Path(__file__).resolve().parents[1] / "assets" / "rocket"
+BOOM_IMAGE_PATH = ASSET_DIR / "rocket_boom.jpg"
+WIN_IMAGE_PATH = ASSET_DIR / "rocket_win.jpg"
 
 BET_REASON = "rocket_bet"
 PAYOUT_REASON = "rocket_payout"
@@ -67,9 +67,15 @@ def generate_crash_point(house_edge_percent: float = 5, *, rng=None) -> float:
     return math.floor(point * 10.0) / 10.0
 
 
-def generate_boom_image(crash_point: float) -> bytes:
-    """Return the rocket crash artwork with its multiplier overlaid."""
-    with Image.open(BOOM_IMAGE_PATH) as source:
+def generate_boom_image(crash_point: float, is_win: bool) -> bytes:
+    """Return the round artwork with its crash multiplier overlaid.
+
+    A winning round shows the apple parachuting safely down
+    (``rocket_win.jpg``); every other outcome keeps the crash artwork
+    (``rocket_boom.jpg``). The multiplier overlay is identical for both.
+    """
+    image_path = WIN_IMAGE_PATH if is_win else BOOM_IMAGE_PATH
+    with Image.open(image_path) as source:
         image = source.convert("RGB")
 
     text = f"{float(crash_point):.1f}x"
