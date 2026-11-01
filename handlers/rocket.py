@@ -22,6 +22,7 @@ _ROCKET_DIGIT_TRANSLATION = str.maketrans(
 ASSET_DIR = Path(__file__).resolve().parents[1] / "assets" / "rocket"
 LAUNCH_VIDEO = ASSET_DIR / "rocket_launch.mp4"
 MAX_PROGRESS_EDITS = 4  # plus one final video-to-photo edit
+_ACTIVE_USERS: set[int] = set()
 
 
 def _normalize_rocket_digits(text: str) -> str:
@@ -231,6 +232,18 @@ async def handle_rocket(message: Message, bot: Bot) -> None:
     if sender is None or getattr(sender, "is_bot", False):
         return
 
+    # Reserve before the first await, across all chats. Keep the animation
+    # awaited: no detached tasks can accumulate or lose their exceptions.
+    if sender.id in _ACTIVE_USERS:
+        return
+    _ACTIVE_USERS.add(sender.id)
+    try:
+        await _handle_rocket_round(message, bot, sender.id)
+    finally:
+        _ACTIVE_USERS.discard(sender.id)
+
+
+async def _handle_rocket_round(message: Message, bot: Bot, user_id: int) -> None:
     parsed = parse_rocket_command(message.text)
     if parsed is None:
         await message.reply(
@@ -243,16 +256,19 @@ async def handle_rocket(message: Message, bot: Bot) -> None:
         async with get_session() as session:
             game = await rocket_service.play_rocket(
                 session,
-                sender.id,
+                user_id,
                 target_multiplier=target,
                 bet_amount=bet,
             )
     except Exception:
-        logger.exception("Apple Rocket could not start (user=%s)", sender.id)
+        logger.exception("Apple Rocket could not start (user=%s)", user_id)
         await message.reply(
             "بازی راکت فعلاً در دسترس نیست؛ کمی بعد دوباره تلاش کن.",
             parse_mode=None,
         )
+        return
+
+    if game.get("status") == "cooldown":
         return
 
     if game.get("status") != "started":
@@ -270,19 +286,19 @@ async def handle_rocket(message: Message, bot: Bot) -> None:
         # idempotent settlement key makes it safe to resolve even if the
         # caller cannot learn the message id and show the animation.
         logger.exception(
-            "Apple Rocket launch animation send failed (user=%s)", sender.id
+            "Apple Rocket launch animation send failed (user=%s)", user_id
         )
         try:
-            outcome = await _settle_round(sender.id, game)
+            outcome = await _settle_round(user_id, game)
             await message.reply(_final_caption(game, outcome), parse_mode=None)
         except Exception:
-            logger.exception("Apple Rocket fallback settlement failed (user=%s)", sender.id)
+            logger.exception("Apple Rocket fallback settlement failed (user=%s)", user_id)
         return
 
     await run_rocket_animation(
         bot,
         chat_id=launch_message.chat.id,
         message_id=launch_message.message_id,
-        user_id=sender.id,
+        user_id=user_id,
         game=game,
     )

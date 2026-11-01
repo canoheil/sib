@@ -277,3 +277,20 @@ cd /opt/sib
 4. وضعیت تست‌های جامع: 🟢 تمام ۹۷ آزمون بدون خطا پاس می‌شوند
 🍏 کلیه شاخص‌های سلامت سیستم تایید شد! ✅
 ```
+
+### Automatic spam jail
+
+The first message/callback middleware shares a single per-user sliding window
+across chats and event types: at most 3 events per 2 seconds. Each dropped
+over-limit event is a strike; 3 strikes within 60 seconds silently jail the user
+for 2 hours. Jailed events do not reach database-backed middleware or handlers.
+No warnings are sent, to avoid amplifying floods.
+
+This state is process-local and expires lazily; restarting the bot clears bans.
+Use one polling process. Before deploying multiple workers, replace the local
+state with an atomic shared cache (such as Redis), otherwise limits and bans
+will not be shared. No database migration is required; the Alembic head remains
+`075_rocket_game`.
+
+Rocket also reserves one active round per user across chats, releases it in a
+`finally` block, awaits animations directly, and silently ignores cooldowns.
