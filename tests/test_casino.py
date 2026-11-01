@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -65,17 +66,35 @@ async def test_menu(state):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("emoji,value,won", [(e, v, w) for e in casino.GAMES.values() for v, w in ([(22, True), (1, False)] if e == "🎰" else [(6, True), (1, False)])])
+@pytest.mark.parametrize("emoji,value,won", [(e, v, w) for e in casino.GAMES.values() for v, w in ([(22, True), (43, True), (64, True), (1, False), (14, False)] if e == "🎰" else [(6, True), (1, False)])])
 @pytest.mark.parametrize("bet_text", ["۱۰", "10"])
-async def test_round(db, state, emoji, value, won, bet_text):
+async def test_round(db, state, emoji, value, won, bet_text, monkeypatch):
     await state.update_data(emoji=emoji)
     await state.set_state(casino.CasinoStates.waiting_for_bet)
     message = SimpleNamespace(from_user=SimpleNamespace(id=1), text=bet_text, answer=AsyncMock(), answer_dice=AsyncMock(return_value=SimpleNamespace(dice=SimpleNamespace(value=value))))
+    async def check_animation_delay(delay):
+        message.answer_dice.assert_awaited_once_with(emoji=emoji)
+        message.answer.assert_not_awaited()
+    sleep = AsyncMock(side_effect=check_animation_delay)
+    monkeypatch.setattr(casino.asyncio, "sleep", sleep)
     await casino.place_bet(message, state)
+    sleep.assert_awaited_once_with(4.0 if emoji == "🎰" else 3.5)
     payout = (30 if emoji == "🎰" else 18) if won else 0
     async with db() as session:
         assert await AppleWalletService.get_balance(session, 1) == 10000 - 10 + payout
-    assert ("بردی" if won else "باختی") in message.answer.await_args.args[0]
+    result_text = message.answer.await_args.args[0]
+    assert ("بردی" if won else "باختی") in result_text
+    if emoji == "🎰":
+        assert ("🎰 جکپات زدی!" if won else "🎰 اسلات باختی!") in result_text
+        assert str(value) not in result_text
+    elif emoji == "🎯":
+        assert f"دارت به {value} خورد" in result_text
+    elif emoji == "🎳":
+        assert f"بولینگ {value} پین انداخت" in result_text
+    else:
+        assert f"تاس {value} آورد" in result_text
+    if won:
+        assert f"{payout} سیب گرفتی" in result_text
     assert await state.get_state() is None
 
 
@@ -134,3 +153,23 @@ async def test_invalid_inputs_clear_state(db, state, text):
     assert await state.get_state() is None
     async with db() as session:
         assert await AppleWalletService.get_balance(session, 1) == 10000
+
+
+@pytest.mark.asyncio
+async def test_cooldown_exact_boundary(db, monkeypatch):
+    async with db.begin() as session:
+        assert (await casino_service.validate_bet(session, 1, 10))["status"] == "started"
+    async with db() as session:
+        last = await session.scalar(sa.select(AppleTransaction).where(
+            AppleTransaction.user_id == 1, AppleTransaction.reason == casino_service.BET_REASON
+        ))
+        played_at = last.created_at
+    now = AsyncMock(return_value=played_at + timedelta(seconds=9))
+    monkeypatch.setattr(casino_service, "_database_now", now)
+    async with db.begin() as session:
+        refused = await casino_service.validate_bet(session, 1, 10)
+        assert refused["status"] == "cooldown"
+        assert "1 ثانیه" in refused["error"]
+    now.return_value = played_at + timedelta(seconds=10)
+    async with db.begin() as session:
+        assert (await casino_service.validate_bet(session, 1, 10))["status"] == "started"

@@ -13,7 +13,7 @@ from sib.services.apple_wallet import AppleWalletService, InsufficientFundsExcep
 from sib.services.lock_order import lock_user_row
 from sib.services.rocket_service import _cooldown_remaining, _database_now
 
-MIN_BET, MAX_BET, COOLDOWN = 10, 5000, 30
+MIN_BET, MAX_BET, COOLDOWN = 10, 5000, 10
 BET_REASON = "casino_bet"
 
 
