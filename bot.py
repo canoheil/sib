@@ -27,8 +27,10 @@ async def create_bot_and_dispatcher() -> tuple[Bot, Dispatcher]:
     )
     dp = Dispatcher()
 
-    # Observe group activity before rate limiting, including dropped updates.
-    # Both observers share one throttle; writes run in detached bounded tasks.
+    # One shared per-user throttle runs before any database/API middleware.
+    throttle = RateLimitMiddleware()
+    dp.message.outer_middleware(throttle)
+    dp.callback_query.outer_middleware(throttle)
     dp.message.outer_middleware(UserBanMiddleware())
     dp.callback_query.outer_middleware(UserBanMiddleware())
     membership = GroupMembershipMiddleware()
@@ -39,9 +41,6 @@ async def create_bot_and_dispatcher() -> tuple[Bot, Dispatcher]:
     # only has to press /start in the private chat), so no referral
     # middleware is needed any more.
 
-    # Global anti-spam protection. Dropped updates never reach handlers.
-    dp.message.outer_middleware(RateLimitMiddleware())
-    dp.callback_query.outer_middleware(RateLimitMiddleware())
     dp.callback_query.outer_middleware(PanelGuardMiddleware())
 
     # Register handlers
