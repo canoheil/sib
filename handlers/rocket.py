@@ -72,14 +72,26 @@ def _format_multiplier(value) -> str:
     return result
 
 
+def _is_winning_round(game: dict) -> bool:
+    """Mirror the settlement rule: a round wins at ``crash >= target``."""
+    try:
+        crash = Decimal(str(game["crash_point"]))
+        target = Decimal(str(game["target"]))
+    except (KeyError, InvalidOperation, TypeError, ValueError):
+        return False
+    if not crash.is_finite() or not target.is_finite():
+        return False
+    return crash >= target
+
+
 def _final_caption(game: dict, outcome: dict) -> str:
     crash_point = float(game["crash_point"])
     if outcome.get("status") == "win":
         target = _format_multiplier(game["target"])
         payout = int(outcome["payout"])
         return (
-            f"💥 راکت در {crash_point:.1f}x ترکید! 🏆 شما با هدف {target}x "
-            f"برنده شدید. (+{payout} سیب)"
+            f"🪂 راکت در {crash_point:.1f}x ترکید، اما شما با چتر نجات فرود "
+            f"آمدید! هدف {target}x محقق شد. (+{payout} سیب)"
         )
     if outcome.get("status") == "loss":
         return f"💥 راکت در {crash_point:.1f}x ترکید! 😭 شما باختید."
@@ -165,6 +177,9 @@ async def run_rocket_animation(
         outcome = {"status": "error"}
 
     caption = _final_caption(game, outcome)
+    # Winning rounds show the apple parachuting down; losses keep the crash art.
+    is_win = _is_winning_round(game)
+    image_name = "rocket_win.jpg" if is_win else "rocket_boom.jpg"
     if message_editable:
         try:
             await bot.edit_message_media(
@@ -172,8 +187,10 @@ async def run_rocket_animation(
                 message_id=message_id,
                 media=InputMediaPhoto(
                     media=BufferedInputFile(
-                        rocket_service.generate_boom_image(crash_point),
-                        filename="rocket_boom.jpg",
+                        rocket_service.generate_boom_image(
+                            crash_point, is_win=is_win
+                        ),
+                        filename=image_name,
                     ),
                     caption=caption,
                     parse_mode=None,

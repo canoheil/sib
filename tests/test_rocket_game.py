@@ -10,6 +10,7 @@ from decimal import Decimal
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from PIL import Image
 import pytest
@@ -118,8 +119,22 @@ def test_crash_point_rng_formula_is_mockable():
     assert rocket_service.generate_crash_point(0, rng=lambda: 0.5) == 2.0
 
 
-def test_generate_boom_image_returns_a_valid_jpeg():
-    data = rocket_service.generate_boom_image(22.3)
+@pytest.mark.parametrize(
+    ("is_win", "image_name"),
+    [(True, "rocket_win.jpg"), (False, "rocket_boom.jpg")],
+)
+def test_generate_boom_image_returns_a_valid_jpeg(is_win, image_name):
+    opened = []
+    real_open = Image.open
+
+    def recording_open(path, *args, **kwargs):
+        opened.append(Path(path).name)
+        return real_open(path, *args, **kwargs)
+
+    with mock.patch.object(rocket_service.Image, "open", recording_open):
+        data = rocket_service.generate_boom_image(22.3, is_win=is_win)
+
+    assert opened == [image_name]
     assert isinstance(data, bytes)
     with Image.open(BytesIO(data)) as image:
         assert image.format == "JPEG"
@@ -312,6 +327,7 @@ async def test_animation_edits_caption_and_replaces_launch_animation_with_boom_p
     assert bot.media[0]["chat_id"] == -123
     assert bot.media[0]["message_id"] == 45
     assert bot.media[0]["media"].caption == caption
+    assert bot.media[0]["media"].media.filename == "rocket_win.jpg"
     assert "در 3.0x ترکید" in caption
     assert "(+500 سیب)" in caption
 
