@@ -1,4 +1,5 @@
 """Interactive Telegram casino."""
+import asyncio
 from pathlib import Path
 
 from aiogram import F, Router
@@ -84,12 +85,24 @@ async def place_bet(message: Message, state: FSMContext) -> None:
             await _credit(user_id, bet, game_id, "casino_refund")
             await message.answer("ارسال بازی ناموفق بود؛ شرط به کیف پولت برگشت.")
             return
+        await asyncio.sleep(4.0 if emoji == "🎰" else 3.5)
         outcome = CasinoService.calculate_result(emoji, dice.dice.value, bet)
+        value = outcome["value"]
+        if emoji == "🎰":
+            description = "🎰 جکپات زدی!" if outcome["is_win"] else "🎰 اسلات باختی!"
+        else:
+            description = {
+                "🎲": f"تاس {value} آورد",
+                "🎯": f"دارت به {value} خورد",
+                "🎳": f"بولینگ {value} پین انداخت",
+            }[emoji]
         if outcome["is_win"]:
             await _credit(user_id, outcome["payout"], game_id, "casino_payout")
-            await message.answer(f"🏆 بردی! {outcome['value']} آوردی و {outcome['payout']} سیب گرفتی.")
+            separator = " " if emoji == "🎰" else " و "
+            await message.answer(f"🏆 بردی! {description}{separator}{outcome['payout']} سیب گرفتی.")
         else:
-            await message.answer(f"😭 باختی! {outcome['value']} آوردی.")
+            punctuation = "" if emoji == "🎰" else "."
+            await message.answer(f"😭 باختی! {description}{punctuation}")
     finally:
         await state.clear()
         _ACTIVE_USERS.discard(user_id)
