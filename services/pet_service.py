@@ -33,6 +33,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sib.database.models import PET_TYPES, UserPet
 from sib.services.config_store import ConfigService
+from sib.services.items import ItemService
+from sib.services.lock_order import lock_user_row
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +54,19 @@ MAX_HUNT_CHANCE = 90
 
 #: Persian display name per species (artwork lives in ``assets/pets/``).
 PET_TYPE_FA = {"dog": "سگ", "squirrel": "سنجاب", "cat": "گربه", "owl": "جغد"}
+
+#: Feeding (Phase 3). The inventory item and its config keys; the XP and adult
+#: threshold keys are seeded by migration 076, while ``pet_feed_cooldown_hours``
+#: is default-only (see ``services.config_store.CONFIG_DEFAULTS``).
+PET_FOOD_ITEM = "pet_food"
+FEED_XP_KEY = "pet_feed_xp_amount"
+FEED_XP_DEFAULT = 50
+ADULT_XP_KEY = "pet_adult_xp_required"
+ADULT_XP_DEFAULT = 500
+FEED_COOLDOWN_KEY = "pet_feed_cooldown_hours"
+FEED_COOLDOWN_HOURS_DEFAULT = 1
+#: Name shown for a pet that has not been named yet.
+UNNAMED_PET_FA = "بی‌نام"
 
 NAME_MIN_LENGTH = 2
 NAME_MAX_LENGTH = 20
@@ -316,6 +331,160 @@ async def execute_hunt(
         "pet": pet,
         "pet_type": pet_type,
         "chance": percent,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Reading pets (menu, profile)
+# ---------------------------------------------------------------------------
+
+async def list_pets(session: AsyncSession, user_id: int) -> list[UserPet]:
+    """Every pet owned by ``user_id``, oldest first (stable menu order)."""
+    rows = await session.scalars(
+        select(UserPet).where(UserPet.user_id == int(user_id)).order_by(UserPet.id)
+    )
+    return list(rows.all())
+
+
+async def get_pet(
+    session: AsyncSession,
+    user_id: int,
+    pet_id: int | str | None,
+    *,
+    for_update: bool = False,
+) -> UserPet | None:
+    """One pet, but only when it belongs to ``user_id`` (else ``None``)."""
+    try:
+        key = int(pet_id)
+    except (TypeError, ValueError):
+        return None
+    stmt = select(UserPet).where(UserPet.id == key)
+    if for_update:
+        stmt = stmt.with_for_update().execution_options(populate_existing=True)
+    pet = await session.scalar(stmt)
+    if pet is None or int(pet.user_id) != int(user_id):
+        return None
+    return pet
+
+
+def pet_display_name(pet: UserPet) -> str:
+    """The custom name, or a friendly placeholder for an unnamed pet."""
+    return (pet.custom_name or "").strip() or UNNAMED_PET_FA
+
+
+async def feed_xp_amount(session: AsyncSession) -> int:
+    """XP granted per feeding (``pet_feed_xp_amount``, default 50)."""
+    return max(0, await _config_int(session, FEED_XP_KEY, FEED_XP_DEFAULT))
+
+
+async def adult_xp_required(session: AsyncSession) -> int:
+    """XP needed to evolve (``pet_adult_xp_required``, default 500)."""
+    return max(1, await _config_int(session, ADULT_XP_KEY, ADULT_XP_DEFAULT))
+
+
+async def feed_cooldown_hours(session: AsyncSession) -> int:
+    """Hours between feedings; ``0`` disables the wait."""
+    return max(0, await _config_int(session, FEED_COOLDOWN_KEY, FEED_COOLDOWN_HOURS_DEFAULT))
+
+
+def feed_remaining_seconds(
+    pet: UserPet, cooldown_hours: int, *, now: datetime | None = None
+) -> int:
+    """Seconds until ``pet`` may eat again (``0`` when it is hungry)."""
+    if cooldown_hours <= 0 or pet.last_fed_at is None:
+        return 0
+    moment = _as_utc(now) if now is not None else _now()
+    ready_at = _as_utc(pet.last_fed_at) + timedelta(hours=cooldown_hours)
+    remaining = (ready_at - moment).total_seconds()
+    return int(math.ceil(remaining)) if remaining > 0 else 0
+
+
+def xp_progress(pet: UserPet, required: int) -> dict:
+    """``{"xp", "required", "percent"}`` for the profile screen."""
+    xp = max(0, int(pet.xp or 0))
+    needed = max(1, int(required))
+    return {
+        "xp": xp,
+        "required": needed,
+        "percent": min(100, int(xp * 100 / needed)),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Feeding and evolution
+# ---------------------------------------------------------------------------
+
+async def feed_pet(
+    session: AsyncSession,
+    user_id: int,
+    pet_id: int | str | None,
+    *,
+    now: datetime | None = None,
+) -> dict:
+    """Feed one owned baby pet with one ``pet_food``.
+
+    Returns a dict whose ``status`` is one of:
+
+    * ``"not_found"`` — no such pet, or it belongs to another player.
+    * ``"already_adult"`` — grown pets cannot be fed.
+    * ``"too_soon"`` — fed less than ``pet_feed_cooldown_hours`` ago;
+      ``remaining_seconds`` is set.
+    * ``"no_food"`` — the inventory holds no ``pet_food``.
+    * ``"fed"`` — XP was added; ``pet`` carries the new totals.
+    * ``"evolved"`` — the XP reached ``pet_adult_xp_required`` and the pet is
+      now an adult.
+
+    Locks: the user row first (rank 0, which also serializes the pet row for
+    this user), then the inventory row (rank 5) via ``ItemService``.
+    """
+    try:
+        await lock_user_row(session, int(user_id))
+    except (ValueError, TypeError):
+        return {"status": "not_found", "pet": None}
+
+    pet = await get_pet(session, user_id, pet_id, for_update=True)
+    if pet is None:
+        return {"status": "not_found", "pet": None}
+    if pet.is_adult:
+        return {"status": "already_adult", "pet": pet}
+
+    moment = _as_utc(now) if now is not None else _now()
+    remaining = feed_remaining_seconds(
+        pet, await feed_cooldown_hours(session), now=moment
+    )
+    if remaining > 0:
+        return {
+            "status": "too_soon",
+            "pet": pet,
+            "remaining_seconds": remaining,
+        }
+
+    owned_food = await ItemService.get_total(
+        session, user_id, PET_FOOD_ITEM, for_update=True
+    )
+    if owned_food < 1:
+        return {"status": "no_food", "pet": pet}
+
+    await ItemService.consume(session, user_id, PET_FOOD_ITEM, 1)
+
+    amount = await feed_xp_amount(session)
+    required = await adult_xp_required(session)
+    pet.xp = max(0, int(pet.xp or 0)) + amount
+    pet.last_fed_at = moment
+    evolved = pet.xp >= required
+    if evolved:
+        pet.is_adult = True
+    await session.flush()
+
+    progress = xp_progress(pet, required)
+    return {
+        "status": "evolved" if evolved else "fed",
+        "pet": pet,
+        "xp": progress["xp"],
+        "required": progress["required"],
+        "percent": progress["percent"],
+        "xp_added": amount,
+        "remaining_food": max(0, owned_food - 1),
     }
 
 

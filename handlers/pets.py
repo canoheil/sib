@@ -14,6 +14,9 @@ Flow
    baby's artwork on success plus the naming prompt.
 3. ``PetStates.waiting_for_name`` then captures the next text message as the
    pet's name; an invalid name keeps the state so the player can retry.
+4. «سیب پت» (``/mypets``) lists the player's pets as buttons; each one opens
+   a profile with its artwork, XP progress and a «🍖 غذا دادن» button that
+   spends one ``pet_food`` from the inventory and eventually evolves the pet.
 
 Only the player who opened the encounter may press its button, and the roll
 uses the server-side chance rather than the number echoed in the callback
@@ -43,7 +46,11 @@ from sib.services import pet_service
 from sib.services.card_progression import card_attributes
 from sib.services.player_cards import PlayerCardService
 from sib.services.sib_claim import fa_digits
-from sib.services.telegram_ui import safe_answer_callback, safe_edit_message_media
+from sib.services.telegram_ui import (
+    safe_answer_callback,
+    safe_edit_message_caption,
+    safe_edit_message_media,
+)
 
 router = Router(name="pets")
 
@@ -69,6 +76,18 @@ HUNT_ALIASES = frozenset(
 
 #: Callback payload of the hunt button: ``pet_hunt:{user_id}:{pet_type}:{chance}``.
 HUNT_CALLBACK_PREFIX = "pet_hunt:"
+PET_VIEW_PREFIX = "pet_view:"
+PET_FEED_PREFIX = "pet_feed:"
+
+#: «سیب پت» / «پت من» / «پت», each in both Yeh spellings. These are matched
+#: before the naming state, so they always open the menu instead of being
+#: stored as a pet name (the same trade-off the hunt aliases already make).
+_MENU_ALIAS_BASES = ("سیب پت", "پت من", "پت")
+PET_MENU_ALIASES = frozenset(
+    base.replace(_PERSIAN_YEH, yeh)
+    for base in _MENU_ALIAS_BASES
+    for yeh in (_PERSIAN_YEH, _ARABIC_YEH)
+)
 
 GENERIC_ERROR = "خطایی رخ داد. لطفاً دوباره تلاش کن."
 COOLDOWN_TEXT = "⏳ برای شکار بعدی باید {remaining} صبر کنید."
@@ -101,6 +120,28 @@ NAMED_TEXT = (
     "از این به بعد با دستور «سیب پت» می‌تونید مدیریتش کنید."
 )
 NO_PET_TEXT = "🐾 پت موردنظر پیدا نشد. دوباره «سیب شکار» را امتحان کنید."
+
+NO_PETS_TEXT = "شما هنوز هیچ پتی ندارید. با دستور «سیب شکار» برید شکار!"
+PET_MENU_TITLE = "🐾 **پت‌های شما**\nبرای دیدن پروفایل هر پت روی اسمش بزن:"
+PROFILE_CAPTION = (
+    "{emoji} **{name}**\n"
+    "🧬 نوع: {type_fa}\n"
+    "{status_line}\n"
+    "📊 XP: {xp}/{required} ({percent}٪)\n"
+    "⭐ اسکیل: {skill}"
+)
+STATUS_BABY = "🍼 وضعیت: بچه"
+STATUS_ADULT = "👑 وضعیت: بالغ"
+FEED_BUTTON_TEXT = "🍖 غذا دادن"
+FEED_NO_FOOD_ALERT = "شما غذای پت ندارید! از فروشگاه بخرید."
+FEED_TOO_SOON_ALERT = "پت شما سیر است! ۱ ساعت دیگر دوباره تلاش کنید."
+FEED_ALREADY_ADULT_ALERT = "این پت بزرگ شده و دیگه غذا لازم نداره."
+PET_GONE_ALERT = "این پت پیدا نشد."
+FEED_DONE_CAPTION = "🍖 **{name}** غذا خورد! +{xp_added} تجربه"
+FEED_EVOLVED_CAPTION = (
+    "🎉 تبریک! پت شما بالغ شد و اسکیلش فعال شد!\n"
+    "👑 **{name}** حالا یک {type_fa} بالغه."
+)
 
 NAME_ERRORS = {
     "empty": "❗️ اسم نمی‌تواند خالی باشد.",
@@ -200,6 +241,66 @@ async def main_card_power(session, user_id: int) -> int:
     if character is None:
         return BASE_UNARMED_POWER
     return max(1, int(card_attributes(main_card, character).power))
+
+
+def pet_emoji(pet_type: str) -> str:
+    """Species emoji for the menu buttons."""
+    return {"dog": "🐶", "squirrel": "🐿️", "cat": "🐱", "owl": "🦉"}.get(
+        _safe_pet_type(pet_type), "🐾"
+    )
+
+
+def pet_profile_caption(pet, required: int) -> str:
+    """The pet profile caption (name, species, status, XP progress, skill)."""
+    pet_type = _safe_pet_type(pet.pet_type)
+    progress = pet_service.xp_progress(pet, required)
+    return PROFILE_CAPTION.format(
+        emoji=pet_emoji(pet_type),
+        name=html.escape(pet_service.pet_display_name(pet)),
+        type_fa=pet_service.pet_type_fa(pet_type),
+        status_line=STATUS_ADULT if pet.is_adult else STATUS_BABY,
+        xp=fa_digits(progress["xp"]),
+        required=fa_digits(progress["required"]),
+        percent=fa_digits(progress["percent"]),
+        skill=fa_digits(pet.skill_level),
+    )
+
+
+def pet_profile_keyboard(pet) -> InlineKeyboardMarkup:
+    """Feed button for a baby, plus a back button to the pet list."""
+    rows = []
+    if not pet.is_adult:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=FEED_BUTTON_TEXT,
+                    callback_data=f"{PET_FEED_PREFIX}{int(pet.id)}",
+                )
+            ]
+        )
+    rows.append(
+        [InlineKeyboardButton(text="🔙 پت‌های من", callback_data=PET_VIEW_PREFIX + "menu")]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def pet_menu_keyboard(pets) -> InlineKeyboardMarkup:
+    """One button per pet: ``🦉 جغد (پشمک)``."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=(
+                        f"{pet_emoji(pet.pet_type)} "
+                        f"{pet_service.pet_type_fa(_safe_pet_type(pet.pet_type))} "
+                        f"({pet_service.pet_display_name(pet)})"
+                    ),
+                    callback_data=f"{PET_VIEW_PREFIX}{int(pet.id)}",
+                )
+            ]
+            for pet in pets
+        ]
+    )
 
 
 async def _reply_photo(message: Message, image: Path, caption: str, **kwargs):
@@ -380,6 +481,199 @@ async def _edit_encounter(callback: CallbackQuery, bot, image: Path, caption: st
     answer = getattr(message, "answer", None)
     if answer is not None:
         await answer(text, parse_mode="HTML")
+
+
+# ---------------------------------------------------------------------------
+# «سیب پت» — the pet menu
+# ---------------------------------------------------------------------------
+
+async def _send_pet_menu(answer, user_id: int) -> None:
+    """Render the pet list (``answer`` is ``message.answer`` or a reply)."""
+    async with get_session() as session:
+        pets = await pet_service.list_pets(session, user_id)
+
+    if not pets:
+        await answer(NO_PETS_TEXT, parse_mode="HTML")
+        return
+
+    await answer(
+        format_html_caption(PET_MENU_TITLE),
+        reply_markup=pet_menu_keyboard(pets),
+        parse_mode="HTML",
+    )
+
+
+@router.message(Command("mypets"))
+@router.message(F.text.in_(PET_MENU_ALIASES))
+async def handle_my_pets(message: Message, state: FSMContext) -> None:
+    sender = message.from_user
+    if sender is None or _is_bot(sender):
+        return
+
+    # Opening the menu abandons a half-finished naming step, like a new hunt.
+    await state.clear()
+    try:
+        await _send_pet_menu(message.answer, sender.id)
+    except Exception:
+        logger.exception("pet menu failed (user=%s)", sender.id)
+        await message.reply(GENERIC_ERROR)
+
+
+# ---------------------------------------------------------------------------
+# Pet profile (pet_view:{pet_id} or pet_view:menu)
+# ---------------------------------------------------------------------------
+
+@router.callback_query(F.data.startswith(PET_VIEW_PREFIX))
+async def handle_pet_view(callback: CallbackQuery, state: FSMContext, bot) -> None:
+    sender = callback.from_user
+    if sender is None:
+        return
+    raw = (callback.data or "")[len(PET_VIEW_PREFIX):]
+
+    if raw == "menu":
+        await safe_answer_callback(callback)
+        try:
+            await _send_pet_menu(callback.message.answer, sender.id)
+        except Exception:
+            logger.exception("pet menu from callback failed (user=%s)", sender.id)
+            await safe_answer_callback(callback, GENERIC_ERROR, show_alert=True)
+        return
+
+    try:
+        async with get_session() as session:
+            pet = await pet_service.get_pet(session, sender.id, raw)
+            if pet is None:
+                await safe_answer_callback(callback, PET_GONE_ALERT, show_alert=True)
+                return
+            required = await pet_service.adult_xp_required(session)
+            caption = pet_profile_caption(pet, required)
+            keyboard = pet_profile_keyboard(pet)
+            image = (
+                adult_artwork(pet.pet_type)
+                if pet.is_adult
+                else baby_artwork(pet.pet_type)
+            )
+    except Exception:
+        logger.exception("pet profile failed (user=%s pet=%s)", sender.id, raw)
+        await safe_answer_callback(callback, GENERIC_ERROR, show_alert=True)
+        return
+
+    await safe_answer_callback(callback)
+    await _show_pet_card(bot, callback, image, caption, keyboard)
+
+
+async def _show_pet_card(bot, callback, image: Path, caption: str, keyboard) -> None:
+    """Replace the current message with a pet card (photo + caption + buttons)."""
+    message = getattr(callback, "message", None)
+    chat_id = getattr(getattr(message, "chat", None), "id", None)
+    message_id = getattr(message, "message_id", None)
+    text = format_html_caption(caption)
+
+    has_photo = bool(getattr(message, "photo", None))
+    if bot is not None and chat_id and message_id and has_photo and image.is_file():
+        edited = await safe_edit_message_media(
+            bot,
+            chat_id,
+            message_id,
+            photo=FSInputFile(str(image)),
+            text=text,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
+        if edited:
+            return
+    if bot is not None and chat_id and message_id and has_photo:
+        edited = await safe_edit_message_caption(
+            bot, chat_id, message_id, text=text, reply_markup=keyboard, parse_mode="HTML"
+        )
+        if edited:
+            return
+
+    # No editable photo message (the menu is text-only): send the card fresh.
+    photo_sender = getattr(message, "answer_photo", None)
+    if photo_sender is not None and image.is_file():
+        await photo_sender(
+            FSInputFile(str(image)),
+            caption=text,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
+        return
+    answer = getattr(message, "answer", None)
+    if answer is not None:
+        await answer(text, reply_markup=keyboard, parse_mode="HTML")
+
+
+# ---------------------------------------------------------------------------
+# «🍖 غذا دادن» (pet_feed:{pet_id})
+# ---------------------------------------------------------------------------
+
+@router.callback_query(F.data.startswith(PET_FEED_PREFIX))
+async def handle_pet_feed(callback: CallbackQuery, state: FSMContext, bot) -> None:
+    sender = callback.from_user
+    if sender is None:
+        return
+    raw_pet_id = (callback.data or "")[len(PET_FEED_PREFIX):]
+
+    try:
+        async with get_session() as session:
+            result = await pet_service.feed_pet(session, sender.id, raw_pet_id)
+    except Exception:
+        logger.exception("pet feeding failed (user=%s pet=%s)", sender.id, raw_pet_id)
+        await safe_answer_callback(callback, GENERIC_ERROR, show_alert=True)
+        return
+
+    status = result.get("status")
+    pet = result.get("pet")
+
+    if status == "no_food":
+        await safe_answer_callback(callback, FEED_NO_FOOD_ALERT, show_alert=True)
+        return
+    if status == "too_soon":
+        await safe_answer_callback(callback, FEED_TOO_SOON_ALERT, show_alert=True)
+        return
+    if status == "already_adult":
+        await safe_answer_callback(callback, FEED_ALREADY_ADULT_ALERT, show_alert=True)
+        return
+    if status != "fed" and status != "evolved":
+        await safe_answer_callback(callback, PET_GONE_ALERT, show_alert=True)
+        return
+
+    pet_type = _safe_pet_type(pet.pet_type)
+    type_fa = pet_service.pet_type_fa(pet_type)
+    name = pet_service.pet_display_name(pet)
+    required = int(result.get("required") or 0)
+
+    if status == "evolved":
+        await safe_answer_callback(callback, "🎉 پت شما بالغ شد!")
+        await _show_pet_card(
+            bot,
+            callback,
+            adult_artwork(pet_type),
+            format_html_caption(
+                FEED_EVOLVED_CAPTION.format(
+                    name=html.escape(name), type_fa=type_fa
+                )
+                + "\n"
+                + pet_profile_caption(pet, required)
+            ),
+            pet_profile_keyboard(pet),
+        )
+        return
+
+    await safe_answer_callback(callback, f"🍖 +{fa_digits(result.get('xp_added') or 0)} XP")
+    # One line about the meal, then the refreshed profile (no duplicated XP).
+    caption = FEED_DONE_CAPTION.format(
+        name=html.escape(name),
+        xp_added=fa_digits(result.get("xp_added") or 0),
+    )
+    await _show_pet_card(
+        bot,
+        callback,
+        baby_artwork(pet_type),
+        format_html_caption(caption + "\n\n" + pet_profile_caption(pet, required)),
+        pet_profile_keyboard(pet),
+    )
 
 
 # ---------------------------------------------------------------------------

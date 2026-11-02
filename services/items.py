@@ -96,11 +96,21 @@ ITEM_CATALOG: Dict[str, Dict[str, str]] = {
         "label": "پادزهر آماده",
         "description": "پادزهری برای درمان بیماری؛ با `/use_antidote` مصرف می‌شه.",
     },
+    "pet_food": {
+        "emoji": "🍖",
+        "label": "غذای پت",
+        "description": "غذای خوشمزه‌ی پت‌های سیبی؛ با هر وعده به پت‌ت تجربه (XP) می‌رسه و کمکش می‌کنه بالغ بشه.",
+    },
 }
 
 # These items may be transferred, but must never be sold back for Apples,
 # even if an operator accidentally adds them to item_sell_prices.
 NON_SELLABLE_ITEMS = frozenset({"disease_plant", "disease_antidote"})
+
+# Items whose price comes from their OWN config setting instead of the
+# ``item_buy_prices`` map, so they appear in the shop on installations whose
+# stored ``item_buy_prices`` row predates the item.
+DEDICATED_PRICE_ITEMS = ("disease_antidote", "pet_food")
 
 
 def item_description(key: str) -> str:
@@ -251,19 +261,32 @@ class ItemService:
             except (TypeError, ValueError, OverflowError):
                 price = int(ConfigService.default("disease_antidote_shop_price"))
             return price if price > 0 else None
+        if item_key == "pet_food":
+            # Dedicated setting, exactly like the antidote: pet_food arrived
+            # after the item_buy_prices row was seeded on existing installs, so
+            # the price must not depend on that stored JSON map containing the
+            # new key. ``pet_food_price`` lives only in CONFIG_DEFAULTS (no seed
+            # migration), and operators can override it at runtime.
+            raw = await ConfigService.get(session, "pet_food_price")
+            try:
+                price = int(raw)
+            except (TypeError, ValueError, OverflowError):
+                price = int(ConfigService.default("pet_food_price"))
+            return price if price > 0 else None
         prices = await ConfigService.get(session, "item_buy_prices") or {}
         price = prices.get(item_key)
         return int(price) if price is not None else None
 
     @classmethod
     async def buy_prices(cls, session: AsyncSession) -> Dict[str, int]:
-        """Shop listing prices, including the antidote's dedicated setting."""
+        """Shop listing prices, including items with a dedicated setting."""
         prices = dict(await ConfigService.get(session, "item_buy_prices") or {})
-        price = await cls.buy_price(session, "disease_antidote")
-        if price is None:
-            prices.pop("disease_antidote", None)
-        else:
-            prices["disease_antidote"] = price
+        for key in DEDICATED_PRICE_ITEMS:
+            price = await cls.buy_price(session, key)
+            if price is None:
+                prices.pop(key, None)
+            else:
+                prices[key] = price
         return prices
 
     @staticmethod
