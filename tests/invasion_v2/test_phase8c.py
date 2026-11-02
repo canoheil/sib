@@ -116,7 +116,7 @@ def test_migration_chain_head():
     cfg = Config()
     cfg.set_main_option("script_location", str(ROOT / "database/migrations"))
     scripts = ScriptDirectory.from_config(cfg)
-    assert scripts.get_current_head() == "075_rocket_game"
+    assert scripts.get_current_head() == "076_pet_system"
     assert _migration().down_revision == "039_archive_inv1_tables"
     chain = {
         "041_inv2_announcement_narrative": "040_inv2_difficulty_default",
@@ -154,6 +154,7 @@ def test_migration_chain_head():
         "073_disease_started_flag": "072_disease_ui",
         "074_theft_system": "073_disease_started_flag",
         "075_rocket_game": "074_theft_system",
+        "076_pet_system": "075_rocket_game",
     }
     for revision, parent in chain.items():
         path = ROOT / f"database/migrations/versions/{revision}.py"

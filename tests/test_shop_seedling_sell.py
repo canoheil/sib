@@ -495,7 +495,8 @@ def test_migration_061_revises_060_and_keeps_one_head():
     # -> 066_daily_channel_digest -> 067_invasion_daily_20_schedule
     # -> 068_golden_hour_apple_rewards -> 069_golden_hour_notices
     # -> 070_disease_system -> 071_disease_items -> 072_disease_ui
-    # -> 073_disease_started_flag -> 074_theft_system -> 075_rocket_game, the single head.
+    # -> 073_disease_started_flag -> 074_theft_system -> 075_rocket_game
+    # -> 076_pet_system, the single head.
     versions = REPO_ROOT / "database/migrations/versions"
     revisions = {}
     for path in versions.glob("*.py"):
@@ -506,7 +507,7 @@ def test_migration_061_revises_060_and_keeps_one_head():
     parents = [parent for parent in revisions.values() if parent]
     assert len(parents) == len(set(parents)), "forked migration history"
     heads = set(revisions) - set(parents)
-    assert heads == {"075_rocket_game"}
+    assert heads == {"076_pet_system"}
 
 
 def test_migration_061_seeds_the_default_price_and_is_idempotent(tmp_path):

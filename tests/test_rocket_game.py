@@ -378,12 +378,12 @@ async def test_deleted_message_still_settles_without_more_edits(monkeypatch):
     assert "شما باختید" in caption
 
 
-def test_075_migration_revises_074_and_is_the_single_head():
+def test_075_migration_revises_074_and_076_is_the_single_head():
     migration = _migration()
     assert migration.revision == "075_rocket_game"
     assert migration.down_revision == "074_theft_system"
     scripts = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["075_rocket_game"]
+    assert scripts.get_heads() == ["076_pet_system"]
     assert scripts.get_revision("075_rocket_game").down_revision == "074_theft_system"
     assert {key: CONFIG_DEFAULTS[key] for key in EXPECTED_CONFIG} == EXPECTED_CONFIG
     assert migration._CONFIG_DEFAULTS == EXPECTED_SEED
@@ -471,16 +471,17 @@ def test_alembic_upgrade_from_074_and_downgrade(tmp_path):
 
     alembic("stamp", "074_theft_system")
     alembic("upgrade", "head")
-    assert alembic("heads") == "075_rocket_game (head)"
-    assert "075_rocket_game" in alembic("current")
+    assert alembic("heads") == "076_pet_system (head)"
+    assert "076_pet_system" in alembic("current")
     engine = sa.create_engine(f"sqlite:///{database}")
     assert sa.inspect(engine).has_table("user_rocket_states")
-    assert {
-        key: value
-        for key, value in engine.connect().execute(
+    # Later migrations seed their own keys, so assert only rocket's values.
+    rows = dict(
+        engine.connect().execute(
             sa.text("SELECT `key`, `value` FROM system_config")
         ).all()
-    } == EXPECTED_SEED
+    )
+    assert {key: rows[key] for key in EXPECTED_SEED} == EXPECTED_SEED
     engine.dispose()
 
     alembic("downgrade", "074_theft_system")
