@@ -201,3 +201,6 @@ __all__ += ["UserReminderState"]
 
 from sib.database.models.league import GroupLeagueWeek, GroupLeagueAward
 __all__ += ["GroupLeagueWeek", "GroupLeagueAward"]
+
+from sib.database.models.pet import UserPet, PET_TYPES
+__all__ += ["UserPet", "PET_TYPES"]

@@ -199,12 +199,12 @@ async def _transactions(session):
 # Migration 074
 # ---------------------------------------------------------------------------
 
-def test_migration_074_revises_073_and_075_is_the_single_head():
+def test_migration_074_revises_073_and_076_is_the_single_head():
     migration = _migration()
     assert migration.revision == "074_theft_system"
     assert migration.down_revision == "073_disease_started_flag"
     scripts = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["075_rocket_game"]
+    assert scripts.get_heads() == ["076_pet_system"]
     assert scripts.get_revision("074_theft_system").down_revision == "073_disease_started_flag"
 
 
@@ -276,7 +276,7 @@ def test_migration_upgrade_creates_table_seeds_and_preserves_overrides(migration
 
 def test_alembic_real_upgrade_and_downgrade_from_073(tmp_path):
     scripts = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["075_rocket_game"]
+    assert scripts.get_heads() == ["076_pet_system"]
 
     database = tmp_path / "theft_migration.db"
     engine = sa.create_engine(f"sqlite:///{database}")
@@ -294,7 +294,7 @@ def test_alembic_real_upgrade_and_downgrade_from_073(tmp_path):
         assert result.returncode == 0, result.stdout + result.stderr
         return result.stdout.strip()
 
-    assert alembic("heads") == "075_rocket_game (head)"
+    assert alembic("heads") == "076_pet_system (head)"
     alembic("stamp", "073_disease_started_flag")
     alembic("upgrade", "074_theft_system")
     alembic("upgrade", "074_theft_system")
