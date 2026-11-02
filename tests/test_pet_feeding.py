@@ -670,6 +670,51 @@ async def test_feed_callback_updates_the_caption(db, state):
         assert stored.xp == 150
 
 
+async def test_feed_callback_caption_renders_bold_html(db, state):
+    """The feed caption keeps real ``<b>`` tags — never ``&lt;b&gt;``.
+
+    Regression: the caption used to be rendered twice (once in the handler,
+    once in ``_show_pet_card``), which escaped the ``<b>`` tags into raw
+    HTML text in the UI.
+    """
+    async with db.begin() as session:
+        pet = UserPet(user_id=1, pet_type="cat", custom_name="ملوس", xp=100)
+        session.add(pet)
+        await session.flush()
+        pet_id = pet.id
+        session.add(UserItem(user_id=1, item_key="pet_food", quantity=1))
+
+    callback = _callback(f"pet_feed:{pet_id}")
+    bot = _bot()
+    await pets.handle_pet_feed(callback, state, bot)
+
+    caption = bot.edit_message_media.await_args.kwargs["media"].caption
+    assert "<b>ملوس</b>" in caption
+    assert "&lt;b&gt;" not in caption
+    assert "&amp;lt;" not in caption
+    # The media edit is sent with an explicit HTML parse mode.
+    assert bot.edit_message_media.await_args.kwargs["media"].parse_mode == "HTML"
+
+
+async def test_feed_callback_caption_renders_bold_html_when_evolving(db, state):
+    """The evolution caption keeps real ``<b>`` tags too."""
+    async with db.begin() as session:
+        pet = UserPet(user_id=1, pet_type="owl", custom_name="پشمک", xp=470)
+        session.add(pet)
+        await session.flush()
+        pet_id = pet.id
+        session.add(UserItem(user_id=1, item_key="pet_food", quantity=1))
+
+    callback = _callback(f"pet_feed:{pet_id}")
+    bot = _bot()
+    await pets.handle_pet_feed(callback, state, bot)
+
+    caption = bot.edit_message_media.await_args.kwargs["media"].caption
+    assert "<b>پشمک</b>" in caption
+    assert "&lt;b&gt;" not in caption
+    assert "تبریک" in caption
+
+
 async def test_feed_callback_evolves_and_swaps_the_art(db, state):
     async with db.begin() as session:
         pet = UserPet(user_id=1, pet_type="owl", custom_name="پشمک", xp=470)

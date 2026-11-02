@@ -1,11 +1,14 @@
 """Pet hunting, naming rules and limits for the pet system (سیستم پت).
 
-The «سیب شکار» hunt is a two-step encounter (Phase 2.5):
+The «سیب شکار» hunt is a multi-step encounter:
 
 1. :func:`get_encounter` validates the player (cooldown, pet caps) and rolls
    which wild pet they meet — but not whether the hunt succeeds.
-2. :func:`execute_hunt` resolves the roll when the player presses the hunt
-   button, creating the nameless baby on success.
+2. The handler runs the *tracking mini-game* (Phase 4): the player answers
+   three tracking questions and the hidden correct path (:func:`roll_tracking_path`)
+   adjusts the base chance (:func:`tracking_adjusted_chance`).
+3. :func:`execute_hunt` resolves the roll with the adjusted chance when the
+   player makes the final choice, creating the nameless baby on success.
 
 :func:`name_pet` is the «اسم» step that gives the new baby a custom name.
 Like the rest of ``services`` no Telegram call is made here; the caller owns
@@ -51,6 +54,68 @@ MAX_BABY_PETS = 1
 BASE_HUNT_CHANCE = 30
 CARD_POWER_DIVISOR = 5
 MAX_HUNT_CHANCE = 90
+
+# ---------------------------------------------------------------------------
+# Tracking mini-game (Phase 4)
+# ---------------------------------------------------------------------------
+#: The choices each tracking step offers, in display order. The handler maps
+#: them to button labels; the service rolls the hidden correct path from them
+#: and never exposes it to the client.
+TRACK_STEP_CHOICES: dict[int, tuple[str, ...]] = {
+    1: ("left", "right"),
+    2: ("cave", "river"),
+    3: ("now", "wait"),
+}
+
+#: A correct tracking choice adds 10 % to the base chance, a wrong one
+#: subtracts 10 % (three steps → at most ±30 %).
+TRACK_CORRECT_BONUS = 10
+TRACK_WRONG_PENALTY = 10
+
+
+def roll_tracking_path(*, rng: random.Random | None = None) -> list[str]:
+    """Roll the hidden correct path of the tracking mini-game.
+
+    One correct choice per step, e.g. ``["right", "cave", "now"]``. The path
+    only ever lives in the server-side FSM: the roll itself uses
+    :func:`tracking_adjusted_chance`, never a client-visible number.
+    """
+    rng = rng or random.Random()
+    return [
+        rng.choice(TRACK_STEP_CHOICES[step]) for step in sorted(TRACK_STEP_CHOICES)
+    ]
+
+
+def correct_choice(step: int, choice: str, path: list[str]) -> bool:
+    """``True`` when ``choice`` is the correct answer of ``step``."""
+    try:
+        index = int(step) - 1
+    except (TypeError, ValueError):
+        return False
+    return 0 <= index < len(path) and path[index] == choice
+
+
+def tracking_adjusted_chance(
+    base_chance: int, choices: list[str], path: list[str]
+) -> int:
+    """The hunt chance after the tracking mini-game.
+
+    Every correct choice adds :data:`TRACK_CORRECT_BONUS` percent and every
+    wrong one subtracts :data:`TRACK_WRONG_PENALTY`; the result is clamped
+    into ``[0, MAX_HUNT_CHANCE]``. Choices beyond the rolled path length are
+    treated as wrong, so a truncated state can never inflate the chance.
+    """
+    try:
+        base = max(0, min(MAX_HUNT_CHANCE, int(base_chance)))
+    except (TypeError, ValueError):
+        base = BASE_HUNT_CHANCE
+    adjusted = base
+    for index, choice in enumerate(choices):
+        if correct_choice(index + 1, choice, path):
+            adjusted += TRACK_CORRECT_BONUS
+        else:
+            adjusted -= TRACK_WRONG_PENALTY
+    return max(0, min(MAX_HUNT_CHANCE, adjusted))
 
 #: Persian display name per species (artwork lives in ``assets/pets/``).
 PET_TYPE_FA = {"dog": "سگ", "squirrel": "سنجاب", "cat": "گربه", "owl": "جغد"}
