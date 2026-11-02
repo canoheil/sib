@@ -114,12 +114,13 @@ async def session():
 # Migration 076
 # ---------------------------------------------------------------------------
 
-def test_076_migration_revises_075_and_is_the_single_head():
+def test_076_migration_revises_075_and_077_is_the_single_head():
     migration = _migration()
     assert migration.revision == "076_pet_system"
     assert migration.down_revision == "075_rocket_game"
     scripts = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["076_pet_system"]
+    assert scripts.get_heads() == ["077_pet_rename"]
+    assert scripts.get_revision("077_pet_rename").down_revision == "076_pet_system"
     assert scripts.get_revision("076_pet_system").down_revision == "075_rocket_game"
 
 
@@ -190,7 +191,7 @@ def test_migration_enforces_user_foreign_key(migration_engine):
 
 def test_alembic_real_upgrade_from_075(tmp_path):
     scripts = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["076_pet_system"]
+    assert scripts.get_heads() == ["077_pet_rename"]
 
     database = tmp_path / "pet_migration.db"
     engine = sa.create_engine(f"sqlite:///{database}")
@@ -213,10 +214,10 @@ def test_alembic_real_upgrade_from_075(tmp_path):
         assert result.returncode == 0, result.stdout + result.stderr
         return result.stdout.strip()
 
-    assert alembic("heads") == "076_pet_system (head)"
+    assert alembic("heads") == "077_pet_rename (head)"
     alembic("stamp", "075_rocket_game")
     alembic("upgrade", "head")
-    assert "076_pet_system" in alembic("current")
+    assert "077_pet_rename" in alembic("current")
 
     engine = sa.create_engine(f"sqlite:///{database}")
     assert sa.inspect(engine).has_table("user_pets")
@@ -305,6 +306,7 @@ def test_user_pet_columns_are_indexed_and_nullable_as_specified():
     assert columns.skill_level.nullable is False
     assert columns.last_fed_at.nullable is True
     assert columns.last_hunted_at.nullable is True
+    assert columns.has_renamed.nullable is False
     assert columns.created_at.nullable is False
     assert columns.created_at.type.timezone is True
 

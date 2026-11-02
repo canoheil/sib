@@ -35,6 +35,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sib.database.models import PET_TYPES, UserPet
+from sib.services.apple_wallet import AppleWalletService, InsufficientFundsException
 from sib.services.config_store import ConfigService
 from sib.services.items import ItemService
 from sib.services.lock_order import lock_user_row
@@ -613,3 +614,90 @@ async def name_pet(
     pet.custom_name = value
     await session.flush()
     return {"status": "named", "pet": pet, "name": value}
+
+
+# ---------------------------------------------------------------------------
+# Renaming (one paid rename per pet)
+# ---------------------------------------------------------------------------
+#: A rename costs a flat amount of apples and is allowed once per pet.
+RENAME_COST_APPLES = 500
+RENAME_LEDGER_REASON = "pet_rename"
+
+
+async def rename_pet(
+    session: AsyncSession,
+    user_id: int,
+    pet_id: int | str | None,
+    new_name: str | None,
+) -> dict:
+    """Rename one of the player's pets, once, for :data:`RENAME_COST_APPLES`.
+
+    Returns a dict whose ``status`` is one of:
+
+    * ``"not_found"`` — no such pet, or it belongs to another player.
+    * a validation reason from :func:`validate_pet_name`
+      (``empty``/``too_short``/``too_long``/``invalid_chars``/``digits_only``).
+    * ``"already_renamed"`` — the single paid rename was already used.
+    * ``"insufficient_funds"`` — the wallet holds less than the cost.
+    * ``"renamed"`` — the 500 apples were debited and ``custom_name`` updated;
+      ``pet`` and ``name`` carry the result.
+
+    Locks: the user row first (rank 0, which also serializes the pet row), then
+    the wallet row (rank 6) through :class:`AppleWalletService`. Nothing is
+    committed here — the caller owns the transaction.
+    """
+    valid, value = validate_pet_name(new_name)
+    if not valid:
+        return {"status": value}
+
+    try:
+        await lock_user_row(session, int(user_id))
+    except (ValueError, TypeError):
+        return {"status": "not_found", "pet": None}
+
+    pet = await get_pet(session, user_id, pet_id, for_update=True)
+    if pet is None:
+        return {"status": "not_found", "pet": None}
+    if pet.has_renamed:
+        return {"status": "already_renamed", "pet": pet}
+
+    balance = await AppleWalletService.get_balance(session, user_id, for_update=True)
+    if balance < RENAME_COST_APPLES:
+        return {
+            "status": "insufficient_funds",
+            "pet": pet,
+            "cost": RENAME_COST_APPLES,
+            "balance": balance,
+        }
+
+    try:
+        debit = await AppleWalletService.debit_once(
+            session,
+            int(user_id),
+            RENAME_COST_APPLES,
+            reason=RENAME_LEDGER_REASON,
+            ref_type="user_pet",
+            ref_id=int(pet.id),
+            idempotency_key=f"{RENAME_LEDGER_REASON}:{int(pet.id)}",
+        )
+    except InsufficientFundsException:
+        return {
+            "status": "insufficient_funds",
+            "pet": pet,
+            "cost": RENAME_COST_APPLES,
+        }
+    if not debit.applied:
+        # The one-and-only keyed debit for this pet was already spent: the
+        # rename was used, even if the flag read stale.
+        return {"status": "already_renamed", "pet": pet}
+
+    pet.custom_name = value
+    pet.has_renamed = True
+    await session.flush()
+    return {
+        "status": "renamed",
+        "pet": pet,
+        "name": value,
+        "cost": RENAME_COST_APPLES,
+        "balance": debit.balance_after,
+    }

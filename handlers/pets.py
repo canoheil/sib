@@ -18,11 +18,15 @@ Flow
 3. The final click rolls :func:`pet_service.execute_hunt` with the adjusted
    chance and edits the message: the escaping-pet artwork on a miss, or the
    baby's artwork on success plus the naming prompt.
-4. ``PetStates.waiting_for_name`` then captures the next text message as the
-   pet's name; an invalid name keeps the state so the player can retry.
+4. ``PetStates.waiting_for_name`` then takes the pet's name from a message
+   that REPLIES to the bot's prompt (a group is shared, so any other message
+   is refused with a gentle reminder). An invalid name keeps the state so the
+   player can retry.
 5. «سیب پت» (``/mypets``) lists the player's pets as buttons; each one opens
-   a profile with its artwork, XP progress and a «🍖 غذا دادن» button that
-   spends one ``pet_food`` from the inventory and eventually evolves the pet.
+   a profile with its artwork, XP progress, a «🍖 غذا دادن» button that
+   spends one ``pet_food`` from the inventory and eventually evolves the pet,
+   and a «✏️ تغییر نام» button that buys the ONE paid rename
+   (``PetStates.waiting_for_rename``, same reply-to-prompt rule).
 
 Only the player who opened the encounter may press its buttons: the tracking
 state lives in their own FSM context, and the roll uses a server-side chance
@@ -39,7 +43,6 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     CallbackQuery,
     FSInputFile,
-    InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
 )
@@ -48,6 +51,7 @@ from sib.core.logging import logger
 from sib.core.text import format_html_caption
 from sib.database.connection import get_session
 from sib.database.models import PET_TYPES, Character
+from sib.keyboards.common import danger_button, primary_button, success_button
 from sib.services import pet_service
 from sib.services.card_progression import card_attributes
 from sib.services.player_cards import PlayerCardService
@@ -84,6 +88,7 @@ HUNT_ALIASES = frozenset(
 HUNT_TRACK_PREFIX = "hunt_track:"
 PET_VIEW_PREFIX = "pet_view:"
 PET_FEED_PREFIX = "pet_feed:"
+PET_RENAME_PREFIX = "pet_rename:"
 
 #: FUTURE EXPANSION — Group Raid (Boss Pet): a future phase will add a
 #: shared raid encounter against a boss pet. When it lands, the tracking
@@ -169,6 +174,19 @@ PROFILE_CAPTION = (
 STATUS_BABY = "🍼 وضعیت: بچه"
 STATUS_ADULT = "👑 وضعیت: بالغ"
 FEED_BUTTON_TEXT = "🍖 غذا دادن"
+#: One paid rename per pet (see ``pet_service.rename_pet``). The cost is shown
+#: in Persian digits inside the button label.
+RENAME_BUTTON_TEXT = f"✏️ تغییر نام ({fa_digits(pet_service.RENAME_COST_APPLES)} سیب)"
+RENAME_PROMPT = "✏️ اسم جدید پت رو بنویسید و روی همین پیام ریپلای کنید:"
+#: Shared by both naming states: the name only counts as a reply to the prompt.
+REPLY_TO_PROMPT_REQUIRED = "لطفاً روی پیام بات ریپلای کنید و اسم پت رو بنویسید."
+RENAME_ALREADY_USED_ALERT = "این پت قبلاً یک بار تغییر نام داده. هر پت فقط یک بار می‌تونه اسم عوض کنه."
+RENAME_NO_FUNDS_ALERT = (
+    "🍎 برای تغییر نام "
+    + fa_digits(pet_service.RENAME_COST_APPLES)
+    + " سیب لازم داری."
+)
+RENAMED_TEXT = "✅ اسم پت به **{name}** تغییر کرد."
 FEED_NO_FOOD_ALERT = "شما غذای پت ندارید! از فروشگاه بخرید."
 FEED_TOO_SOON_ALERT = "پت شما سیر است! ۱ ساعت دیگر دوباره تلاش کنید."
 FEED_ALREADY_ADULT_ALERT = "این پت بزرگ شده و دیگه غذا لازم نداره."
@@ -197,6 +215,9 @@ class PetStates(StatesGroup):
     tracking = State()
     #: After a successful catch, waiting for the pet's name.
     waiting_for_name = State()
+    #: Waiting for the new name of an already-named pet (paid rename). Data:
+    #: ``pet_id`` and ``prompt_message_id`` (the message to reply to).
+    waiting_for_rename = State()
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +242,26 @@ def _is_bot(sender) -> bool:
     return bool(getattr(sender, "is_bot", False))
 
 
+def replied_to_prompt(message, prompt_message_id) -> bool:
+    """Strict reply-to check for the two naming states.
+
+    In a group every message reaches the handler, so the pet's name must come
+    from a reply to the exact bot prompt that asked for it — otherwise a
+    friend's unrelated message would be saved as the name. When the prompt id
+    was not recorded (a state created before the guard existed), any reply is
+    still refused unless it actually replies to *some* message.
+    """
+    replied = getattr(message, "reply_to_message", None)
+    if replied is None:
+        return False
+    if prompt_message_id is None:
+        return True
+    try:
+        return int(getattr(replied, "message_id", 0)) == int(prompt_message_id)
+    except (TypeError, ValueError):
+        return False
+
+
 def _safe_pet_type(pet_type: str | None) -> str:
     """Keep the species inside the known artwork set (it becomes a file path)."""
     return pet_type if pet_type in PET_TYPES else PET_TYPES[0]
@@ -241,7 +282,7 @@ def tracking_keyboard(step: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(
+                primary_button(
                     text=text,
                     callback_data=f"{HUNT_TRACK_PREFIX}step{int(step)}:{choice}",
                 )
@@ -319,19 +360,37 @@ def pet_profile_caption(pet, required: int) -> str:
 
 
 def pet_profile_keyboard(pet) -> InlineKeyboardMarkup:
-    """Feed button for a baby, plus a back button to the pet list."""
+    """Feed (baby), rename, and the back button to the pet list.
+
+    Colors: feeding and renaming are positive/main actions (green and blue),
+    «پت‌های من» is navigation back (red per the bot-wide convention). The
+    rename button disappears once the single paid rename has been used.
+    """
     rows = []
     if not pet.is_adult:
         rows.append(
             [
-                InlineKeyboardButton(
+                success_button(
                     text=FEED_BUTTON_TEXT,
                     callback_data=f"{PET_FEED_PREFIX}{int(pet.id)}",
                 )
             ]
         )
+    if not getattr(pet, "has_renamed", False):
+        rows.append(
+            [
+                primary_button(
+                    text=RENAME_BUTTON_TEXT,
+                    callback_data=f"{PET_RENAME_PREFIX}{int(pet.id)}",
+                )
+            ]
+        )
     rows.append(
-        [InlineKeyboardButton(text="🔙 پت‌های من", callback_data=PET_VIEW_PREFIX + "menu")]
+        [
+            danger_button(
+                text="🔙 پت‌های من", callback_data=PET_VIEW_PREFIX + "menu"
+            )
+        ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -341,7 +400,7 @@ def pet_menu_keyboard(pets) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(
+                primary_button(
                     text=(
                         f"{pet_emoji(pet.pet_type)} "
                         f"{pet_service.pet_type_fa(_safe_pet_type(pet.pet_type))} "
@@ -524,12 +583,15 @@ async def handle_hunt_track(
     if status == "success" and pet_id is not None:
         await state.set_state(PetStates.waiting_for_name)
         await state.update_data(pet_id=pet_id)
-        await _edit_encounter(
+        prompt_message_id = await _edit_encounter(
             callback,
             bot,
             baby_artwork(pet_type),
             SUCCESS_CAPTION.format(type_fa=pet_service.pet_type_fa(pet_type)),
         )
+        # The name must be written as a reply to THAT prompt (see
+        # ``handle_pet_name``), so its id is part of the state.
+        await state.update_data(prompt_message_id=prompt_message_id)
         return
 
     await _edit_encounter(
@@ -600,17 +662,26 @@ async def _edit_hunt_screen(
     return False
 
 
-async def _edit_encounter(callback: CallbackQuery, bot, image: Path, caption: str) -> None:
-    """Replace the encounter artwork and caption in place, removing the button."""
+async def _edit_encounter(
+    callback: CallbackQuery, bot, image: Path, caption: str
+) -> int | None:
+    """Replace the encounter artwork and caption in place, removing the button.
+
+    Returns the ``message_id`` of the message now carrying ``caption`` — the
+    prompt a naming reply must point at (``None`` when nothing could be sent).
+    """
     edited = await _edit_hunt_screen(callback, bot, image, caption)
     if edited:
-        return
+        message = getattr(callback, "message", None)
+        return getattr(message, "message_id", None)
     # The message may have been deleted, or there is no editable photo: still
     # show the outcome once as a plain reply.
     message = getattr(callback, "message", None)
     answer = getattr(message, "answer", None)
     if answer is not None:
-        await answer(format_html_caption(caption), parse_mode="HTML")
+        sent = await answer(format_html_caption(caption), parse_mode="HTML")
+        return getattr(sent, "message_id", None)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -817,6 +888,12 @@ async def handle_pet_name(message: Message, state: FSMContext) -> None:
         return
 
     data = await state.get_data()
+    # The state is per-user FSM but the CHAT is shared: without the reply
+    # guard any message in the group would be stored as this pet's name.
+    if not replied_to_prompt(message, data.get("prompt_message_id")):
+        await message.reply(REPLY_TO_PROMPT_REQUIRED)
+        return
+
     pet_id = data.get("pet_id")
     if pet_id is None:
         await state.clear()
@@ -841,5 +918,101 @@ async def handle_pet_name(message: Message, state: FSMContext) -> None:
     await state.clear()
     await message.reply(
         NAMED_TEXT.format(name=html.escape(str(result.get("name") or ""))),
+        parse_mode="HTML",
+    )
+
+
+# ---------------------------------------------------------------------------
+# «✏️ تغییر نام» — the one paid rename (pet_rename:{pet_id})
+# ---------------------------------------------------------------------------
+
+@router.callback_query(F.data.startswith(PET_RENAME_PREFIX))
+async def handle_pet_rename(callback: CallbackQuery, state: FSMContext, bot) -> None:
+    """Ask for the new name: the reply to THIS prompt carries it."""
+    sender = callback.from_user
+    if sender is None:
+        return
+    raw_pet_id = (callback.data or "")[len(PET_RENAME_PREFIX):]
+
+    try:
+        async with get_session() as session:
+            pet = await pet_service.get_pet(session, sender.id, raw_pet_id)
+    except Exception:
+        logger.exception("pet rename prompt failed (user=%s pet=%s)", sender.id, raw_pet_id)
+        await safe_answer_callback(callback, GENERIC_ERROR, show_alert=True)
+        return
+
+    if pet is None:
+        await safe_answer_callback(callback, PET_GONE_ALERT, show_alert=True)
+        return
+    if pet.has_renamed:
+        await safe_answer_callback(
+            callback, RENAME_ALREADY_USED_ALERT, show_alert=True
+        )
+        return
+
+    await safe_answer_callback(callback)
+    # A half-finished hunt or naming step is abandoned: the FSM now waits for
+    # a name that must be a reply to the prompt sent right below.
+    await state.clear()
+    message = getattr(callback, "message", None)
+    answer = getattr(message, "answer", None)
+    prompt_message_id = None
+    if answer is not None:
+        sent = await answer(RENAME_PROMPT)
+        prompt_message_id = getattr(sent, "message_id", None)
+
+    await state.set_state(PetStates.waiting_for_rename)
+    await state.update_data(
+        pet_id=int(raw_pet_id), prompt_message_id=prompt_message_id
+    )
+
+
+@router.message(PetStates.waiting_for_rename, F.text, ~F.text.startswith("/"))
+async def handle_pet_rename_name(message: Message, state: FSMContext) -> None:
+    """Apply the new name once the player replies to the rename prompt."""
+    sender = message.from_user
+    if sender is None or _is_bot(sender):
+        return
+
+    data = await state.get_data()
+    if not replied_to_prompt(message, data.get("prompt_message_id")):
+        await message.reply(REPLY_TO_PROMPT_REQUIRED)
+        return
+
+    pet_id = data.get("pet_id")
+    if pet_id is None:
+        await state.clear()
+        await message.reply(NO_PET_TEXT)
+        return
+
+    try:
+        async with get_session() as session:
+            result = await pet_service.rename_pet(
+                session, sender.id, int(pet_id), message.text
+            )
+    except Exception:
+        logger.exception("pet rename failed (user=%s pet=%s)", sender.id, pet_id)
+        await message.reply(GENERIC_ERROR)
+        return
+
+    status = str(result.get("status"))
+    if status == "already_renamed":
+        await state.clear()
+        await message.reply(RENAME_ALREADY_USED_ALERT)
+        return
+    if status == "insufficient_funds":
+        # Keep the state: a player who earns the apples can retry right away.
+        await message.reply(RENAME_NO_FUNDS_ALERT)
+        return
+    if status != "renamed":
+        await message.reply(NAME_ERRORS.get(status, GENERIC_ERROR))
+        return
+
+    await state.clear()
+    await message.reply(
+        format_html_caption(
+            RENAMED_TEXT.format(name=html.escape(str(result.get("name") or "")))
+        ),
         parse_mode="HTML",
     )
