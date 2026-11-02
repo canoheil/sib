@@ -1,8 +1,15 @@
 """Pet hunting, naming rules and limits for the pet system (سیستم پت).
 
-Phase 2 of the pet system: the «سیب شکار» hunt that finds a baby pet and the
-«اسم» naming step that gives it a custom name. Like the rest of ``services``
-no Telegram call is made here; the caller owns the transaction and commits.
+The «سیب شکار» hunt is a two-step encounter (Phase 2.5):
+
+1. :func:`get_encounter` validates the player (cooldown, pet caps) and rolls
+   which wild pet they meet — but not whether the hunt succeeds.
+2. :func:`execute_hunt` resolves the roll when the player presses the hunt
+   button, creating the nameless baby on success.
+
+:func:`name_pet` is the «اسم» step that gives the new baby a custom name.
+Like the rest of ``services`` no Telegram call is made here; the caller owns
+the transaction and commits.
 
 Hunting cooldown
 ----------------
@@ -204,23 +211,23 @@ def _limit_reason(counts: dict[str, int]) -> str | None:
     return None
 
 
-async def hunt_pet(
+async def get_encounter(
     session: AsyncSession,
     user_id: int,
-    card_power: int,
+    card_power: int = 0,
     *,
     rng: random.Random | None = None,
     now: datetime | None = None,
 ) -> dict:
-    """Attempt one hunt.
+    """Open the interactive hunt: validate the player and pick a wild pet.
 
-    Returns a dict whose ``status`` is one of:
+    This is step one of the two-step flow used by the inline-keyboard
+    encounter. It only *rolls the species* — the success roll happens later,
+    in :func:`execute_hunt`, when the player presses the hunt button.
 
-    * ``"cooldown"`` — still cooling down; ``remaining_seconds`` is set.
-    * ``"limit"`` — a pet cap blocks the hunt; ``reason`` is ``"total"`` or
-      ``"baby"`` and ``counts``/``max_total`` describe the limit.
-    * ``"failed"`` — the roll missed; the cooldown still starts.
-    * ``"success"`` — a new baby :class:`UserPet` row was created.
+    ``card_power`` is the caller's Main Card power (``0`` gives the base
+    chance). Returns ``{"status": "ok", "pet_type": str, "chance": int}`` or
+    the same ``cooldown`` / ``limit`` refusals the one-step hunt used to return.
     """
     moment = _as_utc(now) if now is not None else _now()
     rng = rng or random.Random()
@@ -240,12 +247,58 @@ async def hunt_pet(
             "max_babies": MAX_BABY_PETS,
         }
 
-    chance = hunt_chance(card_power)
-    if rng.random() * 100 >= chance:
-        await _mark_hunt_attempt(session, user_id, moment, counts["total"])
-        return {"status": "failed", "chance": chance}
+    return {
+        "status": "ok",
+        "pet_type": rng.choice(list(PET_TYPES)),
+        "chance": hunt_chance(card_power),
+    }
 
-    pet_type = rng.choice(list(PET_TYPES))
+
+async def execute_hunt(
+    session: AsyncSession,
+    user_id: int,
+    pet_type: str,
+    chance: int,
+    *,
+    rng: random.Random | None = None,
+    now: datetime | None = None,
+) -> dict:
+    """Resolve an encounter opened by :func:`get_encounter`.
+
+    Rolls ``chance`` percent. On success a nameless baby :class:`UserPet` is
+    created; on a miss nothing is created. Either way the hunt cooldown starts.
+
+    ``pet_type`` and ``chance`` are re-validated here because they arrive from
+    inline-keyboard callback data, which a client can forge: an unknown species
+    is rejected and the chance is clamped into ``[0, MAX_HUNT_CHANCE]``.
+
+    The cooldown and the pet caps are re-checked as well, so pressing the
+    button twice can never produce two pets or skip the wait.
+    """
+    moment = _as_utc(now) if now is not None else _now()
+    rng = rng or random.Random()
+
+    if pet_type not in PET_TYPES:
+        return {"status": "invalid", "pet": None}
+
+    remaining = await cooldown_remaining_seconds(session, user_id, now=moment)
+    if remaining > 0:
+        return {"status": "cooldown", "remaining_seconds": remaining, "pet": None}
+
+    counts = await pet_counts(session, user_id)
+    reason = _limit_reason(counts)
+    if reason is not None:
+        return {"status": "limit", "reason": reason, "pet": None}
+
+    try:
+        percent = max(0, min(MAX_HUNT_CHANCE, int(chance)))
+    except (TypeError, ValueError):
+        percent = 0
+
+    if rng.random() * 100 >= percent:
+        await _mark_hunt_attempt(session, user_id, moment, counts["total"])
+        return {"status": "failed", "pet": None, "pet_type": pet_type, "chance": percent}
+
     pet = UserPet(
         user_id=int(user_id),
         pet_type=pet_type,
@@ -258,7 +311,12 @@ async def hunt_pet(
     session.add(pet)
     _PENDING_HUNT_ATTEMPTS.pop(int(user_id), None)
     await session.flush()
-    return {"status": "success", "pet": pet, "pet_type": pet_type, "chance": chance}
+    return {
+        "status": "success",
+        "pet": pet,
+        "pet_type": pet_type,
+        "chance": percent,
+    }
 
 
 # ---------------------------------------------------------------------------

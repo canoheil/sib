@@ -1,19 +1,23 @@
-"""Telegram UX for the pet system (Phase 2): «سیب شکار» hunting and naming.
+"""Telegram UX for the pet system: the «سیب شکار» encounter and naming.
 
 All rules live in :mod:`sib.services.pet_service`; this module only decides
 what the player sees.
 
 Flow
 ----
-1. ``/hunt`` or the plain-text aliases «سیب شکار» / «شکار سیبی» roll one hunt
-   (cooldown and pet caps are enforced by the service).
-2. On success the baby's artwork is sent and the FSM waits for a name:
-   ``PetStates.waiting_for_name`` keeps the new ``pet_id`` in the state data.
-3. The next text message is validated and stored as ``UserPet.custom_name``;
-   an invalid name keeps the state so the player can simply try again.
+1. ``/hunt`` or the plain-text aliases «سیب شکار» / «شکار سیبی» open an
+   *encounter*: the service validates the cooldown and the pet caps and rolls
+   which wild pet the player meets. The adult artwork is sent with the
+   player's card power, the resulting chance and a single "🏹 شکار!" button.
+2. The button's callback resolves the hunt (:func:`pet_service.execute_hunt`)
+   and edits the same message: the escaping-pet artwork on a miss, or the
+   baby's artwork on success plus the naming prompt.
+3. ``PetStates.waiting_for_name`` then captures the next text message as the
+   pet's name; an invalid name keeps the state so the player can retry.
 
-The hunt handler is registered before the naming handler so the aliases always
-start a new hunt instead of being taken as a pet name.
+Only the player who opened the encounter may press its button, and the roll
+uses the server-side chance rather than the number echoed in the callback
+data (see :func:`handle_hunt_callback`).
 """
 
 import html
@@ -23,19 +27,29 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import FSInputFile, Message
+from aiogram.types import (
+    CallbackQuery,
+    FSInputFile,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 
 from sib.core.logging import logger
+from sib.core.text import format_html_caption
 from sib.database.connection import get_session
 from sib.database.models import PET_TYPES, Character
 from sib.services import pet_service
 from sib.services.card_progression import card_attributes
 from sib.services.player_cards import PlayerCardService
 from sib.services.sib_claim import fa_digits
+from sib.services.telegram_ui import safe_answer_callback, safe_edit_message_media
 
 router = Router(name="pets")
 
 ASSET_DIR = Path(__file__).resolve().parents[1] / "assets" / "pets"
+FOREST_IMAGE = ASSET_DIR / "hunt_forest.jpg"
+FAIL_IMAGE = ASSET_DIR / "hunt_fail.jpg"
 
 #: Power used when the player owns no card at all (mirrors Apple Battle).
 BASE_UNARMED_POWER = 10
@@ -53,6 +67,8 @@ HUNT_ALIASES = frozenset(
     for yeh in (_PERSIAN_YEH, _ARABIC_YEH)
 )
 
+#: Callback payload of the hunt button: ``pet_hunt:{user_id}:{pet_type}:{chance}``.
+HUNT_CALLBACK_PREFIX = "pet_hunt:"
 
 GENERIC_ERROR = "خطایی رخ داد. لطفاً دوباره تلاش کن."
 COOLDOWN_TEXT = "⏳ برای شکار بعدی باید {remaining} صبر کنید."
@@ -64,12 +80,22 @@ LIMIT_BABY_TEXT = (
     "🐾 شما یک بچه پت دارید که هنوز بزرگ نشده. "
     "اول اسمش را انتخاب کنید، بعد دوباره شکار کنید."
 )
-# Verbatim player-facing copy from the Phase 2 spec.
-FAILED_TEXT = "🏹 تلاش برای شکار ناموفق بود! شانس شما: {chance}٪. دوباره تلاش کنید."
-SUCCESS_CAPTION = (
-    "🎉 شما یک {type_fa} بچه شکار کردید!\n"
-    "حالا یک اسم براش انتخاب کنید و روی همین پیام ریپلای کنید:"
+#: The encounter screen. ``**`` renders as bold through ``format_html_caption``.
+ENCOUNTER_CAPTION = (
+    "🌲 وارد جنگل جادویی شدی!\n"
+    "یک **{type_fa} وحشی** دیدی!\n"
+    "💪 قدرت کارتت: {power}\n"
+    "🎯 شانس شکار: {chance}٪"
 )
+HUNT_BUTTON_TEXT = "🏹 شکار!"
+FAILED_CAPTION = "💨 ای وای! {type_fa} فرار کرد. دفعه بعد شانس بهتری داری."
+SUCCESS_CAPTION = (
+    "🎉 شکار موفق! تونستی بچه {type_fa} رو بگیری.\n"
+    "حالا یک اسم براش انتخاب کن و روی همین پیام ریپلای کن:"
+)
+NOT_YOUR_HUNT_ALERT = "این شکار مال شما نیست! خودت «سیب شکار» بزن."
+HUNT_GONE_ALERT = "این شکار منقضی شده. دوباره «سیب شکار» بزن."
+
 NAMED_TEXT = (
     "✅ اسم {name} برای پت شما ثبت شد! "
     "از این به بعد با دستور «سیب پت» می‌تونید مدیریتش کنید."
@@ -114,6 +140,53 @@ def _is_bot(sender) -> bool:
     return bool(getattr(sender, "is_bot", False))
 
 
+def _safe_pet_type(pet_type: str | None) -> str:
+    """Keep the species inside the known artwork set (it becomes a file path)."""
+    return pet_type if pet_type in PET_TYPES else PET_TYPES[0]
+
+
+def adult_artwork(pet_type: str) -> Path:
+    """The wild pet the player meets; the forest plate if the art is missing."""
+    image = ASSET_DIR / f"{_safe_pet_type(pet_type)}_adult.jpg"
+    return image if image.is_file() else FOREST_IMAGE
+
+
+def baby_artwork(pet_type: str) -> Path:
+    return ASSET_DIR / f"{_safe_pet_type(pet_type)}_baby.jpg"
+
+
+def hunt_button(user_id: int, pet_type: str, chance: int) -> InlineKeyboardMarkup:
+    """The single «🏹 شکار!» button carrying the encounter's identity."""
+    payload = f"{HUNT_CALLBACK_PREFIX}{int(user_id)}:{pet_type}:{int(chance)}"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=HUNT_BUTTON_TEXT, callback_data=payload)]
+        ]
+    )
+
+
+def parse_hunt_callback(data: str | None) -> tuple[int, str, int] | None:
+    """``pet_hunt:{user_id}:{pet_type}:{chance}`` → ``(user_id, pet_type, chance)``.
+
+    Returns ``None`` for anything malformed. The ``chance`` is informational:
+    the roll itself uses a value recomputed on the server.
+    """
+    if not isinstance(data, str) or not data.startswith(HUNT_CALLBACK_PREFIX):
+        return None
+    parts = data[len(HUNT_CALLBACK_PREFIX):].split(":")
+    if len(parts) != 3:
+        return None
+    raw_user, pet_type, raw_chance = parts
+    try:
+        user_id = int(raw_user)
+        chance = int(raw_chance)
+    except (TypeError, ValueError):
+        return None
+    if user_id <= 0 or pet_type not in PET_TYPES:
+        return None
+    return user_id, pet_type, chance
+
+
 async def main_card_power(session, user_id: int) -> int:
     """Power of the player's Main Card, else any owned card, else unarmed."""
     main_card = await PlayerCardService.get_main_card(session, user_id)
@@ -129,18 +202,18 @@ async def main_card_power(session, user_id: int) -> int:
     return max(1, int(card_attributes(main_card, character).power))
 
 
-async def _send_photo(message: Message, image: Path, caption: str):
-    """Reply with the baby artwork, falling back to text if it is missing."""
+async def _reply_photo(message: Message, image: Path, caption: str, **kwargs):
+    """Reply with artwork, falling back to text when the file is missing."""
     if image.is_file():
         return await message.reply_photo(
-            FSInputFile(str(image)), caption=caption, parse_mode="HTML"
+            FSInputFile(str(image)), caption=caption, parse_mode="HTML", **kwargs
         )
     logger.warning("missing pet artwork: %s", image)
-    return await message.reply(caption, parse_mode="HTML")
+    return await message.reply(caption, parse_mode="HTML", **kwargs)
 
 
 # ---------------------------------------------------------------------------
-# «سیب شکار» — hunt for a baby pet
+# «سیب شکار» — open an encounter
 # ---------------------------------------------------------------------------
 
 @router.message(Command("hunt"))
@@ -153,61 +226,160 @@ async def handle_hunt(message: Message, state: FSMContext) -> None:
     try:
         async with get_session() as session:
             card_power = await main_card_power(session, sender.id)
-            result = await pet_service.hunt_pet(session, sender.id, card_power)
-            # Read everything the reply needs before the session closes.
+            result = await pet_service.get_encounter(
+                session, sender.id, card_power
+            )
             status = result.get("status")
-            pet_id = None
             pet_type = result.get("pet_type")
-            if status == "success":
-                pet_id = int(result["pet"].id)
-                pet_type = result["pet"].pet_type
+            chance = int(result.get("chance") or 0)
+            remaining = int(result.get("remaining_seconds") or 0)
+            reason = result.get("reason")
+            max_total = result.get("max_total")
     except Exception:
-        logger.exception("pet hunt failed (user=%s)", sender.id)
+        logger.exception("pet encounter failed (user=%s)", sender.id)
         await message.reply(GENERIC_ERROR)
         return
 
     if status == "cooldown":
-        await message.reply(
-            COOLDOWN_TEXT.format(
-                remaining=format_remaining(int(result.get("remaining_seconds") or 0))
-            )
-        )
+        await message.reply(COOLDOWN_TEXT.format(remaining=format_remaining(remaining)))
         return
 
     if status == "limit":
-        if result.get("reason") == "total":
+        if reason == "total":
             await message.reply(
                 LIMIT_TOTAL_TEXT.format(
-                    max_total=fa_digits(result.get("max_total") or pet_service.MAX_PETS_TOTAL)
+                    max_total=fa_digits(max_total or pet_service.MAX_PETS_TOTAL)
                 )
             )
         else:
             await message.reply(LIMIT_BABY_TEXT)
         return
 
-    if status == "failed":
-        await message.reply(
-            FAILED_TEXT.format(chance=fa_digits(int(result.get("chance") or 0)))
-        )
-        return
-
-    if status != "success" or pet_id is None:
+    if status != "ok":
         await message.reply(GENERIC_ERROR)
         return
 
-    # A brand-new baby replaces any half-finished naming step.
+    pet_type = _safe_pet_type(pet_type)
+    # A new encounter abandons any half-finished naming step.
     await state.clear()
-    await state.set_state(PetStates.waiting_for_name)
-    await state.update_data(pet_id=pet_id)
-    # The species is the only value interpolated into a path: keep it inside
-    # the known artwork set even if a row was written by hand.
-    if pet_type not in PET_TYPES:
-        pet_type = PET_TYPES[0]
-    await _send_photo(
+    await _reply_photo(
         message,
-        ASSET_DIR / f"{pet_type}_baby.jpg",
-        SUCCESS_CAPTION.format(type_fa=pet_service.pet_type_fa(pet_type)),
+        adult_artwork(pet_type),
+        format_html_caption(
+            ENCOUNTER_CAPTION.format(
+                type_fa=pet_service.pet_type_fa(pet_type),
+                power=fa_digits(card_power),
+                chance=fa_digits(chance),
+            )
+        ),
+        reply_markup=hunt_button(sender.id, pet_type, chance),
     )
+
+
+# ---------------------------------------------------------------------------
+# «🏹 شکار!» — resolve the encounter
+# ---------------------------------------------------------------------------
+
+@router.callback_query(F.data.startswith(HUNT_CALLBACK_PREFIX))
+async def handle_hunt_callback(
+    callback: CallbackQuery, state: FSMContext, bot
+) -> None:
+    clicker = callback.from_user
+    parsed = parse_hunt_callback(getattr(callback, "data", None))
+    if clicker is None or parsed is None:
+        await safe_answer_callback(callback, HUNT_GONE_ALERT, show_alert=True)
+        return
+
+    owner_id, pet_type, _displayed_chance = parsed
+    # Anyone in the group sees the button; only the hunter may press it.
+    if int(clicker.id) != owner_id:
+        await safe_answer_callback(callback, NOT_YOUR_HUNT_ALERT, show_alert=True)
+        return
+
+    # The roll uses a server-side chance: the value in the callback data is
+    # player-editable and is only kept for the caption the player already saw.
+    try:
+        async with get_session() as session:
+            card_power = await main_card_power(session, owner_id)
+            chance = pet_service.hunt_chance(card_power)
+            result = await pet_service.execute_hunt(
+                session, owner_id, pet_type, chance
+            )
+            status = result.get("status")
+            pet_id = None
+            if status == "success" and result.get("pet") is not None:
+                pet_id = int(result["pet"].id)
+            remaining = int(result.get("remaining_seconds") or 0)
+    except Exception:
+        logger.exception("pet hunt callback failed (user=%s)", owner_id)
+        await safe_answer_callback(callback, GENERIC_ERROR, show_alert=True)
+        return
+
+    if status == "cooldown":
+        await safe_answer_callback(
+            callback,
+            COOLDOWN_TEXT.format(remaining=format_remaining(remaining)),
+            show_alert=True,
+        )
+        return
+    if status == "limit":
+        await safe_answer_callback(callback, LIMIT_BABY_TEXT, show_alert=True)
+        return
+    if status not in ("success", "failed"):
+        await safe_answer_callback(callback, HUNT_GONE_ALERT, show_alert=True)
+        return
+
+    await safe_answer_callback(callback)
+    await state.clear()
+
+    if status == "success" and pet_id is not None:
+        await state.set_state(PetStates.waiting_for_name)
+        await state.update_data(pet_id=pet_id)
+        await _edit_encounter(
+            callback,
+            bot,
+            baby_artwork(pet_type),
+            SUCCESS_CAPTION.format(type_fa=pet_service.pet_type_fa(pet_type)),
+        )
+        return
+
+    await _edit_encounter(
+        callback,
+        bot,
+        FAIL_IMAGE,
+        FAILED_CAPTION.format(type_fa=pet_service.pet_type_fa(pet_type)),
+    )
+
+
+async def _edit_encounter(callback: CallbackQuery, bot, image: Path, caption: str) -> None:
+    """Replace the encounter artwork and caption in place, removing the button."""
+    message = getattr(callback, "message", None)
+    chat_id = getattr(getattr(message, "chat", None), "id", None)
+    message_id = getattr(message, "message_id", None)
+    text = format_html_caption(caption)
+
+    if bot is not None and chat_id and message_id and image.is_file():
+        edited = await safe_edit_message_media(
+            bot,
+            chat_id,
+            message_id,
+            photo=FSInputFile(str(image)),
+            text=text,
+            reply_markup=None,
+            parse_mode="HTML",
+        )
+        if edited:
+            return
+
+    # The message may have been deleted, or there is no editable photo: still
+    # show the outcome once as a plain reply.
+    if bot is not None and chat_id and message_id and image.is_file():
+        logger.info(
+            "pet encounter media edit failed (chat=%s message=%s)", chat_id, message_id
+        )
+    answer = getattr(message, "answer", None)
+    if answer is not None:
+        await answer(text, parse_mode="HTML")
 
 
 # ---------------------------------------------------------------------------
