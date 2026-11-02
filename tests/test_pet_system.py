@@ -37,6 +37,9 @@ EXPECTED_ARTWORK = {
     for pet_type in ("dog", "squirrel", "cat", "owl")
     for stage in ("baby", "adult")
 }
+#: Encounter plates used by the «سیب شکار» mini-game (Phase 2.5); they are
+#: full-bleed scenery, not a species/stage pair.
+EXPECTED_SCENERY = {"hunt_forest.jpg", "hunt_fail.jpg"}
 
 
 # ---------------------------------------------------------------------------
@@ -310,7 +313,7 @@ def test_user_pet_columns_are_indexed_and_nullable_as_specified():
 # Artwork
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("filename", sorted(EXPECTED_ARTWORK))
+@pytest.mark.parametrize("filename", sorted(EXPECTED_ARTWORK) + sorted(EXPECTED_SCENERY))
 def test_pet_artwork_is_a_full_bleed_1024_square_jpeg(filename):
     path = PET_ASSETS / filename
     assert path.is_file(), f"missing pet artwork: {path}"
@@ -344,6 +347,7 @@ def test_pet_artwork_is_a_full_bleed_1024_square_jpeg(filename):
 
 def test_pet_artwork_covers_every_species_and_stage():
     on_disk = {path.name for path in PET_ASSETS.glob("*.jpg")}
-    assert on_disk == set(EXPECTED_ARTWORK)
+    assert on_disk == set(EXPECTED_ARTWORK) | EXPECTED_SCENERY
     assert len(EXPECTED_ARTWORK) == 8
     assert {pet_type for pet_type, _ in EXPECTED_ARTWORK.values()} == set(PET_TYPES)
+    assert EXPECTED_SCENERY.isdisjoint(EXPECTED_ARTWORK)
