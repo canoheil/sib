@@ -454,20 +454,20 @@ async def test_theft_refuses_self_targets_and_unknown_users(session, now):
 
 # ---------------------------------------------------------------------------
 # The exact behaviour the theft fix locks in (bugs 1 and 2):
-#   level 0 -> instant, 100 %      level 1 -> pending, 90 %
-#   level 2 -> pending, 80 %       level 3 -> pending, 70 %
-#   level 4 -> pending, 60 %       level 5 -> pending, 50 %
+#   level 0 -> instant, 100 %      level 1 -> pending, 85 %
+#   level 2 -> pending, 70 %       level 3 -> pending, 55 %
+#   level 4 -> pending, 40 %       level 5 -> pending, 25 %
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    "level,expected_chance", [(0, 100), (1, 90), (2, 80), (3, 70), (4, 60), (5, 50)]
+    "level,expected_chance", [(0, 100), (1, 85), (2, 70), (3, 55), (4, 40), (5, 25)]
 )
 def test_success_percent_drops_ten_points_per_star(level, expected_chance):
     assert theft.success_percent(level) == expected_chance
-    # Wanted thieves never fall below the 50 % floor above the five stars.
-    assert theft.success_percent(level + 7) == 50
-    assert theft.success_percent(99) == 50
+    # Wanted thieves never fall below the 25 % floor above the five stars.
+    assert theft.success_percent(level + 7) == 25
+    assert theft.success_percent(99) == 25
 
 
 async def test_wanted_level_zero_is_an_instant_guaranteed_theft(session, now):
@@ -487,7 +487,7 @@ async def test_wanted_level_zero_is_an_instant_guaranteed_theft(session, now):
 async def test_wanted_level_one_opens_the_window_and_rolls_ninety(
     session, now, monkeypatch
 ):
-    """Test 2: one star is a pending heist that rolls the 90 % row."""
+    """Test 2: one star is a pending heist that rolls the 85 % row."""
     await _users(session, 1, 2)
     await _wallet(session, 1, 4000)
     await _wallet(session, 2, 0)
@@ -509,12 +509,12 @@ async def test_wanted_level_one_opens_the_window_and_rolls_ninety(
     monkeypatch.setattr(theft, "_roll", spy)
     result = await theft.resolve_pending_theft(session, 2, 1, 200, caught_by_id=None)
 
-    assert rolled == [90], "a one-star heist must roll 90 %"
+    assert rolled == [85], "a one-star heist must roll 85 %"
     assert result == {"status": "success", "amount": 200, "wanted_level": 2}
 
 
 async def test_wanted_level_five_rolls_fifty(session, now, monkeypatch):
-    """Test 3: the rate really reaches 50 % at five stars (bug 2)."""
+    """Test 3: the rate really reaches 25 % at five stars (bug 2)."""
     await _users(session, 1, 2)
     await _wallet(session, 1, 4000)
     await _wallet(session, 2, 0)
@@ -534,7 +534,7 @@ async def test_wanted_level_five_rolls_fifty(session, now, monkeypatch):
     monkeypatch.setattr(theft, "_roll", spy)
     result = await theft.resolve_pending_theft(session, 2, 1, 200, caught_by_id=None)
 
-    assert rolled == [50]
+    assert rolled == [25]
     assert result == {"status": "failed"}
     assert await _balance(session, 1) == 4000
 
@@ -769,12 +769,12 @@ async def test_no_arrest_failed_roll_moves_nothing(session, now, monkeypatch):
 @pytest.mark.parametrize(
     "level,roll,expected",
     [
-        # Bug 2: 100 % (L0) - 90 (L1) - 80 (L2) - 70 (L3) - 60 (L4) - 50 (L5).
-        (1, 0.899, "success"), (1, 0.9, "failed"),
-        (2, 0.799, "success"), (2, 0.8, "failed"),
-        (3, 0.699, "success"), (3, 0.7, "failed"),
-        (4, 0.599, "success"), (4, 0.6, "failed"),
-        (5, 0.499, "success"), (5, 0.5, "failed"),
+        # Bug 2: 100 % (L0) - 85 (L1) - 70 (L2) - 55 (L3) - 40 (L4) - 25 (L5).
+        (1, 0.849, "success"), (1, 0.85, "failed"),
+        (2, 0.699, "success"), (2, 0.7, "failed"),
+        (3, 0.549, "success"), (3, 0.55, "failed"),
+        (4, 0.399, "success"), (4, 0.4, "failed"),
+        (5, 0.249, "success"), (5, 0.25, "failed"),
     ],
 )
 async def test_success_chance_drops_with_every_star(
@@ -839,3 +839,92 @@ async def test_resolution_rejects_a_non_positive_amount(session, now):
     assert await theft.resolve_pending_theft(session, 2, 1, 200, 999) == {
         "status": "not_found"
     }
+
+
+# ---------------------------------------------------------------------------
+# Night limit: 00:00-08:00 Asia/Tehran, once per window
+# ---------------------------------------------------------------------------
+
+async def test_night_limit_blocks_second_theft_in_same_window(session, monkeypatch):
+    """Mock time to 01:00 — first theft succeeds, second even after cooldown is night_limit."""
+    night = datetime(2026, 10, 30, 1, 0, tzinfo=TEHRAN)
+    monkeypatch.setattr(theft, "_now", lambda: night)
+    await _users(session, 1, 2)
+    await _wallet(session, 1, 4000)
+    await _wallet(session, 2, 0)
+
+    result1 = await theft.initiate_theft(session, 2, 1)
+    assert result1["status"] == "success"
+
+    # Even after the 20-minute cooldown, still inside 00-08 window
+    later = datetime(2026, 10, 30, 1, 30, tzinfo=TEHRAN)
+    monkeypatch.setattr(theft, "_now", lambda: later)
+    result2 = await theft.initiate_theft(session, 2, 1)
+    assert result2 == {"status": "night_limit"}
+    # No additional money moved
+    assert await _balance(session, 1) == 3800
+    assert await _balance(session, 2) == 200
+
+
+async def test_night_limit_does_not_block_morning_and_cooldown_still_applies(
+    session, monkeypatch
+):
+    """Mock time to 09:00 — theft works normally, cooldown applies."""
+    morning = datetime(2026, 10, 30, 9, 0, tzinfo=TEHRAN)
+    monkeypatch.setattr(theft, "_now", lambda: morning)
+    await _users(session, 1, 2)
+    await _wallet(session, 1, 4000)
+    await _wallet(session, 2, 0)
+
+    result1 = await theft.initiate_theft(session, 2, 1)
+    assert result1["status"] == "success"
+
+    # Immediate second attempt in morning should be cooldown, not night_limit
+    result2 = await theft.initiate_theft(session, 2, 1)
+    assert result2 == {"status": "cooldown"}
+
+    # After cooldown, morning theft is allowed again (pending at level 1, not night_limit)
+    later = datetime(2026, 10, 30, 9, 30, tzinfo=TEHRAN)
+    monkeypatch.setattr(theft, "_now", lambda: later)
+    result3 = await theft.initiate_theft(session, 2, 1)
+    assert result3["status"] == "pending"
+    # Victim balance after first theft is 3800 => 5% = 190
+    assert result3["amount"] == 190
+
+
+async def test_night_limit_resets_next_day(session, monkeypatch):
+    """A theft at 01:00 today does not block a theft at 01:00 tomorrow."""
+    night_today = datetime(2026, 10, 30, 1, 0, tzinfo=TEHRAN)
+    monkeypatch.setattr(theft, "_now", lambda: night_today)
+    await _users(session, 1, 2)
+    await _wallet(session, 1, 4000)
+    await _wallet(session, 2, 0)
+
+    assert (await theft.initiate_theft(session, 2, 1))["status"] == "success"
+
+    # Next day same hour — new window, allowed (no cooldown, new day)
+    night_tomorrow = datetime(2026, 10, 31, 1, 0, tzinfo=TEHRAN)
+    monkeypatch.setattr(theft, "_now", lambda: night_tomorrow)
+    # Need to bypass cooldown: last theft was 24h ago, cooldown expired
+    result = await theft.initiate_theft(session, 2, 1)
+    # Thief is now level 1, so second theft is pending, not night_limit
+    assert result["status"] == "pending"
+
+
+async def test_night_limit_configurable_via_system_config(session, monkeypatch):
+    """Operator can change window via system_config: 02-06 means 01:00 is allowed."""
+    night = datetime(2026, 10, 30, 1, 0, tzinfo=TEHRAN)
+    monkeypatch.setattr(theft, "_now", lambda: night)
+    await _users(session, 1, 2)
+    await _wallet(session, 1, 4000)
+    await _wallet(session, 2, 0)
+    # Shrink window to 02-06, so 01:00 is outside
+    await _set_config(session, "theft_night_start_hour", 2)
+    await _set_config(session, "theft_night_end_hour", 6)
+
+    result1 = await theft.initiate_theft(session, 2, 1)
+    assert result1["status"] == "success"
+    # Second theft at 01:05 still outside window, so cooldown applies, not night_limit
+    later = datetime(2026, 10, 30, 1, 5, tzinfo=TEHRAN)
+    monkeypatch.setattr(theft, "_now", lambda: later)
+    assert await theft.initiate_theft(session, 2, 1) == {"status": "cooldown"}

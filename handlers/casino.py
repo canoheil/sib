@@ -26,7 +26,7 @@ class CasinoStates(StatesGroup):
 
 
 @router.message(Command("casino"))
-@router.message(F.text.in_({"قمارخانه", "قمارخونه", "قمار خانه", "قمار خونه", "قمار"}))
+@router.message(F.text.in_({"قمارخانه", "قمارخونه", "قمار خانه", "قمار خونه", "قمار", "کازینو"}))
 async def casino_menu(message: Message, state: FSMContext) -> None:
     await state.clear()
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[

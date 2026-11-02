@@ -128,7 +128,7 @@ async def test_send_failure_refunds(db, state):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("text", ["/casino", "قمارخانه", "قمارخونه", "قمار خانه", "قمار خونه", "قمار"])
+@pytest.mark.parametrize("text", ["/casino", "قمارخانه", "قمارخونه", "قمار خانه", "قمار خونه", "قمار", "کازینو"])
 async def test_menu_filters(text):
     from aiogram import Bot
     from aiogram.types import Chat, Message, User as TelegramUser
