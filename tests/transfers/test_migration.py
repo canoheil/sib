@@ -104,9 +104,9 @@ def test_migration_062_revises_061_and_is_the_only_head():
     # 067_invasion_daily_20_schedule, 068_golden_hour_apple_rewards,
     # 069_golden_hour_notices, 070_disease_system, 071_disease_items, and
     # 072_disease_ui, 073_disease_started_flag, 074_theft_system and
-    # 075_rocket_game, 076_pet_system revise
+    # 075_rocket_game, 076_pet_system, 077_pet_rename revise
     # it; history stays linear with one head.
-    assert set(revisions) - set(parents) == {"076_pet_system"}
+    assert set(revisions) - set(parents) == {"077_pet_rename"}
 
 
 # ---------------------------------------------------------------------------

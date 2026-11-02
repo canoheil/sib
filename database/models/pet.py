@@ -45,6 +45,10 @@ class UserPet(Base):
     pet_type: Mapped[str] = mapped_column(String(32), nullable=False)
     # Stay NULL until the owner names the pet.
     custom_name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # One paid rename per pet (see ``pet_service.rename_pet``).
+    has_renamed: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", nullable=False
+    )
     is_adult: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="0", nullable=False
     )

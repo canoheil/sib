@@ -12,6 +12,8 @@ builds that reject ``style``); there the color lives inside the label.
 
 import re
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -219,6 +221,58 @@ def test_duel_invitation_colors():
     assert by_callback["ad:accept:" + "d" * 32].style == "success"
     assert by_callback["ad:reject:" + "d" * 32].style == "danger"
     assert by_callback["ad:change:" + "d" * 32].style == "primary"
+
+
+async def test_casino_menu_games_are_blue():
+    from aiogram.fsm.context import FSMContext
+    from aiogram.fsm.storage.memory import MemoryStorage, StorageKey
+
+    from sib.handlers.casino import casino_menu
+
+    message = SimpleNamespace(answer_photo=AsyncMock())
+    state = FSMContext(MemoryStorage(), StorageKey(bot_id=1, chat_id=1, user_id=1))
+    await casino_menu(message, state)
+
+    keyboard = message.answer_photo.await_args.kwargs["reply_markup"]
+    buttons = _buttons(keyboard)
+    assert len(buttons) == 4
+    assert {button.style for button in buttons} == {"primary"}
+    assert [button.callback_data for button in buttons] == [
+        "casino_game:dice",
+        "casino_game:darts",
+        "casino_game:bowling",
+        "casino_game:slots",
+    ]
+
+
+def test_transfer_confirmation_is_green_and_red():
+    from sib.handlers.transfers import confirmation_keyboard
+
+    by_callback = _by_callback(confirmation_keyboard(11))
+    assert by_callback["tr:confirm:11"].style == "success"
+    assert by_callback["tr:cancel:11"].style == "danger"
+
+
+def test_pet_buttons_are_colored():
+    from types import SimpleNamespace as NS
+
+    from sib.handlers.pets import (
+        pet_menu_keyboard,
+        pet_profile_keyboard,
+        tracking_keyboard,
+    )
+
+    baby = pet_profile_keyboard(NS(id=1, is_adult=False, has_renamed=False))
+    by_callback = _by_callback(baby)
+    assert by_callback["pet_feed:1"].style == "success"
+    assert by_callback["pet_rename:1"].style == "primary"
+    assert by_callback["pet_view:menu"].style == "danger"
+
+    menu = pet_menu_keyboard([NS(id=3, pet_type="owl", custom_name="پشمک")])
+    assert _by_callback(menu)["pet_view:3"].style == "primary"
+
+    track = tracking_keyboard(1)
+    assert {button.style for button in _buttons(track)} == {"primary"}
 
 
 def test_module_panel_builders_fill_every_style():

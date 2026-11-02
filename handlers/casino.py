@@ -6,11 +6,12 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardMarkup, Message
 
 from sib.core.logging import logger
 from sib.database.connection import get_session
 from sib.handlers.rocket import _normalize_rocket_digits
+from sib.keyboards.common import primary_button
 from sib.services.casino_service import CasinoService
 from sib.services.apple_wallet import AppleWalletService
 from sib.services.lock_order import lock_user_row
@@ -30,7 +31,7 @@ class CasinoStates(StatesGroup):
 async def casino_menu(message: Message, state: FSMContext) -> None:
     await state.clear()
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=label, callback_data=f"casino_game:{key}")
+        primary_button(text=label, callback_data=f"casino_game:{key}")
         for key, label in [("dice", "🎲 تاس"), ("darts", "🎯 دارت"), ("bowling", "🎳 بولینگ"), ("slots", "🎰 اسلات")]
     ]])
     await message.answer_photo(FSInputFile(str(ASSET)), caption="🎰 به قمارخانه خوش آمدید! کدوم بازی رو انتخاب می‌کنی؟", reply_markup=keyboard)

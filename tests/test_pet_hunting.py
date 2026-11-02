@@ -894,9 +894,12 @@ async def test_track_finale_correct_path_raises_the_chance_and_catches(
     assert "شکار موفق" in edited["media"].caption
     assert edited["reply_markup"] is None  # the buttons disappear
 
-    # A catch starts the naming flow.
+    # A catch starts the naming flow, and the state remembers WHICH message
+    # asked for the name: only a reply to it counts (see handle_pet_name).
     assert await state.get_state() == PetStates.waiting_for_name.state
-    assert (await state.get_data())["pet_id"] == 77
+    data = await state.get_data()
+    assert data["pet_id"] == 77
+    assert data["prompt_message_id"] == 99
 
 
 async def test_track_finale_wrong_path_lowers_the_chance_and_fails(
@@ -1211,6 +1214,24 @@ def test_encounter_artwork_accepts_only_known_species():
 # Handlers — naming
 # ---------------------------------------------------------------------------
 
+#: The id of the bot message the naming/rename state asks the player to reply
+#: to (see ``pet_service``/``handle_pet_name``).
+PROMPT_MESSAGE_ID = 555
+
+
+def _naming_message(text: str, *, prompt_message_id: int | None = PROMPT_MESSAGE_ID,
+                    reply_to=None, user_id: int = 1):
+    """A group message the player wrote (optionally) as a reply to the prompt."""
+    if reply_to is None and prompt_message_id is not None:
+        reply_to = SimpleNamespace(message_id=prompt_message_id)
+    return SimpleNamespace(
+        from_user=SimpleNamespace(id=user_id, is_bot=False),
+        text=text,
+        reply_to_message=reply_to,
+        reply=AsyncMock(),
+    )
+
+
 async def _seed_naming_state(db, state, text: str):
     """An unnamed pet for player 1, with the naming state waiting on it."""
     async with db.begin() as session:
@@ -1219,12 +1240,8 @@ async def _seed_naming_state(db, state, text: str):
         await session.flush()
         pet_id = pet.id
     await state.set_state(PetStates.waiting_for_name)
-    await state.update_data(pet_id=pet_id)
-    return SimpleNamespace(
-        from_user=SimpleNamespace(id=1, is_bot=False),
-        text=text,
-        reply=AsyncMock(),
-    )
+    await state.update_data(pet_id=pet_id, prompt_message_id=PROMPT_MESSAGE_ID)
+    return _naming_message(text)
 
 
 async def test_naming_handler_saves_the_name_and_clears_the_state(db, state):
@@ -1236,13 +1253,9 @@ async def test_naming_handler_saves_the_name_and_clears_the_state(db, state):
         pet_id = pet.id
 
     await state.set_state(PetStates.waiting_for_name)
-    await state.update_data(pet_id=pet_id)
+    await state.update_data(pet_id=pet_id, prompt_message_id=PROMPT_MESSAGE_ID)
 
-    message = SimpleNamespace(
-        from_user=SimpleNamespace(id=1, is_bot=False),
-        text="ملوس",
-        reply=AsyncMock(),
-    )
+    message = _naming_message("ملوس")
     await pets.handle_pet_name(message, state)
 
     message.reply.assert_awaited_once()
@@ -1273,11 +1286,8 @@ async def test_naming_handler_rejects_invalid_names_and_keeps_the_state(db, stat
 
 async def test_naming_handler_without_a_pet_id_asks_to_hunt(db, state):
     await state.set_state(PetStates.waiting_for_name)
-    message = SimpleNamespace(
-        from_user=SimpleNamespace(id=1, is_bot=False),
-        text="ملوس",
-        reply=AsyncMock(),
-    )
+    await state.update_data(prompt_message_id=PROMPT_MESSAGE_ID)
+    message = _naming_message("ملوس")
 
     await pets.handle_pet_name(message, state)
 
@@ -1293,12 +1303,8 @@ async def test_naming_handler_escapes_html_in_the_confirmation(db, state, monkey
     monkeypatch.setattr(pets.pet_service, "name_pet", fake_name_pet)
 
     await state.set_state(PetStates.waiting_for_name)
-    await state.update_data(pet_id=1)
-    message = SimpleNamespace(
-        from_user=SimpleNamespace(id=1, is_bot=False),
-        text="whatever",
-        reply=AsyncMock(),
-    )
+    await state.update_data(pet_id=1, prompt_message_id=PROMPT_MESSAGE_ID)
+    message = _naming_message("whatever")
 
     await pets.handle_pet_name(message, state)
 
