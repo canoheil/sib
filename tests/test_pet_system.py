@@ -322,18 +322,24 @@ def test_pet_artwork_is_a_full_bleed_1024_square_jpeg(filename):
         image.load()
         rgb = image.convert("RGB")
 
-    # Full-bleed: the warm cream paper (#FCF8ED family) reaches every edge,
-    # with no white frame. Neutral white would have R == G == B near 255.
+    # Full-bleed: painted scenery reaches every edge, so no border pixel may
+    # be near-neutral white (a paper margin or frame would be R == G == B ~255).
     width, height = rgb.size
     border = (
-        [rgb.getpixel((x, 0)) for x in range(0, width, 32)]
-        + [rgb.getpixel((x, height - 1)) for x in range(0, width, 32)]
-        + [rgb.getpixel((0, y)) for y in range(0, height, 32)]
-        + [rgb.getpixel((width - 1, y)) for y in range(0, height, 32)]
+        [rgb.getpixel((x, 0)) for x in range(0, width, 8)]
+        + [rgb.getpixel((x, height - 1)) for x in range(0, width, 8)]
+        + [rgb.getpixel((0, y)) for y in range(0, height, 8)]
+        + [rgb.getpixel((width - 1, y)) for y in range(0, height, 8)]
     )
-    mean_r = sum(pixel[0] for pixel in border) / len(border)
-    mean_b = sum(pixel[2] for pixel in border) / len(border)
-    assert mean_r - mean_b >= 10, "edge pixels are neutral white, not cream paper"
+    white_edge_pixels = [
+        pixel
+        for pixel in border
+        if min(pixel) > 230 and max(pixel) - min(pixel) < 12
+    ]
+    assert not white_edge_pixels, (
+        f"{filename} has a white border/margin "
+        f"({len(white_edge_pixels)}/{len(border)} edge pixels)"
+    )
 
 
 def test_pet_artwork_covers_every_species_and_stage():
