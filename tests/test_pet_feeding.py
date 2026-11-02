@@ -1,0 +1,753 @@
+"""Pet System phase 3: the «سیب پت» menu, feeding and evolution.
+
+The service owns the rules (:mod:`sib.services.pet_service.feed_pet`) and the
+handler only renders them, so both layers are exercised here against an
+isolated SQLite database, plus the shop integration for ``pet_food``.
+"""
+
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+
+import pytest
+import pytest_asyncio
+import sqlalchemy as sa
+from aiogram import Dispatcher
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.memory import MemoryStorage, StorageKey
+from aiogram.types import Chat, Message
+from aiogram.types import User as TelegramUser
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from sib.database.models import (
+    AppleTransaction,
+    AppleWallet,
+    SystemConfig,
+    User,
+    UserItem,
+    UserPet,
+)
+from sib.handlers import pets
+from sib.handlers.pets import PetStates
+from sib.services import pet_service
+from sib.services.config_store import CONFIG_DEFAULTS
+from sib.services.sib_claim import fa_digits
+from sib.services.items import ITEM_CATALOG, ItemService
+
+NOW = datetime(2026, 11, 2, 12, 0, tzinfo=timezone.utc)
+FEED_COOLDOWN_KEY = "pet_feed_cooldown_hours"
+
+
+# ---------------------------------------------------------------------------
+# Fixtures and helpers
+# ---------------------------------------------------------------------------
+
+@pytest_asyncio.fixture(autouse=True)
+async def _clean_pending_hunts():
+    pet_service._PENDING_HUNT_ATTEMPTS.clear()
+    yield
+    pet_service._PENDING_HUNT_ATTEMPTS.clear()
+
+
+@pytest_asyncio.fixture
+async def engine():
+    """In-memory SQLite with only the tables this feature touches.
+
+    SQLite autoincrements plain INTEGER primary keys only, so ``BigInteger``
+    primary keys are narrowed for the DDL and restored right after (the same
+    shim as ``tests/conftest.py``).
+    """
+    eng = create_async_engine("sqlite+aiosqlite:///:memory:")
+    tables = [
+        User.__table__,
+        SystemConfig.__table__,
+        UserPet.__table__,
+        UserItem.__table__,
+        AppleWallet.__table__,
+        AppleTransaction.__table__,
+    ]
+    narrowed = []
+    for table in tables:
+        for column in table.columns:
+            if column.primary_key and type(column.type).__name__ == "BigInteger":
+                narrowed.append((column, column.type))
+                column.type = sa.Integer()
+    try:
+        async with eng.begin() as connection:
+            await connection.run_sync(
+                lambda sync_connection: User.metadata.create_all(
+                    sync_connection, tables=tables
+                )
+            )
+    finally:
+        for column, original in narrowed:
+            column.type = original
+    yield eng
+    await eng.dispose()
+
+
+@pytest_asyncio.fixture
+async def session(engine):
+    """An open session whose database already knows users 1 and 2."""
+    factory = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
+    async with factory.begin() as seed:
+        seed.add(User(id=1, first_name="pet owner"))
+        seed.add(User(id=2, first_name="someone else"))
+    async with factory() as db:
+        yield db
+
+
+@pytest_asyncio.fixture
+async def db(engine, monkeypatch):
+    """Session factory shared with the handler through a patched ``get_session``."""
+    factory = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
+
+    @asynccontextmanager
+    async def get_session():
+        async with factory.begin() as db_session:
+            yield db_session
+
+    monkeypatch.setattr(pets, "get_session", get_session)
+    async with factory.begin() as db_session:
+        db_session.add(User(id=1, first_name="pet owner"))
+        db_session.add(User(id=2, first_name="someone else"))
+    yield factory
+
+
+@pytest.fixture
+def state():
+    return FSMContext(MemoryStorage(), StorageKey(bot_id=1, chat_id=1, user_id=1))
+
+
+async def _seed_pet(
+    session,
+    *,
+    user_id: int = 1,
+    pet_type: str = "cat",
+    is_adult: bool = False,
+    custom_name: str | None = "پشمک",
+    xp: int = 0,
+    last_fed_at: datetime | None = None,
+    skill_level: int = 1,
+) -> UserPet:
+    pet = UserPet(
+        user_id=user_id,
+        pet_type=pet_type,
+        is_adult=is_adult,
+        custom_name=custom_name,
+        xp=xp,
+        skill_level=skill_level,
+        last_fed_at=last_fed_at,
+    )
+    session.add(pet)
+    await session.flush()
+    return pet
+
+
+async def _grant_food(session, user_id: int = 1, quantity: int = 1) -> None:
+    await ItemService.grant(session, user_id, pet_service.PET_FOOD_ITEM, quantity)
+
+
+async def _food_count(session, user_id: int = 1) -> int:
+    return await ItemService.get_total(session, user_id, pet_service.PET_FOOD_ITEM)
+
+
+async def _config(session, key: str, value) -> None:
+    session.add(SystemConfig(key=key, value=str(value)))
+    await session.flush()
+
+
+# ---------------------------------------------------------------------------
+# Item and shop integration
+# ---------------------------------------------------------------------------
+
+def test_pet_food_is_in_the_item_catalog():
+    entry = ITEM_CATALOG["pet_food"]
+    assert entry["emoji"] == "🍖"
+    assert entry["label"] == "غذای پت"
+    assert entry["description"]
+
+
+def test_pet_food_price_comes_from_its_own_config():
+    assert CONFIG_DEFAULTS["pet_food_price"] == 100
+
+
+async def test_pet_food_is_buyable_in_the_shop(session):
+    session.add(AppleWallet(user_id=1, balance=250))
+    await session.flush()
+
+    assert await ItemService.buy_price(session, "pet_food") == 100
+    assert "pet_food" in await ItemService.buy_prices(session)
+
+    total = await ItemService.buy(session, 1, "pet_food", 2)
+
+    assert total == 2
+    assert await _food_count(session) == 2
+    wallet = await session.get(AppleWallet, 1)
+    await session.refresh(wallet)
+    assert wallet.balance == 50  # 250 - 2 x 100
+
+    ledger = list((await session.scalars(sa.select(AppleTransaction))).all())
+    assert [(tx.amount, tx.reason) for tx in ledger] == [(-200, "item_purchase")]
+
+
+async def test_pet_food_purchase_is_refused_without_apples(session):
+    session.add(AppleWallet(user_id=1, balance=40))
+    await session.flush()
+
+    with pytest.raises(ValueError):
+        await ItemService.buy(session, 1, "pet_food", 1)
+
+    assert await _food_count(session) == 0
+    wallet = await session.get(AppleWallet, 1)
+    await session.refresh(wallet)
+    assert wallet.balance == 40
+
+
+async def test_pet_food_price_is_operator_configurable(session):
+    await _config(session, "pet_food_price", 25)
+    assert await ItemService.buy_price(session, "pet_food") == 25
+
+
+async def test_pet_food_is_not_sellable():
+    """A consumable: buy-only, like Magic Powder."""
+    assert CONFIG_DEFAULTS["item_sell_prices"].get("pet_food") is None
+
+
+# ---------------------------------------------------------------------------
+# feed_pet
+# ---------------------------------------------------------------------------
+
+async def test_feed_pet_without_food(session):
+    pet = await _seed_pet(session)
+
+    result = await pet_service.feed_pet(session, 1, pet.id, now=NOW)
+
+    assert result["status"] == "no_food"
+    stored = await session.get(UserPet, pet.id)
+    await session.refresh(stored)
+    assert stored.xp == 0
+    assert stored.last_fed_at is None
+
+
+async def test_feed_pet_too_soon(session):
+    pet = await _seed_pet(session, last_fed_at=NOW - timedelta(minutes=20))
+    await _grant_food(session)
+
+    result = await pet_service.feed_pet(session, 1, pet.id, now=NOW)
+
+    assert result["status"] == "too_soon"
+    assert result["remaining_seconds"] == 40 * 60
+    # Nothing was spent.
+    assert await _food_count(session) == 1
+    stored = await session.get(UserPet, pet.id)
+    await session.refresh(stored)
+    assert stored.xp == 0
+
+
+async def test_feed_pet_adds_xp_and_consumes_one_food(session):
+    pet = await _seed_pet(session, xp=100)
+    await _grant_food(session, quantity=3)
+
+    result = await pet_service.feed_pet(session, 1, pet.id, now=NOW)
+
+    assert result["status"] == "fed"
+    assert result["xp"] == 150  # 100 + 50
+    assert result["required"] == 500
+    assert result["xp_added"] == 50
+    assert result["remaining_food"] == 2
+
+    stored = await session.get(UserPet, pet.id)
+    await session.refresh(stored)
+    assert stored.xp == 150
+    assert stored.is_adult is False
+    assert stored.last_fed_at.replace(tzinfo=timezone.utc) == NOW
+    assert await _food_count(session) == 2  # exactly one was eaten
+
+
+async def test_feed_pet_evolves_at_the_threshold(session):
+    pet = await _seed_pet(session, xp=460)  # 460 + 50 >= 500
+    await _grant_food(session)
+
+    result = await pet_service.feed_pet(session, 1, pet.id, now=NOW)
+
+    assert result["status"] == "evolved"
+    assert result["xp"] == 510
+    stored = await session.get(UserPet, pet.id)
+    await session.refresh(stored)
+    assert stored.is_adult is True
+    assert stored.xp == 510
+    assert await _food_count(session) == 0
+
+
+async def test_feed_pet_does_not_evolve_one_xp_below(session):
+    pet = await _seed_pet(session, xp=401)  # 401 + 50 = 451 < 500
+    await _grant_food(session)
+
+    result = await pet_service.feed_pet(session, 1, pet.id, now=NOW)
+
+    assert result["status"] == "fed"
+    stored = await session.get(UserPet, pet.id)
+    await session.refresh(stored)
+    assert stored.is_adult is False
+
+
+async def test_feed_pet_refuses_an_adult(session):
+    pet = await _seed_pet(session, is_adult=True, xp=600)
+    await _grant_food(session)
+
+    result = await pet_service.feed_pet(session, 1, pet.id, now=NOW)
+
+    assert result["status"] == "already_adult"
+    assert await _food_count(session) == 1
+
+
+async def test_feed_pet_refuses_another_players_pet(session):
+    pet = await _seed_pet(session, user_id=2)
+    await _grant_food(session, user_id=1)
+
+    result = await pet_service.feed_pet(session, 1, pet.id, now=NOW)
+
+    assert result["status"] == "not_found"
+    stored = await session.get(UserPet, pet.id)
+    await session.refresh(stored)
+    assert stored.xp == 0
+    assert await _food_count(session, 1) == 1
+
+
+@pytest.mark.parametrize("bad_id", [9999, None, "abc"])
+async def test_feed_pet_refuses_a_bad_pet_id(session, bad_id):
+    await _grant_food(session)
+    assert (await pet_service.feed_pet(session, 1, bad_id, now=NOW))["status"] == "not_found"
+
+
+async def test_feed_cooldown_is_one_hour_by_default(session):
+    pet = await _seed_pet(session, last_fed_at=NOW - timedelta(minutes=59))
+    await _grant_food(session)
+
+    assert (await pet_service.feed_pet(session, 1, pet.id, now=NOW))["status"] == "too_soon"
+
+    pet.last_fed_at = NOW - timedelta(hours=1)
+    await session.flush()
+    assert (await pet_service.feed_pet(session, 1, pet.id, now=NOW))["status"] == "fed"
+
+
+async def test_feed_cooldown_is_configurable(session):
+    await _config(session, FEED_COOLDOWN_KEY, 3)
+    pet = await _seed_pet(session, last_fed_at=NOW - timedelta(hours=2))
+    await _grant_food(session)
+
+    result = await pet_service.feed_pet(session, 1, pet.id, now=NOW)
+    assert result["status"] == "too_soon"
+    assert result["remaining_seconds"] == 3600
+
+
+async def test_feed_cooldown_zero_disables_the_spam_guard(session):
+    await _config(session, FEED_COOLDOWN_KEY, 0)
+    pet = await _seed_pet(session, last_fed_at=NOW - timedelta(seconds=5))
+    await _grant_food(session)
+
+    assert (await pet_service.feed_pet(session, 1, pet.id, now=NOW))["status"] == "fed"
+
+
+async def test_feed_xp_amount_is_configurable(session):
+    await _config(session, "pet_feed_xp_amount", 120)
+    pet = await _seed_pet(session)
+    await _grant_food(session)
+
+    result = await pet_service.feed_pet(session, 1, pet.id, now=NOW)
+
+    assert result["xp"] == 120
+    assert result["xp_added"] == 120
+
+
+async def test_adult_threshold_is_configurable(session):
+    await _config(session, "pet_adult_xp_required", 50)  # default is 500
+    pet = await _seed_pet(session)
+    await _grant_food(session)
+
+    result = await pet_service.feed_pet(session, 1, pet.id, now=NOW)
+
+    assert result["status"] == "evolved"
+    assert result["required"] == 50
+
+
+async def test_feed_pet_only_spends_the_callers_food(session):
+    pet = await _seed_pet(session, pet_type="owl")
+    await _grant_food(session, user_id=2, quantity=5)
+
+    assert (await pet_service.feed_pet(session, 1, pet.id, now=NOW))["status"] == "no_food"
+    # The other player's inventory keeps its food and does not feed this pet.
+    pet.last_fed_at = None
+    await _grant_food(session, user_id=1, quantity=1)
+    assert (await pet_service.feed_pet(session, 1, pet.id, now=NOW))["status"] == "fed"
+    assert await _food_count(session, 2) == 5
+
+
+# ---------------------------------------------------------------------------
+# Reading helpers
+# ---------------------------------------------------------------------------
+
+async def test_list_pets_is_scoped_per_user(session):
+    await _seed_pet(session, user_id=1, pet_type="cat", custom_name="ملوس")
+    await _seed_pet(session, user_id=1, pet_type="owl", custom_name="پشمک")
+    await _seed_pet(session, user_id=2, pet_type="dog")
+
+    mine = await pet_service.list_pets(session, 1)
+    assert [pet.pet_type for pet in mine] == ["cat", "owl"]
+    assert len(await pet_service.list_pets(session, 2)) == 1
+
+
+def test_pet_display_name_falls_back_for_an_unnamed_pet():
+    assert pet_service.pet_display_name(SimpleNamespace(custom_name="ملوس")) == "ملوس"
+    assert (
+        pet_service.pet_display_name(SimpleNamespace(custom_name=None))
+        == pet_service.UNNAMED_PET_FA
+    )
+
+
+def test_xp_progress_is_capped():
+    pet = SimpleNamespace(xp=150)
+    assert pet_service.xp_progress(pet, 500) == {"xp": 150, "required": 500, "percent": 30}
+    assert pet_service.xp_progress(SimpleNamespace(xp=900), 500)["percent"] == 100
+    assert pet_service.xp_progress(SimpleNamespace(xp=0), 0)["required"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Handlers — the menu
+# ---------------------------------------------------------------------------
+
+async def test_my_pets_command_is_registered_with_aliases():
+    registered = [
+        handler
+        for handler in pets.router.message.handlers
+        if handler.callback is pets.handle_my_pets
+    ]
+    assert registered
+
+    for text in ("/mypets", "سیب پت", "پت من", "پت", "سیب پت"):
+        assert text == "/mypets" or text in pets.PET_MENU_ALIASES
+        event = Message(
+            message_id=1,
+            date=datetime.now(timezone.utc),
+            chat=Chat(id=1, type="private"),
+            from_user=TelegramUser(id=1, first_name="player", is_bot=False),
+            text=text,
+        )
+        matched = False
+        for entry in registered:
+            if all([await flt.call(event, bot=None) for flt in entry.filters]):
+                matched = True
+                break
+        assert matched, f"no filter matched {text!r}"
+
+
+def test_pets_router_is_registered_in_the_dispatcher():
+    from sib.handlers import register_all_handlers
+
+    included = []
+    with patch.object(Dispatcher, "include_router", side_effect=included.append):
+        register_all_handlers(Dispatcher())
+    assert pets.router in included
+
+
+async def test_menu_without_pets_says_to_hunt(db, state):
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=1, is_bot=False),
+        answer=AsyncMock(),
+        reply=AsyncMock(),
+    )
+    await pets.handle_my_pets(message, state)
+
+    message.answer.assert_awaited_once()
+    assert "سیب شکار" in message.answer.await_args.args[0]
+    assert message.answer.await_args.kwargs.get("reply_markup") is None
+
+
+async def test_menu_lists_every_pet_as_a_button(db, state):
+    async with db.begin() as session:
+        session.add(UserPet(user_id=1, pet_type="owl", custom_name="پشمک", xp=10))
+        session.add(UserPet(user_id=1, pet_type="cat", custom_name=None, xp=0))
+
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=1, is_bot=False),
+        answer=AsyncMock(),
+        reply=AsyncMock(),
+    )
+    await pets.handle_my_pets(message, state)
+
+    keyboard = message.answer.await_args.kwargs["reply_markup"]
+    buttons = [row[0] for row in keyboard.inline_keyboard]
+    assert len(buttons) == 2
+    assert buttons[0].text == "🦉 جغد (پشمک)"
+    assert buttons[1].text == "🐱 گربه (بی‌نام)"
+    assert [b.callback_data for b in buttons] == ["pet_view:1", "pet_view:2"]
+
+
+async def test_menu_clears_a_half_finished_naming_state(db, state):
+    await state.set_state(PetStates.waiting_for_name)
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=1, is_bot=False),
+        answer=AsyncMock(),
+        reply=AsyncMock(),
+    )
+    await pets.handle_my_pets(message, state)
+    assert await state.get_state() is None
+
+
+# ---------------------------------------------------------------------------
+# Handlers — the pet profile
+# ---------------------------------------------------------------------------
+
+def _callback(data: str, *, clicker_id: int = 1, message_id: int = 5, with_photo=True):
+    return SimpleNamespace(
+        data=data,
+        from_user=SimpleNamespace(id=clicker_id, is_bot=False),
+        answer=AsyncMock(),
+        message=SimpleNamespace(
+            message_id=message_id,
+            chat=SimpleNamespace(id=1),
+            photo=[SimpleNamespace(file_id="f")] if with_photo else None,
+            answer=AsyncMock(),
+            answer_photo=AsyncMock(),
+        ),
+    )
+
+
+def _bot():
+    return SimpleNamespace(
+        edit_message_media=AsyncMock(),
+        edit_message_caption=AsyncMock(),
+    )
+
+
+async def test_pet_view_shows_the_baby_profile(db, state):
+    async with db.begin() as session:
+        pet = UserPet(user_id=1, pet_type="owl", custom_name="پشمک", xp=150)
+        session.add(pet)
+        await session.flush()
+        pet_id = pet.id
+
+    callback = _callback(f"pet_view:{pet_id}")
+    bot = _bot()
+    await pets.handle_pet_view(callback, state, bot)
+
+    bot.edit_message_media.assert_awaited_once()
+    edited = bot.edit_message_media.await_args.kwargs
+    assert str(edited["media"].media.path) == str(pets.ASSET_DIR / "owl_baby.jpg")
+    caption = edited["media"].caption
+    assert "پشمک" in caption
+    assert "جغد" in caption
+    assert f"{fa_digits(150)}/{fa_digits(500)}" in caption
+    assert "بچه" in caption
+    # The feed button points at this pet.
+    feed_row = edited["reply_markup"].inline_keyboard[0][0]
+    assert feed_row.text == pets.FEED_BUTTON_TEXT
+    assert feed_row.callback_data == f"pet_feed:{pet_id}"
+
+
+async def test_pet_view_shows_the_adult_art_and_hides_the_feed_button(db, state):
+    async with db.begin() as session:
+        pet = UserPet(
+            user_id=1, pet_type="cat", custom_name="ملوس", xp=520, is_adult=True
+        )
+        session.add(pet)
+        await session.flush()
+        pet_id = pet.id
+
+    callback = _callback(f"pet_view:{pet_id}")
+    bot = _bot()
+    await pets.handle_pet_view(callback, state, bot)
+
+    edited = bot.edit_message_media.await_args.kwargs
+    assert str(edited["media"].media.path) == str(pets.ASSET_DIR / "cat_adult.jpg")
+    assert "بالغ" in edited["media"].caption
+    buttons = [b for row in edited["reply_markup"].inline_keyboard for b in row]
+    assert all(b.callback_data != f"pet_feed:{pet_id}" for b in buttons)
+
+
+async def test_pet_view_refuses_another_players_pet(db, state):
+    async with db.begin() as session:
+        pet = UserPet(user_id=2, pet_type="dog", custom_name="rex")
+        session.add(pet)
+        await session.flush()
+        pet_id = pet.id
+
+    callback = _callback(f"pet_view:{pet_id}", clicker_id=1)
+    bot = _bot()
+    await pets.handle_pet_view(callback, state, bot)
+
+    bot.edit_message_media.assert_not_awaited()
+    assert callback.answer.await_args.kwargs["show_alert"] is True
+
+
+@pytest.mark.parametrize("raw", ["9999", "abc"])
+async def test_pet_view_handles_unknown_pets(db, state, raw):
+    callback = _callback(f"pet_view:{raw}")
+    bot = _bot()
+    await pets.handle_pet_view(callback, state, bot)
+
+    bot.edit_message_media.assert_not_awaited()
+    assert callback.answer.await_args.kwargs["show_alert"] is True
+
+
+async def test_pet_view_menu_reopens_the_list(db, state):
+    callback = _callback("pet_view:menu")
+    bot = _bot()
+    await pets.handle_pet_view(callback, state, bot)
+
+    callback.message.answer.assert_awaited_once()
+    assert "سیب شکار" in callback.message.answer.await_args.args[0]
+
+
+# ---------------------------------------------------------------------------
+# Handlers — feeding
+# ---------------------------------------------------------------------------
+
+async def test_feed_callback_without_food(db, state):
+    async with db.begin() as session:
+        pet = UserPet(user_id=1, pet_type="cat", custom_name="ملوس")
+        session.add(pet)
+        await session.flush()
+        pet_id = pet.id
+
+    callback = _callback(f"pet_feed:{pet_id}")
+    bot = _bot()
+    await pets.handle_pet_feed(callback, state, bot)
+
+    assert callback.answer.await_args.args[0] == pets.FEED_NO_FOOD_ALERT
+    assert callback.answer.await_args.kwargs["show_alert"] is True
+    bot.edit_message_media.assert_not_awaited()
+
+
+async def test_feed_callback_when_the_pet_is_full(db, state):
+    async with db.begin() as session:
+        pet = UserPet(
+            user_id=1,
+            pet_type="cat",
+            custom_name="ملوس",
+            # The handler runs on the real clock, so anchor to it.
+            last_fed_at=datetime.now(timezone.utc) - timedelta(minutes=10),
+        )
+        session.add(pet)
+        await session.flush()
+        pet_id = pet.id
+        session.add(UserItem(user_id=1, item_key="pet_food", quantity=2))
+
+    callback = _callback(f"pet_feed:{pet_id}")
+    bot = _bot()
+    await pets.handle_pet_feed(callback, state, bot)
+
+    assert callback.answer.await_args.args[0] == pets.FEED_TOO_SOON_ALERT
+    bot.edit_message_media.assert_not_awaited()
+    async with db.begin() as session:
+        assert await ItemService.get_total(session, 1, "pet_food") == 2
+
+
+async def test_feed_callback_updates_the_caption(db, state):
+    async with db.begin() as session:
+        pet = UserPet(user_id=1, pet_type="cat", custom_name="ملوس", xp=100)
+        session.add(pet)
+        await session.flush()
+        pet_id = pet.id
+        session.add(UserItem(user_id=1, item_key="pet_food", quantity=1))
+
+    callback = _callback(f"pet_feed:{pet_id}")
+    bot = _bot()
+    await pets.handle_pet_feed(callback, state, bot)
+
+    # Art stays the baby's; the caption shows the new XP.
+    bot.edit_message_media.assert_awaited_once()
+    edited = bot.edit_message_media.await_args.kwargs
+    assert str(edited["media"].media.path) == str(pets.ASSET_DIR / "cat_baby.jpg")
+    assert f"{fa_digits(150)}/{fa_digits(500)}" in edited["media"].caption
+    assert "🍖" in edited["media"].caption
+
+    async with db.begin() as session:
+        assert await ItemService.get_total(session, 1, "pet_food") == 0
+        stored = await session.get(UserPet, pet_id)
+        assert stored.xp == 150
+
+
+async def test_feed_callback_evolves_and_swaps_the_art(db, state):
+    async with db.begin() as session:
+        pet = UserPet(user_id=1, pet_type="owl", custom_name="پشمک", xp=470)
+        session.add(pet)
+        await session.flush()
+        pet_id = pet.id
+        session.add(UserItem(user_id=1, item_key="pet_food", quantity=1))
+
+    callback = _callback(f"pet_feed:{pet_id}")
+    bot = _bot()
+    await pets.handle_pet_feed(callback, state, bot)
+
+    edited = bot.edit_message_media.await_args.kwargs
+    assert str(edited["media"].media.path) == str(pets.ASSET_DIR / "owl_adult.jpg")
+    caption = edited["media"].caption
+    assert "تبریک" in caption
+    assert "بالغ شد" in caption
+    # The feed button is gone once the pet is an adult.
+    buttons = [b for row in edited["reply_markup"].inline_keyboard for b in row]
+    assert all("pet_feed" not in (b.callback_data or "") for b in buttons)
+
+    async with db.begin() as session:
+        stored = await session.get(UserPet, pet_id)
+        assert stored.is_adult is True
+
+
+async def test_feed_callback_refuses_another_players_pet(db, state):
+    async with db.begin() as session:
+        pet = UserPet(user_id=2, pet_type="dog", custom_name="rex")
+        session.add(pet)
+        await session.flush()
+        pet_id = pet.id
+        session.add(UserItem(user_id=1, item_key="pet_food", quantity=1))
+
+    callback = _callback(f"pet_feed:{pet_id}", clicker_id=1)
+    bot = _bot()
+    await pets.handle_pet_feed(callback, state, bot)
+
+    bot.edit_message_media.assert_not_awaited()
+    assert callback.answer.await_args.kwargs["show_alert"] is True
+
+    async with db.begin() as session:
+        stored = await session.get(UserPet, pet_id)
+        assert stored.xp == 0
+        assert await ItemService.get_total(session, 1, "pet_food") == 1
+
+
+async def test_feed_callback_is_registered():
+    registered = [
+        handler
+        for handler in pets.router.callback_query.handlers
+        if handler.callback is pets.handle_pet_feed
+    ]
+    assert registered
+    event = SimpleNamespace(data="pet_feed:1")
+    assert all([await flt.call(event, bot=None) for flt in registered[0].filters])
+
+
+# ---------------------------------------------------------------------------
+# Artwork
+# ---------------------------------------------------------------------------
+
+def test_pet_food_artwork_is_bundled_and_full_bleed():
+    """The shop card resolves ``assets/items/pet_food.jpg`` (1024², no frame)."""
+    from PIL import Image
+
+    from sib.services.assets import bundled_item_path
+
+    path = bundled_item_path("pet_food")
+    assert path is not None
+    assert path.suffix == ".jpg"
+
+    with Image.open(path) as image:
+        assert image.size == (1024, 1024)
+        assert image.mode == "RGB"
+        pixels = image.load()
+        edges = [pixels[x, 0] for x in range(0, 1024, 64)]
+        edges += [pixels[x, 1023] for x in range(0, 1024, 64)]
+        edges += [pixels[0, y] for y in range(0, 1024, 64)]
+        edges += [pixels[1023, y] for y in range(0, 1024, 64)]
+    assert not any(min(pixel) > 238 and max(pixel) - min(pixel) < 10 for pixel in edges)

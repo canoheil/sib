@@ -593,7 +593,11 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     "rocket_max_bet": 5000,
     "rocket_cooldown_seconds": 30,
     "rocket_house_edge": 5,
-    # Pets (migration 076).
+    # Pets (migration 076). The last two keys are default-only: they were added
+    # after 076 (no seed migration), so they simply fall back to these values
+    # until an operator overrides them in system_config.
+    "pet_food_price": 100,
+    "pet_feed_cooldown_hours": 1,
     "pet_hunt_cooldown_hours": 2,
     "pet_feed_xp_amount": 50,
     "pet_adult_xp_required": 500,
