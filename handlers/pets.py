@@ -80,7 +80,7 @@ HUNT_ALIASES = frozenset(
     for yeh in (_PERSIAN_YEH, _ARABIC_YEH)
 )
 
-#: Callback payload of the tracking game: ``hunt_track:{step}:{choice}``.
+#: Callback payload of the tracking game: ``hunt_track:step{step}:{choice}``.
 HUNT_TRACK_PREFIX = "hunt_track:"
 PET_VIEW_PREFIX = "pet_view:"
 PET_FEED_PREFIX = "pet_feed:"
@@ -237,13 +237,13 @@ def baby_artwork(pet_type: str) -> Path:
 
 
 def tracking_keyboard(step: int) -> InlineKeyboardMarkup:
-    """The two buttons of one tracking step (``hunt_track:{step}:{choice}``)."""
+    """The two buttons of one tracking step (``hunt_track:step{step}:{choice}``)."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text=text,
-                    callback_data=f"{HUNT_TRACK_PREFIX}{int(step)}:{choice}",
+                    callback_data=f"{HUNT_TRACK_PREFIX}step{int(step)}:{choice}",
                 )
                 for choice, text in TRACK_BUTTONS[int(step)].items()
             ]
@@ -252,7 +252,7 @@ def tracking_keyboard(step: int) -> InlineKeyboardMarkup:
 
 
 def parse_hunt_track_callback(data: str | None) -> tuple[int, str] | None:
-    """``hunt_track:{step}:{choice}`` → ``(step, choice)``.
+    """``hunt_track:step{step}:{choice}`` → ``(step, choice)``.
 
     Returns ``None`` for anything malformed: a missing prefix, a step outside
     ``1..3`` or a choice the step does not offer. The step is validated against
@@ -264,8 +264,10 @@ def parse_hunt_track_callback(data: str | None) -> tuple[int, str] | None:
     if len(parts) != 2:
         return None
     raw_step, choice = parts
+    if not raw_step.startswith("step"):
+        return None
     try:
-        step = int(raw_step)
+        step = int(raw_step[len("step"):])
     except (TypeError, ValueError):
         return None
     if step not in TRACK_BUTTONS or choice not in TRACK_BUTTONS[step]:
@@ -436,7 +438,7 @@ async def handle_hunt(message: Message, state: FSMContext) -> None:
 
 
 # ---------------------------------------------------------------------------
-# The tracking mini-game — «hunt_track:{step}:{choice}»
+# The tracking mini-game — «hunt_track:step{step}:{choice}»
 # ---------------------------------------------------------------------------
 
 @router.callback_query(F.data.startswith(HUNT_TRACK_PREFIX))

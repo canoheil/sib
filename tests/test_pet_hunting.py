@@ -649,8 +649,8 @@ async def test_hunt_handler_opens_the_encounter_and_starts_tracking(
     buttons = keyboard.inline_keyboard[0]
     assert [b.text for b in buttons] == ["⬅️ سمت چپ", "➡️ سمت راست"]
     assert [b.callback_data for b in buttons] == [
-        "hunt_track:1:left",
-        "hunt_track:1:right",
+        "hunt_track:step1:left",
+        "hunt_track:step1:right",
     ]
 
     # The encounter starts the tracking FSM with the rolled hidden path.
@@ -816,7 +816,7 @@ async def test_track_step1_advances_to_step2(db, state, monkeypatch):
     monkeypatch.setattr(pets.pet_service, "execute_hunt", fake_execute)
     await _start_tracking(state)
 
-    callback = _callback("hunt_track:1:right")
+    callback = _callback("hunt_track:step1:right")
     bot = _bot()
     await pets.handle_hunt_track(callback, state, bot)
 
@@ -830,8 +830,8 @@ async def test_track_step1_advances_to_step2(db, state, monkeypatch):
     buttons = edited["reply_markup"].inline_keyboard[0]
     assert [b.text for b in buttons] == ["🕳️ غار تاریک", "🌊 رودخانه"]
     assert [b.callback_data for b in buttons] == [
-        "hunt_track:2:cave",
-        "hunt_track:2:river",
+        "hunt_track:step2:cave",
+        "hunt_track:step2:river",
     ]
 
     data = await state.get_data()
@@ -846,7 +846,7 @@ async def test_track_step2_advances_to_step3(db, state, monkeypatch):
     await _start_tracking(state)
     await state.update_data(choices=["right"])
 
-    callback = _callback("hunt_track:2:cave")
+    callback = _callback("hunt_track:step2:cave")
     bot = _bot()
     await pets.handle_hunt_track(callback, state, bot)
 
@@ -856,8 +856,8 @@ async def test_track_step2_advances_to_step3(db, state, monkeypatch):
     buttons = edited["reply_markup"].inline_keyboard[0]
     assert [b.text for b in buttons] == ["🥅 همین حالا!", "⏳ کمی صبر می‌کنم"]
     assert [b.callback_data for b in buttons] == [
-        "hunt_track:3:now",
-        "hunt_track:3:wait",
+        "hunt_track:step3:now",
+        "hunt_track:step3:wait",
     ]
 
     data = await state.get_data()
@@ -882,7 +882,7 @@ async def test_track_finale_correct_path_raises_the_chance_and_catches(
     await _start_tracking(state, path=["right", "cave", "now"], base_chance=50)
     await state.update_data(choices=["right", "cave"])
 
-    callback = _callback("hunt_track:3:now")
+    callback = _callback("hunt_track:step3:now")
     bot = _bot()
     await pets.handle_hunt_track(callback, state, bot)
 
@@ -912,7 +912,7 @@ async def test_track_finale_wrong_path_lowers_the_chance_and_fails(
     await _start_tracking(state, path=["right", "cave", "now"], base_chance=50)
     await state.update_data(choices=["left", "river"])
 
-    callback = _callback("hunt_track:3:wait")
+    callback = _callback("hunt_track:step3:wait")
     bot = _bot()
     await pets.handle_hunt_track(callback, state, bot)
 
@@ -938,7 +938,7 @@ async def test_track_finale_partial_path_mixes_bonus_and_penalty(db, state, monk
     await _start_tracking(state, path=["right", "cave", "now"], base_chance=40)
     await state.update_data(choices=["right", "river"])
 
-    callback = _callback("hunt_track:3:wait")
+    callback = _callback("hunt_track:step3:wait")
     await pets.handle_hunt_track(callback, state, _bot())
 
     # right ✓ +10, river ✗ -10, wait ✗ -10 → 40 - 10 = 30.
@@ -957,7 +957,7 @@ async def test_track_finale_chance_is_clamped(db, state, monkeypatch):
     await _start_tracking(state, path=["right", "cave", "now"], base_chance=90)
     await state.update_data(choices=["right", "cave"])
 
-    callback = _callback("hunt_track:3:now")
+    callback = _callback("hunt_track:step3:now")
     await pets.handle_hunt_track(callback, state, _bot())
 
     assert captured["chance"] == pet_service.MAX_HUNT_CHANCE == 90
@@ -972,7 +972,7 @@ async def test_track_step_out_of_order_is_refused(db, state, monkeypatch):
     monkeypatch.setattr(pets.pet_service, "execute_hunt", fake_execute)
     await _start_tracking(state)
 
-    callback = _callback("hunt_track:2:cave")
+    callback = _callback("hunt_track:step2:cave")
     bot = _bot()
     await pets.handle_hunt_track(callback, state, bot)
 
@@ -987,11 +987,11 @@ async def test_track_step_out_of_order_is_refused(db, state, monkeypatch):
     [
         "hunt_track:",
         "hunt_track:1",
-        "hunt_track:1:left:extra",
-        "hunt_track:0:left",
-        "hunt_track:4:now",
-        "hunt_track:1:up",
-        "hunt_track:2:fly",
+        "hunt_track:step1:left:extra",
+        "hunt_track:step0:left",
+        "hunt_track:step4:now",
+        "hunt_track:step1:up",
+        "hunt_track:step2:fly",
         "hunt_track:abc:left",
     ],
 )
@@ -1008,7 +1008,7 @@ async def test_track_callback_rejects_malformed_data(db, state, data):
 async def test_track_callback_without_a_tracking_state_is_expired(db, state):
     """A stale button press after the game ended shows the gone alert."""
     bot = _bot()
-    callback = _callback("hunt_track:1:left")
+    callback = _callback("hunt_track:step1:left")
     await pets.handle_hunt_track(callback, state, bot)
 
     bot.edit_message_media.assert_not_awaited()
@@ -1021,7 +1021,7 @@ async def test_track_callback_after_the_naming_step_is_expired(db, state):
     await state.set_state(PetStates.waiting_for_name)
     await state.update_data(pet_id=5)
 
-    callback = _callback("hunt_track:1:left")
+    callback = _callback("hunt_track:step1:left")
     bot = _bot()
     await pets.handle_hunt_track(callback, state, bot)
 
@@ -1036,7 +1036,7 @@ async def test_track_callback_corrupt_state_is_cleared(db, state):
     await state.set_state(PetStates.tracking)
     await state.update_data(pet_type="owl", base_chance=50, path=["right"])
 
-    callback = _callback("hunt_track:1:right")
+    callback = _callback("hunt_track:step1:right")
     bot = _bot()
     await pets.handle_hunt_track(callback, state, bot)
 
@@ -1053,7 +1053,7 @@ async def test_track_finale_reports_a_cooldown(db, state, monkeypatch):
     await _start_tracking(state)
     await state.update_data(choices=["right", "cave"])
 
-    callback = _callback("hunt_track:3:now")
+    callback = _callback("hunt_track:step3:now")
     bot = _bot()
     await pets.handle_hunt_track(callback, state, bot)
 
@@ -1072,7 +1072,7 @@ async def test_track_step_edit_falls_back_to_a_reply_when_the_edit_fails(
     await _start_tracking(state)
 
     bot = SimpleNamespace(edit_message_media=AsyncMock(side_effect=RuntimeError("gone")))
-    callback = _callback("hunt_track:1:right")
+    callback = _callback("hunt_track:step1:right")
     await pets.handle_hunt_track(callback, state, bot)
 
     # The player still sees step 2, even if the message cannot be edited.
@@ -1091,7 +1091,7 @@ async def test_track_finale_falls_back_to_text_when_the_edit_fails(
     await state.update_data(choices=["right", "cave"])
 
     bot = SimpleNamespace(edit_message_media=AsyncMock(side_effect=RuntimeError("gone")))
-    callback = _callback("hunt_track:3:now")
+    callback = _callback("hunt_track:step3:now")
     await pets.handle_hunt_track(callback, state, bot)
 
     callback.message.answer.assert_awaited_once()
@@ -1125,7 +1125,7 @@ async def test_track_flow_runs_the_real_hunt_service(db, state, monkeypatch):
     bot = _bot()
     # Every click is wrong against the rolled path.
     for step, choice in ((1, "right"), (2, "cave"), (3, "now")):
-        callback = _callback(f"hunt_track:{step}:{choice}")
+        callback = _callback(f"hunt_track:step{step}:{choice}")
         await pets.handle_hunt_track(callback, state, bot)
 
     # Three edits in total: step 1 → step 2, step 2 → step 3, the finale.
@@ -1159,7 +1159,7 @@ async def test_track_flow_real_service_success_creates_the_baby(db, state, monke
 
     bot = _bot()
     for step, choice in ((1, "right"), (2, "cave"), (3, "now")):
-        callback = _callback(f"hunt_track:{step}:{choice}")
+        callback = _callback(f"hunt_track:step{step}:{choice}")
         await pets.handle_hunt_track(callback, state, bot)
 
     assert bot.edit_message_media.await_count == 3
@@ -1176,7 +1176,7 @@ async def test_track_callback_is_registered_on_the_router():
     ]
     assert registered
 
-    event = SimpleNamespace(data="hunt_track:1:left")
+    event = SimpleNamespace(data="hunt_track:step1:left")
     assert all(
         [await flt.call(event, bot=None) for flt in registered[0].filters]
     ) is True
