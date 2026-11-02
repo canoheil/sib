@@ -17,8 +17,8 @@ Lifecycle
 * Wanted level 0 (a clean thief): the FIRST theft settles instantly, 100 %
   guaranteed, and raises the level to one star.
 * Wanted level 1-5: a theft is *pending*; the caller opens the arrest window
-  and later calls :func:`resolve_pending_theft`. The chance drops by 10 % per
-  star (L1 90 %, L2 80 %, L3 70 %, L4 60 %, L5 50 %).
+  and later calls :func:`resolve_pending_theft`. The chance drops by 15 % per
+  star (L1 85 %, L2 70 %, L3 55 %, L4 40 %, L5 25 %).
 * Being arrested pays the arrester a bot-funded bounty per star and jails the
   thief for ``theft_jail_hours``; the victim keeps their apples.
 """
@@ -28,10 +28,10 @@ import random
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sib.database.models import UserWantedState
+from sib.database.models import AppleTransaction, UserWantedState
 from sib.services.apple_wallet import (
     AppleWalletService,
     InsufficientFundsException,
@@ -42,6 +42,54 @@ from sib.services.lock_order import lock_user_rows_in_order
 TEHRAN = ZoneInfo("Asia/Tehran")
 logger = logging.getLogger(__name__)
 
+# Night limit (00:00-08:00 Asia/Tehran, once per window).
+# Configurable via system_config (theft_night_start_hour, theft_night_end_hour,
+# theft_night_max_attempts) with hardcoded defaults below. No new migration is
+# required for the basic 00-08, 1 attempt rule; operator overrides via
+# system_config are supported opportunistically without a seed migration.
+NIGHT_START_HOUR_DEFAULT = 0
+NIGHT_END_HOUR_DEFAULT = 8
+NIGHT_MAX_ATTEMPTS_DEFAULT = 1
+
+
+async def _get_night_int(session: AsyncSession, key: str, default: int) -> int:
+    try:
+        return int(await ConfigService.get_int(session, key))
+    except Exception:
+        return default
+
+
+def _is_night_time(now: datetime, start_hour: int, end_hour: int) -> bool:
+    hour = now.hour
+    if start_hour == end_hour:
+        return False
+    if start_hour < end_hour:
+        return start_hour <= hour < end_hour
+    return hour >= start_hour or hour < end_hour
+
+
+def _night_window_start(now: datetime, start_hour: int, end_hour: int) -> datetime:
+    if start_hour < end_hour:
+        return now.replace(hour=start_hour, minute=0, second=0, microsecond=0)
+    if start_hour > end_hour:
+        if now.hour >= start_hour:
+            return now.replace(hour=start_hour, minute=0, second=0, microsecond=0)
+        prev = now - timedelta(days=1)
+        return prev.replace(hour=start_hour, minute=0, second=0, microsecond=0)
+    return now.replace(hour=start_hour, minute=0, second=0, microsecond=0)
+
+
+async def _night_config(session: AsyncSession) -> tuple[int, int, int]:
+    start = await _get_night_int(session, "theft_night_start_hour", NIGHT_START_HOUR_DEFAULT)
+    end = await _get_night_int(session, "theft_night_end_hour", NIGHT_END_HOUR_DEFAULT)
+    max_attempts = await _get_night_int(
+        session, "theft_night_max_attempts", NIGHT_MAX_ATTEMPTS_DEFAULT
+    )
+    start = max(0, min(23, int(start)))
+    end = max(0, min(23, int(end)))
+    max_attempts = max(0, int(max_attempts))
+    return start, end, max_attempts
+
 MAX_WANTED_LEVEL = 5
 # Only a CLEAN thief (0 stars) settles instantly. From one star on, every theft
 # is a pending heist whose arrest window must open first.
@@ -49,8 +97,8 @@ INSTANT_THEFT_MAX_LEVEL = 0
 # Wanted stars reset this long after the last successful theft.
 WANTED_EXPIRY_HOURS = 24
 # Chance a pending theft succeeds when nobody arrests the thief in time:
-# one star destroys 10 % of the odds, L1 90 % ... L5 50 %.
-SUCCESS_PERCENT_BY_LEVEL = {1: 90, 2: 80, 3: 70, 4: 60, 5: 50}
+# one star destroys 15 % of the odds, L1 85 % ... L5 25 %.
+SUCCESS_PERCENT_BY_LEVEL = {1: 85, 2: 70, 3: 55, 4: 40, 5: 25}
 # Wallet ledger reasons. Neither is golden-hour eligible.
 REASON_STOLEN = "theft_stolen"
 REASON_ARREST_REWARD = "theft_arrest_reward"
@@ -74,7 +122,7 @@ def success_percent(level: int) -> int:
     """Payout chance of a pending theft at ``level`` wanted stars.
 
     A clean thief (0 stars) never waits for the window and always succeeds, so
-    the rate above ``MAX_WANTED_LEVEL`` never drops below 50 %.
+    the rate above ``MAX_WANTED_LEVEL`` never drops below 25 %.
     """
     if int(level) <= 0:
         return 100
@@ -224,6 +272,30 @@ async def initiate_theft(
 
     if _is_jailed(state, now):
         return {"status": "jailed"}
+
+    # Night limit: between 00:00-08:00 Tehran each user may steal only once
+    # per 8-hour window, regardless of cooldown. Checked via last_stolen_at
+    # (instant thefts) and for max_attempts>1 via ledger count in window.
+    start_hour, end_hour, max_attempts = await _night_config(session)
+    if max_attempts > 0 and _is_night_time(now, start_hour, end_hour):
+        window_start = _night_window_start(now, start_hour, end_hour)
+        if max_attempts == 1:
+            if state is not None and state.last_stolen_at is not None:
+                if _as_utc(state.last_stolen_at) >= _as_utc(window_start):
+                    return {"status": "night_limit"}
+        else:
+            window_start_utc = _as_utc(window_start).replace(tzinfo=None)
+            count = await session.scalar(
+                select(func.count(AppleTransaction.id)).where(
+                    AppleTransaction.user_id == thief_id,
+                    AppleTransaction.reason == REASON_STOLEN,
+                    AppleTransaction.amount > 0,
+                    AppleTransaction.created_at >= window_start_utc,
+                )
+            )
+            if (count or 0) >= max_attempts:
+                return {"status": "night_limit"}
+
     if _in_cooldown(state, now, cooldown_minutes):
         return {"status": "cooldown"}
 

@@ -213,7 +213,7 @@ async def test_wanted_alias_سیب_جرم_matches_the_same_handler():
     assert not handler.is_valid_trigger(handler.WANTED_PATTERN, "سیب جرم من")
 
 
-@pytest.mark.parametrize("level,rate", [(1, 90), (2, 80), (3, 70), (4, 60), (5, 50)])
+@pytest.mark.parametrize("level,rate", [(1, 85), (2, 70), (3, 55), (4, 40), (5, 25)])
 async def test_wanted_for_a_wanted_player_shows_rate_and_expiry(db, monkeypatch, level, rate):
     moment = datetime(2026, 10, 30, 12, 0, tzinfo=timezone.utc)
     await _seed(
@@ -277,7 +277,7 @@ def test_render_status_is_pure_and_formats_durations():
     text = handler.render_status(
         wanted, wanted_expires_at=now + timedelta(minutes=12), now=now
     )
-    assert "شانس موفقیت در دزدی بعدی: ۵۰%" in text
+    assert "شانس موفقیت در دزدی بعدی: ۲۵%" in text
     assert "۱۲ دقیقه باقی‌مانده" in text
 
     expired = handler.render_status(wanted, wanted_expires_at=now - timedelta(minutes=1), now=now)
@@ -685,3 +685,66 @@ def test_router_is_registered_and_triggers_are_anchored():
         assert not handler.is_valid_trigger(handler.THEFT_PATTERN, text)
     assert handler.is_valid_trigger(handler.ARREST_PATTERN, "دستگیری")
     assert not handler.is_valid_trigger(handler.ARREST_PATTERN, "دستگیری کن")
+
+
+# ---------------------------------------------------------------------------
+# Night limit handler: 00:00-08:00 Tehran, once per window
+# ---------------------------------------------------------------------------
+
+async def test_handler_night_limit_blocks_second_theft_at_01(db, monkeypatch):
+    """Mock time to 01:00 — first theft succeeds, second is night_limit Persian reply."""
+    from zoneinfo import ZoneInfo
+
+    TEHRAN = ZoneInfo("Asia/Tehran")
+    night = datetime(2026, 10, 30, 1, 0, tzinfo=TEHRAN)
+    monkeypatch.setattr(theft, "_now", lambda: night)
+    await _seed(db)
+
+    msg1 = _message(target=VICTIM_ID)
+    await handler.handle_theft(msg1)
+    # First theft in night window still succeeds (instant for clean thief)
+    msg1.reply_photo.assert_awaited_once()
+    assert "دزدی موفق" in msg1.reply_photo.await_args.kwargs["caption"]
+
+    # Second theft same window, even after cooldown, should be night_limit
+    later = datetime(2026, 10, 30, 1, 30, tzinfo=TEHRAN)
+    monkeypatch.setattr(theft, "_now", lambda: later)
+    msg2 = _message(target=VICTIM_ID)
+    await handler.handle_theft(msg2)
+    msg2.reply.assert_awaited_once_with(handler.NIGHT_LIMIT_TEXT)
+    msg2.reply_photo.assert_not_awaited()
+    # Message is exactly the required Persian text
+    assert handler.NIGHT_LIMIT_TEXT == "🌙 در ساعات شب (۱۲ شب تا ۸ صبح) فقط یک بار می‌توانید دزدی کنید. برای دزدی‌های بیشتر، صبح بیایید!"
+
+
+async def test_handler_morning_theft_cooldown_at_09(db, monkeypatch):
+    """Mock time to 09:00 — theft works normally, cooldown applies."""
+    from zoneinfo import ZoneInfo
+
+    TEHRAN = ZoneInfo("Asia/Tehran")
+    morning = datetime(2026, 10, 30, 9, 0, tzinfo=TEHRAN)
+    monkeypatch.setattr(theft, "_now", lambda: morning)
+    await _seed(db)
+
+    msg1 = _message(target=VICTIM_ID)
+    await handler.handle_theft(msg1)
+    msg1.reply_photo.assert_awaited_once()
+
+    # Immediate second in morning -> cooldown, not night_limit
+    msg2 = _message(target=VICTIM_ID)
+    await handler.handle_theft(msg2)
+    msg2.reply.assert_awaited_once_with(handler.COOLDOWN_TEXT)
+    msg2.reply_photo.assert_not_awaited()
+
+    # After cooldown, morning theft is allowed again (pending at level 1)
+    later = datetime(2026, 10, 30, 9, 30, tzinfo=TEHRAN)
+    monkeypatch.setattr(theft, "_now", lambda: later)
+    window = WindowFake()
+    monkeypatch.setattr(handler, "_arrest_window", window)
+    msg3 = _message(target=VICTIM_ID)
+    task = asyncio.create_task(handler.handle_theft(msg3))
+    await asyncio.sleep(0.05)
+    assert msg3.reply_photo.await_count == 1
+    assert "دزدی در جریان است" in msg3.reply_photo.await_args.kwargs["caption"]
+    window.release.set()
+    await task

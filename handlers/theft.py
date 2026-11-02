@@ -67,6 +67,7 @@ JAILED_LINE = "⛓️ شما در زندان هستید! زمان آزادی: {r
 
 JAILED_TEXT = "⛓️ شما در زندان هستید و نمی‌توانید دزدی کنید."
 COOLDOWN_TEXT = "⏳ هنوز زمان دزدی بعدی نرسیده است."
+NIGHT_LIMIT_TEXT = "🌙 در ساعات شب (۱۲ شب تا ۸ صبح) فقط یک بار می‌توانید دزدی کنید. برای دزدی‌های بیشتر، صبح بیایید!"
 INSUFFICIENT_TEXT = "موجودی قربانی برای دزدی کافی نیست."
 SELF_TEXT = "😅 نمی‌توانی از خودت دزدی کنی!"
 REPLY_REQUIRED_TEXT = "🕵️ برای دزدی روی پیام قربانی ریپلای کن و بنویس «دزدی سیبی»."
@@ -122,7 +123,7 @@ def next_theft_success_chance(level: int) -> int:
     """Chance the thief's *next* theft pays out, in percent.
 
     A clean thief (0 stars) settles instantly, so 100 %. From one star on the
-    heist waits for the arrest window and the odds drop 10 % per star.
+    heist waits for the arrest window and the odds drop 15 % per star.
     """
     return theft_service.success_percent(level)
 
@@ -281,6 +282,9 @@ async def handle_theft(message: Message) -> None:
 
     if status == "jailed":
         await message.reply(JAILED_TEXT)
+        return
+    if status == "night_limit":
+        await message.reply(NIGHT_LIMIT_TEXT)
         return
     if status == "cooldown":
         await message.reply(COOLDOWN_TEXT)
