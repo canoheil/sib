@@ -7,20 +7,26 @@ Flow
 ----
 1. ``/hunt`` or the plain-text aliases «سیب شکار» / «شکار سیبی» open an
    *encounter*: the service validates the cooldown and the pet caps and rolls
-   which wild pet the player meets. The adult artwork is sent with the
-   player's card power, the resulting chance and a single "🏹 شکار!" button.
-2. The button's callback resolves the hunt (:func:`pet_service.execute_hunt`)
-   and edits the same message: the escaping-pet artwork on a miss, or the
+   which wild pet the player meets. The forest plate is sent and the
+   multi-step *tracking mini-game* begins (Phase 4).
+2. The tracking game asks three questions — which side the rustling comes
+   from, where the footprints lead, when to throw the net. The bot has rolled
+   a hidden correct path behind the scenes; every click edits the same
+   message, and each correct choice adds 10 % to the base chance while each
+   wrong one subtracts 10 % (see
+   :func:`pet_service.tracking_adjusted_chance`).
+3. The final click rolls :func:`pet_service.execute_hunt` with the adjusted
+   chance and edits the message: the escaping-pet artwork on a miss, or the
    baby's artwork on success plus the naming prompt.
-3. ``PetStates.waiting_for_name`` then captures the next text message as the
+4. ``PetStates.waiting_for_name`` then captures the next text message as the
    pet's name; an invalid name keeps the state so the player can retry.
-4. «سیب پت» (``/mypets``) lists the player's pets as buttons; each one opens
+5. «سیب پت» (``/mypets``) lists the player's pets as buttons; each one opens
    a profile with its artwork, XP progress and a «🍖 غذا دادن» button that
    spends one ``pet_food`` from the inventory and eventually evolves the pet.
 
-Only the player who opened the encounter may press its button, and the roll
-uses the server-side chance rather than the number echoed in the callback
-data (see :func:`handle_hunt_callback`).
+Only the player who opened the encounter may press its buttons: the tracking
+state lives in their own FSM context, and the roll uses a server-side chance
+rather than any client-visible number (see :func:`handle_hunt_track`).
 """
 
 import html
@@ -74,10 +80,18 @@ HUNT_ALIASES = frozenset(
     for yeh in (_PERSIAN_YEH, _ARABIC_YEH)
 )
 
-#: Callback payload of the hunt button: ``pet_hunt:{user_id}:{pet_type}:{chance}``.
-HUNT_CALLBACK_PREFIX = "pet_hunt:"
+#: Callback payload of the tracking game: ``hunt_track:{step}:{choice}``.
+HUNT_TRACK_PREFIX = "hunt_track:"
 PET_VIEW_PREFIX = "pet_view:"
 PET_FEED_PREFIX = "pet_feed:"
+
+#: FUTURE EXPANSION — Group Raid (Boss Pet): a future phase will add a
+#: shared raid encounter against a boss pet. When it lands, the tracking
+#: mini-game below is the natural extension point: the boss raid would open
+#: its own multi-step sequence (per-player contributions, a shared timer)
+#: with the same edit-in-place UX and a ``hunt_raid:*`` callback prefix.
+#: Nothing is implemented here on purpose — the encounter/cooldown service
+#: (``pet_service``) is where the raid rules would live.
 
 #: «سیب پت» / «پت من» / «پت», each in both Yeh spellings. These are matched
 #: before the naming state, so they always open the menu instead of being
@@ -106,15 +120,37 @@ ENCOUNTER_CAPTION = (
     "💪 قدرت کارتت: {power}\n"
     "🎯 شانس شکار: {chance}٪"
 )
-HUNT_BUTTON_TEXT = "🏹 شکار!"
 FAILED_CAPTION = "💨 ای وای! {type_fa} فرار کرد. دفعه بعد شانس بهتری داری."
 SUCCESS_CAPTION = (
     "🎉 شکار موفق! تونستی بچه {type_fa} رو بگیری.\n"
     "حالا یک اسم براش انتخاب کن و روی همین پیام ریپلای کن:"
 )
-NOT_YOUR_HUNT_ALERT = "این شکار مال شما نیست! خودت «سیب شکار» بزن."
 HUNT_GONE_ALERT = "این شکار منقضی شده. دوباره «سیب شکار» بزن."
 
+# ---------------------------------------------------------------------------
+# The tracking mini-game (Phase 4)
+# ---------------------------------------------------------------------------
+#: The three questions of the tracking sequence, in order.
+STEP1_CAPTION = "🌲 وارد جنگل شدی. صدای خش‌خش برگ‌ها از کدوم طرف میاد؟"
+STEP2_CAPTION = "👣 رد پاها رو پیدا کردی. به کجا می‌رسه؟"
+STEP3_CAPTION = "👀 پت رو دیدی! کِی تور رو پرتاب کنیم؟"
+#: ``step -> {choice: button text}``; the choice keys are the callback payload
+#: suffixes and the values the ``correct_path`` entries the service compares
+#: against (see ``pet_service.correct_choice``).
+TRACK_BUTTONS = {
+    1: {
+        "left": "⬅️ سمت چپ",
+        "right": "➡️ سمت راست",
+    },
+    2: {
+        "cave": "🕳️ غار تاریک",
+        "river": "🌊 رودخانه",
+    },
+    3: {
+        "now": "🥅 همین حالا!",
+        "wait": "⏳ کمی صبر می‌کنم",
+    },
+}
 NAMED_TEXT = (
     "✅ اسم {name} برای پت شما ثبت شد! "
     "از این به بعد با دستور «سیب پت» می‌تونید مدیریتش کنید."
@@ -154,8 +190,12 @@ NAME_ERRORS = {
 
 
 class PetStates(StatesGroup):
-    """FSM state of the naming step."""
+    """FSM states of the hunt flow: the tracking steps and the naming step."""
 
+    #: Active while the player is answering the tracking mini-game. Data:
+    #: ``pet_type``, ``base_chance``, ``path`` (the hidden correct choices).
+    tracking = State()
+    #: After a successful catch, waiting for the pet's name.
     waiting_for_name = State()
 
 
@@ -196,36 +236,41 @@ def baby_artwork(pet_type: str) -> Path:
     return ASSET_DIR / f"{_safe_pet_type(pet_type)}_baby.jpg"
 
 
-def hunt_button(user_id: int, pet_type: str, chance: int) -> InlineKeyboardMarkup:
-    """The single «🏹 شکار!» button carrying the encounter's identity."""
-    payload = f"{HUNT_CALLBACK_PREFIX}{int(user_id)}:{pet_type}:{int(chance)}"
+def tracking_keyboard(step: int) -> InlineKeyboardMarkup:
+    """The two buttons of one tracking step (``hunt_track:{step}:{choice}``)."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=HUNT_BUTTON_TEXT, callback_data=payload)]
+            [
+                InlineKeyboardButton(
+                    text=text,
+                    callback_data=f"{HUNT_TRACK_PREFIX}{int(step)}:{choice}",
+                )
+                for choice, text in TRACK_BUTTONS[int(step)].items()
+            ]
         ]
     )
 
 
-def parse_hunt_callback(data: str | None) -> tuple[int, str, int] | None:
-    """``pet_hunt:{user_id}:{pet_type}:{chance}`` → ``(user_id, pet_type, chance)``.
+def parse_hunt_track_callback(data: str | None) -> tuple[int, str] | None:
+    """``hunt_track:{step}:{choice}`` → ``(step, choice)``.
 
-    Returns ``None`` for anything malformed. The ``chance`` is informational:
-    the roll itself uses a value recomputed on the server.
+    Returns ``None`` for anything malformed: a missing prefix, a step outside
+    ``1..3`` or a choice the step does not offer. The step is validated against
+    ``TRACK_BUTTONS`` so a forged payload can never skip ahead.
     """
-    if not isinstance(data, str) or not data.startswith(HUNT_CALLBACK_PREFIX):
+    if not isinstance(data, str) or not data.startswith(HUNT_TRACK_PREFIX):
         return None
-    parts = data[len(HUNT_CALLBACK_PREFIX):].split(":")
-    if len(parts) != 3:
+    parts = data[len(HUNT_TRACK_PREFIX):].split(":")
+    if len(parts) != 2:
         return None
-    raw_user, pet_type, raw_chance = parts
+    raw_step, choice = parts
     try:
-        user_id = int(raw_user)
-        chance = int(raw_chance)
+        step = int(raw_step)
     except (TypeError, ValueError):
         return None
-    if user_id <= 0 or pet_type not in PET_TYPES:
+    if step not in TRACK_BUTTONS or choice not in TRACK_BUTTONS[step]:
         return None
-    return user_id, pet_type, chance
+    return step, choice
 
 
 async def main_card_power(session, user_id: int) -> int:
@@ -251,12 +296,17 @@ def pet_emoji(pet_type: str) -> str:
 
 
 def pet_profile_caption(pet, required: int) -> str:
-    """The pet profile caption (name, species, status, XP progress, skill)."""
+    """The pet profile caption (name, species, status, XP progress, skill).
+
+    The caption is returned raw (``**bold**`` markers included): the caller
+    renders it through ``format_html_caption`` exactly once, which escapes
+    the name. Pre-escaping here would double-escape it.
+    """
     pet_type = _safe_pet_type(pet.pet_type)
     progress = pet_service.xp_progress(pet, required)
     return PROFILE_CAPTION.format(
         emoji=pet_emoji(pet_type),
-        name=html.escape(pet_service.pet_display_name(pet)),
+        name=pet_service.pet_display_name(pet),
         type_fa=pet_service.pet_type_fa(pet_type),
         status_line=STATUS_ADULT if pet.is_adult else STATUS_BABY,
         xp=fa_digits(progress["xp"]),
@@ -361,50 +411,87 @@ async def handle_hunt(message: Message, state: FSMContext) -> None:
         return
 
     pet_type = _safe_pet_type(pet_type)
-    # A new encounter abandons any half-finished naming step.
+    # A new encounter abandons any half-finished tracking or naming step and
+    # rolls the hidden correct path of the tracking mini-game.
+    path = pet_service.roll_tracking_path()
     await state.clear()
+    await state.set_state(PetStates.tracking)
+    await state.update_data(
+        pet_type=pet_type, base_chance=chance, path=path, choices=[]
+    )
     await _reply_photo(
         message,
-        adult_artwork(pet_type),
+        FOREST_IMAGE,
         format_html_caption(
             ENCOUNTER_CAPTION.format(
                 type_fa=pet_service.pet_type_fa(pet_type),
                 power=fa_digits(card_power),
                 chance=fa_digits(chance),
             )
+            + "\n\n"
+            + STEP1_CAPTION
         ),
-        reply_markup=hunt_button(sender.id, pet_type, chance),
+        reply_markup=tracking_keyboard(1),
     )
 
 
 # ---------------------------------------------------------------------------
-# «🏹 شکار!» — resolve the encounter
+# The tracking mini-game — «hunt_track:{step}:{choice}»
 # ---------------------------------------------------------------------------
 
-@router.callback_query(F.data.startswith(HUNT_CALLBACK_PREFIX))
-async def handle_hunt_callback(
+@router.callback_query(F.data.startswith(HUNT_TRACK_PREFIX))
+async def handle_hunt_track(
     callback: CallbackQuery, state: FSMContext, bot
 ) -> None:
     clicker = callback.from_user
-    parsed = parse_hunt_callback(getattr(callback, "data", None))
+    parsed = parse_hunt_track_callback(getattr(callback, "data", None))
     if clicker is None or parsed is None:
         await safe_answer_callback(callback, HUNT_GONE_ALERT, show_alert=True)
         return
 
-    owner_id, pet_type, _displayed_chance = parsed
-    # Anyone in the group sees the button; only the hunter may press it.
-    if int(clicker.id) != owner_id:
-        await safe_answer_callback(callback, NOT_YOUR_HUNT_ALERT, show_alert=True)
+    step, choice = parsed
+    # The tracking state is per-user FSM: a stale or expired state (a finished
+    # hunt, a new encounter, the naming step) can never resume the game, and a
+    # group member pressing the buttons sees their own (empty) context.
+    if await state.get_state() != PetStates.tracking.state:
+        await safe_answer_callback(callback, HUNT_GONE_ALERT, show_alert=True)
         return
 
-    # The roll uses a server-side chance: the value in the callback data is
-    # player-editable and is only kept for the caption the player already saw.
+    data = await state.get_data()
+    pet_type = data.get("pet_type")
+    base_chance = data.get("base_chance")
+    path = data.get("path")
+    choices_made = data.get("choices")
+    if (
+        pet_type not in PET_TYPES
+        or not isinstance(base_chance, int)
+        or not isinstance(path, list)
+        or not isinstance(choices_made, list)
+    ):
+        await state.clear()
+        await safe_answer_callback(callback, HUNT_GONE_ALERT, show_alert=True)
+        return
+
+    # Steps are answered in order, exactly once: a stale button press or a
+    # forged step number is refused instead of skipping ahead.
+    if step != len(choices_made) + 1:
+        await safe_answer_callback(callback, HUNT_GONE_ALERT, show_alert=True)
+        return
+
+    choices = choices_made + [choice]
+    await state.update_data(choices=choices)
+    await safe_answer_callback(callback)
+
+    if step < max(TRACK_BUTTONS):
+        await _edit_tracking_step(callback, bot, step + 1)
+        return
+
+    # Final shot: the hidden path adjusts the base chance (±10 % per choice).
+    final_chance = pet_service.tracking_adjusted_chance(base_chance, choices, path)
     try:
         async with get_session() as session:
-            card_power = await main_card_power(session, owner_id)
-            chance = pet_service.hunt_chance(card_power)
             result = await pet_service.execute_hunt(
-                session, owner_id, pet_type, chance
+                session, clicker.id, pet_type, final_chance
             )
             status = result.get("status")
             pet_id = None
@@ -412,7 +499,7 @@ async def handle_hunt_callback(
                 pet_id = int(result["pet"].id)
             remaining = int(result.get("remaining_seconds") or 0)
     except Exception:
-        logger.exception("pet hunt callback failed (user=%s)", owner_id)
+        logger.exception("pet tracking finale failed (user=%s)", clicker.id)
         await safe_answer_callback(callback, GENERIC_ERROR, show_alert=True)
         return
 
@@ -430,7 +517,6 @@ async def handle_hunt_callback(
         await safe_answer_callback(callback, HUNT_GONE_ALERT, show_alert=True)
         return
 
-    await safe_answer_callback(callback)
     await state.clear()
 
     if status == "success" and pet_id is not None:
@@ -452,35 +538,77 @@ async def handle_hunt_callback(
     )
 
 
-async def _edit_encounter(callback: CallbackQuery, bot, image: Path, caption: str) -> None:
-    """Replace the encounter artwork and caption in place, removing the button."""
+async def _edit_tracking_step(callback: CallbackQuery, bot, step: int) -> None:
+    """Move the tracking message to ``step``: new question and buttons."""
+    caption = {2: STEP2_CAPTION, 3: STEP3_CAPTION}[step]
+    edited = await _edit_hunt_screen(
+        callback, bot, FOREST_IMAGE, caption, tracking_keyboard(step)
+    )
+    if edited:
+        return
+    # The message may have been deleted: keep the game going with a fresh one.
+    message = getattr(callback, "message", None)
+    answer = getattr(message, "answer", None)
+    if answer is not None:
+        await answer(
+            format_html_caption(caption),
+            reply_markup=tracking_keyboard(step),
+            parse_mode="HTML",
+        )
+
+
+async def _edit_hunt_screen(
+    callback: CallbackQuery, bot, image: Path, caption: str, keyboard=None
+) -> bool:
+    """Replace a hunt-screen message in place (photo + caption + buttons).
+
+    Returns ``True`` when the message content is current. The photo is kept
+    when only the caption changes; the media is swapped when it does not.
+    """
     message = getattr(callback, "message", None)
     chat_id = getattr(getattr(message, "chat", None), "id", None)
     message_id = getattr(message, "message_id", None)
     text = format_html_caption(caption)
+    has_photo = bool(getattr(message, "photo", None))
 
-    if bot is not None and chat_id and message_id and image.is_file():
+    if bot is not None and chat_id and message_id and has_photo and image.is_file():
         edited = await safe_edit_message_media(
             bot,
             chat_id,
             message_id,
             photo=FSInputFile(str(image)),
             text=text,
-            reply_markup=None,
+            reply_markup=keyboard,
             parse_mode="HTML",
         )
         if edited:
-            return
+            return True
+        logger.info(
+            "pet screen media edit failed (chat=%s message=%s)", chat_id, message_id
+        )
+    if bot is not None and chat_id and message_id and has_photo:
+        edited = await safe_edit_message_caption(
+            bot, chat_id, message_id, text=text, reply_markup=keyboard, parse_mode="HTML"
+        )
+        if edited:
+            return True
+        logger.info(
+            "pet screen caption edit failed (chat=%s message=%s)", chat_id, message_id
+        )
+    return False
 
+
+async def _edit_encounter(callback: CallbackQuery, bot, image: Path, caption: str) -> None:
+    """Replace the encounter artwork and caption in place, removing the button."""
+    edited = await _edit_hunt_screen(callback, bot, image, caption)
+    if edited:
+        return
     # The message may have been deleted, or there is no editable photo: still
     # show the outcome once as a plain reply.
-    if bot is not None and chat_id and message_id and image.is_file():
-        logger.info(
-            "pet encounter media edit failed (chat=%s message=%s)", chat_id, message_id
-        )
+    message = getattr(callback, "message", None)
     answer = getattr(message, "answer", None)
     if answer is not None:
-        await answer(text, parse_mode="HTML")
+        await answer(format_html_caption(caption), parse_mode="HTML")
 
 
 # ---------------------------------------------------------------------------
@@ -650,28 +778,28 @@ async def handle_pet_feed(callback: CallbackQuery, state: FSMContext, bot) -> No
             bot,
             callback,
             adult_artwork(pet_type),
-            format_html_caption(
-                FEED_EVOLVED_CAPTION.format(
-                    name=html.escape(name), type_fa=type_fa
-                )
-                + "\n"
-                + pet_profile_caption(pet, required)
-            ),
+            FEED_EVOLVED_CAPTION.format(name=name, type_fa=type_fa)
+            + "\n"
+            + pet_profile_caption(pet, required),
             pet_profile_keyboard(pet),
         )
         return
 
     await safe_answer_callback(callback, f"🍖 +{fa_digits(result.get('xp_added') or 0)} XP")
     # One line about the meal, then the refreshed profile (no duplicated XP).
+    # NOTE: the caption is passed to ``_show_pet_card`` raw (``**bold**``
+    # markers included): that helper renders it through ``format_html_caption``
+    # exactly once. Pre-rendering here would escape the ``<b>`` tags into
+    # ``&lt;b&gt;`` and the feed caption would show raw HTML.
     caption = FEED_DONE_CAPTION.format(
-        name=html.escape(name),
+        name=name,
         xp_added=fa_digits(result.get("xp_added") or 0),
     )
     await _show_pet_card(
         bot,
         callback,
         baby_artwork(pet_type),
-        format_html_caption(caption + "\n\n" + pet_profile_caption(pet, required)),
+        caption + "\n\n" + pet_profile_caption(pet, required),
         pet_profile_keyboard(pet),
     )
 

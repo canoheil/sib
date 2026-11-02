@@ -421,6 +421,82 @@ async def test_pet_counts_are_per_player(session):
 
 
 # ---------------------------------------------------------------------------
+# Tracking mini-game — the hidden path and the adjusted chance
+# ---------------------------------------------------------------------------
+
+def test_track_step_choices_cover_every_step():
+    assert set(pet_service.TRACK_STEP_CHOICES) == {1, 2, 3}
+    for step, choices in pet_service.TRACK_STEP_CHOICES.items():
+        assert len(choices) == 2
+
+
+class _FirstChoiceRng:
+    """A ``random.Random`` stand-in that always picks the first choice."""
+
+    def random(self) -> float:
+        return 0.0
+
+    def choice(self, sequence):
+        return sequence[0]
+
+
+def test_roll_tracking_path_picks_one_choice_per_step():
+    path = pet_service.roll_tracking_path(rng=_FirstChoiceRng())
+
+    assert len(path) == 3
+    for step, choice in enumerate(path, start=1):
+        assert choice in pet_service.TRACK_STEP_CHOICES[step]
+    assert path == ["left", "cave", "now"]
+
+
+def test_roll_tracking_path_uses_a_real_rng_when_none_is_injected(monkeypatch):
+    monkeypatch.setattr(pet_service.random, "Random", lambda: _FirstChoiceRng())
+
+    path = pet_service.roll_tracking_path()
+
+    assert path == ["left", "cave", "now"]
+
+
+def test_correct_choice_compares_against_the_rolled_path():
+    path = ["right", "cave", "now"]
+
+    assert pet_service.correct_choice(1, "right", path) is True
+    assert pet_service.correct_choice(1, "left", path) is False
+    assert pet_service.correct_choice(2, "cave", path) is True
+    assert pet_service.correct_choice(2, "river", path) is False
+    assert pet_service.correct_choice(3, "now", path) is True
+    assert pet_service.correct_choice(3, "wait", path) is False
+    # Out-of-range steps and truncated paths never count as correct.
+    assert pet_service.correct_choice(4, "now", path) is False
+    assert pet_service.correct_choice(0, "right", path) is False
+    assert pet_service.correct_choice(1, "right", ["left"]) is False
+
+
+def test_tracking_adjusted_chance_adds_and_subtracts():
+    path = ["right", "cave", "now"]
+
+    assert pet_service.tracking_adjusted_chance(50, [], path) == 50
+    assert pet_service.tracking_adjusted_chance(50, ["right"], path) == 60
+    assert pet_service.tracking_adjusted_chance(50, ["left"], path) == 40
+    # Three correct: +30; three wrong: -30.
+    assert pet_service.tracking_adjusted_chance(50, ["right", "cave", "now"], path) == 80
+    assert pet_service.tracking_adjusted_chance(50, ["left", "river", "wait"], path) == 20
+    # A mixed path: right ✓, river ✗, wait ✗ → 50 + 10 - 10 - 10.
+    assert pet_service.tracking_adjusted_chance(50, ["right", "river", "wait"], path) == 40
+
+
+def test_tracking_adjusted_chance_is_clamped():
+    path = ["right", "cave", "now"]
+
+    assert pet_service.tracking_adjusted_chance(90, ["right", "cave", "now"], path) == 90
+    assert pet_service.tracking_adjusted_chance(10, ["left", "river", "wait"], path) == 0
+    # Choices beyond the rolled path length are treated as wrong.
+    assert pet_service.tracking_adjusted_chance(50, ["right", "cave", "now", "now"], path) == 70
+    # A nonsensical base falls back to the base chance.
+    assert pet_service.tracking_adjusted_chance(None, [], path) == pet_service.BASE_HUNT_CHANCE
+
+
+# ---------------------------------------------------------------------------
 # Naming rules
 # ---------------------------------------------------------------------------
 
@@ -536,13 +612,16 @@ def test_pets_router_is_registered_in_the_dispatcher():
     assert pets.router in included
 
 
-async def test_hunt_handler_opens_the_encounter_with_adult_art_and_a_button(
+async def test_hunt_handler_opens_the_encounter_and_starts_tracking(
     db, state, monkeypatch
 ):
     async def fake_encounter(session, user_id, card_power, **_kwargs):
         return {"status": "ok", "pet_type": "owl", "chance": pet_service.hunt_chance(card_power)}
 
     monkeypatch.setattr(pets.pet_service, "get_encounter", fake_encounter)
+    monkeypatch.setattr(
+        pets.pet_service, "roll_tracking_path", lambda **_kwargs: ["right", "cave", "now"]
+    )
 
     message = SimpleNamespace(
         from_user=SimpleNamespace(id=1, is_bot=False),
@@ -553,25 +632,68 @@ async def test_hunt_handler_opens_the_encounter_with_adult_art_and_a_button(
 
     message.reply_photo.assert_awaited_once()
     sent = message.reply_photo.await_args
-    assert str(pets.ASSET_DIR / "owl_adult.jpg") == str(sent.args[0].path)
+    # The tracking game opens on the forest plate, not the adult artwork.
+    assert str(sent.args[0].path) == str(pets.FOREST_IMAGE)
     assert sent.kwargs["parse_mode"] == "HTML"
 
-    # The caption shows the species, the card power and the chance.
+    # The caption shows the species, the card power, the chance and step 1.
     caption = sent.kwargs["caption"]
     assert "وارد جنگل جادویی شدی" in caption
     assert "<b>جغد وحشی</b>" in caption  # **bold** rendered as HTML
     assert "۱۰" in caption  # BASE_UNARMED_POWER
     assert "۳۲" in caption  # 30 + 10/5
+    assert pets.STEP1_CAPTION in caption
 
-    # Exactly one hunt button carrying the user, species and chance.
+    # The two step-1 buttons carry the documented callback payloads.
     keyboard = sent.kwargs["reply_markup"]
-    button = keyboard.inline_keyboard[0][0]
-    assert button.text == pets.HUNT_BUTTON_TEXT
-    assert button.callback_data == "pet_hunt:1:owl:32"
+    buttons = keyboard.inline_keyboard[0]
+    assert [b.text for b in buttons] == ["⬅️ سمت چپ", "➡️ سمت راست"]
+    assert [b.callback_data for b in buttons] == [
+        "hunt_track:1:left",
+        "hunt_track:1:right",
+    ]
 
-    # The encounter itself does not start the naming FSM.
-    assert await state.get_state() is None
+    # The encounter starts the tracking FSM with the rolled hidden path.
+    assert await state.get_state() == PetStates.tracking.state
+    data = await state.get_data()
+    assert data["pet_type"] == "owl"
+    assert data["base_chance"] == 32
+    assert data["path"] == ["right", "cave", "now"]
+    assert data["choices"] == []
     message.reply.assert_not_awaited()
+
+
+async def test_hunt_handler_rolls_a_fresh_path_and_abandons_a_tracking_state(
+    db, state, monkeypatch
+):
+    """A second «سیب شکار» resets the game: new path, no stale choices."""
+    monkeypatch.setattr(
+        pets.pet_service, "roll_tracking_path", lambda **_kwargs: ["left", "river", "wait"]
+    )
+
+    async def fake_encounter(session, user_id, card_power, **_kwargs):
+        return {"status": "ok", "pet_type": "cat", "chance": 40}
+
+    monkeypatch.setattr(pets.pet_service, "get_encounter", fake_encounter)
+
+    # A half-finished tracking game from a previous encounter.
+    await state.set_state(PetStates.tracking)
+    await state.update_data(
+        pet_type="owl", base_chance=30, path=["right"], choices=["right"]
+    )
+
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=1, is_bot=False),
+        reply=AsyncMock(),
+        reply_photo=AsyncMock(),
+    )
+    await pets.handle_hunt(message, state)
+
+    data = await state.get_data()
+    assert data["path"] == ["left", "river", "wait"]
+    assert data["choices"] == []
+    assert data["pet_type"] == "cat"
+    assert data["base_chance"] == 40
 
 
 @pytest.mark.parametrize(
@@ -645,7 +767,7 @@ async def test_main_card_power_falls_back_to_unarmed(db):
 
 
 # ---------------------------------------------------------------------------
-# Handlers — the «🏹 شکار!» callback
+# Handlers — the tracking mini-game
 # ---------------------------------------------------------------------------
 
 def _callback(
@@ -670,138 +792,116 @@ def _callback(
 
 
 def _bot():
-    return SimpleNamespace(edit_message_media=AsyncMock())
+    return SimpleNamespace(
+        edit_message_media=AsyncMock(),
+        edit_message_caption=AsyncMock(),
+    )
 
 
-async def test_hunt_callback_failure_shows_the_fleeing_artwork(db, state, monkeypatch):
+async def _start_tracking(state, path=None, base_chance=50, pet_type="owl"):
+    """Put the FSM into the tracking state the encounter handler would."""
+    await state.set_state(PetStates.tracking)
+    await state.update_data(
+        pet_type=pet_type,
+        base_chance=base_chance,
+        path=path or ["right", "cave", "now"],
+        choices=[],
+    )
+
+
+async def test_track_step1_advances_to_step2(db, state, monkeypatch):
     async def fake_execute(session, user_id, pet_type, chance, **_kwargs):
-        return {"status": "failed", "pet": None, "pet_type": pet_type, "chance": chance}
+        raise AssertionError("the hunt must not roll before step 3")
 
     monkeypatch.setattr(pets.pet_service, "execute_hunt", fake_execute)
+    await _start_tracking(state)
 
-    callback = _callback("pet_hunt:1:dog:40")
+    callback = _callback("hunt_track:1:right")
     bot = _bot()
-    await pets.handle_hunt_callback(callback, state, bot)
+    await pets.handle_hunt_track(callback, state, bot)
 
     callback.answer.assert_awaited_once()  # acknowledged, no alert
     bot.edit_message_media.assert_awaited_once()
     edited = bot.edit_message_media.await_args.kwargs
     assert edited["chat_id"] == 1
     assert edited["message_id"] == 99
-    assert str(edited["media"].media.path) == str(pets.FAIL_IMAGE)
-    assert "فرار کرد" in edited["media"].caption
-    assert "سگ" in edited["media"].caption
-    assert edited["reply_markup"] is None  # the button disappears
+    assert str(edited["media"].media.path) == str(pets.FOREST_IMAGE)
+    assert pets.STEP2_CAPTION in edited["media"].caption
+    buttons = edited["reply_markup"].inline_keyboard[0]
+    assert [b.text for b in buttons] == ["🕳️ غار تاریک", "🌊 رودخانه"]
+    assert [b.callback_data for b in buttons] == [
+        "hunt_track:2:cave",
+        "hunt_track:2:river",
+    ]
 
-    # A miss never starts the naming flow.
-    assert await state.get_state() is None
-    callback.message.answer.assert_not_awaited()
+    data = await state.get_data()
+    assert data["choices"] == ["right"]
 
 
-async def test_hunt_callback_success_shows_the_baby_and_waits_for_a_name(
+async def test_track_step2_advances_to_step3(db, state, monkeypatch):
+    async def fake_execute(session, user_id, pet_type, chance, **_kwargs):
+        raise AssertionError("the hunt must not roll before step 3")
+
+    monkeypatch.setattr(pets.pet_service, "execute_hunt", fake_execute)
+    await _start_tracking(state)
+    await state.update_data(choices=["right"])
+
+    callback = _callback("hunt_track:2:cave")
+    bot = _bot()
+    await pets.handle_hunt_track(callback, state, bot)
+
+    bot.edit_message_media.assert_awaited_once()
+    edited = bot.edit_message_media.await_args.kwargs
+    assert pets.STEP3_CAPTION in edited["media"].caption
+    buttons = edited["reply_markup"].inline_keyboard[0]
+    assert [b.text for b in buttons] == ["🥅 همین حالا!", "⏳ کمی صبر می‌کنم"]
+    assert [b.callback_data for b in buttons] == [
+        "hunt_track:3:now",
+        "hunt_track:3:wait",
+    ]
+
+    data = await state.get_data()
+    assert data["choices"] == ["right", "cave"]
+
+
+async def test_track_finale_correct_path_raises_the_chance_and_catches(
     db, state, monkeypatch
 ):
+    captured = {}
+
     async def fake_execute(session, user_id, pet_type, chance, **_kwargs):
+        captured["chance"] = chance
         return {
             "status": "success",
-            "pet": SimpleNamespace(id=42, pet_type=pet_type),
+            "pet": SimpleNamespace(id=77, pet_type=pet_type),
             "pet_type": pet_type,
             "chance": chance,
         }
 
     monkeypatch.setattr(pets.pet_service, "execute_hunt", fake_execute)
+    await _start_tracking(state, path=["right", "cave", "now"], base_chance=50)
+    await state.update_data(choices=["right", "cave"])
 
-    callback = _callback("pet_hunt:1:squirrel:50")
+    callback = _callback("hunt_track:3:now")
     bot = _bot()
-    await pets.handle_hunt_callback(callback, state, bot)
+    await pets.handle_hunt_track(callback, state, bot)
 
-    edited = bot.edit_message_media.await_args.kwargs
-    assert str(edited["media"].media.path) == str(pets.ASSET_DIR / "squirrel_baby.jpg")
-    assert "شکار موفق" in edited["media"].caption
-    assert "سنجاب" in edited["media"].caption
-
-    assert await state.get_state() == PetStates.waiting_for_name.state
-    assert (await state.get_data())["pet_id"] == 42
-
-
-async def test_hunt_callback_runs_the_rng_for_the_clicking_player(db, state):
-    """Without monkeypatching the service the encounter really rolls."""
-    callback = _callback("pet_hunt:1:cat:90")
-    bot = _bot()
-    await pets.handle_hunt_callback(callback, state, bot)
-
+    # 50 + 3 correct choices x 10 %.
+    assert captured["chance"] == 80
     bot.edit_message_media.assert_awaited_once()
-    media = bot.edit_message_media.await_args.kwargs["media"]
-    # Either outcome edits the message; a success also waits for a name.
-    if "شکار موفق" in media.caption:
-        assert await state.get_state() == PetStates.waiting_for_name.state
-        assert str(media.media.path).endswith("cat_baby.jpg")
-    else:
-        assert str(media.media.path) == str(pets.FAIL_IMAGE)
-        assert await state.get_state() is None
+    edited = bot.edit_message_media.await_args.kwargs
+    assert str(edited["media"].media.path) == str(pets.ASSET_DIR / "owl_baby.jpg")
+    assert "شکار موفق" in edited["media"].caption
+    assert edited["reply_markup"] is None  # the buttons disappear
+
+    # A catch starts the naming flow.
+    assert await state.get_state() == PetStates.waiting_for_name.state
+    assert (await state.get_data())["pet_id"] == 77
 
 
-async def test_hunt_callback_ignores_a_different_user(db, state, monkeypatch):
-    executed = []
-
-    async def fake_execute(session, user_id, pet_type, chance, **_kwargs):
-        executed.append(user_id)
-        return {"status": "success", "pet": SimpleNamespace(id=1), "pet_type": pet_type}
-
-    monkeypatch.setattr(pets.pet_service, "execute_hunt", fake_execute)
-
-    callback = _callback("pet_hunt:1:owl:50", clicker_id=999)
-    bot = _bot()
-    await pets.handle_hunt_callback(callback, state, bot)
-
-    # Nothing is rolled, nothing is edited, and only a warning is shown.
-    assert executed == []
-    bot.edit_message_media.assert_not_awaited()
-    callback.answer.assert_awaited_once()
-    assert callback.answer.await_args.kwargs["show_alert"] is True
-    assert await state.get_state() is None
-
-
-@pytest.mark.parametrize(
-    "data",
-    [
-        "pet_hunt:",
-        "pet_hunt:1",
-        "pet_hunt:1:owl",
-        "pet_hunt:abc:owl:50",
-        "pet_hunt:1:dragon:50",
-        "pet_hunt:0:owl:50",
-    ],
-)
-async def test_hunt_callback_rejects_malformed_data(db, state, data):
-    bot = _bot()
-    callback = _callback(data)
-    await pets.handle_hunt_callback(callback, state, bot)
-
-    bot.edit_message_media.assert_not_awaited()
-    callback.answer.assert_awaited_once()
-    assert callback.answer.await_args.kwargs["show_alert"] is True
-
-
-async def test_hunt_callback_reports_a_cooldown_on_a_second_press(db, state, monkeypatch):
-    async def fake_execute(session, user_id, pet_type, chance, **_kwargs):
-        return {"status": "cooldown", "remaining_seconds": 7200, "pet": None}
-
-    monkeypatch.setattr(pets.pet_service, "execute_hunt", fake_execute)
-
-    callback = _callback("pet_hunt:1:owl:50")
-    bot = _bot()
-    await pets.handle_hunt_callback(callback, state, bot)
-
-    bot.edit_message_media.assert_not_awaited()
-    assert callback.answer.await_args.kwargs["show_alert"] is True
-    assert "۲ ساعت" in callback.answer.await_args.args[0]
-
-
-async def test_hunt_callback_rolls_with_the_server_chance_not_the_payload(
+async def test_track_finale_wrong_path_lowers_the_chance_and_fails(
     db, state, monkeypatch
 ):
-    """A forged 90 % in the callback data must not beat the real card power."""
     captured = {}
 
     async def fake_execute(session, user_id, pet_type, chance, **_kwargs):
@@ -809,28 +909,282 @@ async def test_hunt_callback_rolls_with_the_server_chance_not_the_payload(
         return {"status": "failed", "pet": None, "pet_type": pet_type, "chance": chance}
 
     monkeypatch.setattr(pets.pet_service, "execute_hunt", fake_execute)
+    await _start_tracking(state, path=["right", "cave", "now"], base_chance=50)
+    await state.update_data(choices=["left", "river"])
 
-    callback = _callback("pet_hunt:1:owl:90")  # forged chance
-    await pets.handle_hunt_callback(callback, state, _bot())
+    callback = _callback("hunt_track:3:wait")
+    bot = _bot()
+    await pets.handle_hunt_track(callback, state, bot)
 
-    # Unarmed power (10) → 32 %, not the 90 the client sent.
-    assert captured["chance"] == 32
+    # 50 - 3 wrong choices x 10 %.
+    assert captured["chance"] == 20
+    bot.edit_message_media.assert_awaited_once()
+    edited = bot.edit_message_media.await_args.kwargs
+    assert str(edited["media"].media.path) == str(pets.FAIL_IMAGE)
+    assert "فرار کرد" in edited["media"].caption
+
+    # A miss never starts the naming flow.
+    assert await state.get_state() is None
 
 
-async def test_hunt_callback_falls_back_to_text_when_the_edit_fails(db, state, monkeypatch):
+async def test_track_finale_partial_path_mixes_bonus_and_penalty(db, state, monkeypatch):
+    captured = {}
+
+    async def fake_execute(session, user_id, pet_type, chance, **_kwargs):
+        captured["chance"] = chance
+        return {"status": "failed", "pet": None, "pet_type": pet_type, "chance": chance}
+
+    monkeypatch.setattr(pets.pet_service, "execute_hunt", fake_execute)
+    await _start_tracking(state, path=["right", "cave", "now"], base_chance=40)
+    await state.update_data(choices=["right", "river"])
+
+    callback = _callback("hunt_track:3:wait")
+    await pets.handle_hunt_track(callback, state, _bot())
+
+    # right ✓ +10, river ✗ -10, wait ✗ -10 → 40 - 10 = 30.
+    assert captured["chance"] == 30
+
+
+async def test_track_finale_chance_is_clamped(db, state, monkeypatch):
+    captured = {}
+
+    async def fake_execute(session, user_id, pet_type, chance, **_kwargs):
+        captured["chance"] = chance
+        return {"status": "failed", "pet": None, "pet_type": pet_type, "chance": chance}
+
+    monkeypatch.setattr(pets.pet_service, "execute_hunt", fake_execute)
+    # A base chance of 90 with three correct choices must not exceed the cap.
+    await _start_tracking(state, path=["right", "cave", "now"], base_chance=90)
+    await state.update_data(choices=["right", "cave"])
+
+    callback = _callback("hunt_track:3:now")
+    await pets.handle_hunt_track(callback, state, _bot())
+
+    assert captured["chance"] == pet_service.MAX_HUNT_CHANCE == 90
+
+
+async def test_track_step_out_of_order_is_refused(db, state, monkeypatch):
+    """Pressing step 2 while step 1 is open must not skip ahead."""
+
+    async def fake_execute(session, user_id, pet_type, chance, **_kwargs):
+        raise AssertionError("the hunt must not roll on an out-of-order click")
+
+    monkeypatch.setattr(pets.pet_service, "execute_hunt", fake_execute)
+    await _start_tracking(state)
+
+    callback = _callback("hunt_track:2:cave")
+    bot = _bot()
+    await pets.handle_hunt_track(callback, state, bot)
+
+    bot.edit_message_media.assert_not_awaited()
+    assert callback.answer.await_args.kwargs["show_alert"] is True
+    assert await state.get_state() == PetStates.tracking.state
+    assert (await state.get_data())["choices"] == []
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        "hunt_track:",
+        "hunt_track:1",
+        "hunt_track:1:left:extra",
+        "hunt_track:0:left",
+        "hunt_track:4:now",
+        "hunt_track:1:up",
+        "hunt_track:2:fly",
+        "hunt_track:abc:left",
+    ],
+)
+async def test_track_callback_rejects_malformed_data(db, state, data):
+    bot = _bot()
+    callback = _callback(data)
+    await pets.handle_hunt_track(callback, state, bot)
+
+    bot.edit_message_media.assert_not_awaited()
+    callback.answer.assert_awaited_once()
+    assert callback.answer.await_args.kwargs["show_alert"] is True
+
+
+async def test_track_callback_without_a_tracking_state_is_expired(db, state):
+    """A stale button press after the game ended shows the gone alert."""
+    bot = _bot()
+    callback = _callback("hunt_track:1:left")
+    await pets.handle_hunt_track(callback, state, bot)
+
+    bot.edit_message_media.assert_not_awaited()
+    assert callback.answer.await_args.kwargs["show_alert"] is True
+    assert "منقضی" in callback.answer.await_args.args[0]
+
+
+async def test_track_callback_after_the_naming_step_is_expired(db, state):
+    """The naming state is a different game: tracking buttons are stale."""
+    await state.set_state(PetStates.waiting_for_name)
+    await state.update_data(pet_id=5)
+
+    callback = _callback("hunt_track:1:left")
+    bot = _bot()
+    await pets.handle_hunt_track(callback, state, bot)
+
+    bot.edit_message_media.assert_not_awaited()
+    assert callback.answer.await_args.kwargs["show_alert"] is True
+    # The naming flow is untouched.
+    assert await state.get_state() == PetStates.waiting_for_name.state
+
+
+async def test_track_callback_corrupt_state_is_cleared(db, state):
+    """A tracking state without its data cannot roll anything."""
+    await state.set_state(PetStates.tracking)
+    await state.update_data(pet_type="owl", base_chance=50, path=["right"])
+
+    callback = _callback("hunt_track:1:right")
+    bot = _bot()
+    await pets.handle_hunt_track(callback, state, bot)
+
+    bot.edit_message_media.assert_not_awaited()
+    assert callback.answer.await_args.kwargs["show_alert"] is True
+    assert await state.get_state() is None
+
+
+async def test_track_finale_reports_a_cooldown(db, state, monkeypatch):
+    async def fake_execute(session, user_id, pet_type, chance, **_kwargs):
+        return {"status": "cooldown", "remaining_seconds": 7200, "pet": None}
+
+    monkeypatch.setattr(pets.pet_service, "execute_hunt", fake_execute)
+    await _start_tracking(state)
+    await state.update_data(choices=["right", "cave"])
+
+    callback = _callback("hunt_track:3:now")
+    bot = _bot()
+    await pets.handle_hunt_track(callback, state, bot)
+
+    bot.edit_message_media.assert_not_awaited()
+    assert callback.answer.await_args.kwargs["show_alert"] is True
+    assert "۲ ساعت" in callback.answer.await_args.args[0]
+
+
+async def test_track_step_edit_falls_back_to_a_reply_when_the_edit_fails(
+    db, state, monkeypatch
+):
+    async def fake_execute(session, user_id, pet_type, chance, **_kwargs):
+        raise AssertionError("the hunt must not roll before step 3")
+
+    monkeypatch.setattr(pets.pet_service, "execute_hunt", fake_execute)
+    await _start_tracking(state)
+
+    bot = SimpleNamespace(edit_message_media=AsyncMock(side_effect=RuntimeError("gone")))
+    callback = _callback("hunt_track:1:right")
+    await pets.handle_hunt_track(callback, state, bot)
+
+    # The player still sees step 2, even if the message cannot be edited.
+    callback.message.answer.assert_awaited_once()
+    assert pets.STEP2_CAPTION in callback.message.answer.await_args.args[0]
+
+
+async def test_track_finale_falls_back_to_text_when_the_edit_fails(
+    db, state, monkeypatch
+):
     async def fake_execute(session, user_id, pet_type, chance, **_kwargs):
         return {"status": "failed", "pet": None, "pet_type": pet_type, "chance": chance}
 
     monkeypatch.setattr(pets.pet_service, "execute_hunt", fake_execute)
+    await _start_tracking(state)
+    await state.update_data(choices=["right", "cave"])
 
     bot = SimpleNamespace(edit_message_media=AsyncMock(side_effect=RuntimeError("gone")))
-    callback = _callback("pet_hunt:1:dog:40")
-    await pets.handle_hunt_callback(callback, state, bot)
+    callback = _callback("hunt_track:3:now")
+    await pets.handle_hunt_track(callback, state, bot)
 
-    # The player still sees the outcome, even if the message cannot be edited.
     callback.message.answer.assert_awaited_once()
     assert "فرار کرد" in callback.message.answer.await_args.args[0]
 
+
+async def test_track_flow_runs_the_real_hunt_service(db, state, monkeypatch):
+    """The whole game with the real service: encounter → 3 clicks → roll."""
+    monkeypatch.setattr(
+        pets.pet_service, "roll_tracking_path", lambda **_kwargs: ["left", "river", "wait"]
+    )
+    # A roll far above any adjusted chance: the pet escapes.
+    monkeypatch.setattr(pet_service.random, "Random", lambda: StubRng(roll=0.99))
+
+    async def fake_encounter(session, user_id, card_power, **_kwargs):
+        return {
+            "status": "ok",
+            "pet_type": "owl",
+            "chance": pet_service.hunt_chance(card_power),
+        }
+
+    monkeypatch.setattr(pets.pet_service, "get_encounter", fake_encounter)
+
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=1, is_bot=False),
+        reply=AsyncMock(),
+        reply_photo=AsyncMock(),
+    )
+    await pets.handle_hunt(message, state)
+
+    bot = _bot()
+    # Every click is wrong against the rolled path.
+    for step, choice in ((1, "right"), (2, "cave"), (3, "now")):
+        callback = _callback(f"hunt_track:{step}:{choice}")
+        await pets.handle_hunt_track(callback, state, bot)
+
+    # Three edits in total: step 1 → step 2, step 2 → step 3, the finale.
+    assert bot.edit_message_media.await_count == 3
+    edited = bot.edit_message_media.await_args.kwargs
+    assert str(edited["media"].media.path) == str(pets.FAIL_IMAGE)
+    assert await state.get_state() is None
+
+
+async def test_track_flow_real_service_success_creates_the_baby(db, state, monkeypatch):
+    monkeypatch.setattr(
+        pets.pet_service, "roll_tracking_path", lambda **_kwargs: ["right", "cave", "now"]
+    )
+    monkeypatch.setattr(pet_service.random, "Random", lambda: StubRng(roll=0.0))
+
+    async def fake_encounter(session, user_id, card_power, **_kwargs):
+        return {
+            "status": "ok",
+            "pet_type": "owl",
+            "chance": pet_service.hunt_chance(card_power),
+        }
+
+    monkeypatch.setattr(pets.pet_service, "get_encounter", fake_encounter)
+
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=1, is_bot=False),
+        reply=AsyncMock(),
+        reply_photo=AsyncMock(),
+    )
+    await pets.handle_hunt(message, state)
+
+    bot = _bot()
+    for step, choice in ((1, "right"), (2, "cave"), (3, "now")):
+        callback = _callback(f"hunt_track:{step}:{choice}")
+        await pets.handle_hunt_track(callback, state, bot)
+
+    assert bot.edit_message_media.await_count == 3
+    edited = bot.edit_message_media.await_args.kwargs
+    assert str(edited["media"].media.path) == str(pets.ASSET_DIR / "owl_baby.jpg")
+    assert await state.get_state() == PetStates.waiting_for_name.state
+
+
+async def test_track_callback_is_registered_on_the_router():
+    registered = [
+        handler
+        for handler in pets.router.callback_query.handlers
+        if handler.callback is pets.handle_hunt_track
+    ]
+    assert registered
+
+    event = SimpleNamespace(data="hunt_track:1:left")
+    assert all(
+        [await flt.call(event, bot=None) for flt in registered[0].filters]
+    ) is True
+
+
+# ---------------------------------------------------------------------------
+# Artwork
+# ---------------------------------------------------------------------------
 
 def test_encounter_artwork_falls_back_to_the_forest_plate(tmp_path, monkeypatch):
     """A missing adult file must not break the encounter."""
@@ -851,20 +1205,6 @@ def test_encounter_artwork_accepts_only_known_species():
     # An unknown species cannot escape the artwork directory.
     assert pets.adult_artwork("../../etc/passwd").name == f"{PET_TYPES[0]}_adult.jpg"
     assert pets.baby_artwork(None).name == f"{PET_TYPES[0]}_baby.jpg"
-
-
-async def test_hunt_callback_is_registered_on_the_router():
-    registered = [
-        handler
-        for handler in pets.router.callback_query.handlers
-        if handler.callback is pets.handle_hunt_callback
-    ]
-    assert registered
-
-    event = SimpleNamespace(data="pet_hunt:1:owl:50")
-    assert all(
-        [await flt.call(event, bot=None) for flt in registered[0].filters]
-    ) is True
 
 
 # ---------------------------------------------------------------------------
