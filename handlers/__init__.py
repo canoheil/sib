@@ -50,6 +50,7 @@ from sib.handlers.reminders import router as reminders_router
 from sib.handlers.theft import router as theft_router
 from sib.handlers.rocket import router as rocket_router
 from sib.handlers.casino import router as casino_router
+from sib.handlers.pets import router as pets_router
 
 
 def register_all_handlers(dp: Dispatcher) -> None:
@@ -96,6 +97,7 @@ def register_all_handlers(dp: Dispatcher) -> None:
     dp.include_router(theft_router)
     dp.include_router(rocket_router)
     dp.include_router(casino_router)
+    dp.include_router(pets_router)
     dp.include_router(inv2_controls_router)
     dp.include_router(inv2_dashboard_router)
     dp.include_router(inv2_admin_router)
@@ -130,4 +132,5 @@ __all__ = [
     "disease_router",
     "transfers_router",
     "theft_router",
+    "pets_router",
 ]

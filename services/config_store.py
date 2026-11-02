@@ -593,6 +593,12 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     "rocket_max_bet": 5000,
     "rocket_cooldown_seconds": 30,
     "rocket_house_edge": 5,
+    # Pets (migration 076).
+    "pet_hunt_cooldown_hours": 2,
+    "pet_feed_xp_amount": 50,
+    "pet_adult_xp_required": 500,
+    "pet_skill_max_level": 3,
+    "pet_skill_upgrade_diamond_cost": 10,
 }
 
 
