@@ -130,7 +130,7 @@ async def test_mine_shortfall_alert_is_answered_without_markers(monkeypatch):
     )
     message = SimpleNamespace(chat=SimpleNamespace(id=-506), message_id=82,
                               photo=[object()])
-    callback = SimpleNamespace(data="mine:pickaxe:upgrade",
+    callback = SimpleNamespace(data="mine:pickaxe:upgrade:114",
                                from_user=SimpleNamespace(id=114),
                                message=message, answer=AsyncMock())
 

@@ -152,21 +152,31 @@ def _log_work_button_path(*, uses_style: bool) -> None:
     _WORK_BUTTON_PATH_LOGGED = True
 
 
-def _work_button(supports_style: bool) -> InlineKeyboardButton:
+def mine_callback_data(action: str, user_id: int) -> str:
+    """Bind a mine button to the user who opened the panel.
+
+    Telegram lets anyone press an inline button, so every mine callback
+    carries its owner's id and the handlers reject mismatched pressers.
+    """
+    return f"{action}:{user_id}"
+
+
+def _work_button(supports_style: bool, *, user_id: int) -> InlineKeyboardButton:
     """The green work button, with the legacy-client label fallback."""
     label = "⛏ کار کردن در معدن"
+    callback_data = mine_callback_data("mine:work", user_id)
     if supports_style:
         try:
             button = InlineKeyboardButton(
                 text=label,
-                callback_data="mine:work",
+                callback_data=callback_data,
                 style="success",
             )
         except TypeError:
             _log_work_button_path(uses_style=False)
             button = InlineKeyboardButton(
                 text=f"🟢 {label}",
-                callback_data="mine:work",
+                callback_data=callback_data,
             )
         else:
             _log_work_button_path(uses_style=True)
@@ -174,17 +184,19 @@ def _work_button(supports_style: bool) -> InlineKeyboardButton:
         _log_work_button_path(uses_style=False)
         button = InlineKeyboardButton(
             text=f"🟢 {label}",
-            callback_data="mine:work",
+            callback_data=callback_data,
         )
     return button
 
 
-def work_button_kb(*, supports_style: bool) -> InlineKeyboardMarkup:
+def work_button_kb(*, supports_style: bool, user_id: int) -> InlineKeyboardMarkup:
     """Build the work button using the green style when the client supports it."""
-    return InlineKeyboardMarkup(inline_keyboard=[[_work_button(supports_style)]])
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[_work_button(supports_style, user_id=user_id)]]
+    )
 
 
-def mine_menu_kb(*, supports_style: bool) -> InlineKeyboardMarkup:
+def mine_menu_kb(*, supports_style: bool, user_id: int) -> InlineKeyboardMarkup:
     """Main mine menu (M2-RECON): work (green) + pickaxe upgrade (blue).
 
     One row, two buttons. The pickaxe button uses the standard styled
@@ -193,10 +205,10 @@ def mine_menu_kb(*, supports_style: bool) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                _work_button(supports_style),
+                _work_button(supports_style, user_id=user_id),
                 InlineKeyboardButton(
                     text="🔨 ارتقا کلنگ",
-                    callback_data="mine:pickaxe",
+                    callback_data=mine_callback_data("mine:pickaxe", user_id),
                     style="primary",
                 ),
             ]

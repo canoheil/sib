@@ -359,6 +359,6 @@ def test_legacy_work_button_fallback_stays_transparent():
     """The old-client path is the ONE place a button stays uncolored."""
     from sib.services import telegram_ui
 
-    legacy = telegram_ui.work_button_kb(supports_style=False).inline_keyboard[0][0]
+    legacy = telegram_ui.work_button_kb(supports_style=False, user_id=107).inline_keyboard[0][0]
     assert legacy.style is None
     assert legacy.text.startswith("🟢 ")

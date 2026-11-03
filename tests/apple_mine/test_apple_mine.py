@@ -533,10 +533,10 @@ async def test_double_tap_safety(monkeypatch):
 def test_no_card_selection_required_for_mine():
     import inspect
 
-    kb = mine_handler._main_keyboard().inline_keyboard
+    kb = mine_handler._main_keyboard(107).inline_keyboard
     assert len(kb) == 2 and all(len(row) == 1 for row in kb)
     callbacks = {button.callback_data for row in kb for button in row}
-    assert callbacks == {"mine:work", "mine:pickaxe"}
+    assert callbacks == {"mine:work:107", "mine:pickaxe:107"}
 
     # The M1 card-list screen is gone: no route, no service, no callback.
     source = inspect.getsource(mine_handler)
@@ -575,7 +575,7 @@ async def test_work_performs_shift_directly(monkeypatch):
         answer=AsyncMock(),
     )
     callback = SimpleNamespace(
-        data="mine:work",
+        data="mine:work:107",
         from_user=SimpleNamespace(id=107),
         message=message,
         answer=AsyncMock(),
@@ -632,7 +632,7 @@ async def test_work_cooldown_alerts(
         chat=SimpleNamespace(id=-504), message_id=80, photo=[object()]
     )
     callback = SimpleNamespace(
-        data="mine:work",
+        data="mine:work:111",
         from_user=SimpleNamespace(id=111),
         message=message,
         answer=AsyncMock(),
@@ -674,7 +674,7 @@ async def test_pickaxe_screen_swaps_photo_in_place(monkeypatch, tmp_path):
         chat=SimpleNamespace(id=-502), message_id=78, photo=photo
     )
     callback = SimpleNamespace(
-        data="mine:pickaxe",
+        data="mine:pickaxe:112",
         from_user=SimpleNamespace(id=112),
         message=message,
         answer=AsyncMock(),
@@ -695,8 +695,8 @@ async def test_pickaxe_screen_swaps_photo_in_place(monkeypatch, tmp_path):
     assert kwargs["parse_mode"] == "HTML"
     kb = kwargs["reply_markup"].inline_keyboard
     assert {b.callback_data for row in kb for b in row} == {
-        "mine:pickaxe:upgrade",
-        "mine:pickaxe:back",
+        "mine:pickaxe:upgrade:112",
+        "mine:pickaxe:back:112",
     }
 
 
@@ -725,7 +725,7 @@ async def test_upgrade_success_edits_to_new_level(monkeypatch, tmp_path):
         chat=SimpleNamespace(id=-505), message_id=81, photo=[object()]
     )
     callback = SimpleNamespace(
-        data="mine:pickaxe:upgrade",
+        data="mine:pickaxe:upgrade:113",
         from_user=SimpleNamespace(id=113),
         message=message,
         answer=AsyncMock(),
@@ -758,7 +758,7 @@ async def test_upgrade_insufficient_shows_shortfall_alert(monkeypatch):
         chat=SimpleNamespace(id=-506), message_id=82, photo=[object()]
     )
     callback = SimpleNamespace(
-        data="mine:pickaxe:upgrade",
+        data="mine:pickaxe:upgrade:114",
         from_user=SimpleNamespace(id=114),
         message=message,
         answer=AsyncMock(),
@@ -796,7 +796,7 @@ async def test_upgrade_stale_max_level_renders_max_screen(monkeypatch, tmp_path)
         chat=SimpleNamespace(id=-507), message_id=83, photo=[object()]
     )
     callback = SimpleNamespace(
-        data="mine:pickaxe:upgrade",
+        data="mine:pickaxe:upgrade:115",
         from_user=SimpleNamespace(id=115),
         message=message,
         answer=AsyncMock(),
@@ -811,7 +811,7 @@ async def test_upgrade_stale_max_level_renders_max_screen(monkeypatch, tmp_path)
     assert format_html("🏆 **کلنگ به سطح ۵ رسید!**") in kwargs["text"]
     assert "🎉" not in kwargs["text"]
     kb = kwargs["reply_markup"].inline_keyboard
-    assert {b.callback_data for row in kb for b in row} == {"mine:pickaxe:back"}
+    assert {b.callback_data for row in kb for b in row} == {"mine:pickaxe:back:115"}
 
 
 # ---------------------------------------------------------------------------
@@ -901,17 +901,17 @@ def test_result_caption_uses_cooldown_constant(monkeypatch):
 
 
 def test_main_menu_keyboard_layout():
-    kb = mine_handler._main_keyboard().inline_keyboard
+    kb = mine_handler._main_keyboard(107).inline_keyboard
     assert len(kb) == 2 and all(len(row) == 1 for row in kb)
     work, pickaxe = kb[0][0], kb[1][0]
-    assert work.callback_data == "mine:work"
+    assert work.callback_data == "mine:work:107"
     if mine_handler.APPLE_MINE_WORK_BUTTON_SUPPORTS_STYLE:
         assert work.text == "⛏ کار کردن در معدن"
         assert work.style == "success"
     else:
         assert work.text == "🟢 ⛏ کار کردن در معدن"
         assert work.style is None
-    assert pickaxe.callback_data == "mine:pickaxe"
+    assert pickaxe.callback_data == "mine:pickaxe:107"
     assert pickaxe.text == "🔨 ارتقا کلنگ"
     assert pickaxe.style == "primary"
 
@@ -919,34 +919,34 @@ def test_main_menu_keyboard_layout():
 def test_pickaxe_keyboard_upgrade_label_and_back():
     view = _view(level=4, balance=0)
     assert view.balance < view.upgrade_cost
-    kb = mine_handler._pickaxe_keyboard(view).inline_keyboard
+    kb = mine_handler._pickaxe_keyboard(view, 107).inline_keyboard
     assert len(kb) == 2
     upgrade, back = kb[0][0], kb[1][0]
-    assert upgrade.callback_data == "mine:pickaxe:upgrade"
+    assert upgrade.callback_data == "mine:pickaxe:upgrade:107"
     assert upgrade.text == "🍏 ارتقا به سطح ۵"
     assert upgrade.style == "success"
     assert "۱۵۰۰" not in upgrade.text
-    assert back.callback_data == "mine:pickaxe:back"
+    assert back.callback_data == "mine:pickaxe:back:107"
     assert back.text == "🔙 بازگشت"
 
 
 def test_pickaxe_keyboard_max_level_has_back_only():
-    kb = mine_handler._pickaxe_keyboard(_view(level=5)).inline_keyboard
+    kb = mine_handler._pickaxe_keyboard(_view(level=5), 107).inline_keyboard
     assert len(kb) == 1
-    assert kb[0][0].callback_data == "mine:pickaxe:back"
+    assert kb[0][0].callback_data == "mine:pickaxe:back:107"
 
 
 def test_supported_work_button_uses_success_style():
-    button = telegram_ui.work_button_kb(supports_style=True).inline_keyboard[0][0]
+    button = telegram_ui.work_button_kb(supports_style=True, user_id=107).inline_keyboard[0][0]
     assert button.text == "⛏ کار کردن در معدن"
-    assert button.callback_data == "mine:work"
+    assert button.callback_data == "mine:work:107"
     assert button.style == "success"
 
 
 def test_fallback_work_button_label():
-    button = telegram_ui.work_button_kb(supports_style=False).inline_keyboard[0][0]
+    button = telegram_ui.work_button_kb(supports_style=False, user_id=107).inline_keyboard[0][0]
     assert button.text == "🟢 ⛏ کار کردن در معدن"
-    assert button.callback_data == "mine:work"
+    assert button.callback_data == "mine:work:107"
     assert button.style is None
 
 
@@ -961,7 +961,7 @@ def test_style_type_error_falls_back(monkeypatch):
     monkeypatch.setattr(telegram_ui, "InlineKeyboardButton", button_factory)
     monkeypatch.setattr(telegram_ui, "_WORK_BUTTON_PATH_LOGGED", False)
 
-    button = telegram_ui.work_button_kb(supports_style=True).inline_keyboard[0][0]
+    button = telegram_ui.work_button_kb(supports_style=True, user_id=107).inline_keyboard[0][0]
     assert button.text == "🟢 ⛏ کار کردن در معدن"
     assert button.style is None
 
@@ -995,9 +995,9 @@ def test_no_english_letters_in_user_text():
         *DIAMOND,
         *OBSIDIAN,
         *[line.replace("{mm}", "۲").replace("{ss}", "۵") for line in COOLDOWN],
-        *[b.text for row in mine_handler._main_keyboard().inline_keyboard for b in row],
-        *[b.text for row in mine_handler._pickaxe_keyboard(view).inline_keyboard for b in row],
-        telegram_ui.work_button_kb(supports_style=False).inline_keyboard[0][0].text,
+        *[b.text for row in mine_handler._main_keyboard(107).inline_keyboard for b in row],
+        *[b.text for row in mine_handler._pickaxe_keyboard(view, 107).inline_keyboard for b in row],
+        telegram_ui.work_button_kb(supports_style=False, user_id=107).inline_keyboard[0][0].text,
     ]
     for text in user_texts:
         assert re.search(r"[A-Za-z]", text) is None, text

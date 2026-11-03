@@ -44,6 +44,7 @@ from sib.services.group import GroupService
 from sib.services.sib_claim import fa_digits
 from sib.services.telegram_ui import (
     APPLE_MINE_WORK_BUTTON_SUPPORTS_STYLE,
+    mine_callback_data,
     safe_answer_callback,
     safe_edit_callback_message,
     safe_edit_message_caption,
@@ -58,6 +59,7 @@ MINE_COMMAND_PATTERN = r"^\s*معدن\s+سیبی\s*$"
 MINE_IMAGE_PATH = Path(__file__).resolve().parents[1] / "assets" / "apple_mine" / "mine.jpg"
 
 MINE_FAILURE_TEXT = "معدن اکنون در دسترس نیست. کمی بعد دوباره تلاش کن."
+MINE_NOT_OWNER_TEXT = "⚠️ این دکمه برای شما نیست!"
 GOLDEN_HOUR_MINE_HINT = (
     "🕗 ساعت طلایی تهران (۲۰:۰۰ تا پیش از ۲۱:۰۰): سیب معمولی دوبرابر می‌شود."
 )
@@ -209,36 +211,68 @@ def _insufficient_text(error: PickaxeInsufficientFunds) -> str:
 # Keyboards
 # ---------------------------------------------------------------------------
 
-def _main_keyboard() -> InlineKeyboardMarkup:
+def _main_keyboard(user_id: int) -> InlineKeyboardMarkup:
     """Work (green) + pickaxe upgrade (blue), stacked in separate rows."""
     work_button = work_button_kb(
-        supports_style=APPLE_MINE_WORK_BUTTON_SUPPORTS_STYLE
+        supports_style=APPLE_MINE_WORK_BUTTON_SUPPORTS_STYLE,
+        user_id=user_id,
     ).inline_keyboard[0][0]
     pickaxe_button = primary_button(
         text="🔨 ارتقا کلنگ",
-        callback_data="mine:pickaxe",
+        callback_data=mine_callback_data("mine:pickaxe", user_id),
     )
     return InlineKeyboardMarkup(inline_keyboard=[[work_button], [pickaxe_button]])
 
 
-def _pickaxe_keyboard(view: MineView) -> InlineKeyboardMarkup:
+def _pickaxe_keyboard(view: MineView, user_id: int) -> InlineKeyboardMarkup:
     rows: list[list] = []
     if view.level < MAX_PICKAXE_LEVEL:
         rows.append(
             [
                 success_button(
                     text=f"🍏 ارتقا به سطح {fa_digits(view.level + 1)}",
-                    callback_data="mine:pickaxe:upgrade",
+                    callback_data=mine_callback_data("mine:pickaxe:upgrade", user_id),
                 )
             ]
         )
-    rows.append([danger_button(text="🔙 بازگشت", callback_data="mine:pickaxe:back")])
+    rows.append(
+        [
+            danger_button(
+                text="🔙 بازگشت",
+                callback_data=mine_callback_data("mine:pickaxe:back", user_id),
+            )
+        ]
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 # ---------------------------------------------------------------------------
 # Shared plumbing
 # ---------------------------------------------------------------------------
+
+def _callback_owner_id(data: Optional[str]) -> Optional[int]:
+    """Owner id embedded at the end of a mine callback (``mine:work:123``)."""
+    if not data:
+        return None
+    owner = data.rsplit(":", 1)[-1]
+    if not owner.isascii() or not owner.isdigit():
+        return None
+    return int(owner)
+
+
+async def _reject_foreign_click(callback: CallbackQuery) -> bool:
+    """Answer and reject a mine callback that does not belong to the presser.
+
+    Telegram does not restrict who may press an inline button, so the owner
+    id baked into the button data is the authorization boundary. Legacy
+    buttons (no id) are rejected too; stale panels must be reopened.
+    """
+    presser = callback.from_user
+    if presser is not None and _callback_owner_id(callback.data) == presser.id:
+        return False
+    await safe_answer_callback(callback, MINE_NOT_OWNER_TEXT, show_alert=True)
+    return True
+
 
 def _group_id_for_chat(chat) -> int | None:
     chat_type = getattr(chat, "type", None)
@@ -348,7 +382,7 @@ async def _send_panel(message: Message) -> None:
         await _safe_message_reply(message, MINE_FAILURE_TEXT)
         return
 
-    keyboard = _main_keyboard()
+    keyboard = _main_keyboard(user.id)
     caption = _panel_caption(view, user.id)
     try:
         await message.answer_photo(
@@ -375,9 +409,11 @@ async def handle_mine_command(message: Message) -> None:
         await _safe_message_reply(message, MINE_FAILURE_TEXT)
 
 
-@router.callback_query(F.data == "mine:work")
+@router.callback_query(F.data.regexp(r"^mine:work(?::[0-9]+)?$"))
 async def handle_mine_work(callback: CallbackQuery, bot: Bot) -> None:
     """Run the presser's shift directly (no card selection since M2-RECON)."""
+    if await _reject_foreign_click(callback):
+        return
     user = callback.from_user
     if user is None:
         await safe_answer_callback(callback, MINE_FAILURE_TEXT, show_alert=True)
@@ -434,9 +470,11 @@ async def handle_mine_work(callback: CallbackQuery, bot: Bot) -> None:
         await safe_answer_callback(callback, MINE_FAILURE_TEXT, show_alert=True)
 
 
-@router.callback_query(F.data == "mine:pickaxe")
+@router.callback_query(F.data.regexp(r"^mine:pickaxe(?::[0-9]+)?$"))
 async def handle_mine_pickaxe(callback: CallbackQuery, bot: Bot) -> None:
     """Swap the pressed mine panel for the pickaxe screen, in place."""
+    if await _reject_foreign_click(callback):
+        return
     user = callback.from_user
     if user is None:
         await safe_answer_callback(callback, MINE_FAILURE_TEXT, show_alert=True)
@@ -462,7 +500,7 @@ async def handle_mine_pickaxe(callback: CallbackQuery, bot: Bot) -> None:
             callback,
             bot,
             caption,
-            _pickaxe_keyboard(view),
+            _pickaxe_keyboard(view, user.id),
             image_path=_pickaxe_image_path(view.level),
         ):
             await _send_callback_message(callback, bot, caption)
@@ -471,9 +509,11 @@ async def handle_mine_pickaxe(callback: CallbackQuery, bot: Bot) -> None:
         await safe_answer_callback(callback, MINE_FAILURE_TEXT, show_alert=True)
 
 
-@router.callback_query(F.data == "mine:pickaxe:upgrade")
+@router.callback_query(F.data.regexp(r"^mine:pickaxe:upgrade(?::[0-9]+)?$"))
 async def handle_mine_pickaxe_upgrade(callback: CallbackQuery, bot: Bot) -> None:
     """Pay for one upgrade step and re-render with the new level's art."""
+    if await _reject_foreign_click(callback):
+        return
     user = callback.from_user
     if user is None:
         await safe_answer_callback(callback, MINE_FAILURE_TEXT, show_alert=True)
@@ -504,7 +544,7 @@ async def handle_mine_pickaxe_upgrade(callback: CallbackQuery, bot: Bot) -> None
             callback,
             bot,
             caption,
-            _pickaxe_keyboard(view),
+            _pickaxe_keyboard(view, user.id),
             image_path=_pickaxe_image_path(view.level),
         ):
             await _send_callback_message(callback, bot, caption)
@@ -513,9 +553,11 @@ async def handle_mine_pickaxe_upgrade(callback: CallbackQuery, bot: Bot) -> None
         await safe_answer_callback(callback, MINE_FAILURE_TEXT, show_alert=True)
 
 
-@router.callback_query(F.data == "mine:pickaxe:back")
+@router.callback_query(F.data.regexp(r"^mine:pickaxe:back(?::[0-9]+)?$"))
 async def handle_mine_pickaxe_back(callback: CallbackQuery, bot: Bot) -> None:
     """Return to the main mine panel, editing the same message back."""
+    if await _reject_foreign_click(callback):
+        return
     user = callback.from_user
     if user is None:
         await safe_answer_callback(callback, MINE_FAILURE_TEXT, show_alert=True)
@@ -536,7 +578,7 @@ async def handle_mine_pickaxe_back(callback: CallbackQuery, bot: Bot) -> None:
             callback,
             bot,
             caption,
-            _main_keyboard(),
+            _main_keyboard(user.id),
             image_path=MINE_IMAGE_PATH,
         ):
             await _send_callback_message(callback, bot, caption)
