@@ -21,6 +21,10 @@ Lifecycle
   star (L1 85 %, L2 70 %, L3 55 %, L4 40 %, L5 25 %).
 * Being arrested pays the arrester a bot-funded bounty per star and jails the
   thief for ``theft_jail_hours``; the victim keeps their apples.
+* GTA-style decay: one star drops for every ``theft_star_decay_hours``
+  elapsed since the last successful theft (migration 078), instead of all
+  stars expiring at once. At zero stars the theft timer is cleared, so the
+  player is a clean thief again.
 """
 
 import logging
@@ -94,7 +98,9 @@ MAX_WANTED_LEVEL = 5
 # Only a CLEAN thief (0 stars) settles instantly. From one star on, every theft
 # is a pending heist whose arrest window must open first.
 INSTANT_THEFT_MAX_LEVEL = 0
-# Wanted stars reset this long after the last successful theft.
+# Coarse "sentence" timestamp kept on the row for the /wanted display. The
+# stars themselves no longer reset to zero at this moment: they decay one by
+# one, ``theft_star_decay_hours`` each, since the last successful theft.
 WANTED_EXPIRY_HOURS = 24
 # Chance a pending theft succeeds when nobody arrests the thief in time:
 # one star destroys 15 % of the odds, L1 85 % ... L5 25 %.
@@ -140,16 +146,50 @@ async def _percent(session: AsyncSession, key: str) -> int:
     return min(100, max(0, await _config_int(session, key)))
 
 
-def _effective_level(state: UserWantedState | None, now: datetime) -> int:
-    """Wanted stars as of ``now``, clearing an expired sentence in place."""
+async def _effective_level(
+    session: AsyncSession, state: UserWantedState | None, now: datetime
+) -> int:
+    """Wanted stars as of ``now``, applying the GTA-style decay in place.
+
+    One star drops for every ``theft_star_decay_hours`` elapsed since
+    ``last_stolen_at``; when the level reaches 0 the theft timer is cleared.
+    A row without ``last_stolen_at`` (legacy data) keeps the old hard expiry
+    via ``wanted_expires_at`` instead.
+    """
     if state is None:
         return 0
-    expires_at = state.wanted_expires_at
-    if expires_at is not None and _as_utc(now) > _as_utc(expires_at):
-        state.wanted_level = 0
-        state.wanted_expires_at = None
+    level = int(state.wanted_level or 0)
+    if level <= 0:
         return 0
-    return int(state.wanted_level or 0)
+    last_stolen_at = state.last_stolen_at
+    if last_stolen_at is None:
+        expires_at = state.wanted_expires_at
+        if expires_at is not None and _as_utc(now) > _as_utc(expires_at):
+            state.wanted_level = 0
+            state.wanted_expires_at = None
+            return 0
+        return level
+    decay_hours = await _config_int(session, "theft_star_decay_hours")
+    if decay_hours <= 0:
+        return level
+    hours_since_last_theft = max(
+        0.0, (_as_utc(now) - _as_utc(last_stolen_at)).total_seconds() / 3600
+    )
+    stars_lost = int(hours_since_last_theft // decay_hours)
+    current_level = max(0, level - stars_lost)
+    if current_level != level:
+        state.wanted_level = current_level
+        if current_level == 0:
+            state.last_stolen_at = None
+            state.wanted_expires_at = None
+        else:
+            # Consume the elapsed whole intervals so the next evaluation
+            # measures only the time since the last star dropped: exactly one
+            # star per decay interval, never counted twice.
+            state.last_stolen_at = _as_utc(last_stolen_at) + timedelta(
+                hours=stars_lost * decay_hours
+            )
+    return current_level
 
 
 def _is_jailed(state: UserWantedState | None, now: datetime) -> bool:
@@ -229,17 +269,17 @@ async def _transfer_apples(
 
 
 async def get_status(session: AsyncSession, user_id: int) -> dict:
-    """Current wanted state; clears an expired wanted level on the way out."""
+    """Current wanted state; applies the star decay on the way out."""
     now = _now()
     state = await session.get(UserWantedState, user_id)
-    level = _effective_level(state, now)
+    level = await _effective_level(session, state, now)
     cooldown_minutes = await _config_int(session, "theft_cooldown_minutes")
     jail_remaining = 0
     if _is_jailed(state, now):
         jail_remaining = int(
             (_as_utc(state.jailed_until) - _as_utc(now)).total_seconds()
         )
-    # Persist a reset that _effective_level just applied.
+    # Persist a decay that _effective_level just applied.
     await session.flush()
     return {
         "wanted_level": level,
@@ -247,6 +287,50 @@ async def get_status(session: AsyncSession, user_id: int) -> dict:
         "jail_remaining_seconds": jail_remaining,
         "is_cooldown": _in_cooldown(state, now, cooldown_minutes),
     }
+
+
+async def apply_wanted_decay(
+    session: AsyncSession, *, now: datetime | None = None
+) -> int:
+    """Apply the GTA-style star decay to every wanted row; returns changed rows.
+
+    Maintenance entry point, so players who never open the bot still lose one
+    star per ``theft_star_decay_hours`` over time. The caller owns the
+    transaction: mutations flush but never commit here.
+    """
+    user_ids = list(
+        (
+            await session.scalars(
+                select(UserWantedState.user_id)
+                .where(UserWantedState.wanted_level > 0)
+                .order_by(UserWantedState.user_id)
+            )
+        ).all()
+    )
+    if not user_ids:
+        return 0
+    # Rank-0 user locks first, so a concurrent theft on the same player cannot
+    # interleave with the decay (same contract as initiate_theft).
+    await lock_user_rows_in_order(session, user_ids)
+    states = list(
+        (
+            await session.scalars(
+                select(UserWantedState)
+                .where(UserWantedState.user_id.in_(user_ids))
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).all()
+    )
+    moment = now or _now()
+    changed = 0
+    for state in states:
+        before = int(state.wanted_level or 0)
+        await _effective_level(session, state, moment)
+        if int(state.wanted_level or 0) != before:
+            changed += 1
+    await session.flush()
+    return changed
 
 
 async def initiate_theft(
@@ -268,7 +352,9 @@ async def initiate_theft(
     percent = await _percent(session, "theft_amount_percent")
 
     state = await _state_for_update(session, thief_id)
-    level = _effective_level(state, now)
+    # Apply the decay first (same logic as get_status) so the level used below
+    # is accurate before this new theft is judged or paid out.
+    level = await _effective_level(session, state, now)
 
     if _is_jailed(state, now):
         return {"status": "jailed"}
@@ -351,7 +437,7 @@ async def resolve_pending_theft(
 
     now = _now()
     state = await _state_for_update(session, thief_id)
-    level = _effective_level(state, now)
+    level = await _effective_level(session, state, now)
     if state is None:
         state = UserWantedState(user_id=thief_id)
         session.add(state)

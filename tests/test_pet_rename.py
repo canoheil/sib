@@ -2,8 +2,8 @@
 
 Three layers are covered:
 
-* migration ``077_pet_rename`` adds ``user_pets.has_renamed`` and stays the
-  single head;
+* migration ``077_pet_rename`` adds ``user_pets.has_renamed`` (the single head
+  is now ``078_wanted_decay``);
 * :func:`sib.services.pet_service.rename_pet` owns every rule (ownership, the
   once-per-pet limit, 2-20 characters, the 500-apple price);
 * :mod:`sib.handlers.pets` only renders the result — including the strict
@@ -187,13 +187,13 @@ async def _pet(session, pet_id: int) -> UserPet:
 # Migration 077
 # ---------------------------------------------------------------------------
 
-def test_077_migration_revises_076_and_is_the_single_head():
+def test_077_migration_revises_076_and_078_is_the_single_head():
     migration = _migration()
     assert migration.revision == "077_pet_rename"
     assert migration.down_revision == "076_pet_system"
 
     scripts = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["077_pet_rename"]
+    assert scripts.get_heads() == ["078_wanted_decay"]
     assert (
         scripts.get_revision("077_pet_rename").down_revision == "076_pet_system"
     )
@@ -231,7 +231,7 @@ def test_077_upgrade_adds_the_flag_and_downgrade_removes_it(migration_engine):
     }
 
 
-def test_alembic_real_upgrade_through_077(tmp_path):
+def test_alembic_real_upgrade_through_078(tmp_path):
     database = tmp_path / "pet_rename.db"
     engine = sa.create_engine(f"sqlite:///{database}")
     with engine.begin() as connection:
@@ -260,12 +260,12 @@ def test_alembic_real_upgrade_through_077(tmp_path):
         assert result.returncode == 0, result.stdout + result.stderr
         return result.stdout.strip()
 
-    assert alembic("heads") == "077_pet_rename (head)"
+    assert alembic("heads") == "078_wanted_decay (head)"
     # 076 creates ``user_pets`` itself, so the synthetic baseline starts at its
-    # parent and the whole pet chain (076 create, 077 alter) really runs.
+    # parent and the whole pet chain (076 create, 077 alter, 078 seed) really runs.
     alembic("stamp", "075_rocket_game")
     alembic("upgrade", "head")
-    assert "077_pet_rename" in alembic("current")
+    assert "078_wanted_decay" in alembic("current")
 
     engine = sa.create_engine(f"sqlite:///{database}")
     assert "has_renamed" in {

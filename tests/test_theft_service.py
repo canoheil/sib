@@ -199,12 +199,12 @@ async def _transactions(session):
 # Migration 074
 # ---------------------------------------------------------------------------
 
-def test_migration_074_revises_073_and_077_is_the_single_head():
+def test_migration_074_revises_073_and_078_is_the_single_head():
     migration = _migration()
     assert migration.revision == "074_theft_system"
     assert migration.down_revision == "073_disease_started_flag"
     scripts = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["077_pet_rename"]
+    assert scripts.get_heads() == ["078_wanted_decay"]
     assert scripts.get_revision("074_theft_system").down_revision == "073_disease_started_flag"
 
 
@@ -276,7 +276,7 @@ def test_migration_upgrade_creates_table_seeds_and_preserves_overrides(migration
 
 def test_alembic_real_upgrade_and_downgrade_from_073(tmp_path):
     scripts = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["077_pet_rename"]
+    assert scripts.get_heads() == ["078_wanted_decay"]
 
     database = tmp_path / "theft_migration.db"
     engine = sa.create_engine(f"sqlite:///{database}")
@@ -294,7 +294,7 @@ def test_alembic_real_upgrade_and_downgrade_from_073(tmp_path):
         assert result.returncode == 0, result.stdout + result.stderr
         return result.stdout.strip()
 
-    assert alembic("heads") == "077_pet_rename (head)"
+    assert alembic("heads") == "078_wanted_decay (head)"
     alembic("stamp", "073_disease_started_flag")
     alembic("upgrade", "074_theft_system")
     alembic("upgrade", "074_theft_system")
@@ -309,6 +309,67 @@ def test_alembic_real_upgrade_and_downgrade_from_073(tmp_path):
     assert not sa.inspect(engine).has_table("user_wanted_states")
     assert _config_rows(engine) == {}
     engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Migration 078
+# ---------------------------------------------------------------------------
+
+MIGRATION_078 = ROOT / "database/migrations/versions/078_wanted_decay.py"
+
+
+def _migration_078():
+    spec = importlib.util.spec_from_file_location("migration_078", MIGRATION_078)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _run_migration_078(engine, direction):
+    with engine.begin() as connection:
+        with Operations.context(MigrationContext.configure(connection)):
+            getattr(_migration_078(), direction)()
+
+
+def test_migration_078_revises_077_seeds_decay_hours_and_is_the_head():
+    migration = _migration_078()
+    assert migration.revision == "078_wanted_decay"
+    assert migration.down_revision == "077_pet_rename"
+    scripts = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
+    assert scripts.get_heads() == ["078_wanted_decay"]
+    assert scripts.get_revision("078_wanted_decay").down_revision == "077_pet_rename"
+    # The code default and the seeded value agree.
+    assert CONFIG_DEFAULTS["theft_star_decay_hours"] == 3
+    assert migration._VALUE == "3"
+
+
+def test_migration_078_upgrade_seeds_and_downgrade_preserves_overrides(migration_engine):
+    engine = migration_engine
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                "INSERT INTO system_config (`key`, `value`) VALUES "
+                "('theft_star_decay_hours', '9'), ('unrelated', 'keep')"
+            )
+        )
+
+    _run_migration_078(engine, "upgrade")
+    _run_migration_078(engine, "upgrade")  # idempotent
+    # An operator override wins over the seed ...
+    assert _config_rows(engine) == {"theft_star_decay_hours": "9", "unrelated": "keep"}
+    _run_migration_078(engine, "downgrade")
+    _run_migration_078(engine, "downgrade")  # idempotent
+    # ... and survives the downgrade (only an untouched default is removed).
+    assert _config_rows(engine) == {"theft_star_decay_hours": "9", "unrelated": "keep"}
+
+    # Without an override the default "3" is seeded, and downgrade removes it.
+    with engine.begin() as connection:
+        connection.execute(sa.text("DELETE FROM system_config"))
+    _run_migration_078(engine, "upgrade")
+    assert _config_rows(engine) == {"theft_star_decay_hours": "3"}
+    _run_migration_078(engine, "downgrade")
+    assert _config_rows(engine) == {}
 
 
 # ---------------------------------------------------------------------------
@@ -382,6 +443,149 @@ async def test_status_after_jail_and_cooldown_expire(session, now):
     assert status["is_jailed"] is False
     assert status["jail_remaining_seconds"] == 0
     assert status["is_cooldown"] is False
+
+
+# ---------------------------------------------------------------------------
+# GTA-style wanted decay (migration 078): one star per theft_star_decay_hours
+# since the last theft, instead of all stars expiring at once.
+# ---------------------------------------------------------------------------
+
+
+async def test_status_decays_one_star_after_four_hours(session, now):
+    """Mock 4 hours passing with decay=3h: 3 stars drop to 2, not to 0."""
+    await _users(session, 1)
+    await _state(
+        session,
+        1,
+        wanted_level=3,
+        last_stolen_at=_utc(now) - timedelta(hours=4),
+        wanted_expires_at=_utc(now) + timedelta(hours=20),
+    )
+    status = await theft.get_status(session, 1)
+    assert status["wanted_level"] == 2
+    # The decay is persisted; stars remain, so the theft timer is kept.
+    state = await session.get(UserWantedState, 1)
+    assert state.wanted_level == 2
+    assert state.last_stolen_at is not None
+
+
+async def test_status_decays_to_zero_after_ten_hours(session, now):
+    """Mock 10 hours passing with decay=3h: 3 stars drop to 0."""
+    await _users(session, 1)
+    await _state(
+        session,
+        1,
+        wanted_level=3,
+        last_stolen_at=_utc(now) - timedelta(hours=10),
+        wanted_expires_at=_utc(now) + timedelta(hours=14),
+    )
+    status = await theft.get_status(session, 1)
+    assert status["wanted_level"] == 0
+    assert status["is_cooldown"] is False
+    # The reset is persisted, and at zero stars the theft timer is cleared.
+    state = await session.get(UserWantedState, 1)
+    assert state.wanted_level == 0
+    assert state.last_stolen_at is None
+    assert state.wanted_expires_at is None
+
+
+async def test_decay_drops_one_star_per_interval_not_all_at_once(session, now, monkeypatch):
+    """Stars fall one by one: 4h -> 2 stars, 7h -> 1 star, 10h -> 0 stars."""
+    await _users(session, 1)
+    await _state(
+        session,
+        1,
+        wanted_level=3,
+        last_stolen_at=_utc(now) - timedelta(hours=4),
+    )
+    assert (await theft.get_status(session, 1))["wanted_level"] == 2
+
+    monkeypatch.setattr(theft, "_now", lambda: now + timedelta(hours=3))
+    assert (await theft.get_status(session, 1))["wanted_level"] == 1
+
+    monkeypatch.setattr(theft, "_now", lambda: now + timedelta(hours=6))
+    assert (await theft.get_status(session, 1))["wanted_level"] == 0
+    assert await session.scalar(
+        sa.select(UserWantedState.last_stolen_at).where(UserWantedState.user_id == 1)
+    ) is None
+
+
+async def test_decay_interval_is_configurable(session, now):
+    await _set_config(session, "theft_star_decay_hours", 4)
+    await _users(session, 1)
+    await _state(session, 1, wanted_level=3, last_stolen_at=_utc(now) - timedelta(hours=8))
+    # 8 // 4 = 2 stars lost -> one star remains.
+    assert (await theft.get_status(session, 1))["wanted_level"] == 1
+
+
+async def test_stealing_again_resets_the_decay_timer_and_levels_up(session, now, monkeypatch):
+    """A decayed-away star makes the thief clean; a new theft restarts the clock."""
+    await _users(session, 1, 2)
+    await _wallet(session, 1, 4000)
+    await _wallet(session, 2, 0)
+    await _state(session, 2, wanted_level=1, last_stolen_at=_utc(now) - timedelta(hours=4))
+
+    # 4h >= 3h decay: the single star is gone, so the theft settles instantly
+    # and raises the level back to one.
+    result = await theft.initiate_theft(session, 2, 1)
+    assert result == {"status": "success", "amount": 200, "wanted_level": 1}
+    state = await session.get(UserWantedState, 2)
+    assert _aware(state.last_stolen_at) == _utc(now)
+
+    # The timer restarted: 2h after the new theft no star has dropped yet ...
+    monkeypatch.setattr(theft, "_now", lambda: now + timedelta(hours=2))
+    assert (await theft.get_status(session, 2))["wanted_level"] == 1
+    # ... and 3h after the new theft the star decays again.
+    monkeypatch.setattr(theft, "_now", lambda: now + timedelta(hours=3))
+    assert (await theft.get_status(session, 2))["wanted_level"] == 0
+
+
+async def test_decay_then_successful_theft_still_caps_at_five_stars(
+    session, now, monkeypatch
+):
+    """5 stars decayed to 4 by time; a successful heist raises back to 5, never above."""
+    monkeypatch.setattr(theft.random, "random", lambda: 0.0)
+    await _users(session, 1, 2)
+    await _wallet(session, 1, 4000)
+    await _wallet(session, 2, 0)
+    await _state(
+        session,
+        2,
+        wanted_level=5,
+        last_stolen_at=_utc(now) - timedelta(hours=4),  # 4h -> one star lost -> 4
+    )
+
+    started = await theft.initiate_theft(session, 2, 1)
+    assert started == {"status": "pending", "amount": 200, "window_seconds": 10}
+
+    result = await theft.resolve_pending_theft(session, 2, 1, 200, caught_by_id=None)
+    assert result == {"status": "success", "amount": 200, "wanted_level": 5}
+    state = await session.get(UserWantedState, 2)
+    assert state.wanted_level == 5
+    assert _aware(state.last_stolen_at) == _utc(now)
+
+
+async def test_apply_wanted_decay_sweeps_every_wanted_row(session, now):
+    """Maintenance entry point: offline players lose stars over time too."""
+    await _users(session, 1, 2, 3, 4)
+    await _state(session, 1, wanted_level=3, last_stolen_at=_utc(now) - timedelta(hours=4))
+    await _state(session, 2, wanted_level=2, last_stolen_at=_utc(now) - timedelta(hours=1))
+    await _state(session, 3, wanted_level=1, last_stolen_at=_utc(now) - timedelta(hours=10))
+    # user 4 has no wanted row at all
+
+    changed = await theft.apply_wanted_decay(session)
+
+    assert changed == 2
+    rows = await session.execute(
+        sa.select(UserWantedState.user_id, UserWantedState.wanted_level).order_by(
+            UserWantedState.user_id
+        )
+    )
+    assert dict(rows.all()) == {1: 2, 2: 2, 3: 0}
+    state3 = await session.get(UserWantedState, 3)
+    assert state3.last_stolen_at is None
+    # Re-running at the same moment changes nothing (decay is idempotent).
+    assert await theft.apply_wanted_decay(session) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -907,8 +1111,10 @@ async def test_night_limit_resets_next_day(session, monkeypatch):
     monkeypatch.setattr(theft, "_now", lambda: night_tomorrow)
     # Need to bypass cooldown: last theft was 24h ago, cooldown expired
     result = await theft.initiate_theft(session, 2, 1)
-    # Thief is now level 1, so second theft is pending, not night_limit
-    assert result["status"] == "pending"
+    # 24h >= theft_star_decay_hours, so the single star decayed overnight and
+    # the thief is clean again: instant success, not night_limit and not pending.
+    # The victim only has 3800 apples left, so 5% = 190.
+    assert result == {"status": "success", "amount": 190, "wanted_level": 1}
 
 
 async def test_night_limit_configurable_via_system_config(session, monkeypatch):

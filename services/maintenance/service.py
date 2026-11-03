@@ -71,6 +71,12 @@ class MaintenanceService:
     LEAGUE_SWEEP_INTERVAL_SECONDS = 3600
     _last_league_sweep_at: Optional[datetime] = None
 
+    #: Wanted stars decay one by one (GTA-style, ``theft_star_decay_hours``),
+    #: so players who are offline must lose them too. One sweep per hour is
+    #: plenty: stars drop gradually, never all at once.
+    WANTED_DECAY_SWEEP_INTERVAL_SECONDS = 3600
+    _last_wanted_decay_sweep_at: Optional[datetime] = None
+
     @classmethod
     def _league_sweep_due(cls, now: datetime) -> bool:
         last = cls._last_league_sweep_at
@@ -614,6 +620,29 @@ class MaintenanceService:
             return 0
 
     @classmethod
+    async def run_wanted_decay_sweep(cls, *, now: Optional[datetime] = None) -> int:
+        """Drop wanted stars of every wanted player, at most once an hour.
+
+        Delegates to ``theft_service.apply_wanted_decay`` in its own
+        transaction, so offline players lose stars over time as well. The
+        throttle lives inside this method (like the infection tick) and only
+        advances after a successful commit; failures retry on the next cycle.
+        """
+        from sib.services import theft_service
+
+        now_utc = now or datetime.now(timezone.utc)
+        last = cls._last_wanted_decay_sweep_at
+        if (
+            last is not None
+            and 0 <= (now_utc - last).total_seconds() < cls.WANTED_DECAY_SWEEP_INTERVAL_SECONDS
+        ):
+            return 0
+        async with get_session() as session:
+            changed = await theft_service.apply_wanted_decay(session)
+        cls._last_wanted_decay_sweep_at = now_utc
+        return changed
+
+    @classmethod
     async def run_marriage_love_cycle(cls) -> dict:
         """One Marriage/Love maintenance cycle.
 
@@ -837,6 +866,16 @@ class MaintenanceService:
             await cls.run_marriage_love_cycle()
         except Exception:
             logger.exception("Marriage/Love maintenance cycle failed")
+
+        # GTA-style wanted-star decay: players who are offline still lose one
+        # star per theft_star_decay_hours. Hourly, throttled inside the task,
+        # and in its own transaction so a failure never touches other work.
+        try:
+            decayed = await cls.run_wanted_decay_sweep()
+            if decayed:
+                logger.info("Wanted-star decay adjusted %s player(s)", decayed)
+        except Exception:
+            logger.exception("Maintenance task failed: wanted star decay")
 
         # Come-back reminders (services/reminders.py): at most one short DM
         # per player per day, only inside the local evening window, only when
