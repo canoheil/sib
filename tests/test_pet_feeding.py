@@ -14,6 +14,7 @@ import pytest
 import pytest_asyncio
 import sqlalchemy as sa
 from aiogram import Dispatcher
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage, StorageKey
 from aiogram.types import Chat, Message
@@ -36,6 +37,9 @@ from sib.services.sib_claim import fa_digits
 from sib.services.items import ITEM_CATALOG, ItemService
 
 NOW = datetime(2026, 11, 2, 12, 0, tzinfo=timezone.utc)
+#: Telegram's answer to an edit of a message that no longer exists (fail-fast:
+#: the retry helper does not retry it, so the test stays fast).
+_GONE = TelegramBadRequest(method=None, message="message to edit not found")
 FEED_COOLDOWN_KEY = "pet_feed_cooldown_hours"
 
 
@@ -452,15 +456,21 @@ def test_pets_router_is_registered_in_the_dispatcher():
     assert pets.router in included
 
 
-async def test_menu_without_pets_says_to_hunt(db, state):
-    message = SimpleNamespace(
-        from_user=SimpleNamespace(id=1, is_bot=False),
+def _menu_message(user_id: int = 1):
+    return SimpleNamespace(
+        from_user=SimpleNamespace(id=user_id, is_bot=False),
         answer=AsyncMock(),
+        answer_photo=AsyncMock(),
         reply=AsyncMock(),
     )
+
+
+async def test_menu_without_pets_says_to_hunt(db, state):
+    message = _menu_message()
     await pets.handle_my_pets(message, state)
 
     message.answer.assert_awaited_once()
+    message.answer_photo.assert_not_awaited()
     assert "سیب شکار" in message.answer.await_args.args[0]
     assert message.answer.await_args.kwargs.get("reply_markup") is None
 
@@ -470,14 +480,15 @@ async def test_menu_lists_every_pet_as_a_button(db, state):
         session.add(UserPet(user_id=1, pet_type="owl", custom_name="پشمک", xp=10))
         session.add(UserPet(user_id=1, pet_type="cat", custom_name=None, xp=0))
 
-    message = SimpleNamespace(
-        from_user=SimpleNamespace(id=1, is_bot=False),
-        answer=AsyncMock(),
-        reply=AsyncMock(),
-    )
+    message = _menu_message()
     await pets.handle_my_pets(message, state)
 
-    keyboard = message.answer.await_args.kwargs["reply_markup"]
+    # ONE message: the photo menu carrying the list.
+    message.answer.assert_not_awaited()
+    message.answer_photo.assert_awaited_once()
+    sent = message.answer_photo.await_args
+    assert str(sent.args[0].path) == str(pets.MENU_IMAGE)
+    keyboard = sent.kwargs["reply_markup"]
     buttons = [row[0] for row in keyboard.inline_keyboard]
     assert len(buttons) == 2
     assert buttons[0].text == "🦉 جغد (پشمک)"
@@ -485,13 +496,25 @@ async def test_menu_lists_every_pet_as_a_button(db, state):
     assert [b.callback_data for b in buttons] == ["pet_view:1", "pet_view:2"]
 
 
-async def test_menu_clears_a_half_finished_naming_state(db, state):
-    await state.set_state(PetStates.waiting_for_name)
+async def test_menu_falls_back_to_text_without_a_photo_sender(db, state):
+    """A minimal handle (or missing art) still gets the menu, as text."""
+    async with db.begin() as session:
+        session.add(UserPet(user_id=1, pet_type="owl", custom_name="پشمک"))
+
     message = SimpleNamespace(
         from_user=SimpleNamespace(id=1, is_bot=False),
         answer=AsyncMock(),
         reply=AsyncMock(),
     )
+    await pets.handle_my_pets(message, state)
+
+    message.answer.assert_awaited_once()
+    assert message.answer.await_args.kwargs["reply_markup"] is not None
+
+
+async def test_menu_clears_a_half_finished_naming_state(db, state):
+    await state.set_state(PetStates.waiting_for_name)
+    message = _menu_message()
     await pets.handle_my_pets(message, state)
     assert await state.get_state() is None
 
@@ -519,6 +542,7 @@ def _bot():
     return SimpleNamespace(
         edit_message_media=AsyncMock(),
         edit_message_caption=AsyncMock(),
+        edit_message_text=AsyncMock(),
     )
 
 
@@ -593,12 +617,182 @@ async def test_pet_view_handles_unknown_pets(db, state, raw):
 
 
 async def test_pet_view_menu_reopens_the_list(db, state):
+    """«🔙 پت‌های من» EDITS the message back to the list — it never sends one."""
+    async with db.begin() as session:
+        session.add(UserPet(user_id=1, pet_type="owl", custom_name="پشمک", xp=10))
+
     callback = _callback("pet_view:menu")
     bot = _bot()
     await pets.handle_pet_view(callback, state, bot)
 
-    callback.message.answer.assert_awaited_once()
-    assert "سیب شکار" in callback.message.answer.await_args.args[0]
+    bot.edit_message_media.assert_awaited_once()
+    edited = bot.edit_message_media.await_args.kwargs
+    # The pet's artwork is swapped back for the menu plate, same message.
+    assert str(edited["media"].media.path) == str(pets.MENU_IMAGE)
+    assert edited["message_id"] == 5
+    assert "پت‌های شما" in edited["media"].caption
+    buttons = [b for row in edited["reply_markup"].inline_keyboard for b in row]
+    assert [b.callback_data for b in buttons] == ["pet_view:1"]
+    # No second message was created.
+    callback.message.answer.assert_not_awaited()
+    callback.message.answer_photo.assert_not_awaited()
+
+
+async def test_pet_view_menu_back_without_pets_edits_the_text(db, state):
+    """Without pets the list is plain text — still an EDIT, never a new message."""
+    callback = _callback("pet_view:menu")
+    bot = _bot()
+    await pets.handle_pet_view(callback, state, bot)
+
+    callback.message.answer.assert_not_awaited()
+    callback.message.answer_photo.assert_not_awaited()
+    # A photo message keeps its art: the caption carries the message.
+    bot.edit_message_caption.assert_awaited_once()
+    caption = bot.edit_message_caption.await_args.kwargs["caption"]
+    assert "سیب شکار" in caption
+    assert bot.edit_message_caption.await_args.kwargs["reply_markup"] is None
+
+
+# ---------------------------------------------------------------------------
+# Handlers — the skill line of the profile
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "pet_type, skill_name, description",
+    [
+        ("dog", "پارس هشدار", "محافظت در برابر دزدی"),
+        ("squirrel", "برکت باغ", "سرعت بخشیدن به رشد باغ"),
+        ("cat", "چشم شانس", "شانس بیشتر در کازینو و راکت"),
+        ("owl", "خشم شب", "دمیج بیشتر در نبردها"),
+    ],
+)
+def test_baby_profile_shows_its_locked_skill(pet_type, skill_name, description):
+    caption = pets.pet_profile_caption(
+        SimpleNamespace(
+            pet_type=pet_type, custom_name="پشمک", xp=0, is_adult=False, skill_level=1
+        ),
+        500,
+    )
+
+    assert f"🔒 اسکیل: {skill_name} (با بالغ شدن فعال می‌شود)" in caption
+    # A baby has no usable skill yet: no level, no description.
+    assert description not in caption
+    assert "لول" not in caption
+
+
+@pytest.mark.parametrize(
+    "pet_type, skill_name, description",
+    [
+        ("dog", "پارس هشدار", "محافظت در برابر دزدی"),
+        ("squirrel", "برکت باغ", "سرعت بخشیدن به رشد باغ"),
+        ("cat", "چشم شانس", "شانس بیشتر در کازینو و راکت"),
+        ("owl", "خشم شب", "دمیج بیشتر در نبردها"),
+    ],
+)
+def test_adult_profile_explains_its_active_skill(pet_type, skill_name, description):
+    caption = pets.pet_profile_caption(
+        SimpleNamespace(
+            pet_type=pet_type, custom_name="پشمک", xp=500, is_adult=True, skill_level=2
+        ),
+        500,
+    )
+
+    assert f"✨ اسکیل: {skill_name} - لول {fa_digits(2)}" in caption
+    assert description in caption
+    assert "🔒" not in caption
+
+
+def test_profile_skill_line_uses_the_pet_level():
+    adult = SimpleNamespace(pet_type="owl", is_adult=True, skill_level=3)
+    assert "لول ۳" in pets.pet_skill_line(adult)
+
+
+def test_unknown_species_still_gets_a_skill_line():
+    pet = SimpleNamespace(pet_type="dragon", is_adult=True, skill_level=1)
+    assert "✨ اسکیل" in pets.pet_skill_line(pet)
+
+
+async def test_pet_view_shows_the_locked_skill_of_a_baby(db, state):
+    async with db.begin() as session:
+        session.add(UserPet(user_id=1, pet_type="dog", custom_name="رکس", xp=0))
+
+    callback = _callback("pet_view:1")
+    bot = _bot()
+    await pets.handle_pet_view(callback, state, bot)
+
+    caption = bot.edit_message_media.await_args.kwargs["media"].caption
+    assert "🔒 اسکیل: پارس هشدار" in caption
+    assert "محافظت در برابر دزدی" not in caption
+
+
+async def test_pet_view_shows_the_active_skill_of_an_adult(db, state):
+    async with db.begin() as session:
+        session.add(
+            UserPet(
+                user_id=1,
+                pet_type="cat",
+                custom_name="ملوس",
+                xp=520,
+                is_adult=True,
+                skill_level=2,
+            )
+        )
+
+    callback = _callback("pet_view:1")
+    bot = _bot()
+    await pets.handle_pet_view(callback, state, bot)
+
+    caption = bot.edit_message_media.await_args.kwargs["media"].caption
+    assert "✨ اسکیل: چشم شانس - لول ۲" in caption
+    assert "شانس بیشتر در کازینو و راکت" in caption
+
+
+async def test_pet_view_never_sends_a_new_message(db, state):
+    """Opening a card EDITS the menu message (no chat spam)."""
+    async with db.begin() as session:
+        session.add(UserPet(user_id=1, pet_type="owl", custom_name="پشمک", xp=10))
+
+    callback = _callback("pet_view:1")
+    bot = _bot()
+    await pets.handle_pet_view(callback, state, bot)
+
+    bot.edit_message_media.assert_awaited_once()
+    bot.edit_message_text.assert_not_awaited()
+    callback.message.answer.assert_not_awaited()
+    callback.message.answer_photo.assert_not_awaited()
+
+
+async def test_pet_view_edits_a_text_menu_in_place(db, state):
+    """A text menu (no photo) is edited as text — still no new message."""
+    async with db.begin() as session:
+        session.add(UserPet(user_id=1, pet_type="owl", custom_name="پشمک", xp=10))
+
+    callback = _callback("pet_view:1", with_photo=False)
+    bot = _bot()
+    await pets.handle_pet_view(callback, state, bot)
+
+    bot.edit_message_text.assert_awaited_once()
+    assert "پشمک" in bot.edit_message_text.await_args.args[0]
+    callback.message.answer.assert_not_awaited()
+    callback.message.answer_photo.assert_not_awaited()
+
+
+async def test_pet_view_reposts_only_when_the_message_is_gone(db, state):
+    """Every edit failing (deleted message) is the only case that re-sends."""
+    async with db.begin() as session:
+        session.add(UserPet(user_id=1, pet_type="owl", custom_name="پشمک", xp=10))
+
+    callback = _callback("pet_view:1")
+    bot = _bot()
+    bot.edit_message_media.side_effect = _GONE
+    bot.edit_message_caption.side_effect = _GONE
+    bot.edit_message_text.side_effect = _GONE
+    await pets.handle_pet_view(callback, state, bot)
+
+    callback.message.answer_photo.assert_awaited_once()
+    assert str(callback.message.answer_photo.await_args.args[0].path) == str(
+        pets.ASSET_DIR / "owl_baby.jpg"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -674,7 +868,7 @@ async def test_feed_callback_caption_renders_bold_html(db, state):
     """The feed caption keeps real ``<b>`` tags — never ``&lt;b&gt;``.
 
     Regression: the caption used to be rendered twice (once in the handler,
-    once in ``_show_pet_card``), which escaped the ``<b>`` tags into raw
+    once in the card renderer), which escaped the ``<b>`` tags into raw
     HTML text in the UI.
     """
     async with db.begin() as session:

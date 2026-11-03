@@ -1261,6 +1261,10 @@ async def test_naming_handler_saves_the_name_and_clears_the_state(db, state):
     message.reply.assert_awaited_once()
     assert "ملوس" in message.reply.await_args.args[0]
     assert "سیب پت" in message.reply.await_args.args[0]
+    # The confirmation teases the skill the baby will unlock once it grows up.
+    assert pets.SKILL_TEASER in message.reply.await_args.args[0]
+    assert "بالغ بشه" in message.reply.await_args.args[0]
+    assert "اسکیل" in message.reply.await_args.args[0]
     assert await state.get_state() is None
     assert await state.get_data() == {}
 

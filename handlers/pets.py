@@ -22,11 +22,16 @@ Flow
    that REPLIES to the bot's prompt (a group is shared, so any other message
    is refused with a gentle reminder). An invalid name keeps the state so the
    player can retry.
-5. «سیب پت» (``/mypets``) lists the player's pets as buttons; each one opens
-   a profile with its artwork, XP progress, a «🍖 غذا دادن» button that
-   spends one ``pet_food`` from the inventory and eventually evolves the pet,
-   and a «✏️ تغییر نام» button that buys the ONE paid rename
-   (``PetStates.waiting_for_rename``, same reply-to-prompt rule).
+5. «سیب پت» (``/mypets``) posts the ONE menu message: the player's pets as
+   buttons over the pet plate. Every screen after it — a pet card with its
+   artwork, XP progress and skill, «🍖 غذا دادن» (spends one ``pet_food``
+   from the inventory and eventually evolves the pet), «✏️ تغییر نام» (the
+   ONE paid rename, ``PetStates.waiting_for_rename``, same reply-to-prompt
+   rule) and «🔙 پت‌های من» — edits that same message in place
+   (:func:`_edit_pet_screen`), so browsing pets never spams the chat.
+6. The profile explains the pet's skill: locked for a baby
+   («🔒 ... با بالغ شدن فعال می‌شود»), name + level + what it does once the
+   pet is an adult (see :func:`pet_skill_line`).
 
 Only the player who opened the encounter may press its buttons: the tracking
 state lives in their own FSM context, and the roll uses a server-side chance
@@ -60,6 +65,7 @@ from sib.services.telegram_ui import (
     safe_answer_callback,
     safe_edit_message_caption,
     safe_edit_message_media,
+    safe_edit_message_text,
 )
 
 router = Router(name="pets")
@@ -160,17 +166,41 @@ NAMED_TEXT = (
     "✅ اسم {name} برای پت شما ثبت شد! "
     "از این به بعد با دستور «سیب پت» می‌تونید مدیریتش کنید."
 )
+#: Shown right after the name is saved: a baby pet still has a locked skill,
+#: and the player should know it is worth growing.
+SKILL_TEASER = (
+    "💡 این پت وقتی بالغ بشه، اسکیل مخصوص خودش رو باز می‌کنه "
+    "که توی بازی بهت کمک می‌کنه!"
+)
 NO_PET_TEXT = "🐾 پت موردنظر پیدا نشد. دوباره «سیب شکار» را امتحان کنید."
 
 NO_PETS_TEXT = "شما هنوز هیچ پتی ندارید. با دستور «سیب شکار» برید شکار!"
 PET_MENU_TITLE = "🐾 **پت‌های شما**\nبرای دیدن پروفایل هر پت روی اسمش بزن:"
+#: The plate behind the pet list. The cards swap it for the pet's own artwork
+#: and «🔙 پت‌های من» swaps it back — always inside the SAME message, so
+#: browsing pets never floods the chat with new messages.
+MENU_IMAGE = FOREST_IMAGE
 PROFILE_CAPTION = (
     "{emoji} **{name}**\n"
     "🧬 نوع: {type_fa}\n"
     "{status_line}\n"
     "📊 XP: {xp}/{required} ({percent}٪)\n"
-    "⭐ اسکیل: {skill}"
+    "{skill_line}"
 )
+#: ``pet_type -> (skill name, what the skill actually does)``. Every species
+#: unlocks its own ability when it grows up (see :func:`pet_skill_line`).
+PET_SKILLS = {
+    "dog": ("پارس هشدار", "محافظت در برابر دزدی"),
+    "squirrel": ("برکت باغ", "سرعت بخشیدن به رشد باغ"),
+    "cat": ("چشم شانس", "شانس بیشتر در کازینو و راکت"),
+    "owl": ("خشم شب", "دمیج بیشتر در نبردها"),
+}
+#: Defensive fallback for an unknown species: still announce the skill.
+FALLBACK_SKILL = ("اسکیل ویژه", "کمک به تو در بازی")
+#: A baby's skill exists but is not usable yet.
+SKILL_LOCKED_LINE = "🔒 اسکیل: {skill_name} (با بالغ شدن فعال می‌شود)"
+#: An adult's skill: name, level and what it does.
+SKILL_ACTIVE_LINE = "✨ اسکیل: {skill_name} - لول {level}\n{description}"
 STATUS_BABY = "🍼 وضعیت: بچه"
 STATUS_ADULT = "👑 وضعیت: بالغ"
 FEED_BUTTON_TEXT = "🍖 غذا دادن"
@@ -338,6 +368,28 @@ def pet_emoji(pet_type: str) -> str:
     )
 
 
+def pet_skill(pet_type: str) -> tuple[str, str]:
+    """``(name, description)`` of the ability a species unlocks as an adult."""
+    return PET_SKILLS.get(_safe_pet_type(pet_type), FALLBACK_SKILL)
+
+
+def pet_skill_line(pet) -> str:
+    """The skill line of the profile.
+
+    A baby only sees WHAT it will unlock (locked, no numbers); an adult sees
+    the active skill with its level and what it actually does — otherwise
+    «⭐ اسکیل: ۱» told the player nothing about their pet's ability.
+    """
+    skill_name, description = pet_skill(pet.pet_type)
+    if not pet.is_adult:
+        return SKILL_LOCKED_LINE.format(skill_name=skill_name)
+    return SKILL_ACTIVE_LINE.format(
+        skill_name=skill_name,
+        level=fa_digits(pet.skill_level),
+        description=description,
+    )
+
+
 def pet_profile_caption(pet, required: int) -> str:
     """The pet profile caption (name, species, status, XP progress, skill).
 
@@ -355,7 +407,7 @@ def pet_profile_caption(pet, required: int) -> str:
         xp=fa_digits(progress["xp"]),
         required=fa_digits(progress["required"]),
         percent=fa_digits(progress["percent"]),
-        skill=fa_digits(pet.skill_level),
+        skill_line=pet_skill_line(pet),
     )
 
 
@@ -688,20 +740,123 @@ async def _edit_encounter(
 # «سیب پت» — the pet menu
 # ---------------------------------------------------------------------------
 
-async def _send_pet_menu(answer, user_id: int) -> None:
-    """Render the pet list (``answer`` is ``message.answer`` or a reply)."""
+async def _pet_menu_content(
+    user_id: int,
+) -> tuple[str, InlineKeyboardMarkup | None, Path | None]:
+    """``(caption, keyboard, image)`` of the pet list.
+
+    An empty list has no keyboard and no plate: the player is told to hunt.
+    """
     async with get_session() as session:
         pets = await pet_service.list_pets(session, user_id)
 
     if not pets:
-        await answer(NO_PETS_TEXT, parse_mode="HTML")
-        return
+        return NO_PETS_TEXT, None, None
+    return PET_MENU_TITLE, pet_menu_keyboard(pets), MENU_IMAGE
 
-    await answer(
-        format_html_caption(PET_MENU_TITLE),
-        reply_markup=pet_menu_keyboard(pets),
-        parse_mode="HTML",
+
+async def _send_pet_menu(message, user_id: int) -> None:
+    """Open the pet list — the ONE fresh message of the whole flow.
+
+    Every screen after it (a pet card, «🔙 پت‌های من») edits THIS message in
+    place through :func:`_edit_pet_screen`, so browsing pets never spams the
+    chat with a new message per click.
+    """
+    caption, keyboard, image = await _pet_menu_content(user_id)
+    answer_photo = getattr(message, "answer_photo", None)
+    with_art = image is not None and image.is_file() and answer_photo is not None
+    if keyboard is not None and with_art:
+        await answer_photo(
+            FSInputFile(str(image)),
+            caption=format_html_caption(caption),
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
+        return
+    await message.answer(
+        format_html_caption(caption), reply_markup=keyboard, parse_mode="HTML"
     )
+
+
+async def _show_pet_menu(bot, callback, user_id: int) -> bool:
+    """Put the pet list back on the callback's OWN message («پت‌های من»)."""
+    caption, keyboard, image = await _pet_menu_content(user_id)
+    return await _edit_pet_screen(bot, callback, caption, keyboard, image)
+
+
+async def _edit_pet_screen(
+    bot, callback, caption: str, keyboard=None, image: Path | None = None
+) -> bool:
+    """Render a pet screen on the message behind ``callback`` (edit, never send).
+
+    The menu and every pet card are photo screens, so moving between them is a
+    single ``edit_message_media`` that swaps the artwork — the message stays
+    exactly where it is. The chain degrades instead of duplicating the message:
+    caption edit for a photo message without usable artwork, then a plain
+    ``edit_message_text`` for a text message. A fresh send happens ONLY when
+    the message is gone (deleted) and every edit failed.
+
+    Returns ``True`` when the existing message now shows the screen.
+    """
+    message = getattr(callback, "message", None)
+    chat_id = getattr(getattr(message, "chat", None), "id", None)
+    message_id = getattr(message, "message_id", None)
+    text = format_html_caption(caption)
+    has_photo = bool(getattr(message, "photo", None))
+
+    if bot is not None and chat_id and message_id:
+        if has_photo and image is not None and image.is_file():
+            edited = await safe_edit_message_media(
+                bot,
+                chat_id,
+                message_id,
+                photo=FSInputFile(str(image)),
+                text=text,
+                reply_markup=keyboard,
+                parse_mode="HTML",
+            )
+            if edited:
+                return True
+            logger.info(
+                "pet screen media edit failed (chat=%s message=%s)",
+                chat_id,
+                message_id,
+            )
+        if has_photo and await safe_edit_message_caption(
+            bot,
+            chat_id,
+            message_id,
+            text=text,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        ):
+            return True
+        if await safe_edit_message_text(
+            bot,
+            chat_id,
+            message_id,
+            text=text,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        ):
+            return True
+        logger.info("pet screen edit failed (chat=%s message=%s)", chat_id, message_id)
+
+    # Nothing was editable (the message is gone): show the screen once, so the
+    # button never looks dead.
+    answer_photo = getattr(message, "answer_photo", None)
+    if image is not None and image.is_file() and answer_photo is not None:
+        await answer_photo(
+            FSInputFile(str(image)),
+            caption=text,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
+        return False
+    answer = getattr(message, "answer", None)
+    if answer is not None:
+        await answer(text, reply_markup=keyboard, parse_mode="HTML")
+    return False
 
 
 @router.message(Command("mypets"))
@@ -714,7 +869,7 @@ async def handle_my_pets(message: Message, state: FSMContext) -> None:
     # Opening the menu abandons a half-finished naming step, like a new hunt.
     await state.clear()
     try:
-        await _send_pet_menu(message.answer, sender.id)
+        await _send_pet_menu(message, sender.id)
     except Exception:
         logger.exception("pet menu failed (user=%s)", sender.id)
         await message.reply(GENERIC_ERROR)
@@ -732,9 +887,10 @@ async def handle_pet_view(callback: CallbackQuery, state: FSMContext, bot) -> No
     raw = (callback.data or "")[len(PET_VIEW_PREFIX):]
 
     if raw == "menu":
+        # «🔙 پت‌های من»: back to the list in the SAME message.
         await safe_answer_callback(callback)
         try:
-            await _send_pet_menu(callback.message.answer, sender.id)
+            await _show_pet_menu(bot, callback, sender.id)
         except Exception:
             logger.exception("pet menu from callback failed (user=%s)", sender.id)
             await safe_answer_callback(callback, GENERIC_ERROR, show_alert=True)
@@ -760,49 +916,7 @@ async def handle_pet_view(callback: CallbackQuery, state: FSMContext, bot) -> No
         return
 
     await safe_answer_callback(callback)
-    await _show_pet_card(bot, callback, image, caption, keyboard)
-
-
-async def _show_pet_card(bot, callback, image: Path, caption: str, keyboard) -> None:
-    """Replace the current message with a pet card (photo + caption + buttons)."""
-    message = getattr(callback, "message", None)
-    chat_id = getattr(getattr(message, "chat", None), "id", None)
-    message_id = getattr(message, "message_id", None)
-    text = format_html_caption(caption)
-
-    has_photo = bool(getattr(message, "photo", None))
-    if bot is not None and chat_id and message_id and has_photo and image.is_file():
-        edited = await safe_edit_message_media(
-            bot,
-            chat_id,
-            message_id,
-            photo=FSInputFile(str(image)),
-            text=text,
-            reply_markup=keyboard,
-            parse_mode="HTML",
-        )
-        if edited:
-            return
-    if bot is not None and chat_id and message_id and has_photo:
-        edited = await safe_edit_message_caption(
-            bot, chat_id, message_id, text=text, reply_markup=keyboard, parse_mode="HTML"
-        )
-        if edited:
-            return
-
-    # No editable photo message (the menu is text-only): send the card fresh.
-    photo_sender = getattr(message, "answer_photo", None)
-    if photo_sender is not None and image.is_file():
-        await photo_sender(
-            FSInputFile(str(image)),
-            caption=text,
-            reply_markup=keyboard,
-            parse_mode="HTML",
-        )
-        return
-    answer = getattr(message, "answer", None)
-    if answer is not None:
-        await answer(text, reply_markup=keyboard, parse_mode="HTML")
+    await _edit_pet_screen(bot, callback, caption, keyboard, image)
 
 
 # ---------------------------------------------------------------------------
@@ -847,20 +961,20 @@ async def handle_pet_feed(callback: CallbackQuery, state: FSMContext, bot) -> No
 
     if status == "evolved":
         await safe_answer_callback(callback, "🎉 پت شما بالغ شد!")
-        await _show_pet_card(
+        await _edit_pet_screen(
             bot,
             callback,
-            adult_artwork(pet_type),
             FEED_EVOLVED_CAPTION.format(name=name, type_fa=type_fa)
             + "\n"
             + pet_profile_caption(pet, required),
             pet_profile_keyboard(pet),
+            adult_artwork(pet_type),
         )
         return
 
     await safe_answer_callback(callback, f"🍖 +{fa_digits(result.get('xp_added') or 0)} XP")
     # One line about the meal, then the refreshed profile (no duplicated XP).
-    # NOTE: the caption is passed to ``_show_pet_card`` raw (``**bold**``
+    # NOTE: the caption is passed to ``_edit_pet_screen`` raw (``**bold**``
     # markers included): that helper renders it through ``format_html_caption``
     # exactly once. Pre-rendering here would escape the ``<b>`` tags into
     # ``&lt;b&gt;`` and the feed caption would show raw HTML.
@@ -868,12 +982,12 @@ async def handle_pet_feed(callback: CallbackQuery, state: FSMContext, bot) -> No
         name=name,
         xp_added=fa_digits(result.get("xp_added") or 0),
     )
-    await _show_pet_card(
+    await _edit_pet_screen(
         bot,
         callback,
-        baby_artwork(pet_type),
         caption + "\n\n" + pet_profile_caption(pet, required),
         pet_profile_keyboard(pet),
+        baby_artwork(pet_type),
     )
 
 
@@ -917,7 +1031,9 @@ async def handle_pet_name(message: Message, state: FSMContext) -> None:
 
     await state.clear()
     await message.reply(
-        NAMED_TEXT.format(name=html.escape(str(result.get("name") or ""))),
+        NAMED_TEXT.format(name=html.escape(str(result.get("name") or "")))
+        + "\n"
+        + SKILL_TEASER,
         parse_mode="HTML",
     )
 
