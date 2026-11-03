@@ -22,13 +22,16 @@ Flow
    that REPLIES to the bot's prompt (a group is shared, so any other message
    is refused with a gentle reminder). An invalid name keeps the state so the
    player can retry.
-5. «سیب پت» (``/mypets``) posts the ONE menu message: the player's pets as
-   buttons over the pet plate. Every screen after it — a pet card with its
-   artwork, XP progress and skill, «🍖 غذا دادن» (spends one ``pet_food``
-   from the inventory and eventually evolves the pet), «✏️ تغییر نام» (the
-   ONE paid rename, ``PetStates.waiting_for_rename``, same reply-to-prompt
-   rule) and «🔙 پت‌های من» — edits that same message in place
-   (:func:`_edit_pet_screen`), so browsing pets never spams the chat.
+5. «سیب پت» (``/mypets``) posts the ONE menu message as PLAIN TEXT — no
+   artwork, the forest plate belongs to the hunt — with the player's pets as
+   buttons. Opening a pet card swaps that text message into the pet's photo
+   with ``edit_message_media``; every other screen after it — the pet card
+   with XP progress and skill, «🍖 غذا دادن» (spends one ``pet_food`` from
+   the inventory and eventually evolves the pet), «✏️ تغییر نام» (the ONE
+   paid rename, ``PetStates.waiting_for_rename``, same reply-to-prompt rule)
+   — edits that same message in place (:func:`_edit_pet_screen`).
+   «🔙 پت‌های من» cannot edit a photo back into text, so on a photo card it
+   deletes the card and sends the text menu as a fresh message.
 6. The profile explains the pet's skill: locked for a baby
    («🔒 ... با بالغ شدن فعال می‌شود»), name + level + what it does once the
    pet is an adult (see :func:`pet_skill_line`).
@@ -66,6 +69,7 @@ from sib.services.telegram_ui import (
     safe_edit_message_caption,
     safe_edit_message_media,
     safe_edit_message_text,
+    safe_send_screen,
 )
 
 router = Router(name="pets")
@@ -124,6 +128,12 @@ LIMIT_BABY_TEXT = (
     "🐾 شما یک بچه پت دارید که هنوز بزرگ نشده. "
     "اول اسمش را انتخاب کنید، بعد دوباره شکار کنید."
 )
+#: The same hunt block when the baby ALREADY has a name: it must be fed to
+#: adulthood first — naming is done.
+LIMIT_BABY_NAMED_TEXT = (
+    "🐾 شما یک بچه پت ({name}) دارید که هنوز بزرگ نشده. "
+    "اول بهش غذا بدهید تا بالغ شود، بعد دوباره شکار کنید."
+)
 #: The encounter screen. ``**`` renders as bold through ``format_html_caption``.
 ENCOUNTER_CAPTION = (
     "🌲 وارد جنگل جادویی شدی!\n"
@@ -176,10 +186,9 @@ NO_PET_TEXT = "🐾 پت موردنظر پیدا نشد. دوباره «سیب �
 
 NO_PETS_TEXT = "شما هنوز هیچ پتی ندارید. با دستور «سیب شکار» برید شکار!"
 PET_MENU_TITLE = "🐾 **پت‌های شما**\nبرای دیدن پروفایل هر پت روی اسمش بزن:"
-#: The plate behind the pet list. The cards swap it for the pet's own artwork
-#: and «🔙 پت‌های من» swaps it back — always inside the SAME message, so
-#: browsing pets never floods the chat with new messages.
-MENU_IMAGE = FOREST_IMAGE
+#: The menu itself is TEXT-ONLY: the forest plate (``FOREST_IMAGE``) belongs to
+#: the hunt, not to «سیب پت». Pet cards are the only photo screens of this
+#: flow and are reached by editing the menu message into a photo.
 PROFILE_CAPTION = (
     "{emoji} **{name}**\n"
     "🧬 نوع: {type_fa}\n"
@@ -499,6 +508,14 @@ async def handle_hunt(message: Message, state: FSMContext) -> None:
             remaining = int(result.get("remaining_seconds") or 0)
             reason = result.get("reason")
             max_total = result.get("max_total")
+            # A baby blocks the hunt, and the block message depends on whether
+            # the baby already has a name: name it first, or feed it first.
+            baby_name = None
+            if status == "limit" and reason != "total":
+                owned = await pet_service.list_pets(session, sender.id)
+                baby = next((p for p in owned if not p.is_adult), None)
+                if baby is not None:
+                    baby_name = baby.custom_name
     except Exception:
         logger.exception("pet encounter failed (user=%s)", sender.id)
         await message.reply(GENERIC_ERROR)
@@ -515,8 +532,12 @@ async def handle_hunt(message: Message, state: FSMContext) -> None:
                     max_total=fa_digits(max_total or pet_service.MAX_PETS_TOTAL)
                 )
             )
-        else:
+        elif baby_name is None:
+            # The baby has no name yet: name it first.
             await message.reply(LIMIT_BABY_TEXT)
+        else:
+            # The baby is named: it has to be fed to adulthood first.
+            await message.reply(LIMIT_BABY_NAMED_TEXT.format(name=baby_name))
         return
 
     if status != "ok":
@@ -740,48 +761,55 @@ async def _edit_encounter(
 # «سیب پت» — the pet menu
 # ---------------------------------------------------------------------------
 
-async def _pet_menu_content(
-    user_id: int,
-) -> tuple[str, InlineKeyboardMarkup | None, Path | None]:
-    """``(caption, keyboard, image)`` of the pet list.
+async def _pet_menu_content(user_id: int) -> tuple[str, InlineKeyboardMarkup | None]:
+    """``(text, keyboard)`` of the pet list menu.
 
-    An empty list has no keyboard and no plate: the player is told to hunt.
+    The menu is TEXT-ONLY — no plate, the forest art belongs to the hunt.
+    An empty list has no keyboard: the player is told to hunt.
     """
     async with get_session() as session:
         pets = await pet_service.list_pets(session, user_id)
 
     if not pets:
-        return NO_PETS_TEXT, None, None
-    return PET_MENU_TITLE, pet_menu_keyboard(pets), MENU_IMAGE
+        return NO_PETS_TEXT, None
+    return PET_MENU_TITLE, pet_menu_keyboard(pets)
 
 
 async def _send_pet_menu(message, user_id: int) -> None:
-    """Open the pet list — the ONE fresh message of the whole flow.
+    """Open the pet list — a TEXT-ONLY message, the ONE fresh send of the flow.
 
-    Every screen after it (a pet card, «🔙 پت‌های من») edits THIS message in
-    place through :func:`_edit_pet_screen`, so browsing pets never spams the
-    chat with a new message per click.
+    No photo is attached (the ``hunt_forest.jpg`` plate belongs to hunting):
+    every screen after it (a pet card, «🔙 پت‌های من») is rendered through
+    :func:`_edit_pet_screen`, which swaps this text message into a photo for a
+    card and, on the way back, deletes a photo card to show this text menu
+    again — so browsing pets never spams the chat with a new message per click.
     """
-    caption, keyboard, image = await _pet_menu_content(user_id)
-    answer_photo = getattr(message, "answer_photo", None)
-    with_art = image is not None and image.is_file() and answer_photo is not None
-    if keyboard is not None and with_art:
-        await answer_photo(
-            FSInputFile(str(image)),
-            caption=format_html_caption(caption),
-            reply_markup=keyboard,
-            parse_mode="HTML",
-        )
-        return
+    caption, keyboard = await _pet_menu_content(user_id)
     await message.answer(
         format_html_caption(caption), reply_markup=keyboard, parse_mode="HTML"
     )
 
 
 async def _show_pet_menu(bot, callback, user_id: int) -> bool:
-    """Put the pet list back on the callback's OWN message («پت‌های من»)."""
-    caption, keyboard, image = await _pet_menu_content(user_id)
-    return await _edit_pet_screen(bot, callback, caption, keyboard, image)
+    """Put the text-only pet list back («پت‌های من»)."""
+    caption, keyboard = await _pet_menu_content(user_id)
+    return await _edit_pet_screen(bot, callback, caption, keyboard, image=None)
+
+
+async def _safe_delete_message(bot, chat_id: int, message_id: int) -> bool:
+    """Delete a message without ever raising (best effort).
+
+    When the delete itself fails (the message is already gone, or the bot has
+    no delete rights in the chat) the caller still sends the fresh screen, so
+    the button never looks dead.
+    """
+    try:
+        return bool(await bot.delete_message(chat_id, message_id))
+    except Exception as exc:
+        logger.info(
+            "could not delete message %s in chat %s: %s", message_id, chat_id, exc
+        )
+        return False
 
 
 async def _edit_pet_screen(
@@ -789,23 +817,30 @@ async def _edit_pet_screen(
 ) -> bool:
     """Render a pet screen on the message behind ``callback`` (edit, never send).
 
-    The menu and every pet card are photo screens, so moving between them is a
-    single ``edit_message_media`` that swaps the artwork — the message stays
-    exactly where it is. The chain degrades instead of duplicating the message:
-    caption edit for a photo message without usable artwork, then a plain
-    ``edit_message_text`` for a text message. A fresh send happens ONLY when
-    the message is gone (deleted) and every edit failed.
+    * Photo screen (``image`` given — a pet card, a feed result): one
+      ``edit_message_media`` swaps the artwork of a photo message AND turns
+      the text-only menu into the pet's photo, so opening a card never sends
+      a new message. If the media edit fails, the chain degrades instead of
+      duplicating the message: caption edit for a photo message, then a plain
+      ``edit_message_text`` for a text message.
+    * Text screen (``image is None`` — the menu): a plain ``edit_message_text``
+      when the current message is already text. Telegram cannot edit a PHOTO
+      into a text message, so on a photo card the photo is deleted and the
+      text menu is sent as a fresh message (the menu's one send).
 
-    Returns ``True`` when the existing message now shows the screen.
+    A fresh send happens ONLY when the message is gone (deleted) and every
+    edit failed. Returns ``True`` when the screen is shown on the flow's
+    message — or, for the deleted-photo case, on the fresh menu message.
     """
     message = getattr(callback, "message", None)
     chat_id = getattr(getattr(message, "chat", None), "id", None)
     message_id = getattr(message, "message_id", None)
     text = format_html_caption(caption)
     has_photo = bool(getattr(message, "photo", None))
+    wants_photo = image is not None and image.is_file()
 
     if bot is not None and chat_id and message_id:
-        if has_photo and image is not None and image.is_file():
+        if wants_photo:
             edited = await safe_edit_message_media(
                 bot,
                 chat_id,
@@ -822,16 +857,33 @@ async def _edit_pet_screen(
                 chat_id,
                 message_id,
             )
-        if has_photo and await safe_edit_message_caption(
-            bot,
-            chat_id,
-            message_id,
-            text=text,
-            reply_markup=keyboard,
-            parse_mode="HTML",
-        ):
+            if has_photo and await safe_edit_message_caption(
+                bot,
+                chat_id,
+                message_id,
+                text=text,
+                reply_markup=keyboard,
+                parse_mode="HTML",
+            ):
+                return True
+            if await safe_edit_message_text(
+                bot,
+                chat_id,
+                message_id,
+                text=text,
+                reply_markup=keyboard,
+                parse_mode="HTML",
+            ):
+                return True
+        elif has_photo:
+            # Photo -> text cannot be edited in place: delete the pet's photo
+            # message and post the text-only menu as a fresh message.
+            await _safe_delete_message(bot, chat_id, message_id)
+            await safe_send_screen(
+                bot, chat_id, text, reply_markup=keyboard, parse_mode="HTML"
+            )
             return True
-        if await safe_edit_message_text(
+        elif await safe_edit_message_text(
             bot,
             chat_id,
             message_id,
@@ -845,7 +897,7 @@ async def _edit_pet_screen(
     # Nothing was editable (the message is gone): show the screen once, so the
     # button never looks dead.
     answer_photo = getattr(message, "answer_photo", None)
-    if image is not None and image.is_file() and answer_photo is not None:
+    if wants_photo and answer_photo is not None:
         await answer_photo(
             FSInputFile(str(image)),
             caption=text,
