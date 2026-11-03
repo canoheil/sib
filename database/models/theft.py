@@ -28,7 +28,9 @@ class UserWantedState(Base):
     last_stolen_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    # Reset to 0 stars once this moment has passed.
+    # Coarse "sentence" timestamp kept for the /wanted display. Stars decay
+    # one per theft_star_decay_hours since last_stolen_at (migration 078);
+    # this timestamp only clears legacy rows that have no last_stolen_at.
     wanted_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

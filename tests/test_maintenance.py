@@ -447,6 +447,7 @@ def _task_table():
         "finish_expired_wars": (WarService, "finish_expired_wars"),
         "retry_pending_xp_awards": (MatchResultService, "retry_pending_xp_awards"),
         "run_marriage_love_cycle": (MaintenanceService, "run_marriage_love_cycle"),
+        "run_wanted_decay_sweep": (MaintenanceService, "run_wanted_decay_sweep"),
         "run_disease_cycle": (MaintenanceService, "run_disease_cycle"),
         "run_disease_infection_tick": (MaintenanceService, "run_disease_infection_tick"),
         "invasion_tick": (InvasionScheduler, "tick"),
@@ -561,6 +562,36 @@ async def test_maintenance_survives_every_task_failing_at_once(maintenance_tasks
         if name in {"present_bot_fallbacks", "announce_war_results", "sync_resolved_matches"}:
             continue  # no committed fallback / settled war / resolved match to present
         assert mock.await_count == 1, name
+
+
+async def test_wanted_decay_sweep_runs_at_most_once_an_hour(monkeypatch):
+    """The GTA-style star decay is wired into run_once, throttled hourly."""
+    from sib.services import theft_service
+
+    sweep = AsyncMock(return_value=3)
+    monkeypatch.setattr(theft_service, "apply_wanted_decay", sweep)
+
+    @asynccontextmanager
+    async def fake_get_session():
+        yield SimpleNamespace()
+
+    monkeypatch.setattr(maintenance_module, "get_session", fake_get_session)
+    monkeypatch.setattr(MaintenanceService, "_last_wanted_decay_sweep_at", None)
+
+    t0 = datetime(2026, 11, 3, 12, 0, tzinfo=timezone.utc)
+    assert await MaintenanceService.run_wanted_decay_sweep(now=t0) == 3
+    assert sweep.await_count == 1
+    # Inside the same hour the sweep is skipped ...
+    assert (
+        await MaintenanceService.run_wanted_decay_sweep(now=t0 + timedelta(minutes=30))
+        == 0
+    )
+    assert sweep.await_count == 1
+    # ... and after an hour it runs again.
+    assert (
+        await MaintenanceService.run_wanted_decay_sweep(now=t0 + timedelta(hours=1)) == 3
+    )
+    assert sweep.await_count == 2
 
 
 async def test_failed_task_does_not_roll_back_work_committed_by_earlier_tasks(

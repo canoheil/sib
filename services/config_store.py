@@ -588,6 +588,9 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     "theft_arrest_window_seconds": 10,
     # Bot-paid bounty per wanted star, credited to the arrester.
     "theft_arrest_reward_per_star": 100,
+    # One wanted star decays this many hours after the last successful theft
+    # (migration 078): GTA-style decay instead of a hard 24h reset to zero.
+    "theft_star_decay_hours": 3,
     # Apple Rocket (migration 075).
     "rocket_min_bet": 50,
     "rocket_max_bet": 5000,
