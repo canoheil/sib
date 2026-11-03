@@ -728,6 +728,50 @@ async def test_hunt_handler_renders_every_encounter_refusal(
     assert await state.get_state() is None
 
 
+async def test_hunt_block_for_an_unnamed_baby_asks_to_name_it_first(db, state):
+    """«سیب شکار» with a NAMELESS baby keeps the old block: name it first."""
+    async with db.begin() as session:
+        await _seed_pet(session, pet_type="cat", is_adult=False, custom_name=None)
+
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=1, is_bot=False),
+        reply=AsyncMock(),
+        reply_photo=AsyncMock(),
+    )
+    await pets.handle_hunt(message, state)
+
+    message.reply.assert_awaited_once()
+    text = message.reply.await_args.args[0]
+    assert text == pets.LIMIT_BABY_TEXT
+    assert "اول اسمش را انتخاب کنید" in text
+    assert "غذا بدهید" not in text
+    message.reply_photo.assert_not_awaited()
+    assert await state.get_state() is None
+
+
+async def test_hunt_block_for_a_named_baby_asks_to_feed_it_first(db, state):
+    """«سیب شکار» with an ALREADY-NAMED baby says to feed it to adulthood,
+    naming the pet in the message."""
+    async with db.begin() as session:
+        await _seed_pet(session, pet_type="dog", is_adult=False, custom_name="رکس")
+
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=1, is_bot=False),
+        reply=AsyncMock(),
+        reply_photo=AsyncMock(),
+    )
+    await pets.handle_hunt(message, state)
+
+    message.reply.assert_awaited_once()
+    text = message.reply.await_args.args[0]
+    assert text == pets.LIMIT_BABY_NAMED_TEXT.format(name="رکس")
+    assert "رکس" in text
+    assert "غذا بدهید" in text
+    assert "اول اسمش را انتخاب کنید" not in text
+    message.reply_photo.assert_not_awaited()
+    assert await state.get_state() is None
+
+
 async def test_hunt_handler_uses_the_main_card_power(db, state, monkeypatch):
     captured = {}
 

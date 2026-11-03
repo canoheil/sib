@@ -475,7 +475,9 @@ async def test_menu_without_pets_says_to_hunt(db, state):
     assert message.answer.await_args.kwargs.get("reply_markup") is None
 
 
-async def test_menu_lists_every_pet_as_a_button(db, state):
+async def test_menu_lists_every_pet_as_a_text_only_message(db, state):
+    """«سیب پت» sends ONE TEXT-ONLY message (``answer``, never ``answer_photo``)
+    carrying the pet list as buttons — the hunt forest plate stays with hunting."""
     async with db.begin() as session:
         session.add(UserPet(user_id=1, pet_type="owl", custom_name="پشمک", xp=10))
         session.add(UserPet(user_id=1, pet_type="cat", custom_name=None, xp=0))
@@ -483,11 +485,12 @@ async def test_menu_lists_every_pet_as_a_button(db, state):
     message = _menu_message()
     await pets.handle_my_pets(message, state)
 
-    # ONE message: the photo menu carrying the list.
-    message.answer.assert_not_awaited()
-    message.answer_photo.assert_awaited_once()
-    sent = message.answer_photo.await_args
-    assert str(sent.args[0].path) == str(pets.MENU_IMAGE)
+    # ONE text message: no photo is attached to the menu.
+    message.answer.assert_awaited_once()
+    message.answer_photo.assert_not_awaited()
+    sent = message.answer.await_args
+    assert "پت‌های شما" in sent.args[0]
+    assert sent.kwargs.get("parse_mode") == "HTML"
     keyboard = sent.kwargs["reply_markup"]
     buttons = [row[0] for row in keyboard.inline_keyboard]
     assert len(buttons) == 2
@@ -496,8 +499,8 @@ async def test_menu_lists_every_pet_as_a_button(db, state):
     assert [b.callback_data for b in buttons] == ["pet_view:1", "pet_view:2"]
 
 
-async def test_menu_falls_back_to_text_without_a_photo_sender(db, state):
-    """A minimal handle (or missing art) still gets the menu, as text."""
+async def test_menu_needs_no_photo_sender_at_all(db, state):
+    """The menu is text-only even on a handle without ``answer_photo``."""
     async with db.begin() as session:
         session.add(UserPet(user_id=1, pet_type="owl", custom_name="پشمک"))
 
@@ -509,6 +512,7 @@ async def test_menu_falls_back_to_text_without_a_photo_sender(db, state):
     await pets.handle_my_pets(message, state)
 
     message.answer.assert_awaited_once()
+    assert "پت‌های شما" in message.answer.await_args.args[0]
     assert message.answer.await_args.kwargs["reply_markup"] is not None
 
 
@@ -543,6 +547,8 @@ def _bot():
         edit_message_media=AsyncMock(),
         edit_message_caption=AsyncMock(),
         edit_message_text=AsyncMock(),
+        delete_message=AsyncMock(return_value=True),
+        send_message=AsyncMock(),
     )
 
 
@@ -616,41 +622,92 @@ async def test_pet_view_handles_unknown_pets(db, state, raw):
     assert callback.answer.await_args.kwargs["show_alert"] is True
 
 
-async def test_pet_view_menu_reopens_the_list(db, state):
-    """«🔙 پت‌های من» EDITS the message back to the list — it never sends one."""
+async def test_pet_view_menu_back_from_a_photo_card_deletes_and_resends_text(
+    db, state
+):
+    """«🔙 پت‌های من» on a PHOTO card: Telegram cannot edit a photo into a
+    text message, so the card is DELETED and the text-only menu is sent as a
+    fresh message."""
     async with db.begin() as session:
         session.add(UserPet(user_id=1, pet_type="owl", custom_name="پشمک", xp=10))
 
-    callback = _callback("pet_view:menu")
+    callback = _callback("pet_view:menu")  # with_photo=True (a pet card)
     bot = _bot()
     await pets.handle_pet_view(callback, state, bot)
 
-    bot.edit_message_media.assert_awaited_once()
-    edited = bot.edit_message_media.await_args.kwargs
-    # The pet's artwork is swapped back for the menu plate, same message.
-    assert str(edited["media"].media.path) == str(pets.MENU_IMAGE)
-    assert edited["message_id"] == 5
-    assert "پت‌های شما" in edited["media"].caption
-    buttons = [b for row in edited["reply_markup"].inline_keyboard for b in row]
+    # No edit is attempted on the photo message: it is deleted and replaced.
+    bot.edit_message_media.assert_not_awaited()
+    bot.edit_message_caption.assert_not_awaited()
+    bot.edit_message_text.assert_not_awaited()
+    bot.delete_message.assert_awaited_once()
+    assert bot.delete_message.await_args.args == (1, 5)
+    bot.send_message.assert_awaited_once()
+    sent = bot.send_message.await_args
+    assert sent.args[0] == 1  # chat_id
+    assert "پت‌های شما" in sent.args[1]  # the text-only menu
+    buttons = [b for row in sent.kwargs["reply_markup"].inline_keyboard for b in row]
     assert [b.callback_data for b in buttons] == ["pet_view:1"]
-    # No second message was created.
+    # The old callback message was not answered with another send.
     callback.message.answer.assert_not_awaited()
     callback.message.answer_photo.assert_not_awaited()
 
 
-async def test_pet_view_menu_back_without_pets_edits_the_text(db, state):
-    """Without pets the list is plain text — still an EDIT, never a new message."""
-    callback = _callback("pet_view:menu")
+async def test_pet_view_menu_back_on_a_text_menu_edits_in_place(db, state):
+    """«🔙 پت‌های من» on an already-TEXT message (the menu itself) is a plain
+    ``edit_message_text`` — still no new message."""
+    async with db.begin() as session:
+        session.add(UserPet(user_id=1, pet_type="owl", custom_name="پشمک", xp=10))
+
+    callback = _callback("pet_view:menu", with_photo=False)
     bot = _bot()
     await pets.handle_pet_view(callback, state, bot)
 
+    bot.edit_message_text.assert_awaited_once()
+    edited = bot.edit_message_text.await_args
+    assert edited.args[0]  # text is passed positionally
+    assert "پت‌های شما" in edited.args[0]
+    assert edited.kwargs["message_id"] == 5
+    buttons = [b for row in edited.kwargs["reply_markup"].inline_keyboard for b in row]
+    assert [b.callback_data for b in buttons] == ["pet_view:1"]
+    bot.delete_message.assert_not_awaited()
+    bot.send_message.assert_not_awaited()
     callback.message.answer.assert_not_awaited()
     callback.message.answer_photo.assert_not_awaited()
-    # A photo message keeps its art: the caption carries the message.
-    bot.edit_message_caption.assert_awaited_once()
-    caption = bot.edit_message_caption.await_args.kwargs["caption"]
-    assert "سیب شکار" in caption
-    assert bot.edit_message_caption.await_args.kwargs["reply_markup"] is None
+
+
+async def test_pet_view_menu_back_without_pets_on_a_photo_card_resends_text(
+    db, state
+):
+    """Without pets the list is plain text: from a photo card it is deleted
+    and re-sent as text with the hunt hint and no keyboard."""
+    callback = _callback("pet_view:menu")  # photo card, but the owner has no pets
+    bot = _bot()
+    await pets.handle_pet_view(callback, state, bot)
+
+    bot.edit_message_media.assert_not_awaited()
+    bot.edit_message_text.assert_not_awaited()
+    bot.delete_message.assert_awaited_once()
+    bot.send_message.assert_awaited_once()
+    sent = bot.send_message.await_args
+    assert "سیب شکار" in sent.args[1]
+    assert sent.kwargs["reply_markup"] is None
+    callback.message.answer.assert_not_awaited()
+    callback.message.answer_photo.assert_not_awaited()
+
+
+async def test_pet_view_menu_back_without_pets_on_text_edits_the_text(db, state):
+    """Without pets and on a TEXT message the hint is edited in place."""
+    callback = _callback("pet_view:menu", with_photo=False)
+    bot = _bot()
+    await pets.handle_pet_view(callback, state, bot)
+
+    bot.edit_message_text.assert_awaited_once()
+    assert "سیب شکار" in bot.edit_message_text.await_args.args[0]
+    assert bot.edit_message_text.await_args.kwargs["reply_markup"] is None
+    bot.delete_message.assert_not_awaited()
+    bot.send_message.assert_not_awaited()
+    callback.message.answer.assert_not_awaited()
+    callback.message.answer_photo.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -762,17 +819,22 @@ async def test_pet_view_never_sends_a_new_message(db, state):
     callback.message.answer_photo.assert_not_awaited()
 
 
-async def test_pet_view_edits_a_text_menu_in_place(db, state):
-    """A text menu (no photo) is edited as text — still no new message."""
+async def test_pet_view_turns_the_text_menu_into_a_photo_card(db, state):
+    """Opening a pet from the TEXT-ONLY menu is an ``edit_message_media``
+    (text -> photo): the pet's artwork replaces the menu, no new message."""
     async with db.begin() as session:
         session.add(UserPet(user_id=1, pet_type="owl", custom_name="پشمک", xp=10))
 
-    callback = _callback("pet_view:1", with_photo=False)
+    callback = _callback("pet_view:1", with_photo=False)  # the text menu message
     bot = _bot()
     await pets.handle_pet_view(callback, state, bot)
 
-    bot.edit_message_text.assert_awaited_once()
-    assert "پشمک" in bot.edit_message_text.await_args.args[0]
+    bot.edit_message_media.assert_awaited_once()
+    edited = bot.edit_message_media.await_args.kwargs
+    assert edited["message_id"] == 5
+    assert str(edited["media"].media.path) == str(pets.ASSET_DIR / "owl_baby.jpg")
+    assert "پشمک" in edited["media"].caption
+    bot.edit_message_text.assert_not_awaited()
     callback.message.answer.assert_not_awaited()
     callback.message.answer_photo.assert_not_awaited()
 
