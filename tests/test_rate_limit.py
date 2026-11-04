@@ -123,8 +123,11 @@ async def test_jail_notice_is_sent_when_jailed(monkeypatch):
     answer.assert_any_await(WARNING_TEXT)
     jail_call = answer.await_args_list[-1]
     assert jail_call.args[0] == middleware.jail_text()
-    assert "۱۰" in jail_call.args[0]  # «10 minutes» in Persian digits
-    assert "محروم" in jail_call.args[0]
+    # The full notice, word for word («به دلیل», 10 minutes in Persian digits).
+    assert jail_call.args[0] == (
+        "⛔ شما به دلیل اسپم برای ۱۰ دقیقه از بازی محروم شدید. "
+        "لطفاً بعداً تلاش کنید."
+    )
 
 
 @pytest.mark.asyncio
