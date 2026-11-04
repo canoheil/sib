@@ -56,6 +56,12 @@ from sib.handlers.pets import router as pets_router
 def register_all_handlers(dp: Dispatcher) -> None:
     """Register all modular routers to the main dispatcher."""
     dp.include_router(errors_router)
+    # User-facing callback flows (friendship accept/reject buttons) MUST be
+    # registered BEFORE the admin routers: the admin routers carry a
+    # router-level IsAdminFilter, and friendship callbacks must never be
+    # evaluated against it (they used to trigger bogus "unauthorized admin"
+    # warnings — and on some setups get swallowed before reaching us).
+    dp.include_router(friendship_router)
     from sib.handlers.admin_broadcast import router as broadcast_router
     from sib.handlers.admin_users import router as users_admin_router
     dp.include_router(users_admin_router)
@@ -85,7 +91,6 @@ def register_all_handlers(dp: Dispatcher) -> None:
     dp.include_router(party_router)
     dp.include_router(friendly_router)
     dp.include_router(marriage_router)
-    dp.include_router(friendship_router)
     dp.include_router(reminders_router)
     dp.include_router(sib_hug_router)
     dp.include_router(sib_kiss_router)
