@@ -477,7 +477,7 @@ def test_every_pet_button_is_colored():
             SimpleNamespace(id=1, is_adult=False, has_renamed=False)
         ),
         pets.pet_profile_keyboard(
-            SimpleNamespace(id=1, is_adult=True, has_renamed=True)
+            SimpleNamespace(id=1, is_adult=True, has_renamed=True, skill_level=3)
         ),
         pets.pet_menu_keyboard(
             [SimpleNamespace(id=1, pet_type="cat", custom_name="ملوس")]
@@ -488,13 +488,14 @@ def test_every_pet_button_is_colored():
         assert buttons
         assert {button.style for button in buttons} <= styles
 
-    # An adult pet that already used its rename keeps only the back button.
+    # A max-level adult that already used its rename keeps feed (hunger) and
+    # the back button — the skill upgrade is hidden at the cap.
     adult = pets.pet_profile_keyboard(
-        SimpleNamespace(id=1, is_adult=True, has_renamed=True)
+        SimpleNamespace(id=1, is_adult=True, has_renamed=True, skill_level=3)
     )
     assert [
         button.callback_data for row in adult.inline_keyboard for button in row
-    ] == ["pet_view:menu"]
+    ] == ["pet_feed:1", "pet_view:menu"]
 
 
 async def test_rename_button_is_hidden_after_the_rename(db, state):

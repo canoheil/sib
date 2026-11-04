@@ -26,15 +26,19 @@ Flow
    artwork, the forest plate belongs to the hunt — with the player's pets as
    buttons. Opening a pet card swaps that text message into the pet's photo
    with ``edit_message_media``; every other screen after it — the pet card
-   with XP progress and skill, «🍖 غذا دادن» (spends one ``pet_food`` from
-   the inventory and eventually evolves the pet), «✏️ تغییر نام» (the ONE
+   with XP progress, satiety and skill, «🍖 غذا دادن» (spends one ``pet_food``
+   from the inventory: a baby gains XP and eventually evolves, an adult just
+   resets its hunger clock), «💎 ارتقای اسکیل» (an adult below the skill cap
+   spends Diamond Apples to raise its skill level), «✏️ تغییر نام» (the ONE
    paid rename, ``PetStates.waiting_for_rename``, same reply-to-prompt rule)
    — edits that same message in place (:func:`_edit_pet_screen`).
    «🔙 پت‌های من» cannot edit a photo back into text, so on a photo card it
    deletes the card and sends the text menu as a fresh message.
 6. The profile explains the pet's skill: locked for a baby
    («🔒 ... با بالغ شدن فعال می‌شود»), name + level + what it does once the
-   pet is an adult (see :func:`pet_skill_line`).
+   pet is an adult (see :func:`pet_skill_line`). A satiety line
+   («🍖 وضعیت سیری») shows whether the pet is fed; a pet not fed for 24h is
+   «گشنه» and its skill is temporarily disabled (🔴) until it eats again.
 
 Only the player who opened the encounter may press its buttons: the tracking
 state lives in their own FSM context, and the roll uses a server-side chance
@@ -99,6 +103,7 @@ HUNT_TRACK_PREFIX = "hunt_track:"
 PET_VIEW_PREFIX = "pet_view:"
 PET_FEED_PREFIX = "pet_feed:"
 PET_RENAME_PREFIX = "pet_rename:"
+PET_SKILL_UP_PREFIX = "pet_skill_up:"
 
 #: FUTURE EXPANSION — Group Raid (Boss Pet): a future phase will add a
 #: shared raid encounter against a boss pet. When it lands, the tracking
@@ -194,8 +199,15 @@ PROFILE_CAPTION = (
     "🧬 نوع: {type_fa}\n"
     "{status_line}\n"
     "📊 XP: {xp}/{required} ({percent}٪)\n"
+    "{satiety_line}\n"
     "{skill_line}"
 )
+#: Satiety (hunger): a pet not fed for 24h is «گشنه» and its skill is off
+#: until the next meal (see ``pet_service.get_satiety_status``).
+SATIETY_FULL_LINE = "🍖 وضعیت سیری: سیر (اسکیل فعال)"
+SATIETY_HUNGRY_LINE = "🍖 وضعیت سیری: گشنه (اسکیل غیرفعال! بهش غذا بده)"
+#: Prepended to the skill line while the pet is hungry (skill disabled).
+SKILL_DISABLED_PREFIX = "🔴 "
 #: ``pet_type -> (skill name, what the skill actually does)``. Every species
 #: unlocks its own ability when it grows up (see :func:`pet_skill_line`).
 PET_SKILLS = {
@@ -228,13 +240,20 @@ RENAME_NO_FUNDS_ALERT = (
 RENAMED_TEXT = "✅ اسم پت به **{name}** تغییر کرد."
 FEED_NO_FOOD_ALERT = "شما غذای پت ندارید! از فروشگاه بخرید."
 FEED_TOO_SOON_ALERT = "پت شما سیر است! ۱ ساعت دیگر دوباره تلاش کنید."
-FEED_ALREADY_ADULT_ALERT = "این پت بزرگ شده و دیگه غذا لازم نداره."
 PET_GONE_ALERT = "این پت پیدا نشد."
 FEED_DONE_CAPTION = "🍖 **{name}** غذا خورد! +{xp_added} تجربه"
+#: An adult's meal grants no XP — it only resets the hunger clock.
+FEED_SATIATED_CAPTION = "🍖 **{name}** غذا خورد و دوباره سیر شد! اسکیلش فعاله."
 FEED_EVOLVED_CAPTION = (
     "🎉 تبریک! پت شما بالغ شد و اسکیلش فعال شد!\n"
     "👑 **{name}** حالا یک {type_fa} بالغه."
 )
+#: «💎 ارتقای اسکیل» — an adult's skill level costs Diamond Apples.
+SKILL_UP_BUTTON_TEXT = "💎 ارتقای اسکیل"
+SKILL_UP_NO_DIAMONDS_ALERT = "شما سیب الماسی کافی ندارید! (نیاز: {cost})"
+SKILL_UP_NOT_ADULT_ALERT = "اسکیل این پت هنوز قفل است؛ اول باید بالغ شود."
+SKILL_UP_MAX_LEVEL_ALERT = "اسکیل این پت به بالاترین لول رسیده!"
+SKILL_UP_DONE_CAPTION = "💎 اسکیل **{name}** به لول {level} ارتقا یافت!"
 
 NAME_ERRORS = {
     "empty": "❗️ اسم نمی‌تواند خالی باشد.",
@@ -387,20 +406,41 @@ def pet_skill_line(pet) -> str:
 
     A baby only sees WHAT it will unlock (locked, no numbers); an adult sees
     the active skill with its level and what it actually does — otherwise
-    «⭐ اسکیل: ۱» told the player nothing about their pet's ability.
+    «⭐ اسکیل: ۱» told the player nothing about their pet's ability. A hungry
+    adult keeps the line but prefixed with 🔴: the skill is temporarily off
+    until the pet is fed again (see ``pet_service.is_skill_active``).
     """
     skill_name, description = pet_skill(pet.pet_type)
     if not pet.is_adult:
         return SKILL_LOCKED_LINE.format(skill_name=skill_name)
-    return SKILL_ACTIVE_LINE.format(
+    line = SKILL_ACTIVE_LINE.format(
         skill_name=skill_name,
         level=fa_digits(pet.skill_level),
         description=description,
     )
+    if not pet_service.is_skill_active(pet):
+        line = SKILL_DISABLED_PREFIX + line
+    return line
+
+
+def pet_satiety_line(pet) -> str:
+    """«🍖 وضعیت سیری: ...» — full (skill on) or hungry (skill off).
+
+    A baby's skill is locked by age, not hunger, so it only sees the plain
+    fed/hungry status; the skill-state note belongs to adults.
+    """
+    full = (
+        pet_service.get_satiety_status(getattr(pet, "last_fed_at", None))
+        == pet_service.SATIETY_FULL
+    )
+    if not pet.is_adult:
+        status = pet_service.SATIETY_FULL if full else pet_service.SATIETY_HUNGRY
+        return f"🍖 وضعیت سیری: {status}"
+    return SATIETY_FULL_LINE if full else SATIETY_HUNGRY_LINE
 
 
 def pet_profile_caption(pet, required: int) -> str:
-    """The pet profile caption (name, species, status, XP progress, skill).
+    """The pet profile caption (name, species, status, XP, satiety, skill).
 
     The caption is returned raw (``**bold**`` markers included): the caller
     renders it through ``format_html_caption`` exactly once, which escapes
@@ -416,24 +456,36 @@ def pet_profile_caption(pet, required: int) -> str:
         xp=fa_digits(progress["xp"]),
         required=fa_digits(progress["required"]),
         percent=fa_digits(progress["percent"]),
+        satiety_line=pet_satiety_line(pet),
         skill_line=pet_skill_line(pet),
     )
 
 
 def pet_profile_keyboard(pet) -> InlineKeyboardMarkup:
-    """Feed (baby), rename, and the back button to the pet list.
+    """Feed, skill upgrade (adult), rename, and the back button.
 
-    Colors: feeding and renaming are positive/main actions (green and blue),
-    «پت‌های من» is navigation back (red per the bot-wide convention). The
-    rename button disappears once the single paid rename has been used.
+    Colors: feeding is a positive action (green), upgrading and renaming are
+    main actions (blue), «پت‌های من» is navigation back (red per the bot-wide
+    convention). The rename button disappears once the single paid rename has
+    been used; «💎 ارتقای اسکیل» only shows for an adult below the skill cap.
+    Feeding stays available for adults — their meal resets the hunger clock.
     """
-    rows = []
-    if not pet.is_adult:
+    rows = [
+        [
+            success_button(
+                text=FEED_BUTTON_TEXT,
+                callback_data=f"{PET_FEED_PREFIX}{int(pet.id)}",
+            )
+        ]
+    ]
+    if pet.is_adult and int(getattr(pet, "skill_level", 1) or 1) < (
+        pet_service.SKILL_MAX_LEVEL_DEFAULT
+    ):
         rows.append(
             [
-                success_button(
-                    text=FEED_BUTTON_TEXT,
-                    callback_data=f"{PET_FEED_PREFIX}{int(pet.id)}",
+                primary_button(
+                    text=SKILL_UP_BUTTON_TEXT,
+                    callback_data=f"{PET_SKILL_UP_PREFIX}{int(pet.id)}",
                 )
             ]
         )
@@ -999,10 +1051,7 @@ async def handle_pet_feed(callback: CallbackQuery, state: FSMContext, bot) -> No
     if status == "too_soon":
         await safe_answer_callback(callback, FEED_TOO_SOON_ALERT, show_alert=True)
         return
-    if status == "already_adult":
-        await safe_answer_callback(callback, FEED_ALREADY_ADULT_ALERT, show_alert=True)
-        return
-    if status != "fed" and status != "evolved":
+    if status not in ("fed", "evolved", "satiated"):
         await safe_answer_callback(callback, PET_GONE_ALERT, show_alert=True)
         return
 
@@ -1018,6 +1067,20 @@ async def handle_pet_feed(callback: CallbackQuery, state: FSMContext, bot) -> No
             callback,
             FEED_EVOLVED_CAPTION.format(name=name, type_fa=type_fa)
             + "\n"
+            + pet_profile_caption(pet, required),
+            pet_profile_keyboard(pet),
+            adult_artwork(pet_type),
+        )
+        return
+
+    if status == "satiated":
+        # An adult's meal resets the hunger clock (no XP): back to «سیر».
+        await safe_answer_callback(callback, "🍖 پت شما دوباره سیر شد!")
+        await _edit_pet_screen(
+            bot,
+            callback,
+            FEED_SATIATED_CAPTION.format(name=name)
+            + "\n\n"
             + pet_profile_caption(pet, required),
             pet_profile_keyboard(pet),
             adult_artwork(pet_type),
@@ -1040,6 +1103,68 @@ async def handle_pet_feed(callback: CallbackQuery, state: FSMContext, bot) -> No
         caption + "\n\n" + pet_profile_caption(pet, required),
         pet_profile_keyboard(pet),
         baby_artwork(pet_type),
+    )
+
+
+# ---------------------------------------------------------------------------
+# «💎 ارتقای اسکیل» (pet_skill_up:{pet_id})
+# ---------------------------------------------------------------------------
+
+@router.callback_query(F.data.startswith(PET_SKILL_UP_PREFIX))
+async def handle_pet_skill_up(callback: CallbackQuery, state: FSMContext, bot) -> None:
+    sender = callback.from_user
+    if sender is None:
+        return
+    raw_pet_id = (callback.data or "")[len(PET_SKILL_UP_PREFIX):]
+
+    try:
+        async with get_session() as session:
+            result = await pet_service.upgrade_skill(session, sender.id, raw_pet_id)
+            if result.get("status") == "upgraded":
+                # The refreshed profile caption needs the adult XP threshold.
+                result["required"] = await pet_service.adult_xp_required(session)
+    except Exception:
+        logger.exception("pet skill upgrade failed (user=%s pet=%s)", sender.id, raw_pet_id)
+        await safe_answer_callback(callback, GENERIC_ERROR, show_alert=True)
+        return
+
+    status = result.get("status")
+    pet = result.get("pet")
+
+    if status == "no_diamonds":
+        await safe_answer_callback(
+            callback,
+            SKILL_UP_NO_DIAMONDS_ALERT.format(
+                cost=fa_digits(
+                    result.get("cost") or pet_service.SKILL_UPGRADE_COST_DEFAULT
+                )
+            ),
+            show_alert=True,
+        )
+        return
+    if status == "not_adult":
+        await safe_answer_callback(callback, SKILL_UP_NOT_ADULT_ALERT, show_alert=True)
+        return
+    if status == "max_level":
+        await safe_answer_callback(callback, SKILL_UP_MAX_LEVEL_ALERT, show_alert=True)
+        return
+    if status != "upgraded":
+        await safe_answer_callback(callback, PET_GONE_ALERT, show_alert=True)
+        return
+
+    pet_type = _safe_pet_type(pet.pet_type)
+    level = fa_digits(result.get("skill_level") or pet.skill_level)
+    await safe_answer_callback(callback, f"💎 اسکیل به لول {level} ارتقا یافت!")
+    await _edit_pet_screen(
+        bot,
+        callback,
+        SKILL_UP_DONE_CAPTION.format(
+            name=pet_service.pet_display_name(pet), level=level
+        )
+        + "\n\n"
+        + pet_profile_caption(pet, int(result.get("required") or 0)),
+        pet_profile_keyboard(pet),
+        adult_artwork(pet_type),
     )
 
 

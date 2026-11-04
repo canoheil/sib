@@ -131,6 +131,18 @@ ADULT_XP_KEY = "pet_adult_xp_required"
 ADULT_XP_DEFAULT = 500
 FEED_COOLDOWN_KEY = "pet_feed_cooldown_hours"
 FEED_COOLDOWN_HOURS_DEFAULT = 1
+#: Skill upgrades (both keys seeded by migration 076): an adult's skill level
+#: is raised by spending Diamond Apples from the inventory.
+SKILL_UPGRADE_ITEM = "apple_diamond"
+SKILL_UPGRADE_COST_KEY = "pet_skill_upgrade_diamond_cost"
+SKILL_UPGRADE_COST_DEFAULT = 10
+SKILL_MAX_LEVEL_KEY = "pet_skill_max_level"
+SKILL_MAX_LEVEL_DEFAULT = 3
+#: Hunger: a pet not fed for more than this many hours is «گشنه» and its
+#: skill is temporarily disabled until the next meal resets ``last_fed_at``.
+SATIETY_HUNGRY_AFTER_HOURS = 24
+SATIETY_FULL = "سیر"
+SATIETY_HUNGRY = "گشنه"
 #: Name shown for a pet that has not been named yet.
 UNNAMED_PET_FA = "بی‌نام"
 
@@ -465,6 +477,35 @@ def feed_remaining_seconds(
     return int(math.ceil(remaining)) if remaining > 0 else 0
 
 
+def get_satiety_status(
+    last_fed_at: datetime | None, *, now: datetime | None = None
+) -> str:
+    """«سیر» (full) or «گشنه» (hungry) from the last meal's timestamp.
+
+    More than :data:`SATIETY_HUNGRY_AFTER_HOURS` hours since ``last_fed_at``
+    means hungry; a pet that has never been fed (``None``) is hungry too.
+    While hungry the pet's skill is disabled (see :func:`is_skill_active`).
+    """
+    if last_fed_at is None:
+        return SATIETY_HUNGRY
+    moment = _as_utc(now) if now is not None else _now()
+    elapsed = moment - _as_utc(last_fed_at)
+    if elapsed > timedelta(hours=SATIETY_HUNGRY_AFTER_HOURS):
+        return SATIETY_HUNGRY
+    return SATIETY_FULL
+
+
+def is_skill_active(pet: UserPet, *, now: datetime | None = None) -> bool:
+    """``True`` when the pet's skill works: an adult that is still «سیر».
+
+    Babies have no usable skill yet, and a hungry adult's skill is off until
+    it is fed again — gameplay effects consult this instead of ``is_adult``.
+    """
+    return bool(pet.is_adult) and (
+        get_satiety_status(getattr(pet, "last_fed_at", None), now=now) == SATIETY_FULL
+    )
+
+
 def xp_progress(pet: UserPet, required: int) -> dict:
     """``{"xp", "required", "percent"}`` for the profile screen."""
     xp = max(0, int(pet.xp or 0))
@@ -487,18 +528,19 @@ async def feed_pet(
     *,
     now: datetime | None = None,
 ) -> dict:
-    """Feed one owned baby pet with one ``pet_food``.
+    """Feed one owned pet with one ``pet_food``.
 
     Returns a dict whose ``status`` is one of:
 
     * ``"not_found"`` — no such pet, or it belongs to another player.
-    * ``"already_adult"`` — grown pets cannot be fed.
     * ``"too_soon"`` — fed less than ``pet_feed_cooldown_hours`` ago;
       ``remaining_seconds`` is set.
     * ``"no_food"`` — the inventory holds no ``pet_food``.
     * ``"fed"`` — XP was added; ``pet`` carries the new totals.
     * ``"evolved"`` — the XP reached ``pet_adult_xp_required`` and the pet is
       now an adult.
+    * ``"satiated"`` — an adult was fed: ``last_fed_at`` is reset (the pet is
+      «سیر» again and its skill re-enabled) but no XP is granted.
 
     Locks: the user row first (rank 0, which also serializes the pet row for
     this user), then the inventory row (rank 5) via ``ItemService``.
@@ -511,8 +553,6 @@ async def feed_pet(
     pet = await get_pet(session, user_id, pet_id, for_update=True)
     if pet is None:
         return {"status": "not_found", "pet": None}
-    if pet.is_adult:
-        return {"status": "already_adult", "pet": pet}
 
     moment = _as_utc(now) if now is not None else _now()
     remaining = feed_remaining_seconds(
@@ -533,24 +573,104 @@ async def feed_pet(
 
     await ItemService.consume(session, user_id, PET_FOOD_ITEM, 1)
 
-    amount = await feed_xp_amount(session)
     required = await adult_xp_required(session)
-    pet.xp = max(0, int(pet.xp or 0)) + amount
     pet.last_fed_at = moment
-    evolved = pet.xp >= required
-    if evolved:
-        pet.is_adult = True
+    if pet.is_adult:
+        # A grown pet still eats: the meal only resets the hunger clock, so
+        # XP never climbs past the adult threshold (see get_satiety_status).
+        amount = 0
+        status = "satiated"
+    else:
+        amount = await feed_xp_amount(session)
+        pet.xp = max(0, int(pet.xp or 0)) + amount
+        evolved = pet.xp >= required
+        if evolved:
+            pet.is_adult = True
+        status = "evolved" if evolved else "fed"
     await session.flush()
 
     progress = xp_progress(pet, required)
     return {
-        "status": "evolved" if evolved else "fed",
+        "status": status,
         "pet": pet,
         "xp": progress["xp"],
         "required": progress["required"],
         "percent": progress["percent"],
         "xp_added": amount,
         "remaining_food": max(0, owned_food - 1),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Skill upgrades (Diamond Apples)
+# ---------------------------------------------------------------------------
+
+async def skill_max_level(session: AsyncSession) -> int:
+    """Configured skill cap (``pet_skill_max_level``, default 3)."""
+    return max(1, await _config_int(session, SKILL_MAX_LEVEL_KEY, SKILL_MAX_LEVEL_DEFAULT))
+
+
+async def skill_upgrade_cost(session: AsyncSession) -> int:
+    """Diamond Apples per skill level (``pet_skill_upgrade_diamond_cost``)."""
+    return max(0, await _config_int(session, SKILL_UPGRADE_COST_KEY, SKILL_UPGRADE_COST_DEFAULT))
+
+
+async def upgrade_skill(
+    session: AsyncSession,
+    user_id: int,
+    pet_id: int | str | None,
+) -> dict:
+    """Raise one owned adult pet's skill level by one, for Diamond Apples.
+
+    Returns a dict whose ``status`` is one of:
+
+    * ``"not_found"`` — no such pet, or it belongs to another player.
+    * ``"not_adult"`` — a baby's skill is still locked; it must evolve first.
+    * ``"max_level"`` — the skill already sits at ``pet_skill_max_level``.
+    * ``"no_diamonds"`` — the inventory holds fewer than
+      ``pet_skill_upgrade_diamond_cost`` Diamond Apples; ``cost`` and
+      ``owned`` are set.
+    * ``"upgraded"`` — the cost was consumed and ``skill_level`` raised by one
+      (capped); ``pet``, ``cost`` and ``remaining_diamonds`` carry the result.
+
+    Locks: the user row first (rank 0, which also serializes the pet row for
+    this user), then the inventory row (rank 5) via ``ItemService`` — the same
+    order as :func:`feed_pet`. Nothing is committed here; the caller owns the
+    transaction.
+    """
+    try:
+        await lock_user_row(session, int(user_id))
+    except (ValueError, TypeError):
+        return {"status": "not_found", "pet": None}
+
+    pet = await get_pet(session, user_id, pet_id, for_update=True)
+    if pet is None:
+        return {"status": "not_found", "pet": None}
+    if not pet.is_adult:
+        return {"status": "not_adult", "pet": pet}
+
+    cap = await skill_max_level(session)
+    level = max(1, int(pet.skill_level or 1))
+    if level >= cap:
+        return {"status": "max_level", "pet": pet, "max_level": cap}
+
+    cost = await skill_upgrade_cost(session)
+    owned = await ItemService.get_total(
+        session, user_id, SKILL_UPGRADE_ITEM, for_update=True
+    )
+    if owned < cost:
+        return {"status": "no_diamonds", "pet": pet, "cost": cost, "owned": owned}
+
+    if cost > 0:
+        await ItemService.consume(session, user_id, SKILL_UPGRADE_ITEM, cost)
+    pet.skill_level = min(cap, level + 1)
+    await session.flush()
+    return {
+        "status": "upgraded",
+        "pet": pet,
+        "skill_level": pet.skill_level,
+        "cost": cost,
+        "remaining_diamonds": max(0, owned - cost),
     }
 
 
