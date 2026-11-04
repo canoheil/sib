@@ -297,14 +297,25 @@ async def test_feed_pet_does_not_evolve_one_xp_below(session):
     assert stored.is_adult is False
 
 
-async def test_feed_pet_refuses_an_adult(session):
-    pet = await _seed_pet(session, is_adult=True, xp=600)
+async def test_feed_pet_satiates_an_adult_without_adding_xp(session):
+    """A grown pet still eats: the meal resets the hunger clock, not the XP."""
+    pet = await _seed_pet(
+        session, is_adult=True, xp=500, last_fed_at=NOW - timedelta(hours=30)
+    )
     await _grant_food(session)
 
     result = await pet_service.feed_pet(session, 1, pet.id, now=NOW)
 
-    assert result["status"] == "already_adult"
-    assert await _food_count(session) == 1
+    assert result["status"] == "satiated"
+    assert result["xp_added"] == 0
+    assert result["xp"] == 500  # never climbs past the adult threshold
+    stored = await session.get(UserPet, pet.id)
+    await session.refresh(stored)
+    assert stored.xp == 500
+    assert stored.is_adult is True
+    assert stored.last_fed_at.replace(tzinfo=timezone.utc) == NOW
+    assert pet_service.get_satiety_status(stored.last_fed_at, now=NOW) == "سیر"
+    assert await _food_count(session) == 0  # the meal was consumed
 
 
 async def test_feed_pet_refuses_another_players_pet(session):
@@ -577,7 +588,9 @@ async def test_pet_view_shows_the_baby_profile(db, state):
     assert feed_row.callback_data == f"pet_feed:{pet_id}"
 
 
-async def test_pet_view_shows_the_adult_art_and_hides_the_feed_button(db, state):
+async def test_pet_view_shows_the_adult_art_and_keeps_the_feed_button(db, state):
+    """Adults keep «🍖 غذا دادن» — their meal resets the hunger clock — and
+    gain «💎 ارتقای اسکیل» while below the skill cap."""
     async with db.begin() as session:
         pet = UserPet(
             user_id=1, pet_type="cat", custom_name="ملوس", xp=520, is_adult=True
@@ -594,7 +607,9 @@ async def test_pet_view_shows_the_adult_art_and_hides_the_feed_button(db, state)
     assert str(edited["media"].media.path) == str(pets.ASSET_DIR / "cat_adult.jpg")
     assert "بالغ" in edited["media"].caption
     buttons = [b for row in edited["reply_markup"].inline_keyboard for b in row]
-    assert all(b.callback_data != f"pet_feed:{pet_id}" for b in buttons)
+    by_callback = {b.callback_data: b for b in buttons}
+    assert f"pet_feed:{pet_id}" in by_callback
+    assert by_callback[f"pet_skill_up:{pet_id}"].text == pets.SKILL_UP_BUTTON_TEXT
 
 
 async def test_pet_view_refuses_another_players_pet(db, state):
@@ -988,9 +1003,12 @@ async def test_feed_callback_evolves_and_swaps_the_art(db, state):
     caption = edited["media"].caption
     assert "تبریک" in caption
     assert "بالغ شد" in caption
-    # The feed button is gone once the pet is an adult.
+    # The pet is now an adult: feeding stays (hunger) and the skill upgrade
+    # button appears (skill_level 1 < 3).
     buttons = [b for row in edited["reply_markup"].inline_keyboard for b in row]
-    assert all("pet_feed" not in (b.callback_data or "") for b in buttons)
+    callbacks = [b.callback_data for b in buttons]
+    assert f"pet_feed:{pet_id}" in callbacks
+    assert f"pet_skill_up:{pet_id}" in callbacks
 
     async with db.begin() as session:
         stored = await session.get(UserPet, pet_id)
