@@ -11,8 +11,18 @@ SQLite (tests), Pillow + `arabic-reshaper` + `python-bidi` already in `requireme
 asset manifest, quality gates). Persian copy follows `.agents/skills/persian-writing`
 rules (محاوره‌نویسی برای متن‌های درون‌بازی، اعداد فارسی در حباب‌های گفت‌وگو).
 
-Paths are relative to the repository root. Nothing below is implemented. Everything
-labelled *proposed* is future work for a separate implementation phase.
+Paths are relative to the repository root. Everything labelled *proposed* is future
+work; **idea B is now implemented** (see the status line below), ideas A, C and D are
+not.
+
+> **Status (2026-11-05):** **Idea B — Near-Miss & Critical Hit Theatre — SHIPPED.**
+> `handlers/casino.py` presents every round as three beats (anticipation line →
+> `answer_dice` → tiered verdict: fumble / so close / win / jackpot), with slots
+> decoding its three reels so a genuine two-of-a-kind earns the «🍒 خیلی نزدیک بود»
+> line. Economy, odds, multipliers, cooldowns, FSM and the Alembic head
+> (`078_wanted_decay`) are untouched. Economy answer received for idea A: settle
+> immediately per round (no pending pot), which removes the need for
+> `casino_streak_bank` rows when A is built.
 
 ---
 

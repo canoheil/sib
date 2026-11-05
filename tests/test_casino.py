@@ -203,28 +203,134 @@ async def test_round(db, state, emoji, value, won, bet_text, monkeypatch):
     dice = AsyncMock(return_value=SimpleNamespace(dice=SimpleNamespace(value=value)))
     message = _bet_message(bet_text, answer_dice=dice)
     async def check_animation_delay(delay):
+        if delay == casino.ANTICIPATION_PAUSE:
+            # Beat 1 landed before the roll: anticipation only, no dice yet.
+            dice.assert_not_awaited()
+            assert message.answer.await_args.args[0] == casino.ANTICIPATION[emoji]
+            return
+        # Beat 2: the animation is the only thing that ran during its own delay.
         dice.assert_awaited_once_with(emoji=emoji, reply_to_message_id=777)
-        message.answer.assert_not_awaited()
+        assert message.answer.await_args.args[0] == casino.ANTICIPATION[emoji]
     sleep = AsyncMock(side_effect=check_animation_delay)
     monkeypatch.setattr(casino.asyncio, "sleep", sleep)
     await casino.place_bet(message, state)
-    sleep.assert_awaited_once_with(4.0 if emoji == "🎰" else 3.5)
+    # Two beats of presentation around one animation: the anticipation pause,
+    # then the animation delay itself. Nothing else gates the round.
+    assert [call.args[0] for call in sleep.await_args_list] == [
+        casino.ANTICIPATION_PAUSE,
+        4.0 if emoji == "🎰" else 3.5,
+    ]
     # The prompt the player replied to is deleted once the bet is accepted.
     message.reply_to_message.delete.assert_awaited_once()
     payout = (150 if emoji == "🎰" else 50) if won else 0
     async with db() as session:
         assert await AppleWalletService.get_balance(session, 1) == 10000 - 10 + payout
     result_text = message.answer.await_args.args[0]
-    # Slots never leak the raw 1-64 value: the player only sees fruit.
+    assert result_text == casino.verdict_text(emoji, value, payout)
+    # Slots never leak the raw 1-64 value: the player only sees fruit. (Wins
+    # are covered by test_slots_loss_never_shows_the_number, because the
+    # jackpot line legitimately carries the ×15 and the payout digits.)
     if emoji == "🎰" and not won:
         assert str(value) not in result_text
-    if won:
-        assert result_text == f"🏆 بردی! {casino.win_line(emoji, value)} و {payout} سیب گرفتی."
-    else:
-        assert result_text == f"😭 باختی! {casino.loss_line(emoji, value)}."
     # No parenthetical rule reminders in the chat any more.
     assert "(برای برد باید" not in result_text
     assert await state.get_state() is None
+
+
+# ---------------------------------------------------------------------------
+# Idea B — the three-beat round: anticipation → roll → verdict
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key,emoji", casino.GAMES.items())
+async def test_anticipation_message_precedes_the_roll(db, state, key, emoji, monkeypatch):
+    """Beat 1 is its own message, and it is sent before the animation."""
+    await _enter_waiting_for_bet(state, emoji=emoji)
+    order = []
+    message = _bet_message("10")
+    message.answer = AsyncMock(side_effect=lambda *a, **k: order.append(("answer", a[0])))
+    message.answer_dice = AsyncMock(
+        side_effect=lambda **k: order.append(("dice", None))
+        or SimpleNamespace(dice=SimpleNamespace(value=6))
+    )
+    monkeypatch.setattr(casino.asyncio, "sleep", AsyncMock())
+    await casino.place_bet(message, state)
+    assert order[0] == ("answer", casino.ANTICIPATION[emoji])
+    assert order[1] == ("dice", None)
+    # The same message object carries the verdict last. 6 is a win on the dice
+    # games (×5) and a two-of-a-kind loss on the slots.
+    assert order[-1] == ("answer", casino.verdict_text(emoji, 6, 0 if emoji == "🎰" else 50))
+
+
+@pytest.mark.asyncio
+async def test_anticipation_failure_never_aborts_the_round(db, state, monkeypatch):
+    """Presentation cannot cost the player their wager: after the debit the
+    anticipation line failing must still roll, settle and pay."""
+    await _enter_waiting_for_bet(state)
+    calls = {"count": 0}
+    def answer(*args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:  # the anticipation line itself
+            raise RuntimeError("not enough rights")
+        return SimpleNamespace()
+    message = _bet_message("100")
+    message.answer = AsyncMock(side_effect=answer)
+    message.answer_dice = AsyncMock(
+        return_value=SimpleNamespace(dice=SimpleNamespace(value=6))
+    )
+    monkeypatch.setattr(casino.asyncio, "sleep", AsyncMock())
+    await casino.place_bet(message, state)
+    message.answer_dice.assert_awaited_once()
+    async with db() as session:
+        assert await AppleWalletService.get_balance(session, 1) == 10000 - 100 + 500
+    assert await state.get_state() is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("emoji,value,expected,payout", [
+    # The four tiers the design review signed off, end to end.
+    ("🎲", 1, "😭 باختی! تاس 1 آورد. زمین خوردی!", 0),
+    ("🎲", 5, "😱 نزدیک بود! تاس 5 آورد. فقط یه دونه کم آوردی!", 0),
+    ("🎲", 6, "🎉 بردی! تاس 6 آورد. ضربه‌ی کاری! · 500 سیب گرفتی.", 500),
+    ("🎰", 22, "💥 جکپات! سه‌تای یکسان! 15 برابر! · 1500 سیب گرفتی.", 1500),
+])
+async def test_verdict_tiers_end_to_end(db, state, emoji, value, expected, payout, monkeypatch):
+    """Fumble / so-close / win / jackpot: one mocked value each, one verdict."""
+    await _enter_waiting_for_bet(state, emoji=emoji)
+    message = _bet_message(
+        "100",
+        answer_dice=AsyncMock(return_value=SimpleNamespace(dice=SimpleNamespace(value=value))),
+    )
+    monkeypatch.setattr(casino.asyncio, "sleep", AsyncMock())
+    await casino.place_bet(message, state)
+    assert message.answer.await_args.args[0] == expected
+    # The presentation never touches the economy: only the existing bet and
+    # payout reasons are written.
+    async with db() as session:
+        assert await AppleWalletService.get_balance(session, 1) == 10000 - 100 + payout
+
+
+@pytest.mark.parametrize("value", sorted(casino_service.SLOTS_WINNING_VALUES))
+def test_every_slot_jackpot_is_three_matching_reels(value):
+    """The reel decode must agree with the payout rule it decorates."""
+    assert len(set(casino._slot_reels(value))) == 1
+    assert not casino.slots_two_of_a_kind(value)
+
+
+@pytest.mark.parametrize("value", range(1, 65))
+def test_slot_reel_decode_matches_the_winning_set(value):
+    """Reels are rebuilt purely from the 1-64 result, never guessed."""
+    reels = casino._slot_reels(value)
+    assert all(0 <= reel <= 3 for reel in reels)
+    assert (len(set(reels)) == 1) == (value in casino_service.SLOTS_WINNING_VALUES)
+
+
+def test_two_of_a_kind_count():
+    """36 of the 64 results are a real «one fruit short»; 24 are not."""
+    two = [v for v in range(1, 65) if casino.slots_two_of_a_kind(v)]
+    assert len(two) == 36
+    assert 5 in two and 9 in two
+    assert 10 not in two and 14 not in two and 55 not in two
 
 
 def test_win_lines_are_natural():
@@ -235,25 +341,53 @@ def test_win_lines_are_natural():
 
 
 @pytest.mark.parametrize("emoji,value,expected", [
-    ("🎲", 5, "تاس 5 آورد"),
-    ("🎲", 1, "تاس 1 آورد"),
-    ("🎯", 5, "دارت به 5 خورد"),
-    ("🎯", 1, "دارت به بیرون خورد"),
-    ("🎳", 5, "بولینگ 5 پین انداخت"),
-    ("🎰", 10, "اسلات‌ها جور درنیومدن"),
-    ("🎰", 55, "اسلات‌ها جور درنیومدن"),
+    ("🎲", 1, "😭 باختی! تاس 1 آورد. زمین خوردی!"),
+    ("🎲", 2, "😭 باختی! تاس 2 آورد. زمین خوردی!"),
+    ("🎯", 1, "😭 باختی! دارت به بیرون خورد. دستت لرزید!"),
+    ("🎯", 2, "😭 باختی! دارت به 2 خورد. دستت لرزید!"),
+    ("🎳", 2, "😭 باختی! بولینگ 2 پین انداخت. پرت شد!"),
+    ("🎰", 10, "🎰 اسلات‌ها جور درنیومدن... باختی."),
+    ("🎰", 55, "🎰 اسلات‌ها جور درنیومدن... باختی."),
 ])
-def test_loss_lines_are_natural(emoji, value, expected):
-    """Natural wording; slots never print the raw number at all."""
-    line = casino.loss_line(emoji, value)
-    assert line == expected
-    assert "(برای برد" not in line
+def test_fumble_verdicts_are_dramatic(emoji, value, expected):
+    """Values 1-2 never had a chance: the «fumble» tier."""
+    text = casino.verdict_text(emoji, value, 0)
+    assert text == expected
+    assert "(برای برد" not in text
     if emoji == "🎰":
-        assert str(value) not in line
+        assert str(value) not in text
+
+
+@pytest.mark.parametrize("emoji,value,expected", [
+    # The gap is spoken honestly: a 3 is never sold as "one short".
+    ("🎲", 3, "😱 نزدیک بود! تاس 3 آورد. سه تا کم آوردی!"),
+    ("🎲", 4, "😱 نزدیک بود! تاس 4 آورد. دو تا کم آوردی!"),
+    ("🎲", 5, "😱 نزدیک بود! تاس 5 آورد. فقط یه دونه کم آوردی!"),
+    ("🎯", 5, "😱 نزدیک بود! دارت به 5 خورد. یک خط تا هدف فاصله داشتی!"),
+    ("🎯", 3, "😱 نزدیک بود! دارت به 3 خورد. لبه‌ی تخته بود!"),
+    ("🎳", 5, "😱 نزدیک بود! بولینگ 5 پین انداخت. یکی مونده بود!"),
+])
+def test_so_close_verdicts_are_dramatic(emoji, value, expected):
+    """A losing 3-5 is a genuine near miss: the «so close» tier."""
+    text = casino.verdict_text(emoji, value, 0)
+    assert text == expected
+    assert text.startswith("😱")
+    assert "بردی" not in text
+    assert "(برای برد" not in text
+
+
+@pytest.mark.parametrize("emoji", ["🎲", "🎯", "🎳"])
+def test_every_near_miss_speaks_its_own_gap(emoji):
+    """Each losing face 3-5 gets a distinct, truthful line."""
+    lines = {value: casino.verdict_text(emoji, value, 0) for value in (3, 4, 5)}
+    assert len(set(lines.values())) == 3
+    for value, line in lines.items():
+        assert str(value) in line
+        assert "بردی" not in line
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("value", [1, 55, 64])
+@pytest.mark.parametrize("value", [5, 9, 64])
 async def test_slots_loss_never_shows_the_number(db, state, value, monkeypatch):
     """A 55 must not appear: the player watched fruit, not a number."""
     await _enter_waiting_for_bet(state, emoji="🎰")
@@ -265,13 +399,20 @@ async def test_slots_loss_never_shows_the_number(db, state, value, monkeypatch):
     await casino.place_bet(message, state)
     result_text = message.answer.await_args.args[0]
     if value in casino_service.SLOTS_WINNING_VALUES:
-        assert result_text == "🏆 بردی! 🎰 جکپات زدی و 1500 سیب گرفتی."
-        # No digit in the description (the payout is the only number shown).
-        assert not any(ch.isdigit() for ch in result_text.split(" و ")[0])
+        assert result_text == casino.verdict_text("🎰", value, 1500)
+        assert result_text == (
+            "💥 جکپات! سه‌تای یکسان! 15 برابر! · 1500 سیب گرفتی."
+        )
+        # The payout is the only number shown.
+        assert result_text.count("15") == 2
     else:
-        assert result_text == "😭 باختی! اسلات‌ها جور درنیومدن."
+        # 5 and 9 are two-of-a-kind, 64 is not: the verdicts must differ.
+        assert result_text == (
+            "🍒 خیلی نزدیک بود! فقط یه میوه کم داشتی... باختی."
+            if casino.slots_two_of_a_kind(value)
+            else "🎰 اسلات‌ها جور درنیومدن... باختی."
+        )
         assert str(value) not in result_text
-        assert not any(ch.isdigit() for ch in result_text)
 
 
 @pytest.mark.asyncio
@@ -284,7 +425,9 @@ async def test_darts_one_misses_the_board(db, state, monkeypatch):
     )
     monkeypatch.setattr(casino.asyncio, "sleep", AsyncMock())
     await casino.place_bet(message, state)
-    assert message.answer.await_args.args[0] == "😭 باختی! دارت به بیرون خورد."
+    assert message.answer.await_args.args[0] == (
+        "😭 باختی! دارت به بیرون خورد. دستت لرزید!"
+    )
 
 
 @pytest.mark.asyncio
@@ -299,8 +442,9 @@ async def test_five_is_a_loss_for_dice_games(db, state, key, emoji, monkeypatch)
     monkeypatch.setattr(casino.asyncio, "sleep", AsyncMock())
     await casino.place_bet(message, state)
     result_text = message.answer.await_args.args[0]
-    assert result_text == f"😭 باختی! {casino.loss_line(emoji, 5)}."
-    assert result_text.endswith(".")
+    assert result_text == casino.verdict_text(emoji, 5, 0)
+    assert result_text.startswith("😱 نزدیک بود!")
+    assert "5" in result_text
     assert "6" not in result_text and "۶" not in result_text
     assert "برای برد" not in result_text
     async with db() as session:
@@ -318,6 +462,9 @@ async def test_six_wins_five_times_the_bet(db, state, key, emoji, monkeypatch):
     monkeypatch.setattr(casino.asyncio, "sleep", AsyncMock())
     await casino.place_bet(message, state)
     result_text = message.answer.await_args.args[0]
+    assert result_text == (
+        f"🎉 بردی! {casino.win_line(emoji, 6)}. ضربه‌ی کاری! · 500 سیب گرفتی."
+    )
     assert "بردی" in result_text
     assert "500 سیب گرفتی" in result_text
     async with db() as session:
@@ -334,7 +481,7 @@ async def test_slots_matching_combination_pays_fifteen_times(db, state, monkeypa
     monkeypatch.setattr(casino.asyncio, "sleep", AsyncMock())
     await casino.place_bet(message, state)
     result_text = message.answer.await_args.args[0]
-    assert result_text == "🏆 بردی! 🎰 جکپات زدی و 1500 سیب گرفتی."
+    assert result_text == "💥 جکپات! سه‌تای یکسان! 15 برابر! · 1500 سیب گرفتی."
     assert "22" not in result_text
     async with db() as session:
         assert await AppleWalletService.get_balance(session, 1) == 10000 - 100 + 1500
@@ -345,14 +492,15 @@ async def test_slots_non_matching_value_loses(db, state, monkeypatch):
     await _enter_waiting_for_bet(state, emoji="🎰")
     message = _bet_message(
         "100",
-        answer_dice=AsyncMock(return_value=SimpleNamespace(dice=SimpleNamespace(value=10))),
+        answer_dice=AsyncMock(return_value=SimpleNamespace(dice=SimpleNamespace(value=14))),
     )
     monkeypatch.setattr(casino.asyncio, "sleep", AsyncMock())
     await casino.place_bet(message, state)
     result_text = message.answer.await_args.args[0]
-    assert result_text == "😭 باختی! اسلات‌ها جور درنیومدن."
+    # 14 is three different fruits: nothing was close, so no «so close» line.
+    assert result_text == "🎰 اسلات‌ها جور درنیومدن... باختی."
     # The raw slot number must never be shown; only the fruit animation is.
-    assert "10" not in result_text
+    assert "14" not in result_text
     assert "بردی" not in result_text
     assert "برای برد" not in result_text
     async with db() as session:

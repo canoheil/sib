@@ -11,6 +11,16 @@ exact message that started it:
   silently, so button spam cannot queue a pile of prompts;
 * the prompt is deleted as soon as the wager is parsed, and the dice
   replies to the player's own bet message.
+
+A round is presented as three beats (CASINO-THRILL idea B):
+
+1. **anticipation** — one short line naming the game, sent before the roll;
+2. **the roll** — Telegram's ``answer_dice`` animation, untouched;
+3. **the verdict** — one tiered line (fumble / so close / win / jackpot).
+
+The presentation is deliberately outside the economy: odds, multipliers,
+cooldowns and the FSM are unchanged, and the wallet is settled *before* the
+verdict is written so a message can never promise a payout that did not happen.
 """
 import asyncio
 from pathlib import Path
@@ -27,8 +37,9 @@ from sib.core.text import safe_name
 from sib.database.connection import get_session
 from sib.handlers.rocket import _normalize_rocket_digits
 from sib.keyboards.common import primary_button
-from sib.services.casino_service import CasinoService
+from sib.services import casino_service
 from sib.services.apple_wallet import AppleWalletService
+from sib.services.casino_service import CasinoService
 from sib.services.lock_order import lock_user_row
 
 router = Router(name="casino")
@@ -117,12 +128,52 @@ async def _delete_prompt(message) -> None:
         logger.debug("Casino prompt cleanup failed", exc_info=True)
 
 
+#: Beat 1 — the anticipation line sent just before the animation. It keeps the
+#: round a three-beat scene (anticipation → roll → verdict) instead of a silent
+#: wait, and it names the game so a group reading mid-scroll knows what is live.
+ANTICIPATION = {
+    "🎲": "🎲 تاس‌ها در حال چرخش...",
+    "🎯": "🎯 دارت پرتاب شد...",
+    "🎳": "🎳 توپ در حال غلتیدن...",
+    "🎰": "🎰 اسلات‌ها می‌چرخند...",
+}
+#: A short pause so the anticipation line is read before the dice lands on it.
+#: Presentation only: it never gates the wager, the roll or the payout.
+ANTICIPATION_PAUSE = 1.0
+
 #: What the animation actually showed. Slots deliberately never print the raw
 #: 1-64 result: the player sees fruit, not a number.
 _GAME_LINES = {
     "🎲": "تاس {value} آورد",
     "🎯": "دارت به {value} خورد",
     "🎳": "بولینگ {value} پین انداخت",
+}
+#: Beat 3, tier «fumble»: nothing was close. Values 1-2 of the six faces.
+FUMBLE_VALUES = frozenset({1, 2})
+_FUMBLE_LINES = {
+    "🎲": "تاس {value} آورد. زمین خوردی!",
+    "🎯": "دارت به {value} خورد. دستت لرزید!",
+    "🎳": "بولینگ {value} پین انداخت. پرت شد!",
+}
+#: Beat 3, tier «so close»: a losing roll that still raised hope (3-5 of 6).
+#: Keyed by how many faces the roll was short of the winning 6, so a 3 never
+#: pretends to have been "one short": the tier is dramatic, the number is honest.
+_NEAR_MISS_LINES = {
+    "🎲": {
+        1: "تاس {value} آورد. فقط یه دونه کم آوردی!",
+        2: "تاس {value} آورد. دو تا کم آوردی!",
+        3: "تاس {value} آورد. سه تا کم آوردی!",
+    },
+    "🎯": {
+        1: "دارت به {value} خورد. یک خط تا هدف فاصله داشتی!",
+        2: "دارت به {value} خورد. نزدیک هدف بود، ولی نه روی هدف!",
+        3: "دارت به {value} خورد. لبه‌ی تخته بود!",
+    },
+    "🎳": {
+        1: "بولینگ {value} پین انداخت. یکی مونده بود!",
+        2: "بولینگ {value} پین انداخت. دو تا مونده بود!",
+        3: "بولینگ {value} پین انداخت. نصف لین رو زدی!",
+    },
 }
 
 
@@ -133,13 +184,61 @@ def win_line(emoji: str, value: int) -> str:
     return _GAME_LINES[emoji].format(value=value)
 
 
-def loss_line(emoji: str, value: int) -> str:
-    """Natural one-liner for a losing round — no rule reminder in the chat."""
-    if emoji == "🎰":
-        return "اسلات‌ها جور درنیومدن"
+def fumble_line(emoji: str, value: int) -> str:
+    """The «fumble» tier: the roll never had a chance."""
     if emoji == "🎯" and value == 1:
-        return "دارت به بیرون خورد"
-    return _GAME_LINES[emoji].format(value=value)
+        return "دارت به بیرون خورد. دستت لرزید!"
+    return _FUMBLE_LINES[emoji].format(value=value)
+
+
+def near_miss_line(emoji: str, value: int) -> str:
+    """The «so close» tier: a real, honest near miss."""
+    lines = _NEAR_MISS_LINES[emoji]
+    return lines.get(6 - value, lines[1]).format(value=value)
+
+
+def _slot_reels(value: int) -> tuple[int, int, int]:
+    """Decode a slot result into its three reels (0-3 each).
+
+    Read as three base-4 digits plus one, ``1 + 16*a + 4*b + c``. The winning
+    set in :mod:`sib.services.casino_service` is the product rule; this
+    decoding is what lets the *presentation* tell a genuine two-of-a-kind
+    "one fruit short" apart from three different fruits, without ever
+    printing the raw 1-64 value.
+    """
+    offset = value - 1
+    return offset // 16, (offset // 4) % 4, offset % 4
+
+
+def slots_two_of_a_kind(value: int) -> bool:
+    """True when exactly two reels match — the real «one fruit short» case."""
+    return len(set(_slot_reels(value))) == 2
+
+
+def verdict_text(emoji: str, value: int, payout: int) -> str:
+    """Beat 3: one dramatic verdict per tier. Never leaks a slot result.
+
+    Wins carry the payout (and the slots multiplier) so the celebration line
+    doubles as the receipt; losses only ever describe the animation the player
+    just watched.
+    """
+    if emoji == "🎰":
+        if payout:
+            return (
+                f"💥 جکپات! سه‌تای یکسان! {casino_service.SLOTS_MULTIPLIER} برابر! "
+                f"· {payout} سیب گرفتی."
+            )
+        if slots_two_of_a_kind(value):
+            return "🍒 خیلی نزدیک بود! فقط یه میوه کم داشتی... باختی."
+        return "🎰 اسلات‌ها جور درنیومدن... باختی."
+    if payout:
+        return (
+            f"🎉 بردی! {win_line(emoji, value)}. ضربه‌ی کاری! "
+            f"· {payout} سیب گرفتی."
+        )
+    if value in FUMBLE_VALUES:
+        return f"😭 باختی! {fumble_line(emoji, value)}"
+    return f"😱 نزدیک بود! {near_miss_line(emoji, value)}"
 
 
 async def _notify(message, text: str) -> None:
@@ -239,6 +338,17 @@ async def place_bet(message: Message, state: FSMContext) -> None:
         # The wager is parsed and accepted: the prompt has done its job.
         await _delete_prompt(message)
         game_id = result["game_id"]
+        # Beat 1 — anticipation is best effort: a group whose bot lost the
+        # right to post must still get its round, so this never raises.
+        anticipation = ANTICIPATION.get(emoji)
+        if anticipation:
+            try:
+                await message.answer(anticipation)
+            except Exception:
+                logger.debug(
+                    "Casino anticipation send failed (user=%s)", user_id, exc_info=True
+                )
+        await asyncio.sleep(ANTICIPATION_PAUSE)
         try:
             # The animation replies to the player's own bet message, so the
             # round stays attached to the person who placed it.
@@ -253,13 +363,11 @@ async def place_bet(message: Message, state: FSMContext) -> None:
         await asyncio.sleep(4.0 if emoji == "🎰" else 3.5)
         outcome = CasinoService.calculate_result(emoji, dice.dice.value, bet)
         value = outcome["value"]
+        # Beat 3 — the verdict. The wallet is settled first so the text can
+        # never claim a payout the ledger did not make.
         if outcome["is_win"]:
             await _credit(user_id, outcome["payout"], game_id, "casino_payout")
-            await message.answer(
-                f"🏆 بردی! {win_line(emoji, value)} و {outcome['payout']} سیب گرفتی."
-            )
-        else:
-            await message.answer(f"😭 باختی! {loss_line(emoji, value)}.")
+        await message.answer(verdict_text(emoji, value, outcome["payout"]))
     finally:
         await state.clear()
         _ACTIVE_USERS.discard(user_id)
