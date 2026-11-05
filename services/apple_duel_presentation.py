@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 from aiogram.types import BufferedInputFile
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
+from sib.core.bidi import fix_bidi
 from sib.core.logging import logger
 from sib.core.text import safe_name
 from sib.database.connection import get_session
@@ -86,7 +87,9 @@ def scene_text(duel, battle, index):
     ]
     if snapshot.get("disease_infected_user_id") is not None:
         scenes[5] += "\n⚠️ بازنده پس از دوئل به بیماری مبتلا شد."
-    return scenes[index]
+    # Every scene opens with an emoji and names a player, so the paragraph
+    # direction is pinned to RTL at the single render point.
+    return fix_bidi(scenes[index])
 
 
 def compose_frame(arts, stage, background=None):

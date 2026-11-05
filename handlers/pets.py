@@ -59,6 +59,7 @@ from aiogram.types import (
     Message,
 )
 
+from sib.core.bidi import fix_bidi
 from sib.core.logging import logger
 from sib.core.text import format_html_caption
 from sib.database.connection import get_session
@@ -528,7 +529,14 @@ def pet_menu_keyboard(pets) -> InlineKeyboardMarkup:
 
 
 async def _reply_photo(message: Message, image: Path, caption: str, **kwargs):
-    """Reply with artwork, falling back to text when the file is missing."""
+    """Reply with artwork, falling back to text when the file is missing.
+
+    Pet captions interpolate the player-chosen pet name (fenced with ``LRM``
+    by :func:`pet_service.pet_display_name`) and usually open with an emoji,
+    so the paragraph direction is pinned to RTL here, before the renderer
+    escapes the text.
+    """
+    caption = fix_bidi(caption)
     if image.is_file():
         return await message.reply_photo(
             FSInputFile(str(image)), caption=caption, parse_mode="HTML", **kwargs
@@ -757,7 +765,7 @@ async def _edit_hunt_screen(
     message = getattr(callback, "message", None)
     chat_id = getattr(getattr(message, "chat", None), "id", None)
     message_id = getattr(message, "message_id", None)
-    text = format_html_caption(caption)
+    text = format_html_caption(fix_bidi(caption))
     has_photo = bool(getattr(message, "photo", None))
 
     if bot is not None and chat_id and message_id and has_photo and image.is_file():
@@ -838,7 +846,9 @@ async def _send_pet_menu(message, user_id: int) -> None:
     """
     caption, keyboard = await _pet_menu_content(user_id)
     await message.answer(
-        format_html_caption(caption), reply_markup=keyboard, parse_mode="HTML"
+        format_html_caption(fix_bidi(caption)),
+        reply_markup=keyboard,
+        parse_mode="HTML",
     )
 
 
@@ -887,7 +897,7 @@ async def _edit_pet_screen(
     message = getattr(callback, "message", None)
     chat_id = getattr(getattr(message, "chat", None), "id", None)
     message_id = getattr(message, "message_id", None)
-    text = format_html_caption(caption)
+    text = format_html_caption(fix_bidi(caption))
     has_photo = bool(getattr(message, "photo", None))
     wants_photo = image is not None and image.is_file()
 
@@ -1208,7 +1218,7 @@ async def handle_pet_name(message: Message, state: FSMContext) -> None:
 
     await state.clear()
     await message.reply(
-        NAMED_TEXT.format(name=html.escape(str(result.get("name") or "")))
+        fix_bidi(NAMED_TEXT.format(name=html.escape(str(result.get("name") or ""))))
         + "\n"
         + SKILL_TEASER,
         parse_mode="HTML",
@@ -1305,7 +1315,9 @@ async def handle_pet_rename_name(message: Message, state: FSMContext) -> None:
     await state.clear()
     await message.reply(
         format_html_caption(
-            RENAMED_TEXT.format(name=html.escape(str(result.get("name") or "")))
+            fix_bidi(
+                RENAMED_TEXT.format(name=html.escape(str(result.get("name") or "")))
+            )
         ),
         parse_mode="HTML",
     )

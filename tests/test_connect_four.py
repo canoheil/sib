@@ -198,7 +198,7 @@ def test_c4_turn_clarity_solo_initial(solo_players):
 
     # Player 302 (team B, 🍏) sees waiting
     text_opp = engine.render_for_group(state, -3002, 302)
-    assert "⏳ نوبت حریف (🍎 Player 1)" in text_opp
+    assert "⏳ نوبت حریف (🍎 \u200ePlayer 1\u200e)" in text_opp
 
 
 def test_c4_turn_clarity_solo_after_move(solo_players):
@@ -215,7 +215,7 @@ def test_c4_turn_clarity_solo_after_move(solo_players):
 
     # Player 301 sees waiting for opponent
     text_opp = engine.render_for_group(state, -3001, 301)
-    assert "⏳ نوبت حریف (🍏 Player 2)" in text_opp
+    assert "⏳ نوبت حریف (🍏 \u200ePlayer 2\u200e)" in text_opp
 
 
 def test_c4_turn_clarity_solo_invalid_move(solo_players):
@@ -271,7 +271,7 @@ def test_c4_turn_clarity_team_your_turn(team_players_2v2):
     # Since both team A players are in group -3001 (shared group),
     # player 310 sees "نوبت Player 0 است!" instead of "نوبت شماست!"
     text = engine.render_for_group(state, -3001, 310)
-    assert "🍎 **نوبت Player 0 است!**" in text
+    assert "🍎 **نوبت \u200ePlayer 0\u200e است!**" in text
 
 
 def test_c4_turn_clarity_team_teammate_turn(team_players_2v2):
@@ -287,7 +287,7 @@ def test_c4_turn_clarity_team_teammate_turn(team_players_2v2):
 
     # Player 311 (team A) sees opponent's turn (312 is team B)
     text = engine.render_for_group(state, -3001, 311)
-    assert "⏳ نوبت تیم حریف: 👤 Player 2 (🍏)" in text
+    assert "⏳ نوبت تیم حریف: 👤 \u200ePlayer 2\u200e (🍏)" in text
 
     # After 312 moves, it's 311's turn (team A)
     state = engine.apply_action(state, 312, {"col": 1})
@@ -295,12 +295,12 @@ def test_c4_turn_clarity_team_teammate_turn(team_players_2v2):
     # Player 311 (team A, "Player 1") sees their turn
     # Since group is shared, they see "نوبت Player 1 است!"
     text = engine.render_for_group(state, -3001, 311)
-    assert "🍎 **نوبت Player 1 است!**" in text
+    assert "🍎 **نوبت \u200ePlayer 1\u200e است!**" in text
 
     # Player 310 (team A, same team as 311) sees "your team's turn: Player 1"
     # (311's name is "Player 1")
     text_teammate = engine.render_for_group(state, -3001, 310)
-    assert "🍎 **نوبت تیم شما:** 👤 Player 1" in text_teammate
+    assert "🍎 **نوبت تیم شما:** 👤 \u200ePlayer 1\u200e" in text_teammate
 
 
 def test_c4_turn_clarity_team_opponent_turn(team_players_2v2):
@@ -313,11 +313,11 @@ def test_c4_turn_clarity_team_opponent_turn(team_players_2v2):
 
     # Player 312 (team B) sees opponent's turn
     text = engine.render_for_group(state, -3002, 312)
-    assert "⏳ نوبت تیم حریف: 👤 Player 0 (🍎)" in text
+    assert "⏳ نوبت تیم حریف: 👤 \u200ePlayer 0\u200e (🍎)" in text
 
     # Player 313 (team B) also sees opponent's turn
     text2 = engine.render_for_group(state, -3002, 313)
-    assert "⏳ نوبت تیم حریف: 👤 Player 0 (🍎)" in text2
+    assert "⏳ نوبت تیم حریف: 👤 \u200ePlayer 0\u200e (🍎)" in text2
 
 
 def test_c4_turn_clarity_team_full_rotation(team_players_2v2):
@@ -331,43 +331,43 @@ def test_c4_turn_clarity_team_full_rotation(team_players_2v2):
     # Turn 0: 310 (team A) active
     # Shared group: 310 sees "نوبت Player 0 است!"
     text_310 = engine.render_for_group(state, -3001, 310)
-    assert "🍎 **نوبت Player 0 است!**" in text_310
+    assert "🍎 **نوبت \u200ePlayer 0\u200e است!**" in text_310
 
     text_311 = engine.render_for_group(state, -3001, 311)
-    assert "🍎 **نوبت تیم شما:** 👤 Player 0" in text_311
+    assert "🍎 **نوبت تیم شما:** 👤 \u200ePlayer 0\u200e" in text_311
 
     text_312 = engine.render_for_group(state, -3002, 312)
-    assert "⏳ نوبت تیم حریف: 👤 Player 0 (🍎)" in text_312
+    assert "⏳ نوبت تیم حریف: 👤 \u200ePlayer 0\u200e (🍎)" in text_312
 
     state = engine.apply_action(state, 310, {"col": 0})
 
     # Turn 1: 312 (team B) active
     # Shared group: 312 sees "نوبت Player 2 است!"
     text_312 = engine.render_for_group(state, -3002, 312)
-    assert "🍏 **نوبت Player 2 است!**" in text_312
+    assert "🍏 **نوبت \u200ePlayer 2\u200e است!**" in text_312
 
     text_313 = engine.render_for_group(state, -3002, 313)
-    assert "🍏 **نوبت تیم شما:** 👤 Player 2" in text_313
+    assert "🍏 **نوبت تیم شما:** 👤 \u200ePlayer 2\u200e" in text_313
 
     text_310 = engine.render_for_group(state, -3001, 310)
-    assert "⏳ نوبت تیم حریف: 👤 Player 2 (🍏)" in text_310
+    assert "⏳ نوبت تیم حریف: 👤 \u200ePlayer 2\u200e (🍏)" in text_310
 
     state = engine.apply_action(state, 312, {"col": 1})
 
     # Turn 2: 311 (team A, "Player 1") active
     # Shared group: 311 sees "نوبت Player 1 است!"
     text_311 = engine.render_for_group(state, -3001, 311)
-    assert "🍎 **نوبت Player 1 است!**" in text_311
+    assert "🍎 **نوبت \u200ePlayer 1\u200e است!**" in text_311
 
     text_310 = engine.render_for_group(state, -3001, 310)
-    assert "🍎 **نوبت تیم شما:** 👤 Player 1" in text_310
+    assert "🍎 **نوبت تیم شما:** 👤 \u200ePlayer 1\u200e" in text_310
 
     state = engine.apply_action(state, 311, {"col": 2})
 
     # Turn 3: 313 (team B, "Player 3") active
     # Shared group: 313 sees "نوبت Player 3 است!"
     text_313 = engine.render_for_group(state, -3002, 313)
-    assert "🍏 **نوبت Player 3 است!**" in text_313
+    assert "🍏 **نوبت \u200ePlayer 3\u200e است!**" in text_313
 
     text_312 = engine.render_for_group(state, -3002, 312)
-    assert "🍏 **نوبت تیم شما:** 👤 Player 3" in text_312
+    assert "🍏 **نوبت تیم شما:** 👤 \u200ePlayer 3\u200e" in text_312

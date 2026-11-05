@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy import select
 
+from sib.core.bidi import fix_bidi
 from sib.database.models import (
     AppleBattle,
     AppleBattleStatus,
@@ -243,12 +244,12 @@ async def test_narration_is_sent_as_separate_photo_messages(db_session):
     # Every narration message is a PHOTO + short cinematic caption.
     for call in bot.send_photo.call_args_list:
         assert call.args[1] is not None, "narration messages must carry a photo"
-        assert call.kwargs["caption"] in [beat["text"] for beat in ctx["plan"]]
+        assert call.kwargs["caption"] in [fix_bidi(beat["text"]) for beat in ctx["plan"]]
 
     # Each beat appears exactly once per group, as its own send.
     captions = [c.kwargs["caption"] for c in bot.send_photo.call_args_list]
     for beat in ctx["plan"]:
-        assert captions.count(beat["text"]) == 2
+        assert captions.count(fix_bidi(beat["text"])) == 2
 
     # Narration is NEVER appended into a repeatedly edited board message:
     # the only edits are the two final reports.
@@ -410,7 +411,7 @@ async def test_restart_resumes_mid_narration_without_duplicates(db_session):
     assert len(captions) == 3 * 2
     assert all(text not in captions for text in [b["text"] for b in ctx["plan"][:2]])
     for beat in ctx["plan"][2:]:
-        assert captions.count(beat["text"]) == 2
+        assert captions.count(fix_bidi(beat["text"])) == 2
 
     state = await _persisted_state(db_session, match_id)
     records = AppleBattleNarrationState.messages(state)
@@ -452,7 +453,7 @@ async def test_concurrent_narration_workers_never_duplicate_events(db_session):
     ]
     assert len(all_captions) == len(ctx["plan"]) * 2
     for beat in ctx["plan"]:
-        assert all_captions.count(beat["text"]) == 2
+        assert all_captions.count(fix_bidi(beat["text"])) == 2
 
     state = await _persisted_state(db_session, ctx["match_id"])
     records = AppleBattleNarrationState.messages(state)
@@ -507,7 +508,7 @@ async def test_legacy_state_without_narration_records_resumes_safely(db_session)
     captions = [c.kwargs["caption"] for c in bot.send_photo.call_args_list]
     assert len(captions) == 3 * 2
     for beat in ctx["plan"][2:]:
-        assert captions.count(beat["text"]) == 2
+        assert captions.count(fix_bidi(beat["text"])) == 2
     for beat in ctx["plan"][:2]:
         assert beat["text"] not in captions
 
@@ -651,12 +652,12 @@ async def test_narration_continues_as_text_when_no_photo_is_available(db_session
         if text is None and len(call.args) > 1:
             text = call.args[1]
         texts.append(text)
-    narration_texts = {beat["text"] for beat in ctx["plan"]}
+    narration_texts = {fix_bidi(beat["text"]) for beat in ctx["plan"]}
     narration_sends = [text for text in texts if text in narration_texts]
     level_up_notices = [text for text in texts if text not in narration_texts]
     assert len(narration_sends) == len(ctx["plan"]) * 2
     for beat in ctx["plan"]:
-        assert narration_sends.count(beat["text"]) == 2
+        assert narration_sends.count(fix_bidi(beat["text"])) == 2
     assert len(level_up_notices) == 2
     assert all("تبریک" in text and "سطح" in text for text in level_up_notices)
     assert bot.edit_message_text.await_count == 2  # final report, text-only

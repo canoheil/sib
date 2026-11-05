@@ -244,7 +244,7 @@ def test_group_board_has_no_grid_buttons():
     _assert_neutral_group_text(text)
     assert "آرش" in text and "بابک" in text          # both players are named
     assert "🍎 تیم سرخ" in text and "🍏 تیم سبز" in text
-    assert "🎯 **نوبت: آرش**" in text                 # whose turn it is
+    assert "🎯 **نوبت: \u200eآرش\u200e**" in text                 # whose turn it is
     assert "هنوز شلیکی انجام نشده است" in text
 
     # One public shot keeps the board readable and grid-free.
@@ -252,9 +252,9 @@ def test_group_board_has_no_grid_buttons():
     state = engine.apply_action(state, 101, {"r": r, "c": c})
     text = engine.render_public(state)
     _assert_neutral_group_text(text)
-    assert f"آرش به {engine._coord_label(r, c)} شلیک کرد" in text
+    assert f"\u200eآرش\u200e به {engine._coord_label(r, c)} شلیک کرد" in text
     assert "🌊 آب" in text
-    assert "🎯 **نوبت: بابک**" in text
+    assert "🎯 **نوبت: \u200eبابک\u200e**" in text
 
     # A finished match names the winning TEAM (no "you").
     state["finished"] = True
@@ -282,7 +282,7 @@ async def test_group_board_edit_after_shot_has_no_grid(db_session):
     call = bot.edit_message_text.await_args
     group_text, group_keyboard = call.args[0], call.kwargs["reply_markup"]
     _assert_neutral_group_text(group_text)
-    assert f"{ctx.on_turn.first_name} به" in group_text
+    assert f"\u200e{ctx.on_turn.first_name}\u200e به" in group_text
     assert "شلیک کرد" in group_text
     assert _shot_callbacks(group_keyboard) == []
     assert _callbacks(group_keyboard) == [
@@ -384,8 +384,8 @@ async def test_shot_updates_both_ephemeral_and_group_messages(db_session):
     group_text = group.args[0]
     assert group.kwargs["message_id"] == GROUP_MESSAGE_ID
     _assert_neutral_group_text(group_text)
-    assert f"{ctx.on_turn.first_name} به {coord} شلیک کرد: 💥 برخورد" in group_text
-    assert f"نوبت: {ctx.waiting.first_name}" in group_text
+    assert f"\u200e{ctx.on_turn.first_name}\u200e به {coord} شلیک کرد: 💥 برخورد" in group_text
+    assert f"نوبت: \u200e{ctx.waiting.first_name}\u200e" in group_text
 
     # (c) the move is committed and the turn passed to the opponent
     await db_session.rollback()

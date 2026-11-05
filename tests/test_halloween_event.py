@@ -340,8 +340,8 @@ async def test_menu_shows_exact_loot_timer_and_top3_board(db_session):
     # TASK 3: the loot range the player can actually expect.
     assert f"🎁 هر غنیمت: **{seed_loot_range_fa()} دونه کدو**" in caption
     # TASK 4: medals + damage per player, Persian digits only.
-    assert f"🥇 شکارچی کهنه: {fa_digits(1200)} آسیب" in caption
-    assert f"🥈 نوکار: {fa_digits(400)} آسیب" in caption
+    assert f"🥇 \u200eشکارچی کهنه\u200e: {fa_digits(1200)} آسیب" in caption
+    assert f"🥈 \u200eنوکار\u200e: {fa_digits(400)} آسیب" in caption
     assert "🥉" not in caption  # only two attackers exist
     assert not any(digit in caption for digit in "0123456789")
 
@@ -423,7 +423,10 @@ async def test_attack_by_replying_to_menu_consumes_seed_and_hits(db_session):
     hits = [line for line in sent if "به سیبومورتیس" in line]
     assert len(hits) == 1
     assert hits[0].startswith(
-        format_html(f"⚔️ **شکارچی** به سیبومورتیس **{fa_digits(damage)} آسیب** زد!")
+        format_html(
+            f"⚔️ **\u200eشکارچی\u200e** به سیبومورتیس "
+            f"**{fa_digits(damage)} آسیب** زد!"
+        )
     )
     # The public line is HTML: bold is a <b> tag, never a raw "**".
     assert "**" not in hits[0]
@@ -743,7 +746,7 @@ async def test_attack_reports_phase_evolution_and_announces_it(db_session):
     bot = _mock_bot()
     await handle_halloween_attack_trigger(_mock_attack_reply(uid), bot)
     public = bot.send_message.await_args.args[1]
-    assert public.startswith(format_html("⚔️ **شکارچی** به سیبومورتیس **"))
+    assert public.startswith(format_html("⚔️ **\u200eشکارچی\u200e** به سیبومورتیس **"))
     assert format_html(ATTACK_DEFEAT_LINE) in public
     assert format_html("🏆 **سیبومورتیس سقوط کرد!**") in public
     assert "**" not in public

@@ -697,7 +697,7 @@ def test_group_notice_names_the_presser_and_escapes_the_display_name():
 
     notice = chest._group_reward_notice(presser, result)
 
-    assert notice.startswith("🎁 [ali\\_\\*x](tg://user?id=4242)")
+    assert notice.startswith("🎁 [\u200eali\\_\\*x\u200e](tg://user?id=4242)")
     assert "**۱۵ سیب معمولی**" in notice
 
 

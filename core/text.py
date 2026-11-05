@@ -17,10 +17,18 @@ are still used by text that has not been migrated yet. Markdown escaping
 is *inert* under HTML, so :func:`format_html` also removes that escaping
 layer (``\\_`` renders as ``_``, not as a stray backslash) before applying
 the HTML escaping.
+
+Bidi: both name helpers fence the name with :func:`sib.core.bidi.wrap_ltr`,
+so a Latin/stylized name inside a Persian sentence cannot reorder the words
+or their punctuation around it. The paragraph direction of a message that
+opens with an emoji or an English word is pinned separately, at the point
+where the final string is sent, with :func:`sib.core.bidi.fix_bidi`.
 """
 
 import re
 from typing import Optional
+
+from sib.core.bidi import wrap_ltr
 
 # Characters that are active in Telegram's legacy Markdown parse mode.
 _MARKDOWN_SPECIALS = ("\\", "_", "*", "`", "[")
@@ -41,11 +49,20 @@ def escape_markdown(text: Optional[str]) -> str:
 
 
 def safe_name(name: Optional[str], fallback: str = "بازیکن") -> str:
-    """Return a Markdown-safe display name with a friendly fallback."""
+    """Return a Markdown-safe display name with a friendly fallback.
+
+    The name is fenced with ``LRM`` (see :func:`sib.core.bidi.wrap_ltr`):
+    ``Ali`` must read as one left-to-right block inside the Persian
+    sentence, otherwise the ``!``/``()`` around it jump to the wrong side.
+    The marks are invisible and inert in both Markdown and HTML.
+
+    >>> safe_name("Ali")
+    '\u200eAli\u200e'
+    """
     cleaned = (name or "").strip()
     if not cleaned:
         cleaned = fallback
-    return escape_markdown(cleaned)
+    return escape_markdown(wrap_ltr(cleaned))
 
 
 # HTML tags, link schemes and Telegram @handles that must never reach a
@@ -65,7 +82,8 @@ def plain_display_name(
     whitespace is collapsed to one line, the name is capped, and the result
     is Markdown-escaped so it cannot break the message. The output never
     contains ``@``, ``tg://`` or an HTML tag, so it can't become a clickable
-    DM link.
+    DM link. Like :func:`safe_name`, the name is fenced with ``LRM`` so it
+    stays one LTR block inside a Persian sentence.
     """
     cleaned = _HTML_TAG.sub("", name or "")
     cleaned = _LINK_SCHEME.sub("", cleaned)
@@ -74,7 +92,7 @@ def plain_display_name(
     cleaned = " ".join(cleaned.split())[:max_length].strip()
     if not cleaned:
         cleaned = fallback
-    return escape_markdown(cleaned)
+    return escape_markdown(wrap_ltr(cleaned))
 
 
 # ---------------------------------------------------------------------------

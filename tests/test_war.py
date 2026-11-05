@@ -436,7 +436,7 @@ def test_war_narrative_pools_have_variants():
         damage=800,
         is_buff=False,
     )
-    assert "**رستم**" in text_def
+    assert "**\u200eرستم\u200e**" in text_def
     assert "**سایه ایگریس**" in text_def
     assert "**عقاب‌ها**" in text_def
     assert "**۸۰۰ آسیب**" in text_def

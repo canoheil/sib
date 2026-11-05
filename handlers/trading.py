@@ -24,6 +24,7 @@ from aiogram import Bot, Router, F
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from sib.core.bidi import fix_bidi, wrap_ltr
 from sib.keyboards.common import danger_button, primary_button, success_button
 from sib.database.connection import get_session
 from sib.database.models import Character, PlayerCard, Trade, TradeStatus
@@ -303,8 +304,8 @@ async def handle_trade_offer(callback: CallbackQuery, bot: Bot):
             f"💪{attrs.power} ⚡{attrs.speed} 🧠{attrs.intelligence}" if attrs else "—"
         )
 
-    name = user.first_name or "یک سیبی"
-    text = (
+    name = wrap_ltr(user.first_name or "یک سیبی")
+    text = fix_bidi(
         "🤝 **پیشنهاد مبادله کارت**\n\n"
         f"🍎 {name} کارت **{label}** رو برای مبادله گذاشته.\n"
         f"📊 {stats}\n\n"

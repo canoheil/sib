@@ -44,6 +44,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from sqlalchemy import select
 
+from sib.core.bidi import fix_bidi
 from sib.core.logging import Events, log_event, logger
 from sib.database.connection import get_session
 from sib.database.models import Character, Match, PlayerCard
@@ -460,7 +461,9 @@ class AppleBattleNarration:
         if not isinstance(plan, list) or not (0 <= beat_index < len(plan)):
             return []
         beat = plan[beat_index] if isinstance(plan[beat_index], dict) else {}
-        text = str(beat.get("text") or "")
+        # A beat opens with an emoji and names both players, so the paragraph
+        # direction is pinned to RTL before it is rendered/sent.
+        text = fix_bidi(str(beat.get("text") or ""))
         if not text:
             return []
         if bot is None:

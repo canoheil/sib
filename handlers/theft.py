@@ -36,6 +36,7 @@ from aiogram.filters import Command
 from aiogram.types import FSInputFile, Message
 from sqlalchemy import select
 
+from sib.core.bidi import fix_bidi
 from sib.core.logging import logger
 from sib.core.text import format_html_caption, plain_display_name
 from sib.database.connection import get_session
@@ -201,8 +202,13 @@ async def _config_int(session, key: str) -> int:
 
 
 async def _send_photo(message: Message, image: Path, caption: str, *, answer: bool = False):
-    """Send an artwork with an HTML caption, falling back to text if missing."""
-    markup = format_html_caption(caption)
+    """Send an artwork with an HTML caption, falling back to text if missing.
+
+    Every theft caption interpolates a player name, and the thief/victim
+    names are ``LRM``-fenced by ``plain_display_name``; the paragraph
+    direction is pinned to RTL here because the caption opens with an emoji.
+    """
+    markup = format_html_caption(fix_bidi(caption))
     send_photo = message.answer_photo if answer else message.reply_photo
     if image.is_file():
         return await send_photo(

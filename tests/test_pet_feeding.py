@@ -21,6 +21,7 @@ from aiogram.types import Chat, Message
 from aiogram.types import User as TelegramUser
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from sib.core.bidi import LRM
 from sib.database.models import (
     AppleTransaction,
     AppleWallet,
@@ -415,11 +416,12 @@ async def test_list_pets_is_scoped_per_user(session):
 
 
 def test_pet_display_name_falls_back_for_an_unnamed_pet():
-    assert pet_service.pet_display_name(SimpleNamespace(custom_name="ملوس")) == "ملوس"
-    assert (
-        pet_service.pet_display_name(SimpleNamespace(custom_name=None))
-        == pet_service.UNNAMED_PET_FA
+    assert pet_service.pet_display_name(SimpleNamespace(custom_name="ملوس")) == (
+        LRM + "ملوس" + LRM
     )
+    assert pet_service.pet_display_name(
+        SimpleNamespace(custom_name=None)
+    ) == LRM + pet_service.UNNAMED_PET_FA + LRM
 
 
 def test_xp_progress_is_capped():
@@ -505,8 +507,8 @@ async def test_menu_lists_every_pet_as_a_text_only_message(db, state):
     keyboard = sent.kwargs["reply_markup"]
     buttons = [row[0] for row in keyboard.inline_keyboard]
     assert len(buttons) == 2
-    assert buttons[0].text == "🦉 جغد (پشمک)"
-    assert buttons[1].text == "🐱 گربه (بی‌نام)"
+    assert buttons[0].text == "🦉 جغد (" + LRM + "پشمک" + LRM + ")"
+    assert buttons[1].text == "🐱 گربه (" + LRM + "بی‌نام" + LRM + ")"
     assert [b.callback_data for b in buttons] == ["pet_view:1", "pet_view:2"]
 
 
@@ -960,7 +962,7 @@ async def test_feed_callback_caption_renders_bold_html(db, state):
     await pets.handle_pet_feed(callback, state, bot)
 
     caption = bot.edit_message_media.await_args.kwargs["media"].caption
-    assert "<b>ملوس</b>" in caption
+    assert f"<b>{LRM}ملوس{LRM}</b>" in caption
     assert "&lt;b&gt;" not in caption
     assert "&amp;lt;" not in caption
     # The media edit is sent with an explicit HTML parse mode.
@@ -981,7 +983,7 @@ async def test_feed_callback_caption_renders_bold_html_when_evolving(db, state):
     await pets.handle_pet_feed(callback, state, bot)
 
     caption = bot.edit_message_media.await_args.kwargs["media"].caption
-    assert "<b>پشمک</b>" in caption
+    assert f"<b>{LRM}پشمک{LRM}</b>" in caption
     assert "&lt;b&gt;" not in caption
     assert "تبریک" in caption
 

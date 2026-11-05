@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+from sib.core.bidi import fix_bidi
 from sib.core.text import safe_name
 from sib.services.card_progression import card_attributes
 from sqlalchemy import select
@@ -341,9 +342,9 @@ def test_staged_narrative_is_short_bold_and_markdown_safe():
             if beat["phase"] == "round":
                 assert len(text) <= 120
                 assert sum(text.count(mark) for mark in ".!؟") <= 2
-        assert "**آرین**" in plan[0]["text"]
+        assert "**\u200eآرین\u200e**" in plan[0]["text"]
         assert "(سطح **۴**)" in plan[0]["text"]
-        assert "برنده: **آرین**" in plan[-1]["text"]
+        assert "برنده: **\u200eآرین\u200e**" in plan[-1]["text"]
         assert "**۱ نهال**" in plan[-1]["text"]
         assert "**۵ سیب**" in plan[-1]["text"]
 
@@ -357,8 +358,8 @@ def test_staged_narrative_is_short_bold_and_markdown_safe():
         winner_id=1,
         seed="escaped",
     )
-    assert "**آرین\\_الف**" in escaped[0]["text"]
-    assert "**کارت\\[ویژه**" in escaped[0]["text"]
+    assert "**\u200eآرین\\_الف\u200e**" in escaped[0]["text"]
+    assert "**\u200eکارت\\[ویژه\u200e**" in escaped[0]["text"]
 
 
 @pytest.mark.golden_hour
@@ -879,7 +880,9 @@ async def test_narration_loop_sends_separate_messages_and_finalizes(db_session):
     await db_session.commit()
 
     winner_id = state["battle"]["winner_id"]
-    plan_texts = [beat["text"] for beat in state["plan"]]
+    # What the group actually receives: each beat pinned to RTL (the beats
+    # open with an emoji but continue in Persian).
+    plan_texts = [fix_bidi(beat["text"]) for beat in state["plan"]]
 
     bot = _mock_bot_with_sends()
 

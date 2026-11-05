@@ -7,6 +7,7 @@ from aiogram import Router, F, Bot
 from aiogram.filters import Command, CommandObject, CommandStart, Filter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from sib.core.bidi import fix_bidi, wrap_ltr
 from sib.core.config import settings
 from sib.core.errors import MESSAGES
 from sib.core.logging import logger, log_event, Events
@@ -221,8 +222,8 @@ async def handle_start(message: Message, bot: Bot, command: Optional[CommandObje
             # Phase A3: Ovarya-first group welcome; keyboard unchanged.
             # Plain text (no parse mode) so group titles can never break
             # Markdown parsing.
-            group_welcome_text = (
-                f"🍏 سیب وارد شد! سلام به {chat.title}.\n\n"
+            group_welcome_text = fix_bidi(
+                f"🍏 سیب وارد شد! سلام به {wrap_ltr(chat.title)}.\n\n"
                 "گروه شما به جمع مدافعان اواریا پیوست. از این پس با هر یورش شیاسیب، "
                 "در کنار هم می‌جنگید و با هر پیروزی، افتخاری به نام گروه‌تان ثبت می‌شود.\n\n"
                 "برای شروع، دکمه‌های زیر را لمس کنید 👇\n\n"
