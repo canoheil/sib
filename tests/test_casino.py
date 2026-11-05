@@ -1285,3 +1285,14 @@ async def test_menu_declares_the_chain_rule_before_any_wager(state):
     assert "برداشت" in caption and "زنجیره" in caption
     assert "می‌سوزه" in caption  # the loss condition is explicit
     assert "×5" in caption and "×15" in caption  # odds unchanged and still shown
+
+
+def test_chain_lock_registry_does_not_grow_forever():
+    """The per-user lock must not leak for the lifetime of the process."""
+    import gc
+
+    lock = casino._chain_lock(4242)
+    assert 4242 in casino._CHAIN_LOCKS
+    del lock
+    gc.collect()
+    assert 4242 not in casino._CHAIN_LOCKS

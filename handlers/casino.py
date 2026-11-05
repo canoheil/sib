@@ -37,6 +37,7 @@ nothing at all, which is exactly what makes pushing a real risk.
 """
 import asyncio
 import hashlib
+import weakref
 from pathlib import Path
 
 from aiogram import F, Router
@@ -100,7 +101,13 @@ CHAIN_BANK_PREFIX = "casino_chain_bank"
 CHAIN_PUSH_PREFIX = "casino_chain_push"
 #: Per-user chain ownership, so two taps that land in the same tick cannot both
 #: settle the same pot. The FSM state alone is updated too late for that.
-_CHAIN_LOCKS: dict[int, "asyncio.Lock"] = {}
+#:
+#: A WeakValueDictionary so the registry cannot grow for the process lifetime:
+#: the only strong reference is the handler currently holding the lock (the
+#: rate-limit middleware follows the same "in-memory, one worker" contract).
+_CHAIN_LOCKS: "weakref.WeakValueDictionary[int, asyncio.Lock]" = (
+    weakref.WeakValueDictionary()
+)
 #: One wake-up gate per live rung. The window sleeps on it; a tap opens it, and
 #: that is what lets a player answer *while* the countdown is running (aiogram
 #: handles each update in its own task, so the window and the tap are
@@ -133,9 +140,12 @@ _REAL_WAIT_FOR_DECISION = _wait_for_decision
 
 
 def _chain_lock(user_id: int) -> asyncio.Lock:
+    """The caller must keep the returned lock alive for the duration of the
+    ``async with``; that strong reference is what keeps the weak entry alive."""
     lock = _CHAIN_LOCKS.get(user_id)
     if lock is None:
-        lock = _CHAIN_LOCKS[user_id] = asyncio.Lock()
+        lock = asyncio.Lock()
+        _CHAIN_LOCKS[user_id] = lock
     return lock
 
 
@@ -458,7 +468,13 @@ async def _await_chain_decision(
 
 
 async def _auto_bank(state: FSMContext, prompt, *, user_id: int, token: str, pot: int) -> None:
-    """Close the window by banking: the promise that a won pot is never lost."""
+    """Close the window by banking: the promise that a won pot is never lost.
+
+    Scope of that promise: it holds while the process is alive (the FSM is
+    aiogram's in-memory storage). A restart inside the 10-second window loses
+    the window with it — but not any apples, because an unclaimed pot was never
+    debited or credited: the ledger still shows only the original wager.
+    """
     async with _chain_lock(user_id):
         data = await state.get_data()
         if data.get("chain_token") != token:
