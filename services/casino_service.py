@@ -16,6 +16,14 @@ from sib.services.rocket_service import _cooldown_remaining, _database_now
 MIN_BET, MAX_BET, COOLDOWN = 10, 5000, 10
 BET_REASON = "casino_bet"
 
+#: Dice / darts / bowling only win on the single best face.
+DICE_WINNING_VALUES = frozenset({6})
+#: Slots pay only on a matching three-of-a-kind (Telegram's winning values).
+SLOTS_WINNING_VALUES = frozenset({1, 22, 43, 64})
+#: Payout multipliers, applied as ``bet * multiplier // 1`` so apples stay whole.
+DICE_MULTIPLIER = 5
+SLOTS_MULTIPLIER = 15
+
 
 async def validate_bet(session: AsyncSession, user_id: int, bet_amount: int) -> dict:
     if isinstance(bet_amount, bool) or not isinstance(bet_amount, int) or not MIN_BET <= bet_amount <= MAX_BET:
@@ -55,8 +63,14 @@ def calculate_result(emoji: str, dice_value: int, bet_amount: int) -> dict:
         raise ValueError("unknown casino game")
     if not isinstance(dice_value, int) or not 1 <= dice_value <= (64 if emoji == "🎰" else 6):
         raise ValueError("invalid dice value")
-    won = dice_value in ({22, 43, 64} if emoji == "🎰" else {4, 5, 6})
-    payout = (bet_amount * (3 if emoji == "🎰" else 18) // (1 if emoji == "🎰" else 10)) if won else 0
+    if emoji == "🎰":
+        won = dice_value in SLOTS_WINNING_VALUES
+        multiplier = SLOTS_MULTIPLIER
+    else:
+        won = dice_value in DICE_WINNING_VALUES
+        multiplier = DICE_MULTIPLIER
+    # Integer maths only: a whole-apple bet can never pay a fractional apple.
+    payout = bet_amount * multiplier if won else 0
     return {"is_win": won, "payout": payout, "value": dice_value}
 
 
