@@ -112,6 +112,31 @@ async def _delete_prompt(message) -> None:
         logger.debug("Casino prompt cleanup failed", exc_info=True)
 
 
+#: What the animation actually showed. Slots deliberately never print the raw
+#: 1-64 result: the player sees fruit, not a number.
+_GAME_LINES = {
+    "🎲": "تاس {value} آورد",
+    "🎯": "دارت به {value} خورد",
+    "🎳": "بولینگ {value} پین انداخت",
+}
+
+
+def win_line(emoji: str, value: int) -> str:
+    """Natural one-liner for a winning round."""
+    if emoji == "🎰":
+        return "🎰 جکپات زدی"
+    return _GAME_LINES[emoji].format(value=value)
+
+
+def loss_line(emoji: str, value: int) -> str:
+    """Natural one-liner for a losing round — no rule reminder in the chat."""
+    if emoji == "🎰":
+        return "اسلات‌ها جور درنیومدن"
+    if emoji == "🎯" and value == 1:
+        return "دارت به بیرون خورد"
+    return _GAME_LINES[emoji].format(value=value)
+
+
 async def _notify(message, text: str) -> None:
     """Answer the player, threading the notice when the message allows it."""
     reply = getattr(message, "reply", None)
@@ -223,26 +248,13 @@ async def place_bet(message: Message, state: FSMContext) -> None:
         await asyncio.sleep(4.0 if emoji == "🎰" else 3.5)
         outcome = CasinoService.calculate_result(emoji, dice.dice.value, bet)
         value = outcome["value"]
-        if emoji == "🎰":
-            description = (
-                "🎰 جکپات زدی!" if outcome["is_win"]
-                else f"🎰 اسلات {value} آورد. (برای برد باید سه‌تای یکسان بیاد)"
-            )
-        else:
-            played = {
-                "🎲": f"تاس {value} آورد",
-                "🎯": f"دارت به {value} خورد",
-                "🎳": f"بولینگ {value} پین انداخت",
-            }[emoji]
-            # A losing face spells out the only winning one (6).
-            description = played if outcome["is_win"] else f"{played}. (برای برد باید ۶ بیاد)"
         if outcome["is_win"]:
             await _credit(user_id, outcome["payout"], game_id, "casino_payout")
-            separator = " " if emoji == "🎰" else " و "
-            await message.answer(f"🏆 بردی! {description}{separator}{outcome['payout']} سیب گرفتی.")
+            await message.answer(
+                f"🏆 بردی! {win_line(emoji, value)} و {outcome['payout']} سیب گرفتی."
+            )
         else:
-            punctuation = "" if emoji == "🎰" else "."
-            await message.answer(f"😭 باختی! {description}{punctuation}")
+            await message.answer(f"😭 باختی! {loss_line(emoji, value)}.")
     finally:
         await state.clear()
         _ACTIVE_USERS.discard(user_id)
