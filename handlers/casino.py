@@ -45,6 +45,12 @@ BET_PROMPT_TEMPLATE = (
     "مبلغ رو بنویس."
 )
 REPLY_TO_PROMPT_REQUIRED = "لطفاً روی پیام بات ریپلای کنید و مبلغ را بنویسید."
+#: Shown in the menu so the odds are known before the apples are wagered.
+MENU_CAPTION = (
+    "🎰 به قمارخانه خوش آمدید! کدوم بازی رو انتخاب می‌کنی؟\n"
+    "🎲 تاس، 🎯 دارت و 🎳 بولینگ فقط با ۶ برنده می‌شن (×5).\n"
+    "🎰 اسلات فقط با سه‌تای یکسان برنده می‌شه (×15)."
+)
 
 
 class CasinoStates(StatesGroup):
@@ -123,7 +129,7 @@ async def casino_menu(message: Message, state: FSMContext) -> None:
         primary_button(text=label, callback_data=f"casino_game:{key}")
         for key, label in [("dice", "🎲 تاس"), ("darts", "🎯 دارت"), ("bowling", "🎳 بولینگ"), ("slots", "🎰 اسلات")]
     ]])
-    await message.answer_photo(FSInputFile(str(ASSET)), caption="🎰 به قمارخانه خوش آمدید! کدوم بازی رو انتخاب می‌کنی؟", reply_markup=keyboard)
+    await message.answer_photo(FSInputFile(str(ASSET)), caption=MENU_CAPTION, reply_markup=keyboard)
 
 
 @router.callback_query(F.data.startswith("casino_game:"))
@@ -218,13 +224,18 @@ async def place_bet(message: Message, state: FSMContext) -> None:
         outcome = CasinoService.calculate_result(emoji, dice.dice.value, bet)
         value = outcome["value"]
         if emoji == "🎰":
-            description = "🎰 جکپات زدی!" if outcome["is_win"] else "🎰 اسلات باختی!"
+            description = (
+                "🎰 جکپات زدی!" if outcome["is_win"]
+                else f"🎰 اسلات {value} آورد. (برای برد باید سه‌تای یکسان بیاد)"
+            )
         else:
-            description = {
+            played = {
                 "🎲": f"تاس {value} آورد",
                 "🎯": f"دارت به {value} خورد",
                 "🎳": f"بولینگ {value} پین انداخت",
             }[emoji]
+            # A losing face spells out the only winning one (6).
+            description = played if outcome["is_win"] else f"{played}. (برای برد باید ۶ بیاد)"
         if outcome["is_win"]:
             await _credit(user_id, outcome["payout"], game_id, "casino_payout")
             separator = " " if emoji == "🎰" else " و "

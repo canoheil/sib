@@ -192,7 +192,11 @@ async def test_failed_prompt_send_clears_the_state_and_the_guard(state):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("emoji,value,won", [(e, v, w) for e in casino.GAMES.values() for v, w in ([(22, True), (43, True), (64, True), (1, False), (14, False)] if e == "🎰" else [(6, True), (1, False)])])
+@pytest.mark.parametrize("emoji,value,won", [(e, v, w) for e in casino.GAMES.values() for v, w in (
+    [(1, True), (22, True), (43, True), (64, True), (10, False), (14, False)]
+    if e == "🎰"
+    else [(6, True), (1, False), (5, False)]
+)])
 @pytest.mark.parametrize("bet_text", ["۱۰", "10"])
 async def test_round(db, state, emoji, value, won, bet_text, monkeypatch):
     await _enter_waiting_for_bet(state, emoji=emoji)
@@ -207,23 +211,105 @@ async def test_round(db, state, emoji, value, won, bet_text, monkeypatch):
     sleep.assert_awaited_once_with(4.0 if emoji == "🎰" else 3.5)
     # The prompt the player replied to is deleted once the bet is accepted.
     message.reply_to_message.delete.assert_awaited_once()
-    payout = (30 if emoji == "🎰" else 18) if won else 0
+    payout = (150 if emoji == "🎰" else 50) if won else 0
     async with db() as session:
         assert await AppleWalletService.get_balance(session, 1) == 10000 - 10 + payout
     result_text = message.answer.await_args.args[0]
     assert ("بردی" if won else "باختی") in result_text
     if emoji == "🎰":
-        assert ("🎰 جکپات زدی!" if won else "🎰 اسلات باختی!") in result_text
-        assert str(value) not in result_text
-    elif emoji == "🎯":
-        assert f"دارت به {value} خورد" in result_text
-    elif emoji == "🎳":
-        assert f"بولینگ {value} پین انداخت" in result_text
+        assert ("🎰 جکپات زدی!" if won else f"🎰 اسلات {value} آورد") in result_text
+        if not won:
+            assert "سه‌تای یکسان" in result_text
     else:
-        assert f"تاس {value} آورد" in result_text
+        played = {
+            "🎯": f"دارت به {value} خورد",
+            "🎳": f"بولینگ {value} پین انداخت",
+        }.get(emoji, f"تاس {value} آورد")
+        assert played in result_text
+        # A loss explains that only an exact 6 wins.
+        assert ("برای برد باید ۶ بیاد" in result_text) is not won
     if won:
         assert f"{payout} سیب گرفتی" in result_text
     assert await state.get_state() is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key,emoji", [(k, v) for k, v in casino.GAMES.items() if v != "🎰"])
+async def test_five_is_a_loss_for_dice_games(db, state, key, emoji, monkeypatch):
+    """Rolling a 5 used to win; now only an exact 6 pays."""
+    await _enter_waiting_for_bet(state, emoji=emoji)
+    message = _bet_message(
+        "10",
+        answer_dice=AsyncMock(return_value=SimpleNamespace(dice=SimpleNamespace(value=5))),
+    )
+    monkeypatch.setattr(casino.asyncio, "sleep", AsyncMock())
+    await casino.place_bet(message, state)
+    result_text = message.answer.await_args.args[0]
+    assert "باختی" in result_text
+    assert "برای برد باید ۶ بیاد" in result_text
+    async with db() as session:
+        assert await AppleWalletService.get_balance(session, 1) == 10000 - 10
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key,emoji", [(k, v) for k, v in casino.GAMES.items() if v != "🎰"])
+async def test_six_wins_five_times_the_bet(db, state, key, emoji, monkeypatch):
+    await _enter_waiting_for_bet(state, emoji=emoji)
+    message = _bet_message(
+        "100",
+        answer_dice=AsyncMock(return_value=SimpleNamespace(dice=SimpleNamespace(value=6))),
+    )
+    monkeypatch.setattr(casino.asyncio, "sleep", AsyncMock())
+    await casino.place_bet(message, state)
+    result_text = message.answer.await_args.args[0]
+    assert "بردی" in result_text
+    assert "500 سیب گرفتی" in result_text
+    async with db() as session:
+        assert await AppleWalletService.get_balance(session, 1) == 10000 - 100 + 500
+
+
+@pytest.mark.asyncio
+async def test_slots_matching_combination_pays_fifteen_times(db, state, monkeypatch):
+    await _enter_waiting_for_bet(state, emoji="🎰")
+    message = _bet_message(
+        "100",
+        answer_dice=AsyncMock(return_value=SimpleNamespace(dice=SimpleNamespace(value=22))),
+    )
+    monkeypatch.setattr(casino.asyncio, "sleep", AsyncMock())
+    await casino.place_bet(message, state)
+    result_text = message.answer.await_args.args[0]
+    assert "🎰 جکپات زدی!" in result_text
+    assert "1500 سیب گرفتی" in result_text
+    async with db() as session:
+        assert await AppleWalletService.get_balance(session, 1) == 10000 - 100 + 1500
+
+
+@pytest.mark.asyncio
+async def test_slots_non_matching_value_loses(db, state, monkeypatch):
+    await _enter_waiting_for_bet(state, emoji="🎰")
+    message = _bet_message(
+        "100",
+        answer_dice=AsyncMock(return_value=SimpleNamespace(dice=SimpleNamespace(value=10))),
+    )
+    monkeypatch.setattr(casino.asyncio, "sleep", AsyncMock())
+    await casino.place_bet(message, state)
+    result_text = message.answer.await_args.args[0]
+    assert "باختی" in result_text
+    assert "🎰 اسلات 10 آورد" in result_text
+    assert "بردی" not in result_text
+    async with db() as session:
+        assert await AppleWalletService.get_balance(session, 1) == 10000 - 100
+
+
+@pytest.mark.asyncio
+async def test_menu_explains_the_odds(state):
+    message = SimpleNamespace(answer_photo=AsyncMock())
+    await casino.casino_menu(message, state)
+    caption = message.answer_photo.await_args.kwargs["caption"]
+    assert "فقط با ۶ برنده" in caption
+    assert "×5" in caption
+    assert "سه‌تای یکسان" in caption
+    assert "×15" in caption
 
 
 @pytest.mark.asyncio
@@ -340,9 +426,44 @@ async def test_refusals_and_cooldown(db):
         assert (await casino_service.validate_bet(session, 2, 10))["status"] == "insufficient_funds"
 
 
-@pytest.mark.parametrize("value", [22, 43, 64])
+@pytest.mark.parametrize("value", [1, 22, 43, 64])
 def test_slots_winning_values(value):
-    assert casino_service.calculate_result("🎰", value, 11)["payout"] == 33
+    """A matching combination pays 15x, floored to whole apples."""
+    result = casino_service.calculate_result("🎰", value, 11)
+    assert result["is_win"] is True
+    assert result["payout"] == 165
+
+
+@pytest.mark.parametrize("value", [2, 10, 20, 33, 63])
+def test_slots_losing_values(value):
+    result = casino_service.calculate_result("🎰", value, 100)
+    assert result["is_win"] is False
+    assert result["payout"] == 0
+
+
+@pytest.mark.parametrize("emoji", ["🎲", "🎯", "🎳"])
+@pytest.mark.parametrize("value,won", [(1, False), (3, False), (4, False), (5, False), (6, True)])
+def test_dice_only_six_wins(emoji, value, won):
+    """Dice, darts and bowling win on an exact 6 only — 5x the wager."""
+    result = casino_service.calculate_result(emoji, value, 100)
+    assert result["is_win"] is won
+    assert result["payout"] == (500 if won else 0)
+
+
+@pytest.mark.parametrize("bet", [10, 13, 5000])
+def test_payouts_are_whole_apples(bet):
+    for emoji, multiplier in (("🎲", 5), ("🎰", 15)):
+        winning = max(casino_service.SLOTS_WINNING_VALUES) if emoji == "🎰" else 6
+        payout = casino_service.calculate_result(emoji, winning, bet)["payout"]
+        assert isinstance(payout, int)
+        assert payout == int(bet * multiplier)
+
+
+def test_win_rules_are_pinned():
+    assert casino_service.DICE_WINNING_VALUES == {6}
+    assert casino_service.SLOTS_WINNING_VALUES == {1, 22, 43, 64}
+    assert casino_service.DICE_MULTIPLIER == 5
+    assert casino_service.SLOTS_MULTIPLIER == 15
 
 
 @pytest.mark.asyncio
