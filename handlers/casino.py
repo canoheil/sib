@@ -18,11 +18,25 @@ A round is presented as three beats (CASINO-THRILL idea B):
 2. **the roll** — Telegram's ``answer_dice`` animation, untouched;
 3. **the verdict** — one tiered line (fumble / so close / win / jackpot).
 
-The presentation is deliberately outside the economy: odds, multipliers,
-cooldowns and the FSM are unchanged, and the wallet is settled *before* the
-verdict is written so a message can never promise a payout that did not happen.
+A winning round replaces beat 3 with «زنجیره سیبی» (idea A): the pot is
+*offered*, not credited, and the player has :data:`CHAIN_DECISION_SECONDS` to
+bank it (green) or push it one rung further (red). The rules that keep that
+fair all live in this module:
+
+* a push never costs a new stake — the wager was already spent on round one;
+* the ladder is owned by :mod:`sib.services.casino_service` and is EV-gated
+  there, so pushing can never beat banking;
+* the timeout always auto-banks: closing Telegram cannot cost a won pot;
+* every rung gets a new token, so a stale or double tap cannot settle twice;
+* odds, cooldowns and the advertised multipliers are unchanged — a push roll
+  reuses :func:`casino_service.calculate_result` and its win rules.
+
+Because the pot stays out of the wallet until it is banked, the ledger only
+ever sees the original stake and one ``casino_payout``; a burned pot pays
+nothing at all, which is exactly what makes pushing a real risk.
 """
 import asyncio
+import hashlib
 from pathlib import Path
 
 from aiogram import F, Router
@@ -30,13 +44,12 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardMarkup, Message
-
 from sib.core.bidi import fix_bidi
 from sib.core.logging import logger
 from sib.core.text import safe_name
 from sib.database.connection import get_session
 from sib.handlers.rocket import _normalize_rocket_digits
-from sib.keyboards.common import primary_button
+from sib.keyboards.common import danger_button, primary_button, success_button
 from sib.services import casino_service
 from sib.services.apple_wallet import AppleWalletService
 from sib.services.casino_service import CasinoService
@@ -61,12 +74,137 @@ REPLY_TO_PROMPT_REQUIRED = "لطفاً روی پیام بات ریپلای کن�
 MENU_CAPTION = (
     "🎰 به قمارخانه خوش آمدید! کدوم بازی رو انتخاب می‌کنی؟\n"
     "🎲 تاس، 🎯 دارت و 🎳 بولینگ فقط با ۶ برنده می‌شن (×5).\n"
-    "🎰 اسلات فقط با سه‌تای یکسان برنده می‌شه (×15)."
+    "🎰 اسلات فقط با سه‌تای یکسان برنده می‌شه (×15).\n"
+    "🍎 بردی؟ می‌تونی همون‌جا برداشت کنی یا ریسک کنی و زنجیره رو ادامه بدی — "
+    "ولی ادامه بدهی و ببازی، کل پات می‌سوزه."
 )
 
 
 class CasinoStates(StatesGroup):
     waiting_for_bet = State()
+    #: «زنجیره سیبی» is live: the pot is on the table and the player has
+    #: :data:`CHAIN_DECISION_SECONDS` to bank it or push it one rung further.
+    waiting_for_chain_decision = State()
+
+
+#: How long the bank/push prompt stays open. The handler owns the countdown
+#: and auto-banks when it expires, so a player never loses a won pot by simply
+#: closing Telegram.
+CHAIN_DECISION_SECONDS = casino_service.CHAIN_DECISION_SECONDS
+#: Edit budget for the countdown caption. Every edit is best effort: Telegram
+#: rate-limits edits, and a dropped tick must never delay the auto-bank.
+CHAIN_COUNTDOWN_EDITS = 3
+#: Callback prefixes. The token in the middle is what makes a stale tap
+#: impossible: it is regenerated for every rung, and a bank consumes it.
+CHAIN_BANK_PREFIX = "casino_chain_bank"
+CHAIN_PUSH_PREFIX = "casino_chain_push"
+#: Per-user chain ownership, so two taps that land in the same tick cannot both
+#: settle the same pot. The FSM state alone is updated too late for that.
+_CHAIN_LOCKS: dict[int, "asyncio.Lock"] = {}
+#: One wake-up gate per live rung. The window sleeps on it; a tap opens it, and
+#: that is what lets a player answer *while* the countdown is running (aiogram
+#: handles each update in its own task, so the window and the tap are
+#: concurrent coroutines).
+_CHAIN_GATES: dict[str, asyncio.Event] = {}
+
+
+def _open_gate(token: str) -> None:
+    """Wake the window that is waiting for this rung, if it is still waiting."""
+    gate = _CHAIN_GATES.get(token)
+    if gate is not None:
+        gate.set()
+
+
+async def _wait_for_decision(gate: asyncio.Event, timeout: float) -> bool:
+    """True when the player answered in time, False when the clock ran out.
+
+    Isolated so tests can drive the window deterministically instead of
+    racing a real ten-second clock.
+    """
+    try:
+        await asyncio.wait_for(gate.wait(), timeout=timeout)
+        return True
+    except TimeoutError:  # asyncio.TimeoutError is an alias since 3.11
+        return False
+
+
+#: Kept so a test can restore the production clock after stubbing it out.
+_REAL_WAIT_FOR_DECISION = _wait_for_decision
+
+
+def _chain_lock(user_id: int) -> asyncio.Lock:
+    lock = _CHAIN_LOCKS.get(user_id)
+    if lock is None:
+        lock = _CHAIN_LOCKS[user_id] = asyncio.Lock()
+    return lock
+
+
+def chain_token(game_id: str, step: int) -> str:
+    """Opaque per-rung token, echoed in the buttons of one prompt."""
+    return f"{game_id}.{step}"
+
+
+def chain_keyboard(token: str, pot: int, *, can_push: bool = True) -> InlineKeyboardMarkup:
+    """The two decisions that make the chain: bank (green) or push (red).
+
+    Green/red carry meaning per ``keyboards.common``: banking is safe and
+    final, pushing is the risky action. Callback data stays short because the
+    Bot API caps it at 64 bytes and the token already carries the game id.
+    """
+    buttons = [
+        success_button(
+            text=f"💰 برداشت {pot} سیب", callback_data=f"{CHAIN_BANK_PREFIX}:{token}"
+        )
+    ]
+    if can_push:
+        buttons.append(
+            danger_button(
+                text="🔥 ادامه بده", callback_data=f"{CHAIN_PUSH_PREFIX}:{token}"
+            )
+        )
+    return InlineKeyboardMarkup(inline_keyboard=[buttons])
+
+
+def chain_prompt(pot: int, *, can_push: bool = True) -> str:
+    """The push-your-luck prompt: the number, the clock, and the two ways out.
+
+    At the top rung ``can_push`` is False and the text stops offering a bet the
+    ladder cannot pay for.
+    """
+    lines = [f"🎉 بردی! پات فعلی: {pot} سیب."]
+    if can_push:
+        lines.append(
+            "🔥 ادامه بدی، باید دوباره ببری تا پات بزرگ‌تر شه؛ ببازی، همه‌ش می‌سوزه."
+        )
+    else:
+        lines.append("🏆 به آخرین پله‌ی زنجیره رسیدی؛ بالاتر از این پله‌ای نیست.")
+    lines.append(
+        f"⏳ {CHAIN_DECISION_SECONDS} ثانیه فرصت داری؛ بعد از آن خودکار واریز می‌شه."
+    )
+    return fix_bidi("\n".join(lines))
+
+
+def chain_decision_text(pot: int, remaining: int, *, can_push: bool = True) -> str:
+    """The prompt with its countdown folded into the same message.
+
+    Telegram cannot animate a timer, but re-editing one caption a few times
+    makes the clock visible without spamming the chat with new messages.
+    """
+    return f"{chain_prompt(pot, can_push=can_push)}\n⏳ {remaining} ثانیه مانده..."
+
+
+def banked_text(pot: int) -> str:
+    return f"💰 {pot} سیب به حسابت واریز شد."
+
+
+def push_accepted_text(risked: int) -> str:
+    """Replaces the bank/push prompt the moment the player pushes."""
+    return fix_bidi(f"🔥 ادامه دادی! {risked} سیب روی میز موند...")
+
+
+def chain_burned_text(pot: int) -> str:
+    """Everything that was on the table, gone — no wallet movement involved."""
+    return f"💥 ای وای! این بار نیامد. کل {pot} سیب سوخت!"
 
 
 def mention(user) -> str:
@@ -250,6 +388,162 @@ async def _notify(message, text: str) -> None:
     await message.answer(text)
 
 
+async def _await_chain_decision(
+    state: FSMContext,
+    source,
+    user_id: int,
+    *,
+    emoji: str,
+    stake: int,
+    game_id: str,
+    step: int,
+    pot: int,
+) -> None:
+    """Open one bank/push window: prompt, arm the FSM, run the clock.
+
+    The prompt goes out before the state is armed, so a fast tap can never hit
+    a handler while the FSM still says «waiting for a bet». Anything arriving
+    later is arbitrated by the token, which is new for every rung: both
+    callbacks refuse a token that is no longer the live one.
+    """
+    token = chain_token(game_id, step)
+    can_push = casino_service.chain_available(emoji, stake, step)
+    try:
+        prompt = await source.answer(
+            chain_prompt(pot, can_push=can_push),
+            reply_markup=chain_keyboard(token, pot, can_push=can_push),
+        )
+    except Exception:
+        # Without a prompt there is no decision to make, so the pot is paid
+        # rather than stranded: the player already won it.
+        logger.exception(
+            "Casino chain prompt failed (game=%s step=%s); banking the pot", game_id, step
+        )
+        await state.clear()
+        key = _derive_round_id(game_id, step) if step > 1 else game_id
+        await _credit(user_id, pot, key, "casino_payout")
+        await _notify(source, f"پیام بازی ارسال نشد؛ {banked_text(pot)}")
+        return
+    await state.set_state(CasinoStates.waiting_for_chain_decision)
+    await state.update_data(
+        emoji=emoji,
+        chain_owner=user_id,
+        chain_token=token,
+        chain_pot=pot,
+        chain_stake=stake,
+        chain_step=step,
+        chain_game_id=game_id,
+    )
+    gate = _CHAIN_GATES[token] = asyncio.Event()
+    try:
+        tick = CHAIN_DECISION_SECONDS / (CHAIN_COUNTDOWN_EDITS + 1)
+        for tick_index in range(1, CHAIN_COUNTDOWN_EDITS + 1):
+            if await _wait_for_decision(gate, tick):
+                return  # answered: the callback owns the settlement
+            remaining = max(1, CHAIN_DECISION_SECONDS - round(tick * tick_index))
+            try:
+                await prompt.edit_text(
+                    chain_decision_text(pot, remaining, can_push=can_push),
+                    reply_markup=chain_keyboard(token, pot, can_push=can_push),
+                )
+            except Exception:
+                # A dropped tick is cosmetic; the deadline is the gate's.
+                logger.debug("Casino chain countdown edit failed", exc_info=True)
+        if await _wait_for_decision(gate, tick):
+            return
+        await _auto_bank(state, prompt, user_id=user_id, token=token, pot=pot)
+    finally:
+        # Whoever woke us (or the timeout) closes the gates for this rung.
+        _CHAIN_GATES.pop(token, None)
+
+
+async def _auto_bank(state: FSMContext, prompt, *, user_id: int, token: str, pot: int) -> None:
+    """Close the window by banking: the promise that a won pot is never lost."""
+    async with _chain_lock(user_id):
+        data = await state.get_data()
+        if data.get("chain_token") != token:
+            return  # a tap settled this rung first; its answer already shipped
+        await state.clear()
+        await _credit(user_id, pot, token, "casino_payout")
+        try:
+            await prompt.edit_text(banked_text(pot))
+        except Exception:
+            logger.debug("Casino chain auto-bank edit failed", exc_info=True)
+
+
+def _derive_round_id(game_id: str, step: int) -> str:
+    """A stand-in id for a later rung of the same chain.
+
+    Only the FIRST round keeps the id its wager was debited under; every push
+    is a fresh roll with no new stake, so it needs its own idempotency
+    namespace. Deterministic, because a retried settlement must reuse the same
+    key rather than mint a second credit.
+    """
+    digest = hashlib.blake2s(f"{game_id}:{step}".encode(), digest_size=8).hexdigest()
+    return f"{game_id}.{step}.{int(digest, 16) % 1_000_000_007}"
+
+
+async def _chain_round(
+    source,
+    state: FSMContext,
+    *,
+    user_id: int,
+    emoji: str,
+    stake: int,
+    game_id: str,
+    step: int,
+) -> None:
+    """Roll one more rung of the chain, then prompt again or burn the pot.
+
+    No wallet movement happens here: the stake was spent when the chain began,
+    so a push is always free and a loss only forfeits a pot nobody was paid.
+    ``source`` only has to answer like a Message (``answer`` and
+    ``answer_dice``), which keeps this testable and keeps the round in the chat
+    where the prompt was.
+    """
+    pot = casino_service.chain_pot(emoji, stake, step - 1)  # what is on the table
+    anticipation = ANTICIPATION.get(emoji)
+    if anticipation:
+        try:
+            await source.answer(anticipation)
+        except Exception:
+            logger.debug(
+                "Casino chain anticipation failed (user=%s)", user_id, exc_info=True
+            )
+    await asyncio.sleep(ANTICIPATION_PAUSE)
+    try:
+        dice = await source.answer_dice(
+            emoji=emoji, reply_to_message_id=getattr(source, "message_id", None)
+        )
+    except Exception:
+        # Never strand apples the player already won: settle the pot instead.
+        logger.exception("Casino chain dice failed (user=%s game=%s)", user_id, game_id)
+        await state.clear()
+        await _credit(user_id, pot, _derive_round_id(game_id, step), "casino_payout")
+        await _notify(source, f"ارسال بازی ناموفق بود؛ {banked_text(pot)}")
+        return
+    await asyncio.sleep(4.0 if emoji == "🎰" else 3.5)
+    outcome = CasinoService.calculate_result(emoji, dice.dice.value, stake)
+    if not outcome["is_win"]:
+        await state.clear()
+        await source.answer(
+            f"{verdict_text(emoji, outcome['value'], 0)}\n{chain_burned_text(pot)}"
+        )
+        return
+    # This roll WAS rung ``step``, so a win offers rung ``step``'s pot: the
+    # next push is what moves to ``step + 1``.
+    await _await_chain_decision(
+        state,
+        source,
+        user_id,
+        emoji=emoji,
+        stake=stake,
+        game_id=game_id,
+        step=step,
+        pot=casino_service.chain_pot(emoji, stake, step),
+    )
+
+
 @router.message(Command("casino"))
 @router.message(F.text.in_({"قمارخانه", "قمارخونه", "قمار خانه", "قمار خونه", "قمار", "کازینو"}))
 async def casino_menu(message: Message, state: FSMContext) -> None:
@@ -363,11 +657,126 @@ async def place_bet(message: Message, state: FSMContext) -> None:
         await asyncio.sleep(4.0 if emoji == "🎰" else 3.5)
         outcome = CasinoService.calculate_result(emoji, dice.dice.value, bet)
         value = outcome["value"]
-        # Beat 3 — the verdict. The wallet is settled first so the text can
-        # never claim a payout the ledger did not make.
+        if outcome["is_win"] and casino_service.chain_available(emoji, bet, 1):
+            # Beat 3 becomes a decision: the pot is OFFERED, not credited, so
+            # nothing is paid until the player banks — explicitly or by timeout.
+            await _await_chain_decision(
+                state,
+                message,
+                user_id,
+                emoji=emoji,
+                stake=bet,
+                game_id=game_id,
+                step=1,
+                pot=casino_service.chain_pot(emoji, bet, 1),
+            )
+            return
+        # A plain round keeps the idea-B behaviour: settle first, then narrate,
+        # so a message can never promise a payout the ledger did not make.
         if outcome["is_win"]:
             await _credit(user_id, outcome["payout"], game_id, "casino_payout")
         await message.answer(verdict_text(emoji, value, outcome["payout"]))
     finally:
-        await state.clear()
+        # A live chain keeps its own state: `waiting_for_chain_decision` must
+        # survive this handler, and only an unfinished one is cleared here.
+        if await state.get_state() != CasinoStates.waiting_for_chain_decision.state:
+            await state.clear()
         _ACTIVE_USERS.discard(user_id)
+
+
+@router.callback_query(F.data.startswith(f"{CHAIN_BANK_PREFIX}:"))
+async def chain_bank(callback: CallbackQuery, state: FSMContext) -> None:
+    """«💰 برداشت»: credit the pot exactly once and close the prompt."""
+    token = callback.data.partition(":")[2]
+    sender = getattr(callback, "from_user", None)
+    user_id = getattr(sender, "id", None)
+    if user_id is None or callback.message is None:
+        await callback.answer()
+        return
+    async with _chain_lock(user_id):
+        data = await state.get_data()
+        if data.get("chain_token") != token:
+            # Already settled: auto-bank, this button twice, or an older rung.
+            await callback.answer("این دست تموم شد.", show_alert=False)
+            return
+        owner = data.get("chain_owner")
+        if owner is not None and int(owner) != user_id:
+            # A bystander tapping the group's buttons can never bank for us.
+            await callback.answer("این دست مال تو نیست.", show_alert=True)
+            return
+        pot = int(data.get("chain_pot") or 0)
+        await state.clear()
+        # Wake the window first: from here on this coroutine owns the rung and
+        # the waiting one must simply return.
+        _open_gate(token)
+        await _credit(user_id, pot, token, "casino_payout")
+        await callback.answer(f"💰 {pot} سیب واریز شد.")
+        try:
+            await callback.message.edit_text(banked_text(pot))
+        except Exception:
+            logger.debug("Casino chain bank edit failed", exc_info=True)
+
+
+@router.callback_query(F.data.startswith(f"{CHAIN_PUSH_PREFIX}:"))
+async def chain_push(callback: CallbackQuery, state: FSMContext) -> None:
+    """«🔥 ادامه بده»: roll again for a bigger pot, never for a new stake."""
+    token = callback.data.partition(":")[2]
+    sender = getattr(callback, "from_user", None)
+    user_id = getattr(sender, "id", None)
+    if user_id is None or callback.message is None:
+        await callback.answer()
+        return
+    # The lock is taken only long enough to claim the rung; the animation runs
+    # outside it so a slow send cannot block anything else the player does.
+    async with _chain_lock(user_id):
+        data = await state.get_data()
+        if data.get("chain_token") != token:
+            await callback.answer("این دست تموم شد.", show_alert=False)
+            return
+        owner = data.get("chain_owner")
+        if owner is not None and int(owner) != user_id:
+            await callback.answer("این دست مال تو نیست.", show_alert=True)
+            return
+        emoji = data.get("emoji")
+        stake = int(data.get("chain_stake") or 0)
+        step = int(data.get("chain_step") or 0) + 1
+        game_id = data.get("chain_game_id")
+        if emoji not in GAMES.values() or stake <= 0 or not game_id:
+            await state.clear()
+            await callback.answer("این دست معتبر نیست.", show_alert=True)
+            return
+        if not casino_service.chain_available(emoji, stake, step - 1):
+            # The button should not exist here; refuse rather than invent a rung.
+            await callback.answer("این دست تموم شد.", show_alert=False)
+            return
+        risked = casino_service.chain_pot(emoji, stake, step - 1)
+        # Clearing first retires the token, so a second tap finds nothing live;
+        # the data is then re-armed for the round that is about to roll.
+        await state.clear()
+        await state.update_data(
+            emoji=emoji,
+            chain_token=None,
+            chain_stake=stake,
+            chain_step=step,
+            chain_game_id=game_id,
+            # The risked pot is recorded under the rung that is LIVE, so if the
+            # send fails the settlement refunds exactly what was on the table.
+            chain_pot=risked,
+        )
+        _open_gate(token)
+        await callback.answer("🔥 ادامه!")
+        try:
+            await callback.message.edit_text(push_accepted_text(risked))
+        except Exception:
+            logger.debug("Casino chain push edit failed", exc_info=True)
+    await _chain_round(
+        callback.message,
+        state,
+        user_id=user_id,
+        emoji=emoji,
+        stake=stake,
+        game_id=game_id,
+        step=step,
+    )
+    if await state.get_state() != CasinoStates.waiting_for_chain_decision.state:
+        await state.clear()

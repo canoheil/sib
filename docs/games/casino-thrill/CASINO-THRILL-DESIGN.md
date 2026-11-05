@@ -20,9 +20,22 @@ not.
 > `answer_dice` → tiered verdict: fumble / so close / win / jackpot), with slots
 > decoding its three reels so a genuine two-of-a-kind earns the «🍒 خیلی نزدیک بود»
 > line. Economy, odds, multipliers, cooldowns, FSM and the Alembic head
-> (`078_wanted_decay`) are untouched. Economy answer received for idea A: settle
-> immediately per round (no pending pot), which removes the need for
-> `casino_streak_bank` rows when A is built.
+> (`078_wanted_decay`) are untouched.
+
+> **Idea A — «زنجیره سیبی» (Apple Chain) — ALSO SHIPPED** (same PR, after B).
+> A winning round now *offers* the pot instead of crediting it: green
+> «💰 برداشت» banks it, red «🔥 ادامه بده» rolls again for the next rung, and the
+> 10-second window always auto-banks on timeout. Built on a new FSM state
+> (`waiting_for_chain_decision`), a per-rung token (stale and double taps cannot
+> settle twice), a per-user lock, and an interruptible countdown so a tap during
+> the clock is honoured. Still no migration, still head `078_wanted_decay`.
+>
+> **The ladder in §4A below was WRONG and was not shipped as written.** It is
+> EV-safe in the narrow "never exceeds the first rung" sense, but a simulation
+> showed that a player who always pushes returns just **1–2% of base RTP** on
+> dice (a 98.9% house edge): technically safe, practically a trap. The shipped
+> ladder keeps pushing an honest bad bet rather than a certain theft — corrected
+> table below.
 
 ---
 
@@ -110,8 +123,8 @@ thresholds hardcoded at import time** (the repo already enforces this convention
 casino_thrill_enabled            true     master kill-switch (seeded OFF would be safer, see §7)
 casino_streak_enabled            true     idea A
 casino_streak_max               5        streak depth cap (bank is forced at n = max)
-casino_streak_pot_ladder_dice    [5, 10, 22, 50, 120]    pot multiplier after n wins (§4A, EV-gated)
-casino_streak_pot_ladder_slots   [15, 35, 90, 250, 700]   idem, slots (p = 4/64)
+casino_chain_ladder_dice         [5, 28, 150, 800, 4000]  pot multiplier after n wins (§4A)
+casino_chain_ladder_slots        [15, 220, 3000]         idem, slots (p = 4/64, shallower)
 casino_streak_bonus_ladder       [0, 0, 20, 60, 150]      flat bonus at n = 1..5, paid from the pot pool
 casino_bank_window_seconds       6        "hold for a bigger multiplier" decision window
 casino_hicrit_enabled            true     idea B critical-hit tier (cosmetic unless pot-funded)
@@ -160,7 +173,7 @@ casino_jackpot_cap              100000   hard ceiling so it cannot inflate the e
    banks, the pot is credited and the chain ends. This is the crucial mechanical change:
    the loop between rounds drops from ~8 seconds of typing a number to **one tap**,
    which is what makes a streak feel like a streak and not a form.
-5. A 5-win dice chain pays `stake × 120` (capped by `MAX_BET`), i.e. a Rocket-Neptune
+5. A 5-win dice chain pays `stake × 4000` (capped by `MAX_BET`), i.e. a Rocket-Neptune
    moment — but the road there is `(1/6)^5 ≈ 1 in 7,776`, which is why it can afford to
    be that big.
 
@@ -185,22 +198,28 @@ persisted in `user_casino_streaks` (one row per user, together with `streak`,
 **Economy guard rails (mandatory — this is the part that must not be hand-waved):**
 - `EV(n) = p(win) × ladder[n]` must stay < 1.0 for every `n`, both games:
 
-  | n | dice ladder | dice EV | slots ladder | slots EV |
-  |---|---|---|---|---|
-  | 1 | 5 | 0.83 | 15 | 0.94 |
-  | 2 | 10 | 0.83 | 35 | 0.94 |
-  | 3 | 22 | 0.92 | 90 | 0.94 |
-  | 4 | 50 | 0.83 | 250 | 0.94 |
-  | 5 | 120 | 0.63 | 700 | 0.94 |
+  **Shipped ladder** (`services/casino_service.CHAIN_LADDERS`), with the
+  simulated return of a player who pushes to that rung and then banks:
 
-  These are the guard values. With the flat `casino_streak_bonus_ladder` added at
-  `n ≥ 3`, keep `slots` bonus ≤ 100 apples or the slots EV crosses 1.0 — the bonus MUST
-  be paid **from the funded pot pool** (§4D), never minted, so it cannot inflate.
-- A regression test asserts this table (mirroring the style of
-  `tests/test_casino.py:488-505`), so nobody can silently edit the ladder into a
-  losing house.
-- Hard cap: a player can never bank more than `MAX_BET × 120` per chain, and
-  `casino_streak_max = 5` forces a bank.
+  | n | dice ladder | dice RTP (rung) | push-then-bank | slots ladder | slots RTP (rung) | push-then-bank |
+  |---|---|---|---|---|---|---|
+  | 1 | ×5 | 0.833 | 0.837 | ×15 | 0.938 | 0.941 |
+  | 2 | ×28 | 0.778 | 0.788 (94%) | ×220 | 0.859 | 0.856 (91%) |
+  | 3 | ×150 | 0.694 | 0.658 (79%) | ×3000 | 0.732 | 0.520 (55%) |
+  | 4 | ×800 | 0.617 | 0.560 (67%) | — | — | — |
+  | 5 | ×4000 | 0.514 | 0.533 (64%) | — | — | — |
+
+  Two properties, both unit-tested: every rung stays below the first rung's
+  return (chain length can never beat the house), and **no rung falls below half
+  of base RTP** so a push stays an honest gamble. Slots stops at three rungs
+  because 1-in-16 cannot support a deeper honest ladder.
+- The earlier draft (`5, 10, 22, 50, 120` / `15, 35, 90, 250, 700`) passed the
+  first test and failed the second: always-push returned 1–2% of base. The guard
+  is `tests/test_casino.py::test_pushing_is_a_real_bet_not_a_punishment`.
+- Flat bonus ladders were dropped entirely for this ship: they are minted apples
+  and would need the §4D pot pool to fund them. No new faucet exists.
+- Hard cap: a chain pot is clamped to `MAX_BET × 120`, and each family's ladder
+  length forces a bank at its own top rung.
 - Streak is per-player, per-game-type (a dice streak never carries into slots).
 
 **UX/visuals:** streak counter rendered as apples/lit lamps in the caption
