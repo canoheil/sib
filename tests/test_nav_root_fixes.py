@@ -9,6 +9,7 @@ import pytest
 from aiogram.types import Message
 from aiogram.types import User as TelegramUser
 
+from sib.core.bidi import LRM
 from sib.database.models import PanelOwner
 from sib.handlers.garden import _render_garden
 from sib.handlers.start import (
@@ -233,7 +234,7 @@ async def test_wake_words_open_the_right_surfaces(db_session):
     msg = _message("سیب پروفایل", user_id=4242)
     await handle_sib_profile_word(msg, MagicMock())
     text = msg.reply.call_args.args[0]
-    assert "پروفایل سیبی سارا" in text  # the sender's name
+    assert "پروفایل سیبی " + LRM + "سارا" + LRM in text  # the sender's name
     # And the opened panel is claimed to the sender.
     sent = msg.reply.return_value
     owner = await PanelOwnershipService.get_owner(

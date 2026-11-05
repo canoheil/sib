@@ -41,6 +41,7 @@ from aiogram.types import (
 )
 from sqlalchemy import select
 
+from sib.core.bidi import fix_bidi
 from sib.core.config import settings
 from sib.core.logging import logger
 from sib.database.connection import get_session
@@ -244,7 +245,9 @@ async def handle_transfer_command(message: Message) -> None:
     )
 
     try:
-        sent = await message.reply(body, reply_markup=confirmation_keyboard(pending_id))
+        sent = await message.reply(
+            fix_bidi(body), reply_markup=confirmation_keyboard(pending_id)
+        )
     except Exception as error:  # pragma: no cover - Telegram send failure
         logger.error(f"transfer confirmation could not be sent ({pending_id}): {error}")
         await _set_state(pending_id, PendingTransferState.CANCELLED)
@@ -515,11 +518,13 @@ async def handle_transfer_confirm(callback: CallbackQuery, bot: Bot) -> None:
     await safe_edit_callback_message(
         callback,
         bot,
-        render_success(
-            to_display=to_display,
-            item_type=snapshot.item_type,
-            amount=result.amount_received,
-            fee=result.fee,
+        fix_bidi(
+            render_success(
+                to_display=to_display,
+                item_type=snapshot.item_type,
+                amount=result.amount_received,
+                fee=result.fee,
+            )
         ),
         reply_markup=None,
     )
@@ -570,13 +575,15 @@ async def _notify_receiver(
     pending row (see the phase report: replying to B's *original* message
     would need a second message-id column, i.e. a schema change).
     """
-    text = render_receiver_notification(
-        from_display=from_display,
-        item_type=snapshot.item_type,
-        amount=amount,
-        to_mention=(
-            f"[{to_display}](tg://user?id={int(snapshot.to_user_id)})"
-        ),
+    text = fix_bidi(
+        render_receiver_notification(
+            from_display=from_display,
+            item_type=snapshot.item_type,
+            amount=amount,
+            to_mention=(
+                f"[{to_display}](tg://user?id={int(snapshot.to_user_id)})"
+            ),
+        )
     )
     try:
         await bot.send_message(

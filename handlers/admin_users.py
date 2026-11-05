@@ -7,6 +7,7 @@ from aiogram import Router, F
 from aiogram.filters import Command
 from sqlalchemy import select
 from sib.admin.auth import is_admin
+from sib.core.bidi import fix_bidi, wrap_ltr
 from sib.database.connection import get_session
 from sib.database.models import Character
 from sib.keyboards.common import keyboard_from_specs
@@ -50,7 +51,11 @@ async def authorized(event):
 
 async def dashboard(session, uid):
     user, values, cards = await snapshot(session, uid)
-    text = f"👤 کاربر: {user.display_name} ({uid})\nنام کاربری: @{user.username or 'ندارد'}\nتاریخ ثبت: {user.created_at}\n"
+    text = fix_bidi(
+        f"👤 کاربر: {wrap_ltr(user.display_name)} ({uid})\n"
+        f"نام کاربری: @{wrap_ltr(user.username or 'ندارد')}\n"
+        f"تاریخ ثبت: {user.created_at}\n"
+    )
     text += "\n".join(f"{label}: {values[key]}" for key,label in FIELDS.items())
     text += f"\n🃏 کارت‌ها: {len(cards)}\n🚫 وضعیت: {'مسدود' if user.is_banned else 'فعال'}"
     text += "\nتعداد گروه‌ها: نامشخص"

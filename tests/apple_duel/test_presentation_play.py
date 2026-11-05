@@ -360,7 +360,7 @@ async def test_duel_result_does_not_contain_duel_id(db_session, monkeypatch):
         assert sum(body.count(mark) for mark in ".!؟") <= 2
 
     # The result still tells the group who won and what the rewards were.
-    assert result_text.startswith("🏆 **پایان دوئل سیبی**")
+    assert result_text.startswith("\u200f🏆 **پایان دوئل سیبی**")  # RLM pins RTL
     assert "برنده: **" in result_text
     assert "**۱ نهال**" in result_text
     assert "**۵ سیب**" in result_text

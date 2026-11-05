@@ -34,6 +34,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sib.core.bidi import wrap_ltr
 from sib.database.models import PET_TYPES, UserPet
 from sib.services.apple_wallet import AppleWalletService, InsufficientFundsException
 from sib.services.config_store import ConfigService
@@ -446,8 +447,14 @@ async def get_pet(
 
 
 def pet_display_name(pet: UserPet) -> str:
-    """The custom name, or a friendly placeholder for an unnamed pet."""
-    return (pet.custom_name or "").strip() or UNNAMED_PET_FA
+    """The custom name, or a friendly placeholder for an unnamed pet.
+
+    A player can name a pet anything, including a Latin name. The name is
+    fenced with ``LRM`` (:func:`sib.core.bidi.wrap_ltr`) so it stays one
+    left-to-right block inside the Persian pet captions instead of dragging
+    their punctuation to the wrong side.
+    """
+    return wrap_ltr((pet.custom_name or "").strip() or UNNAMED_PET_FA)
 
 
 async def feed_xp_amount(session: AsyncSession) -> int:

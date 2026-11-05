@@ -12,6 +12,7 @@ import pytest
 from aiogram.types import CallbackQuery, Chat as TelegramChat, Message
 from aiogram.types import User as TelegramUser
 
+from sib.core.bidi import LRM
 from sib.database import Group, Marriage, MarriageStatus, User
 from sib.handlers.start import (
     PROFILE_VIEW_NOT_REGISTERED_TEXT,
@@ -175,7 +176,7 @@ async def test_reply_profile_view_works(db_session):
     await handle_reply_profile_view(msg, MagicMock())
 
     text = _rendered(msg)
-    assert f"👤 **پروفایل سیبی {TARGET_FIRST_NAME}** 🍏" in text
+    assert f"👤 **پروفایل سیبی {LRM}{TARGET_FIRST_NAME}{LRM}** 🍏" in text
     assert "🎴 تعداد کارت‌ها: `0`" in text
     assert "⭐ کارت اصلی: انتخاب نشده" in text
     assert "⚔️ نبردهای سیبی:" in text
@@ -251,7 +252,7 @@ async def test_reply_profile_view_exposes_no_identity_or_links(db_session):
 
     text = _rendered(msg)
     # The spouse appears as a plain first name in the target's profile.
-    assert "💍 همسر: پریسا" in text
+    assert f"💍 همسر: {LRM}پریسا{LRM}" in text
     assert "❤️ عشق سیبی:" in text
     for leaked in (
         "@",

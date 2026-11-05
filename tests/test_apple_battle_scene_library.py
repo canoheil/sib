@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy import select
 
+from sib.core.bidi import fix_bidi
 from sib.database.models import Game, Match, MatchPlayer, MatchState, ReleaseStatus
 from sib.games.apple_battle.engine import AppleBattleEngine
 from sib.services.apple_battle import AppleBattleService
@@ -519,7 +520,7 @@ async def test_narration_loop_sends_real_scene_plates(db_session):
     # The plate for each beat matches its family (caption can never contradict).
     per_beat: dict[int, list[str]] = {}
     for _kind, _chat, caption, photo in [e for e in bot.order if e[0] == "send_photo"]:
-        index = [beat["text"] for beat in ctx["plan"]].index(caption)
+        index = [fix_bidi(beat["text"]) for beat in ctx["plan"]].index(caption)
         per_beat.setdefault(index, []).append(Path(getattr(photo, "path")).name)
     for index, files in per_beat.items():
         families = AppleBattleSceneDirector.families_for_beat(ctx["plan"][index])
@@ -568,7 +569,7 @@ async def test_restart_during_narration_reuses_the_same_plates(db_session):
     ]
     assert len(sent) == len(plan)
     for caption, filename in sent:
-        index = [beat["text"] for beat in plan].index(caption)
+        index = [fix_bidi(beat["text"]) for beat in plan].index(caption)
         assert filename == expected[index].file, "restart changed the chosen plate"
 
     # Cleanup + settlement are untouched by the real artwork.
@@ -626,7 +627,7 @@ async def test_scene_director_survives_missing_manifest(db_session, monkeypatch)
         await db_session.rollback()
         # The narration still happened (card art / placeholder / text only).
         # Direct level-up notices are separate from those narrative beats.
-        narration_texts = {beat["text"] for beat in ctx["plan"]}
+        narration_texts = {fix_bidi(beat["text"]) for beat in ctx["plan"]}
         narration_sends = [
             call.kwargs.get("caption")
             for call in bot.send_photo.call_args_list

@@ -211,7 +211,7 @@ async def test_high_card_group_message_neutral_during_draw(db_session, monkeypat
     await handle_high_card_action(callback, bot)
 
     group_text = bot.edit_message_text.await_args.args[0]
-    assert "بازیکن الف کارت خود را کشید" in group_text
+    assert "\u200eبازیکن الف\u200e کارت خود را کشید" in group_text
     assert "تک / آس (A)" not in group_text
     assert "♠️" not in group_text
     assert "کارت شما:" not in group_text

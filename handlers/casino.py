@@ -21,6 +21,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardMarkup, Message
 
+from sib.core.bidi import fix_bidi
 from sib.core.logging import logger
 from sib.core.text import safe_name
 from sib.database.connection import get_session
@@ -67,8 +68,12 @@ def mention(user) -> str:
 
 
 def bet_prompt(user) -> str:
-    """The prompt text: the player's mention first, then the wager question."""
-    return BET_PROMPT_TEMPLATE.format(user_mention=mention(user))
+    """The prompt text: the player's mention first, then the wager question.
+
+    The line opens with the player's mention, which may be a Latin or
+    stylized name, so the paragraph direction is pinned to RTL explicitly.
+    """
+    return fix_bidi(BET_PROMPT_TEMPLATE.format(user_mention=mention(user)))
 
 
 def replied_to_prompt(message, prompt_message_id) -> bool:

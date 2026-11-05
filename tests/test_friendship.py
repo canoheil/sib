@@ -94,9 +94,9 @@ def test_friend_request_card_is_short_markdown_and_escapes_names():
     text = _card_text("آرین_الف", "سارا_ب", 42)
 
     assert "<b>" not in text and "<a " not in text
-    assert "**آرین\\_الف**" in text
-    assert "**سارا\\_ب**" in text
-    assert "**[سارا\\_ب](tg://user?id=42)**" in text
+    assert "**\u200eآرین\\_الف\u200e**" in text
+    assert "**\u200eسارا\\_ب\u200e**" in text
+    assert "**[\u200eسارا\\_ب\u200e](tg://user?id=42)**" in text
     assert sum(text.count(mark) for mark in ".!؟") <= 2
 
 
@@ -118,7 +118,9 @@ async def test_friend_acceptance_uses_markdown_and_plain_alert(db_session, monke
     await _resolve_friend_callback(callback, FRIEND_ACCEPT)
 
     text = edit.await_args.args[2]
-    assert text == "🤝 **آرین\\_الف** و **سارا\\_ب** با هم رفیق شدن!"
+    assert text == (
+        "🤝 **\u200eآرین\\_الف\u200e** و **\u200eسارا\\_ب\u200e** با هم رفیق شدن!"
+    )
     assert edit.await_args.kwargs["parse_mode"] == "Markdown"
     assert "**" not in answer.await_args.args[1]
     await db_session.refresh(request)

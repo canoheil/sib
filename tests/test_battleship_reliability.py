@@ -216,7 +216,7 @@ async def test_safe_edit_treats_not_modified_as_success():
 def test_player_names_are_markdown_escaped_in_state():
     assert escape_markdown("ali_reza*") == "ali\\_reza\\*"
     assert escape_markdown("a`b[c") == "a\\`b\\[c"
-    assert safe_name(None, "بازیکن") == "بازیکن"
+    assert safe_name(None, "بازیکن") == "\u200eبازیکن\u200e"
 
 
 @pytest.mark.asyncio

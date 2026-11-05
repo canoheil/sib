@@ -17,6 +17,7 @@ import pytest_asyncio
 from aiogram.types import User as TGUser
 from sqlalchemy import delete, select
 
+from sib.core.bidi import RLM, LRM
 from sib.database.connection import get_session
 from sib.database.models import (
     AppleWallet,
@@ -207,8 +208,8 @@ async def test_regular_apple_transfer_end_to_end(session):
     # --- confirmation -----------------------------------------------------
     body = message.reply.await_args.args[0]
     assert "⚠️ تأیید انتقال" in body
-    assert "از: فرستنده (@sender)" in body
-    assert "به: گیرنده (@receiver)" in body
+    assert f"از: {LRM}فرستنده{LRM} (@{LRM}sender{LRM})" in body
+    assert f"به: {LRM}گیرنده{LRM} (@{LRM}receiver{LRM})" in body
     assert "مقدار: ۱۰۰ 🍎 سیب" in body
     assert "⏳ این تأیید تا ۶۰ ثانیه دیگر منقضی می‌شود." in body
 
@@ -242,7 +243,10 @@ async def test_regular_apple_transfer_end_to_end(session):
     assert (await _pending_row(row.id)).state == PendingTransferState.DONE
 
     edit_text = edit.await_args.args[2]
-    assert edit_text == "✅ ۱۰۰ سیب به گیرنده (@receiver) منتقل شد."
+    assert edit_text == (
+        RLM
+        + f"✅ ۱۰۰ سیب به {LRM}گیرنده{LRM} (@{LRM}receiver{LRM}) منتقل شد."
+    )
     assert edit.await_args.kwargs["reply_markup"] is None
     assert _toast(callback) == "✅ انتقال انجام شد."
     assert callback.answer.await_args.kwargs["show_alert"] is False
@@ -252,8 +256,9 @@ async def test_regular_apple_transfer_end_to_end(session):
     assert notification["chat_id"] == GROUP_CHAT_ID
     assert notification["reply_to_message_id"] == CONFIRMATION_MESSAGE_ID
     assert notification["text"] == (
-        f"[گیرنده (@receiver)](tg://user?id={receiver.id}) "
-        "📥 فرستنده (@sender) مبلغ ۱۰۰ سیب به شما منتقل کرد."
+        RLM
+        + f"[{LRM}گیرنده{LRM} (@{LRM}receiver{LRM})](tg://user?id={receiver.id}) "
+        f"📥 {LRM}فرستنده{LRM} (@{LRM}sender{LRM}) مبلغ ۱۰۰ سیب به شما منتقل کرد."
     )
 
 

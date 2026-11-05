@@ -14,6 +14,7 @@ from sib.keyboards.leaderboard import (
     get_group_stats_keyboard,
     get_player_stats_keyboard,
 )
+from sib.core.bidi import fix_bidi, wrap_ltr
 from sib.core.text import escape_markdown
 
 router = Router(name="leaderboard")
@@ -260,8 +261,8 @@ async def cmd_stats(message: Message):
                 await GroupService.get_or_create_group(session, chat)
                 stats = await LeaderboardService.get_group_stats_and_rank(session, chat.id)
 
-            text = (
-                f"📊 **آمار گروه {chat.title}** 🍏\n\n"
+            text = fix_bidi(
+                f"📊 **آمار گروه {wrap_ltr(chat.title)}** 🍏\n\n"
                 f"🏆 رتبه جهانی: `#{stats['rank']}`\n"
                 f"🏆 تعداد بردها: `{stats['wins']}`\n"
                 f"⚔️ مسابقات: `{stats['matches_played']}`\n"
@@ -275,8 +276,8 @@ async def cmd_stats(message: Message):
             p_stats = await LeaderboardService.get_player_stats(session, user.id)
             from sib.services.seedling import SeedlingService
             seedlings = await SeedlingService.get_total(session, user.id)
-            name = user.first_name or "شما"
-            text = (
+            name = wrap_ltr(user.first_name or "شما")
+            text = fix_bidi(
                 f"👤 **کارنامه بازیکن: {name}** 🍏\n\n"
                 f"⚔️ **مسابقه‌های واقعی**\n"
                 f"بازی‌ها: `{p_stats['matches_played']}` | برد: `{p_stats['wins']}` | "

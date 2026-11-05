@@ -13,6 +13,7 @@ before the reply, so no partial reward survives.
 from aiogram import F, Router
 from aiogram.types import Message
 
+from sib.core.bidi import fix_bidi
 from sib.core.logging import logger
 from sib.core.text import safe_name
 from sib.database.connection import get_session
@@ -124,4 +125,6 @@ async def handle_sib_hug(message: Message) -> None:
         result.amount,
         friends=result.friendship_bonus,
     )
-    await send_scene_reply(message, HUG_SCENE_KEY, text)
+    # RLM: the sentence opens with an emoji, so the paragraph direction
+    # must be pinned to RTL or the trailing «!» jumps to the wrong side.
+    await send_scene_reply(message, HUG_SCENE_KEY, fix_bidi(text))

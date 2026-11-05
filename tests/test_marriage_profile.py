@@ -33,6 +33,7 @@ from aiogram.types import (
     User as TelegramUser,
 )
 
+from sib.core.bidi import LRM
 from sib.database import Group, Marriage, MarriageStatus, User
 from sib.handlers.apple_battle import cmd_profile
 from sib.handlers.marriage import (
@@ -213,13 +214,13 @@ def test_love_bar_clamps_out_of_range_values():
 def test_spouse_display_name_is_the_plain_first_name_only():
     """Only the first name: no last name, no @username."""
     user = User(id=1, first_name="سارا", last_name="احمدی", username="player_one")
-    assert spouse_display_name(user) == "سارا"
+    assert spouse_display_name(user) == LRM + "سارا" + LRM
 
 
 def test_spouse_display_name_never_falls_back_to_the_username():
     """A username must not leak as plain text when the first name is missing."""
     user = User(id=1, first_name=None, username="player_one")
-    assert spouse_display_name(user) == "یک سیبی"
+    assert spouse_display_name(user) == LRM + "یک سیبی" + LRM
 
 
 def test_spouse_display_name_strips_at_signs_html_and_links():
@@ -234,7 +235,7 @@ def test_spouse_display_name_strips_at_signs_html_and_links():
 
 def test_spouse_display_name_is_markdown_safe():
     user = User(id=1, first_name="سارا_احمدی")
-    assert spouse_display_name(user) == "سارا\\_احمدی"
+    assert spouse_display_name(user) == LRM + "سارا\\_احمدی" + LRM
 
 
 def test_love_percentage_rejects_unusable_values():
@@ -274,7 +275,7 @@ async def test_married_user_shows_the_spouse_and_love(db_session):
     lines = await profile_marriage_lines(db_session, OWNER_ID)
 
     assert len(lines) == 2
-    assert lines[0] == "💍 همسر: " + SPOUSE_FIRST_NAME
+    assert lines[0] == "💍 همسر: " + LRM + SPOUSE_FIRST_NAME + LRM
     assert lines[1] == "❤️ عشق سیبی: ██████░░░░ 60%"
 
 
@@ -290,10 +291,10 @@ async def test_correct_spouse_is_displayed_from_either_side(db_session):
     await db_session.commit()
 
     assert (await profile_marriage_lines(db_session, OWNER_ID))[0] == (
-        "💍 همسر: " + SPOUSE_FIRST_NAME
+        "💍 همسر: " + LRM + SPOUSE_FIRST_NAME + LRM
     )
     assert (await profile_marriage_lines(db_session, SPOUSE_ID))[0] == (
-        "💍 همسر: سارا"
+        "💍 همسر: " + LRM + "سارا" + LRM
     )
 
 
@@ -307,7 +308,7 @@ async def test_spouse_without_username_uses_the_safe_fallback(db_session):
     await db_session.commit()
 
     lines = await profile_marriage_lines(db_session, OWNER_ID)
-    assert lines[0] == "💍 همسر: زهرا"
+    assert lines[0] == "💍 همسر: " + LRM + "زهرا" + LRM
 
 
 @pytest.mark.asyncio
@@ -366,7 +367,7 @@ async def test_unusable_love_score_omits_only_the_gauge(db_session, monkeypatch)
 
     lines = await profile_marriage_lines(db_session, OWNER_ID)
     assert len(lines) == 1
-    assert lines[0] == "💍 همسر: " + SPOUSE_FIRST_NAME
+    assert lines[0] == "💍 همسر: " + LRM + SPOUSE_FIRST_NAME + LRM
     assert "عشق سیبی" not in " ".join(lines)
 
 
@@ -392,7 +393,7 @@ async def test_single_user_profile_has_no_marriage_block(db_session):
 
     text = await _wake_word_profile(db_session, _tg(OWNER_ID, "سارا"))
 
-    assert "👤 **پروفایل سیبی سارا**" in text
+    assert "👤 **پروفایل سیبی " + LRM + "سارا" + LRM + "**" in text
     assert "🍎 سیب:" in text
     assert "🌱 نهال:" in text
     assert "🎴 تعداد کارت‌ها:" in text
@@ -414,10 +415,10 @@ async def test_married_user_profile_via_the_wake_word(db_session):
 
     text = await _wake_word_profile(db_session, _tg(OWNER_ID, "سارا"))
 
-    assert "💍 همسر: " + SPOUSE_FIRST_NAME in text
+    assert "💍 همسر: " + LRM + SPOUSE_FIRST_NAME + LRM in text
     assert "❤️ عشق سیبی: ██████░░░░ 60%" in text
     # Existing content is still there.
-    assert "👤 **پروفایل سیبی سارا**" in text
+    assert "👤 **پروفایل سیبی " + LRM + "سارا" + LRM + "**" in text
     assert "🍎 سیب:" in text
 
 
@@ -431,7 +432,7 @@ async def test_married_user_profile_via_the_profile_panel(db_session):
 
     text = await _panel_profile(db_session, _tg(OWNER_ID, "سارا"))
 
-    assert "💍 همسر: " + SPOUSE_FIRST_NAME in text
+    assert "💍 همسر: " + LRM + SPOUSE_FIRST_NAME + LRM in text
     assert "❤️ عشق سیبی: " + "█" * LOVE_BAR_CELLS + " 100%" in text
 
 
@@ -447,7 +448,7 @@ async def test_married_user_profile_via_the_profile_command(db_session):
     await cmd_profile(msg, MagicMock())
 
     text = _profile_text(msg)
-    assert "💍 همسر: " + SPOUSE_FIRST_NAME in text
+    assert "💍 همسر: " + LRM + SPOUSE_FIRST_NAME + LRM in text
     assert "❤️ عشق سیبی: " + "░" * LOVE_BAR_CELLS + " 0%" in text
 
 
@@ -516,7 +517,7 @@ async def test_profile_shows_spouse_first_name_not_username(db_session):
 
     text = await _wake_word_profile(db_session, _tg(OWNER_ID, "سارا"))
 
-    assert f"💍 همسر: {SPOUSE_FIRST_NAME}\n" in text
+    assert f"💍 همسر: {LRM}{SPOUSE_FIRST_NAME}{LRM}\n" in text
     assert "sib" not in text  # the username never appears, escaped or not
     assert "@" not in text
 

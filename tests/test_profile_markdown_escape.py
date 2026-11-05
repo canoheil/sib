@@ -17,6 +17,7 @@ import pytest
 from aiogram.types import Chat as TelegramChat
 from aiogram.types import User as TelegramUser
 
+from sib.core.bidi import LRM
 from sib.database import User
 from sib.handlers.admin_center import _user_panel
 from sib.handlers.apple_battle import cmd_profile
@@ -77,7 +78,7 @@ async def test_profile_handles_underscores_in_name(db_session):
     name = "Soheil_Dev"
     text = await _wake_word_profile(db_session, _tg(OWNER_ID, name))
 
-    assert "پروفایل سیبی Soheil\\_Dev" in text
+    assert "پروفایل سیبی " + LRM + "Soheil\\_Dev" + LRM in text
     assert_legacy_markdown_balanced(text)
 
 
@@ -85,7 +86,7 @@ async def test_profile_handles_underscores_in_name(db_session):
 async def test_profile_panel_handles_underscores_in_name(db_session):
     text = await _panel_profile(db_session, _tg(OWNER_ID, "Soheil_Dev"))
 
-    assert "پروفایل سیبی Soheil\\_Dev" in text
+    assert "پروفایل سیبی " + LRM + "Soheil\\_Dev" + LRM in text
     assert_legacy_markdown_balanced(text)
 
 
@@ -109,7 +110,7 @@ async def test_main_menu_greeting_handles_underscores_in_name(db_session):
     """The private main menu greets the player by name in Markdown."""
     text, _kb = _main_menu_text_and_kb(_tg(OWNER_ID, "Soheil_Dev"), PRIVATE_CHAT)
 
-    assert "سلام Soheil\\_Dev!" in text
+    assert "سلام " + LRM + "Soheil\\_Dev" + LRM + "!" in text
     assert_legacy_markdown_balanced(text)
 
 
@@ -128,7 +129,7 @@ async def test_reply_profile_view_handles_underscores_in_target_name(db_session)
     await handle_reply_profile_view(msg, MagicMock())
 
     text = reply_view._rendered(msg)
-    assert "پروفایل سیبی Soheil\\_Dev" in text
+    assert "پروفایل سیبی " + LRM + "Soheil\\_Dev" + LRM in text
     assert_legacy_markdown_balanced(text)
     assert (await db_session.get(User, MD_TARGET_ID)).first_name == "Soheil_Dev"
 
@@ -156,7 +157,7 @@ async def test_spouse_name_with_underscores_stays_balanced(db_session):
 
     text = await _wake_word_profile(db_session, _tg(OWNER_ID, "Soheil_Dev"))
 
-    assert "💍 همسر: Pari\\_\\*Ahmadi" in text
+    assert "💍 همسر: " + LRM + "Pari\\_\\*Ahmadi" + LRM in text
     assert_legacy_markdown_balanced(text)
 
 

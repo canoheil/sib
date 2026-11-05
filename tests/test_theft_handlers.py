@@ -23,6 +23,7 @@ from aiogram.types import User as TelegramUser
 from PIL import Image
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from sib.core.bidi import RLM, LRM
 from sib.database.models import (
     AppleTransaction,
     AppleWallet,
@@ -381,7 +382,7 @@ async def test_clean_thief_theft_succeeds_instantly_with_artwork(db):
     assert kwargs["parse_mode"] == "HTML"
     caption = kwargs["caption"]
     assert "دزدی موفق!" in caption
-    assert "۲۰۰ سیب از قربانی" in caption
+    assert f"۲۰۰ سیب از {LRM}قربانی{LRM}" in caption
     assert "۱ ستاره ⭐" in caption
     message.answer_photo.assert_not_awaited()
 
@@ -612,7 +613,7 @@ async def test_nobody_arrests_and_the_rng_fails(db, monkeypatch):
     message.answer_photo.assert_awaited_once()
     args, kwargs = message.answer_photo.await_args
     assert str(args[0].path) == str(handler.FAIL_IMAGE)
-    assert kwargs["caption"] == handler.WINDOW_FAIL_CAPTION
+    assert kwargs["caption"] == RLM + handler.WINDOW_FAIL_CAPTION
 
 
 async def test_settlement_failure_is_reported_and_clears_the_window(db, monkeypatch):

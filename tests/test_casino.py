@@ -130,14 +130,14 @@ async def test_prompt_mentions_the_player(state):
     assert "tg://user?id=1" in prompt_text
     assert "Test Player" in prompt_text
     assert "چقدر می‌خوای شرط بندی کنی؟" in prompt_text
-    assert prompt_text.startswith("[")
+    assert prompt_text.startswith("\u200f[")  # RLM pins the paragraph to RTL
 
 
 @pytest.mark.asyncio
 async def test_prompt_mention_survives_missing_full_name(state):
     sender = SimpleNamespace(id=5, is_bot=False, first_name="solo", full_name=None)
     assert "tg://user?id=5" in casino.mention(sender)
-    assert casino.mention(SimpleNamespace(id=None, full_name="x")) == "x"
+    assert casino.mention(SimpleNamespace(id=None, full_name="x")) == "\u200ex\u200e"
 
 
 @pytest.mark.asyncio

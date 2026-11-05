@@ -7,6 +7,7 @@ from pathlib import Path
 from aiogram import F, Router
 from aiogram.types import CallbackQuery, FSInputFile, Message
 
+from sib.core.bidi import fix_bidi, wrap_ltr
 from sib.core.logging import logger
 from sib.core.text import safe_name
 from sib.database.connection import get_session
@@ -44,7 +45,7 @@ def _card_text(sender_name: str, target_name: str, target_id: int) -> str:
     sender = safe_name(sender_name, "یک سیبی")
     target = safe_name(target_name, "یک سیبی")
     mention = f"[{target}](tg://user?id={int(target_id)})"
-    return (
+    return fix_bidi(
         "🤝 **درخواست دوستی سیبی**\n\n"
         f"**{sender}** به **{target}** درخواست رفاقت داد!\n"
         f"**{mention}**، برای رفیق شدن «قبول» رو بزن."
@@ -240,11 +241,12 @@ async def _friend_list_screen(user_id: int, display_name: str, page: int = 0):
     first = page * PAGE_SIZE + 1
     last = min(first + len(friends) - 1, total)
     names = "\n".join(
-        f"{fa_digits(first + index)}. {html.escape(friend.display_name or 'بازیکن بی‌نام')}"
+        f"{fa_digits(first + index)}. "
+        f"{wrap_ltr(html.escape(friend.display_name or 'بازیکن بی‌نام'))}"
         for index, friend in enumerate(friends)
     )
-    owner_name = html.escape(display_name or "شما")
-    text = (
+    owner_name = wrap_ltr(html.escape(display_name or "شما"))
+    text = fix_bidi(
         f"🍏 <b>دوستان سیبی {owner_name}</b>\n\n{names}\n\n"
         f"صفحهٔ {fa_digits(page + 1)} از {fa_digits(page_count)} — "
         f"{fa_digits(first)} تا {fa_digits(last)} از {fa_digits(total)} نفر"

@@ -461,7 +461,9 @@ async def test_doctor_callback_rechecks_membership_and_announces_once(db, monkey
     assert answer.await_args.args[1] == handler.DOCTOR_ONLY
     bot.get_chat_member.assert_not_awaited()
     await handler.handle_doctor_heal(callback, bot)
-    assert callback.message.answer.await_args.args == ("💉 بازیکن 1 بیمار بازیکن 2 را درمان کرد.",)
+    assert callback.message.answer.await_args.args == (
+        "💉 \u200eبازیکن 1\u200e بیمار \u200eبازیکن 2\u200e را درمان کرد.",
+    )
     await handler.handle_doctor_heal(callback, bot)  # stale button can't pay twice
     assert callback.message.answer.await_count == 1
     async with db() as session:

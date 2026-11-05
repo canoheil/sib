@@ -9,6 +9,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     Message,
 )
+from sib.core.bidi import fix_bidi
 from sib.core.logging import logger
 from sib.core.text import safe_name
 from sib.database.connection import get_session
@@ -86,9 +87,11 @@ async def command_duel(message: Message, bot: Bot):
     # Commit invitation BEFORE transport; failed send remains expirable in DB.
     try:
         sent = await message.reply(
-            f"⚔️ **{safe_name(inviter.full_name[:80])}** با "
-            f"**{safe_name(recipient.full_name[:80])}** دوئل می‌خواد!\n"
-            "کارتت رو انتخاب کن و «قبول» رو بزن.",
+            fix_bidi(
+                f"⚔️ **{safe_name(inviter.full_name[:80])}** با "
+                f"**{safe_name(recipient.full_name[:80])}** دوئل می‌خواد!\n"
+                "کارتت رو انتخاب کن و «قبول» رو بزن."
+            ),
             reply_markup=invitation_keyboard(duel.id),
             parse_mode="Markdown",
         )
