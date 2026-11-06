@@ -11,7 +11,7 @@ Three layers are covered:
   button, the 🔴 disabled-skill line and the satiety line of the profile.
 
 No new migration: every config key and column already exists (head is
-``078_wanted_decay``).
+``079_disease_daily_announcement``).
 """
 
 from contextlib import asynccontextmanager

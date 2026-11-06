@@ -1070,6 +1070,17 @@ class MaintenanceService:
         except Exception:
             logger.exception("Maintenance task failed: disease cycle")
 
+        # Daily Disease & Doctor announcement: once per Tehran day at the
+        # configured hour:minute (18:15 by default, after the 18:00 infection
+        # tick). The durable claim lives in system_config, so this runs on
+        # every 30s tick without reposting. Own session, own guard.
+        try:
+            from sib.services.disease_announcement import run_disease_announcement
+
+            await run_disease_announcement(cls._bot, now=datetime.now(timezone.utc))
+        except Exception:
+            logger.exception("Maintenance task failed: disease daily announcement")
+
     @classmethod
     async def _announce_war_results(cls, bot, outcomes: list) -> None:
         """Send the final message of every war settled in this cycle.

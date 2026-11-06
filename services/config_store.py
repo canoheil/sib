@@ -227,6 +227,11 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     "disease_doctor_daily_limit": 5,
     "disease_doctor_reward_apples": 50,
     "disease_doctor_infection_chance": 10,
+    # Daily Disease & Doctor group announcement (migration 079); the worker
+    # posts at this Asia/Tehran time. Override the seeded system_config rows.
+    "disease_announcement_enabled": True,
+    "disease_announcement_hour": 18,
+    "disease_announcement_minute": 15,
     # Halloween global world-boss event («سیبومورتیس» / Sibomortis, HW1-RECON).
     "halloween_enabled": False,
     "halloween_default_max_hp": 500_000,
