@@ -33,6 +33,7 @@ from alembic.script import ScriptDirectory
 from sib.core.text import format_html
 from sib.database.models import (
     Group,
+    GroupDoctorState,
     Inv2GroupMember,
     SystemConfig,
     User,
@@ -105,10 +106,14 @@ def test_migration_079_revises_078_seeds_config_and_is_the_head():
     assert migration.revision == "079_disease_daily_announcement"
     assert migration.down_revision == "078_wanted_decay"
     scripts = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["079_disease_daily_announcement"]
+    assert scripts.get_heads() == ["080_group_doctors"]
     assert (
         scripts.get_revision("079_disease_daily_announcement").down_revision
         == "078_wanted_decay"
+    )
+    assert (
+        scripts.get_revision("080_group_doctors").down_revision
+        == "079_disease_daily_announcement"
     )
     # The code defaults and the seeded values agree.
     assert CONFIG_DEFAULTS["disease_announcement_enabled"] is True
@@ -168,17 +173,18 @@ def test_migration_079_mysql_sql_is_non_destructive():
 
 def test_alembic_real_upgrade_and_downgrade_from_078(tmp_path):
     scripts = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["079_disease_daily_announcement"]
+    assert scripts.get_heads() == ["080_group_doctors"]
     database = tmp_path / "announcement_migration.db"
     engine = sa.create_engine(f"sqlite:///{database}")
     with engine.begin() as connection:
+        connection.execute(sa.text("CREATE TABLE users (id BIGINT PRIMARY KEY)"))
         connection.execute(
             sa.text("CREATE TABLE system_config (`key` VARCHAR(64) PRIMARY KEY, `value` TEXT NOT NULL)")
         )
     engine.dispose()
     env = os.environ.copy()
     env["DATABASE_SYNC_URL"] = f"sqlite:///{database}"
-    env["PYTHONPATH"] = os.pathsep.join((str(ROOT.parent), env.get("PYTHONPATH", "")))
+    env["PYTHONPATH"] = os.pathsep.join((str(ROOT.parent), str(ROOT), env.get("PYTHONPATH", "")))
 
     def alembic(*args):
         result = subprocess.run(
@@ -191,16 +197,18 @@ def test_alembic_real_upgrade_and_downgrade_from_078(tmp_path):
         assert result.returncode == 0, result.stdout + result.stderr
         return result.stdout.strip()
 
-    assert alembic("heads") == "079_disease_daily_announcement (head)"
+    assert alembic("heads") == "080_group_doctors (head)"
     alembic("stamp", "078_wanted_decay")
     alembic("upgrade", "head")
-    assert "079_disease_daily_announcement" in alembic("current")
+    assert "080_group_doctors" in alembic("current")
     engine = sa.create_engine(f"sqlite:///{database}")
+    assert sa.inspect(engine).has_table("group_doctor_states")
     with engine.connect() as connection:
         assert _config_rows(engine) == EXPECTED_SEED
     engine.dispose()
     alembic("downgrade", "078_wanted_decay")
     engine = sa.create_engine(f"sqlite:///{database}")
+    assert not sa.inspect(engine).has_table("group_doctor_states")
     with engine.connect() as connection:
         assert _config_rows(engine) == {}
     engine.dispose()
@@ -281,7 +289,11 @@ async def _seed_group(db_session, *, group_id=-1007001, active=True):
 
 async def _seed_user(db_session, user_id, name, *, group_id=None, sick=False):
     now = _tehran(12)
-    db_session.add(User(id=user_id, first_name=name))
+    existing = await db_session.get(User, user_id)
+    if existing is None:
+        db_session.add(User(id=user_id, first_name=name))
+    else:
+        existing.first_name = name
     await db_session.flush()
     if group_id is not None:
         db_session.add(
@@ -294,12 +306,13 @@ async def _seed_user(db_session, user_id, name, *, group_id=None, sick=False):
     await db_session.flush()
 
 
-async def _seed_doctor(db_session, doctor_id, *, on=None):
-    day = (on or _tehran(18, 15)).astimezone(TEHRAN).date().isoformat()
+async def _seed_doctor(db_session, doctor_id, *, chat_id=-1007001, on=None):
+    selected_at = (on or _tehran(18, 15)).astimezone(timezone.utc)
     db_session.add(
-        SystemConfig(
-            key=disease_handler.DOCTOR_STATE_KEY,
-            value=json.dumps({"day": day, "user_id": doctor_id, "heals": 0}),
+        GroupDoctorState(
+            chat_id=chat_id,
+            doctor_user_id=doctor_id,
+            selected_at=selected_at,
         )
     )
     await db_session.flush()
@@ -394,3 +407,44 @@ async def test_failed_group_send_does_not_block_other_groups(db_session):
     assert bot.send_message.await_count == 2
     # The day is claimed regardless: no same-day retry storm.
     assert await run_disease_announcement(bot, now=_tehran(18, 16)) == 0
+
+
+@pytest.mark.asyncio
+async def test_announcement_tags_each_groups_local_doctor_and_fallback(db_session):
+    group_a, group_b, group_c = -1007011, -1007012, -1007013
+    await _seed_group(db_session, group_id=group_a)
+    await _seed_group(db_session, group_id=group_b)
+    await _seed_group(db_session, group_id=group_c)
+    await _seed_user(db_session, 7201, "دکتر گروه اول", group_id=group_a)
+    await _seed_user(db_session, 7202, "بیمار الف", group_id=group_a, sick=True)
+    await _seed_user(db_session, 7203, "دکتر گروه دوم", group_id=group_b)
+    await _seed_user(db_session, 7204, "بیمار ب", group_id=group_b, sick=True)
+    await _seed_user(db_session, 7205, "بیمار ج", group_id=group_c, sick=True)
+    await _seed_doctor(db_session, 7201, chat_id=group_a)
+    await _seed_doctor(db_session, 7203, chat_id=group_b)
+    # group_c intentionally has no doctor row (backwards compatibility fallback).
+    await db_session.commit()
+    bot = _bot()
+
+    assert await run_disease_announcement(bot, now=_tehran(18, 15)) == 3
+    by_chat = {
+        call.kwargs["chat_id"]: call.kwargs["text"]
+        for call in bot.send_message.await_args_list
+    }
+    assert set(by_chat) == {group_a, group_b, group_c}
+
+    assert '<a href="tg://user?id=7201">' in by_chat[group_a]
+    assert '<a href="tg://user?id=7202">' in by_chat[group_a]
+    assert 'id=7203' not in by_chat[group_a]
+    assert 'id=7204' not in by_chat[group_a]
+
+    assert '<a href="tg://user?id=7203">' in by_chat[group_b]
+    assert '<a href="tg://user?id=7204">' in by_chat[group_b]
+    assert 'id=7201' not in by_chat[group_b]
+    assert 'id=7202' not in by_chat[group_b]
+
+    assert "هنوز انتخاب نشده است." in by_chat[group_c]
+    assert '<a href="tg://user?id=7205">' in by_chat[group_c]
+    assert 'id=7201' not in by_chat[group_c]
+    assert 'id=7203' not in by_chat[group_c]
+

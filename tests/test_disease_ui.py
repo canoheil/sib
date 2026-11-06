@@ -31,8 +31,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import sib.database.connection as db_connection
 from sib.database.models import (
-    AppleTransaction, AppleWallet, Group, Inv2GroupMember, PanelOwner,
-    SystemConfig, User, UserDisease, UserItem,
+    AppleTransaction, AppleWallet, Group, GroupDoctorState, Inv2GroupMember,
+    PanelOwner, SystemConfig, User, UserDisease, UserItem,
 )
 from sib.handlers import admin as admin_handler
 from sib.handlers import disease as handler
@@ -62,8 +62,8 @@ async def db(tmp_path, monkeypatch):
         connection.execute("PRAGMA foreign_keys=ON")
 
     metadata = sa.MetaData()
-    for model in (User, Group, Inv2GroupMember, SystemConfig, UserDisease, UserItem,
-                  AppleWallet, AppleTransaction, PanelOwner):
+    for model in (User, Group, Inv2GroupMember, SystemConfig, UserDisease,
+                  GroupDoctorState, UserItem, AppleWallet, AppleTransaction, PanelOwner):
         model.__table__.to_metadata(metadata)
     # SQLite's integer PK is required for auto-generated ledger/member ids;
     # cloned metadata avoids mutating the app's global model definitions.
@@ -100,9 +100,9 @@ async def _seed(db, *, now=MIDNIGHT, doctor=1, patients=(2,), group=GROUP,
         for uid in patients:
             session.add(UserDisease(user_id=uid, infection_level=35, has_demon_power=True,
                                     infected_at=now))
-        session.add(SystemConfig(key=handler.DOCTOR_STATE_KEY, value=json.dumps({
-            "day": handler._tehran_day(now), "user_id": doctor, "heals": 0,
-        })))
+        session.add(GroupDoctorState(
+            chat_id=group, doctor_user_id=doctor, selected_at=now, heals_today=0,
+        ))
         for key, value in (
             ("disease_doctor_daily_limit", limit),
             ("disease_doctor_reward_apples", reward),
@@ -236,55 +236,86 @@ async def test_both_own_profile_entry_points_render_disease(db_session, sick):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_doctor_selection_is_daily_persistent_and_unique_across_groups(db, monkeypatch):
+async def test_doctor_selection_is_daily_persistent_and_per_group(db, monkeypatch):
+    quiet_group = -100003
+    inactive_group = -100004
     async with db.begin() as session:
-        session.add_all([Group(id=GROUP, title="g"), Group(id=OTHER_GROUP, title="g2")])
+        session.add_all([
+            Group(id=GROUP, title="g"),
+            Group(id=OTHER_GROUP, title="g2"),
+            Group(id=quiet_group, title="quiet"),
+            Group(id=inactive_group, title="inactive", is_active=False),
+        ])
         session.add_all([
             User(id=1, first_name="active1"), User(id=2, first_name="active2"),
             User(id=3, first_name="old"), User(id=4, first_name="bot", is_bot=True),
             User(id=5, first_name="banned", is_banned=True),
             User(id=6, first_name="inactive", is_active=False),
             User(id=7, first_name="future"),
+            User(id=8, first_name="group2_doc"),
         ])
         await session.flush()
         for uid, seen, group in [
             (1, MIDNIGHT - timedelta(hours=23), GROUP),
             (1, MIDNIGHT - timedelta(hours=1), OTHER_GROUP),
+            (8, MIDNIGHT - timedelta(hours=2), OTHER_GROUP),
             (2, MIDNIGHT - timedelta(hours=24), GROUP),
             (3, MIDNIGHT - timedelta(hours=24, seconds=1), GROUP),
             (4, MIDNIGHT, GROUP), (5, MIDNIGHT, GROUP), (6, MIDNIGHT, GROUP),
             (7, MIDNIGHT + timedelta(seconds=1), GROUP),
+            (1, MIDNIGHT, inactive_group),
         ]:
             session.add(Inv2GroupMember(user_id=uid, group_id=group, last_seen_at=seen))
     choice = Mock(side_effect=lambda candidates: candidates[-1])
     monkeypatch.setattr(handler.random, "choice", choice)
     async with db.begin() as session:
-        assert await handler.select_daily_doctor(session, now=MIDNIGHT) == 2
-    choice.assert_called_once_with([1, 2])
+        selected = await handler.select_daily_doctor(session, now=MIDNIGHT)
+        assert selected == {GROUP: 2, OTHER_GROUP: 8}
+    assert [c.args[0] for c in choice.call_args_list] == [[1, 8], [1, 2]]
     async with db.begin() as session:
-        row = await session.get(SystemConfig, handler.DOCTOR_STATE_KEY)
-        assert json.loads(row.value) == {"day": "2026-10-29", "user_id": 2, "heals": 0}
-        assert await handler.select_daily_doctor(session, now=MIDNIGHT + timedelta(hours=8)) == 2
-    choice.assert_called_once()  # a second worker/restart does not reroll
-    async with db.begin() as session:
-        assert await handler.current_doctor(session, now=MIDNIGHT - timedelta(seconds=1)) is None
-        assert await handler.current_doctor(session, now=MIDNIGHT + timedelta(days=1)) is None
-        # On the next Tehran day, select again from the new 24-hour window.
-        assert await handler.select_daily_doctor(session, now=MIDNIGHT + timedelta(days=1)) == 7
+        assert await handler.current_doctor(session, GROUP, now=MIDNIGHT) == 2
+        assert await handler.current_doctor(session, OTHER_GROUP, now=MIDNIGHT) == 8
+        assert await handler.current_doctor(session, quiet_group, now=MIDNIGHT) is None
+        assert await handler.current_doctor(session, inactive_group, now=MIDNIGHT) is None
+        row_a = await session.get(GroupDoctorState, GROUP)
+        row_b = await session.get(GroupDoctorState, OTHER_GROUP)
+        assert row_a.doctor_user_id == 2 and row_a.heals_today == 0
+        assert row_b.doctor_user_id == 8 and row_b.heals_today == 0
+        # A second worker/restart on the same Tehran day does not reroll either group.
+        assert await handler.select_daily_doctor(session, now=MIDNIGHT + timedelta(hours=8)) == {
+            GROUP: 2, OTHER_GROUP: 8,
+        }
     assert choice.call_count == 2
+    async with db.begin() as session:
+        assert await handler.current_doctor(session, GROUP, now=MIDNIGHT - timedelta(seconds=1)) is None
+        assert await handler.current_doctor(session, GROUP, now=MIDNIGHT + timedelta(days=1)) is None
+        assert await handler.current_doctor(session, OTHER_GROUP, now=MIDNIGHT + timedelta(days=1)) is None
+        # On the next Tehran day, select again from the new 24-hour window;
+        # OTHER_GROUP has no activity in the new 24h window so only GROUP gets a doctor.
+        assert await handler.select_daily_doctor(session, now=MIDNIGHT + timedelta(days=1)) == {
+            GROUP: 7,
+        }
+        assert await handler.current_doctor(session, OTHER_GROUP, now=MIDNIGHT + timedelta(days=1)) is None
+    assert choice.call_count == 3
 
 
 @pytest.mark.asyncio
 async def test_no_active_players_does_not_keep_yesterdays_doctor(db):
     async with db.begin() as session:
-        session.add(SystemConfig(key=handler.DOCTOR_STATE_KEY, value=json.dumps({
-            "day": "2026-10-28", "user_id": 123, "heals": 4,
-        })))
+        session.add_all([Group(id=GROUP, title="g"), User(id=123, first_name="old doc")])
+        await session.flush()
+        session.add(GroupDoctorState(
+            chat_id=GROUP,
+            doctor_user_id=123,
+            selected_at=MIDNIGHT - timedelta(days=1),
+            heals_today=4,
+        ))
     async with db.begin() as session:
-        assert await handler.select_daily_doctor(session, now=MIDNIGHT) is None
+        assert await handler.select_daily_doctor(session, now=MIDNIGHT) == {}
     async with db() as session:
-        state = json.loads((await session.get(SystemConfig, handler.DOCTOR_STATE_KEY)).value)
-        assert state == {"day": "2026-10-29", "user_id": None, "heals": 0}
+        assert await handler.current_doctor(session, GROUP, now=MIDNIGHT) is None
+        row = await session.get(GroupDoctorState, GROUP)
+        assert row.doctor_user_id is None and row.heals_today == 0
 
 
 @pytest.mark.asyncio
@@ -312,7 +343,7 @@ async def test_doctor_heal_authorization_quota_reward_and_group_scope(db):
         patient = await disease.get_status(session, 2)
         assert not patient["is_sick"] and patient["immunity_until"] is not None
         assert await AppleWalletService.get_balance(session, 1) == 73
-        assert json.loads((await session.get(SystemConfig, handler.DOCTOR_STATE_KEY)).value)["heals"] == 1
+        assert (await session.get(GroupDoctorState, GROUP)).heals_today == 1
         assert await disease.is_sick(session, 3)
         assert await disease.is_sick(session, 4)
         transactions = (await session.scalars(sa.select(AppleTransaction))).all()
@@ -372,7 +403,7 @@ async def test_heal_rolls_back_patient_infection_and_quota_if_reward_fails(db, m
     async with db() as session:
         assert await disease.is_sick(session, 2)
         assert not await disease.is_sick(session, 1)
-        assert json.loads((await session.get(SystemConfig, handler.DOCTOR_STATE_KEY)).value)["heals"] == 0
+        assert (await session.get(GroupDoctorState, GROUP)).heals_today == 0
         assert await AppleWalletService.get_balance(session, 1) == 0
 
 
@@ -391,7 +422,7 @@ async def test_doctor_locks_mutex_and_sorted_users_with_mysql_for_update(db):
         async with session.begin():
             await handler.heal_as_doctor(session, 9, 2, GROUP, now=MIDNIGHT)
     locks = [sql for sql in statements if "FOR UPDATE" in sql.upper()]
-    assert "system_config" in locks[0].lower()
+    assert "group_doctor_states" in locks[0].lower()
     user_locks = [sql.lower() for sql in locks if "from users" in sql.lower()]
     assert "where users.id = 2" in user_locks[0]
     assert "where users.id = 9" in user_locks[1]
@@ -438,6 +469,60 @@ async def test_doctor_command_and_group_patient_list(db, monkeypatch):
     answer.reset_mock()
     await handler.handle_doctor_heal_list(_callback(1, "doc_heal_list", kind="private", chat_id=1), bot)
     assert answer.await_args.args[1] == handler.DOCTOR_GROUP_ONLY
+
+
+@pytest.mark.asyncio
+async def test_group_a_doctor_cannot_use_doctor_panel_in_group_b(db, monkeypatch):
+    now = datetime.now(timezone.utc)
+    unselected_group = -100003
+    await _seed(db, now=now, doctor=1, patients=(2,), group=GROUP)
+    async with db.begin() as session:
+        session.add(Group(id=unselected_group, title="unselected"))
+        session.add_all([User(id=10, first_name="دکتر دوم"), User(id=20, first_name="بیمار دوم")])
+        await session.flush()
+        session.add_all([
+            Inv2GroupMember(user_id=10, group_id=OTHER_GROUP, last_seen_at=now),
+            Inv2GroupMember(user_id=20, group_id=OTHER_GROUP, last_seen_at=now),
+            UserDisease(user_id=20, infection_level=25, infected_at=now),
+            GroupDoctorState(chat_id=OTHER_GROUP, doctor_user_id=10, selected_at=now, heals_today=0),
+        ])
+
+    # Doctor 1 opens the panel in GROUP, but is refused in OTHER_GROUP and unselected_group.
+    msg_a_in_a = _message(1, chat_id=GROUP)
+    msg_a_in_b = _message(1, chat_id=OTHER_GROUP)
+    msg_a_in_c = _message(1, chat_id=unselected_group)
+    msg_b_in_b = _message(10, chat_id=OTHER_GROUP)
+    msg_b_in_a = _message(10, chat_id=GROUP)
+    for msg in (msg_a_in_a, msg_a_in_b, msg_a_in_c, msg_b_in_b, msg_b_in_a):
+        await handler.handle_doctor(msg)
+
+    assert msg_a_in_a.reply.await_args.args[0] == "🩺 پنل پزشک روز"
+    assert msg_b_in_b.reply.await_args.args[0] == "🩺 پنل پزشک روز"
+    assert msg_a_in_b.reply.await_args.args[0] == "شما پزشک این گروه نیستید."
+    assert msg_a_in_c.reply.await_args.args[0] == "شما پزشک این گروه نیستید."
+    assert msg_b_in_a.reply.await_args.args[0] == "شما پزشک این گروه نیستید."
+
+    # Forged callbacks from Group A's doctor into Group B are also rejected.
+    answer, edit = AsyncMock(), AsyncMock()
+    monkeypatch.setattr(handler, "safe_answer_callback", answer)
+    monkeypatch.setattr(handler, "safe_edit_callback_message", edit)
+    bot = _bot()
+
+    await handler.handle_doctor_heal_list(_callback(1, "doc_heal_list", chat_id=OTHER_GROUP), bot)
+    assert answer.await_args.args[1] == "شما پزشک این گروه نیستید."
+    edit.assert_not_awaited()
+
+    answer.reset_mock()
+    await handler.handle_doctor_heal(_callback(1, "doc_heal:20", chat_id=OTHER_GROUP), bot)
+    assert answer.await_args.args[1] == "شما پزشک این گروه نیستید."
+    async with db() as session:
+        assert await disease.is_sick(session, 20)
+
+    # Group B's own doctor sees and heals only Group B's sick players.
+    answer.reset_mock()
+    await handler.handle_doctor_heal_list(_callback(10, "doc_heal_list", chat_id=OTHER_GROUP), bot)
+    keys = _callbacks(edit.await_args.kwargs["reply_markup"])
+    assert [k for k in keys if k.startswith("doc_heal:")] == ["doc_heal:20"]
 
 
 @pytest.mark.asyncio
@@ -809,7 +894,8 @@ def _migration():
 
 def test_migration_072_single_head_and_real_round_trip(tmp_path):
     scripts = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["079_disease_daily_announcement"]
+    assert scripts.get_heads() == ["080_group_doctors"]
+    assert scripts.get_revision("080_group_doctors").down_revision == "079_disease_daily_announcement"
     assert scripts.get_revision("074_theft_system").down_revision == "073_disease_started_flag"
     assert scripts.get_revision("073_disease_started_flag").down_revision == "072_disease_ui"
     assert scripts.get_revision("072_disease_ui").down_revision == "071_disease_items"
@@ -825,7 +911,7 @@ def test_migration_072_single_head_and_real_round_trip(tmp_path):
                                 text=True, capture_output=True, check=True)
         return result.stdout.strip()
 
-    assert alembic("heads") == "079_disease_daily_announcement (head)"
+    assert alembic("heads") == "080_group_doctors (head)"
     alembic("stamp", "071_disease_items")
     alembic("upgrade", "072_disease_ui")
     alembic("upgrade", "072_disease_ui")
@@ -859,6 +945,55 @@ def test_migration_072_mysql_seed_and_downgrade_sql():
     assert "ON DUPLICATE KEY UPDATE" in sql
     assert "disease_doctor_state" in sql
     assert "BINARY `value` = BINARY" in sql
+
+
+def test_migration_080_creates_group_doctor_states_and_downgrades():
+    from io import StringIO
+
+    path = ROOT / "database/migrations/versions/080_group_doctors.py"
+    spec = importlib.util.spec_from_file_location("migration_080", path)
+    assert spec and spec.loader
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    assert (migration.revision, migration.down_revision) == (
+        "080_group_doctors", "079_disease_daily_announcement"
+    )
+
+    engine = sa.create_engine("sqlite:///:memory:")
+    try:
+        with engine.begin() as connection:
+            connection.execute(sa.text("CREATE TABLE users (id BIGINT PRIMARY KEY)"))
+            with Operations.context(MigrationContext.configure(connection)):
+                migration.upgrade()
+                migration.upgrade()
+            inspector = sa.inspect(connection)
+            assert inspector.has_table("group_doctor_states")
+            columns = {col["name"]: col for col in inspector.get_columns("group_doctor_states")}
+            assert set(columns) == set(GroupDoctorState.__table__.columns.keys()) == {
+                "chat_id", "doctor_user_id", "selected_at", "heals_today",
+            }
+            assert inspector.get_pk_constraint("group_doctor_states")["constrained_columns"] == ["chat_id"]
+            fk = inspector.get_foreign_keys("group_doctor_states")[0]
+            assert (fk["constrained_columns"], fk["referred_table"], fk["referred_columns"]) == (
+                ["doctor_user_id"], "users", ["id"]
+            )
+            with Operations.context(MigrationContext.configure(connection)):
+                migration.downgrade()
+                migration.downgrade()
+            assert not sa.inspect(connection).has_table("group_doctor_states")
+    finally:
+        engine.dispose()
+
+    output = StringIO()
+    context = MigrationContext.configure(dialect_name="mysql", opts={
+        "as_sql": True, "output_buffer": output, "literal_binds": True,
+    })
+    with Operations.context(context):
+        migration.upgrade()
+        migration.downgrade()
+    sql = output.getvalue()
+    assert "CREATE TABLE group_doctor_states" in sql
+    assert "DROP TABLE group_doctor_states" in sql
 
 
 @pytest.mark.asyncio
@@ -909,9 +1044,9 @@ async def test_concurrent_doctor_heals_serialize_and_enforce_one_shared_quota(db
             Inv2GroupMember(user_id=patient.id, group_id=group_id, last_seen_at=now),
             UserDisease(user_id=patient.id, infection_level=10),
         ])
-    db_session.add(SystemConfig(key=handler.DOCTOR_STATE_KEY, value=json.dumps({
-        "day": handler._tehran_day(now), "user_id": doctor.id, "heals": 0,
-    })))
+    db_session.add(GroupDoctorState(
+        chat_id=group_id, doctor_user_id=doctor.id, selected_at=now, heals_today=0,
+    ))
     await ConfigService.set(db_session, "disease_doctor_daily_limit", 1)
     await ConfigService.set(db_session, "disease_doctor_infection_chance", 0)
     await ConfigService.set(db_session, "disease_doctor_reward_apples", 50)
@@ -1104,7 +1239,7 @@ async def test_delayed_worker_cannot_rewind_doctor_selection_across_midnight(db,
         await asyncio.sleep(0.1)
         assert not delayed.done()
         release.set()
-        assert await asyncio.wait_for(asyncio.gather(first, delayed), timeout=5) == [1, None]
+        assert await asyncio.wait_for(asyncio.gather(first, delayed), timeout=5) == [{GROUP: 1}, {}]
     finally:
         release.set()
         for task in (first, delayed):
@@ -1112,8 +1247,10 @@ async def test_delayed_worker_cannot_rewind_doctor_selection_across_midnight(db,
                 task.cancel()
         await asyncio.gather(*(task for task in (first, delayed) if task), return_exceptions=True)
     async with db() as session:
-        state = json.loads((await session.get(SystemConfig, handler.DOCTOR_STATE_KEY)).value)
-        assert state == {"day": "2026-10-29", "user_id": 1, "heals": 0}
+        row = await session.get(GroupDoctorState, GROUP)
+        assert row.doctor_user_id == 1
+        assert handler._tehran_day(row.selected_at) == "2026-10-29"
+        assert row.heals_today == 0
     choice.assert_called_once()
 
 
