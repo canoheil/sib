@@ -16,8 +16,9 @@ Magical progression (per-tree, Magic Powder driven):
 - the level shifts the drop table towards special Apples.
 
 Plot unlocks: plots 1..garden_initial_plots are free; each further plot is
-bought individually at garden_plot_prices (100/250/500/1000/2000 for plots
-6..10). Gardens that already exceed the new 10-plot cap are grandfathered.
+bought individually at garden_plot_prices (plots 6..20). Gardens that
+already exceed a configured cap are grandfathered: plots are never
+deleted or truncated; the cap only gates NEW unlocks.
 
 State is DERIVED from server timestamps on read so client clock changes
 can never accelerate growth. Uncollected fruit stays available; it does

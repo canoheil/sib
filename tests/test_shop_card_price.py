@@ -459,7 +459,12 @@ async def test_other_shop_and_economy_prices_are_untouched():
     assert CONFIG_DEFAULTS["item_buy_prices"]["magic_powder"] == 40
     assert CONFIG_DEFAULTS["item_buy_prices"]["wedding_ring"] == 1000
     assert CONFIG_DEFAULTS["item_buy_prices"]["flower"] == 30
-    assert CONFIG_DEFAULTS["garden_plot_prices"] == [100, 250, 500, 1000, 2000]
+    assert CONFIG_DEFAULTS["garden_plot_prices"] == [
+        100, 250, 500, 1000, 2000,
+        3000, 4500, 6500, 9000, 12000,
+        15500, 19500, 24000, 29000, 35000,
+    ]
+    assert CONFIG_DEFAULTS["garden_max_plots"] == 20
     # The shop card price is a code rule, not a config key that could drift.
     assert "shop_card_price_apples" not in CONFIG_DEFAULTS
 

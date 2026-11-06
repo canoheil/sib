@@ -65,9 +65,13 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     "invasion_min_players_with_card": 3,
     # Garden
     "garden_initial_plots": 5,
-    "garden_max_plots": 10,
-    # Per-plot unlock prices for plots 6..10 (index 0 = plot 6).
-    "garden_plot_prices": [100, 250, 500, 1000, 2000],
+    "garden_max_plots": 20,
+    # Per-plot unlock prices for plots 6..20 (index 0 = plot 6).
+    "garden_plot_prices": [
+        100, 250, 500, 1000, 2000,          # plots 6..10
+        3000, 4500, 6500, 9000, 12000,      # plots 11..15
+        15500, 19500, 24000, 29000, 35000,  # plots 16..20
+    ],
     # G2 36-hour fix: growth 12h + fruit 12h => the FIRST fruit is ready
     # exactly 24h after planting (was 24h+12h=36h). Repeating harvest cycles
     # stay at garden_fruit_seconds (12h), unchanged.
@@ -227,6 +231,11 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     "disease_doctor_daily_limit": 5,
     "disease_doctor_reward_apples": 50,
     "disease_doctor_infection_chance": 10,
+    # Daily Disease & Doctor group announcement (migration 079); the worker
+    # posts at this Asia/Tehran time. Override the seeded system_config rows.
+    "disease_announcement_enabled": True,
+    "disease_announcement_hour": 18,
+    "disease_announcement_minute": 15,
     # Halloween global world-boss event («سیبومورتیس» / Sibomortis, HW1-RECON).
     "halloween_enabled": False,
     "halloween_default_max_hp": 500_000,

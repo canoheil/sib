@@ -809,7 +809,7 @@ def _migration():
 
 def test_migration_072_single_head_and_real_round_trip(tmp_path):
     scripts = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["078_wanted_decay"]
+    assert scripts.get_heads() == ["079_disease_daily_announcement"]
     assert scripts.get_revision("074_theft_system").down_revision == "073_disease_started_flag"
     assert scripts.get_revision("073_disease_started_flag").down_revision == "072_disease_ui"
     assert scripts.get_revision("072_disease_ui").down_revision == "071_disease_items"
@@ -825,7 +825,7 @@ def test_migration_072_single_head_and_real_round_trip(tmp_path):
                                 text=True, capture_output=True, check=True)
         return result.stdout.strip()
 
-    assert alembic("heads") == "078_wanted_decay (head)"
+    assert alembic("heads") == "079_disease_daily_announcement (head)"
     alembic("stamp", "071_disease_items")
     alembic("upgrade", "072_disease_ui")
     alembic("upgrade", "072_disease_ui")

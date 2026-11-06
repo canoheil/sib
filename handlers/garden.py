@@ -91,12 +91,31 @@ async def _deliver_xp_notifications(
     await PlayerXPService.deliver_pending_notifications(bot, fallback_chat_id=chat_id)
 
 
-async def _render_garden(user_id: int, session) -> tuple[str, InlineKeyboardMarkup]:
+PAGE_SIZE = 10
+
+
+def _page_for_plot(plot_index: int) -> int:
+    """Which garden page a 0-based plot index lives on (1-based page)."""
+    return max(1, int(plot_index) // PAGE_SIZE + 1)
+
+
+def _normalize_page(page, total_pages: int) -> int:
+    try:
+        page = int(page)
+    except (TypeError, ValueError):
+        page = 1
+    return min(max(page, 1), total_pages)
+
+
+async def _render_garden(user_id: int, session, page: int = 1) -> tuple[str, InlineKeyboardMarkup]:
     from sib.database.models import User
 
     # Read-only render: no row lock (mutations lock separately).
     garden = await GardenService.get_or_create(session, user_id)
     views = GardenService.view(garden)
+    total_pages = max(1, -(-len(views) // PAGE_SIZE))
+    page = _normalize_page(page, total_pages)
+    page_views = views[(page - 1) * PAGE_SIZE: page * PAGE_SIZE]
     seedlings = await SeedlingService.get_total(session, user_id)
     apples = await AppleWalletService.get_balance(session, user_id)
     items = await ItemService.list_items(session, user_id)
@@ -109,6 +128,8 @@ async def _render_garden(user_id: int, session) -> tuple[str, InlineKeyboardMark
     withered_count = sum(1 for v in views if v.state == PlotState.WITHERED)
 
     lines = [f"🌳 **باغ سیبِ {owner_name}** 🍏\n"]
+    if total_pages > 1:
+        lines.append(f"🌳 باغ من (صفحه {fa_digits(page)} از {fa_digits(total_pages)})")
     if withered_count:
         lines.append(f"🥀 **{fa_digits(withered_count)} زمین پژمرده شده!** برای ترمیم، **کود الهی** لازمه.")
         lines.append("")
@@ -119,7 +140,7 @@ async def _render_garden(user_id: int, session) -> tuple[str, InlineKeyboardMark
     lines.append("")
 
     buttons: list[list[InlineKeyboardButton]] = []
-    for view in views:
+    for view in page_views:
         emoji = PLOT_EMOJI.get(view.state, "⬜")
         magic = f" ✨{fa_digits(view.magic_level)}" if view.magic_level > 0 else ""
         if view.state == PlotState.WITHERED:
@@ -147,6 +168,13 @@ async def _render_garden(user_id: int, session) -> tuple[str, InlineKeyboardMark
     lines.append("")
     lines.append(f"✨ جزئیات هر قطعه رو باز کن. بیشترین سطح جادو: **{fa_digits(max_level)}**.")
 
+    nav_row: list[InlineKeyboardButton] = []
+    if page > 1:
+        nav_row.append(primary_button(text="⬅️ صفحه قبل", callback_data=f"garden_page:{page - 1}"))
+    if page < total_pages:
+        nav_row.append(primary_button(text="➡️ صفحه بعد", callback_data=f"garden_page:{page + 1}"))
+    if nav_row:
+        buttons.append(nav_row)
     if next_price is not None:
         buttons.append(
             [success_button(
@@ -158,7 +186,8 @@ async def _render_garden(user_id: int, session) -> tuple[str, InlineKeyboardMark
         buttons.append(
             [success_button(text=f"🍇 برداشت همه ({fa_digits(ready_count)} قطعه)", callback_data="garden_harvest_all")]
         )
-    buttons.append([primary_button(text="🔄 بروزرسانی", callback_data="garden_refresh")])
+    refresh_callback = "garden_refresh" if total_pages == 1 else f"garden_page:{page}"
+    buttons.append([primary_button(text="🔄 بروزرسانی", callback_data=refresh_callback)])
     buttons.append([danger_button(text="↩️ بازگشت به منوی اصلی", callback_data="main_menu")])
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -225,7 +254,13 @@ async def _panel_subject(callback: CallbackQuery) -> int:
     return subject_id
 
 
-async def _rerender(callback: CallbackQuery, bot: Bot, *, answer: str = "بروزرسانی شد 🍏") -> None:
+async def _rerender(
+    callback: CallbackQuery,
+    bot: Bot,
+    *,
+    answer: str = "بروزرسانی شد 🍏",
+    page: Optional[int] = None,
+) -> None:
     """Re-render the garden panel (canonical banner path)."""
     from sib.services.banner import render_banner
 
@@ -235,7 +270,10 @@ async def _rerender(callback: CallbackQuery, bot: Bot, *, answer: str = "برو�
     msg_id = getattr(callback.message, "message_id", None)
     subject_id = await _panel_subject(callback)
     async with get_session() as session:
-        text, kb = await _render_garden(subject_id, session)
+        if page is None:
+            text, kb = await _render_garden(subject_id, session)
+        else:
+            text, kb = await _render_garden(subject_id, session, page=page)
     await safe_answer_callback(callback, strip_bold(answer))
     if callback.message:
         await render_banner(callback, bot, "garden", text, kb)
@@ -263,6 +301,7 @@ async def _rerender(callback: CallbackQuery, bot: Bot, *, answer: str = "برو�
 
 async def _tree_view(user_id: int, plot_index: int) -> tuple[str, InlineKeyboardMarkup]:
     """One tree's screen: state, magic level/height, drop chances, actions."""
+    back_callback = f"garden_page:{_page_for_plot(plot_index)}"
     async with get_session() as session:
         garden = await GardenService.get_or_create(session, user_id)
         views = GardenService.view(garden)
@@ -271,7 +310,7 @@ async def _tree_view(user_id: int, plot_index: int) -> tuple[str, InlineKeyboard
             return (
                 "این قطعه در باغ شما وجود ندارد.",
                 InlineKeyboardMarkup(
-                    inline_keyboard=[[danger_button(text="↩️ بازگشت به باغ", callback_data="garden_refresh")]]
+                    inline_keyboard=[[danger_button(text="↩️ بازگشت به باغ", callback_data=back_callback)]]
                 ),
             )
 
@@ -297,7 +336,7 @@ async def _tree_view(user_id: int, plot_index: int) -> tuple[str, InlineKeyboard
                             callback_data=f"garden_fertilize:{plot_index}",
                         )
                     ],
-                    [danger_button(text="↩️ بازگشت به باغ", callback_data="garden_refresh")],
+                    [danger_button(text="↩️ بازگشت به باغ", callback_data=back_callback)],
                 ]
             )
             return withered_text, withered_kb
@@ -356,7 +395,7 @@ async def _tree_view(user_id: int, plot_index: int) -> tuple[str, InlineKeyboard
                 callback_data=f"garden_magic:{plot_index}",
             )]
         )
-    buttons.append([danger_button(text="↩️ بازگشت به باغ", callback_data="garden_refresh")])
+    buttons.append([danger_button(text="↩️ بازگشت به باغ", callback_data=back_callback)])
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -424,6 +463,16 @@ async def handle_garden_magic(callback: CallbackQuery, bot: Bot):
 @router.callback_query(F.data == "garden_refresh")
 async def handle_garden_refresh(callback: CallbackQuery, bot: Bot):
     await _rerender(callback, bot)
+
+
+@router.callback_query(F.data.startswith("garden_page:"))
+async def handle_garden_page(callback: CallbackQuery, bot: Bot):
+    """Flip between the garden's pages of 10 plots."""
+    raw = callback.data.split(":", 1)[1]
+    if not raw.isascii() or not raw.isdecimal() or len(raw) > 3:
+        await safe_answer_callback(callback, "صفحهٔ نامعتبر", show_alert=True)
+        return
+    await _rerender(callback, bot, page=int(raw))
 
 
 @router.callback_query(F.data.startswith("garden_plant:"))

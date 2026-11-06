@@ -409,7 +409,9 @@ async def test_withered_garden_ui_uses_distinct_emoji_and_semantic_buttons(db_se
     fertilizer_btn = by_callback[f"garden_fertilize:{idx}"]
     assert fertilizer_btn.style == "success"  # green restore action
     assert "کود الهی" in fertilizer_btn.text
-    assert by_callback["garden_refresh"].style == "danger"  # red back row
+    back_callback = f"garden_page:{1 if idx < 10 else 2}"
+    assert by_callback[back_callback].style == "danger"  # red back row
+    assert by_callback[back_callback].text.endswith("بازگشت به باغ")
     # No transparent (unstyled) buttons are allowed on this screen.
     assert all(b.style in {"primary", "success", "danger"} for b in all_buttons)
 
