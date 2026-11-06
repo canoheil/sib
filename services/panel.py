@@ -36,6 +36,7 @@ OWNER_SCOPED_CALLBACKS: Tuple[str, ...] = (
     "garden_unlock",
     "garden_harvest_all",
     "garden_refresh",
+    "garden_page:",
     # Daily chest panel (consumes the once-per-day claim)
     "daily_chest:open",
     # NOTE: the GROUP chest post (group_chest, group_chest:open:<day>) is
