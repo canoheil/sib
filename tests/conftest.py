@@ -136,6 +136,7 @@ async def db_session():
         await session.execute(text("DELETE FROM user_items"))
         await session.execute(text("DELETE FROM user_wanted_states"))
         await session.execute(text("DELETE FROM user_rocket_states"))
+        await session.execute(text("DELETE FROM group_doctor_states"))
         await session.execute(text("DELETE FROM user_diseases"))
         await session.execute(text("DELETE FROM daily_chest_claims"))
         await session.execute(text("DELETE FROM daily_channel_posts"))

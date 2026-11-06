@@ -507,7 +507,7 @@ def test_migration_061_revises_060_and_keeps_one_head():
     parents = [parent for parent in revisions.values() if parent]
     assert len(parents) == len(set(parents)), "forked migration history"
     heads = set(revisions) - set(parents)
-    assert heads == {"079_disease_daily_announcement"}
+    assert heads == {"080_group_doctors"}
 
 
 def test_migration_061_seeds_the_default_price_and_is_idempotent(tmp_path):

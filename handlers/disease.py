@@ -1,6 +1,5 @@
 """Antidote crafting and use; the caller owns each economy transaction."""
 
-import json
 import math
 import random
 import re
@@ -16,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sib.core.logging import logger
 from sib.core.text import plain_display_name, unescape_markdown
 from sib.database.connection import get_session
-from sib.database.models import Group, Inv2GroupMember, SystemConfig, User, UserDisease
+from sib.database.models import Group, GroupDoctorState, Inv2GroupMember, User, UserDisease
 from sib.keyboards.common import primary_button, success_button
 from sib.services import disease_service
 from sib.services.apple_wallet import AppleWalletService
@@ -179,15 +178,16 @@ async def handle_use_antidote(message: Message) -> None:
     await message.reply(USE_SUCCESS)
 
 
-# Doctor selection, heal count, and the Tehran date live together in one
-# row. Locking that row serializes selection and the daily quota across workers.
+# Deprecated: global doctor state in system_config superseded by group_doctor_states (migration 080).
 DOCTOR_STATE_KEY = "disease_doctor_state"
 DOCTOR_STATE_DEFAULT = '{"day":null,"user_id":null,"heals":0}'
-DOCTOR_ONLY = "شما پزشک امروز نیستید."
+DOCTOR_ONLY = "شما پزشک این گروه نیستید."
 DOCTOR_LIMIT = "سقف درمان امروز شما تکمیل شده است."
 DOCTOR_GROUP_ONLY = "برای درمان، دستور /doctor را در گروه اجرا کنید."
 PATIENT_NOT_AVAILABLE = "این بیمار در این گروه قابل درمان نیست."
 NO_PATIENTS = "بیمار قابل درمانی در این گروه پیدا نشد."
+
+_DOCTOR_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
 def _utc(now: datetime | None = None) -> datetime:
@@ -213,83 +213,109 @@ def disease_profile_lines(status: dict, *, now: datetime | None = None) -> list[
     return lines
 
 
-def _doctor_state(raw: str | None) -> dict:
-    try:
-        value = json.loads(raw or DOCTOR_STATE_DEFAULT)
-    except (TypeError, ValueError):
-        value = {}
-    if not isinstance(value, dict):
-        value = {}
-    doctor_id = value.get("user_id")
-    heals = value.get("heals")
-    return {
-        "day": value.get("day") if isinstance(value.get("day"), str) else None,
-        "user_id": doctor_id if type(doctor_id) is int and doctor_id > 0 else None,
-        "heals": heals if type(heals) is int and heals >= 0 else 0,
-    }
-
-
-async def _locked_doctor_state(session: AsyncSession) -> SystemConfig:
-    """Upsert the mutex row, then lock it even on first use or after restart."""
+async def _locked_group_doctor_state(session: AsyncSession, chat_id: int) -> GroupDoctorState:
+    """Upsert the per-group mutex row, then lock it across workers."""
     dialect = session.get_bind().dialect.name
-    values = {"key": DOCTOR_STATE_KEY, "value": DOCTOR_STATE_DEFAULT}
+    values = {
+        "chat_id": chat_id,
+        "doctor_user_id": None,
+        "selected_at": _DOCTOR_EPOCH,
+        "heals_today": 0,
+    }
     if dialect in ("mysql", "mariadb"):
-        stmt = mysql.insert(SystemConfig).values(**values)
-        stmt = stmt.on_duplicate_key_update(key=SystemConfig.key)
+        stmt = mysql.insert(GroupDoctorState).values(**values)
+        stmt = stmt.on_duplicate_key_update(chat_id=GroupDoctorState.chat_id)
     elif dialect == "sqlite":
-        stmt = sqlite.insert(SystemConfig).values(**values).on_conflict_do_nothing(
-            index_elements=["key"]
+        stmt = sqlite.insert(GroupDoctorState).values(**values).on_conflict_do_nothing(
+            index_elements=["chat_id"]
         )
     else:
         raise RuntimeError(f"Unsupported doctor state dialect: {dialect}")
     await session.execute(stmt)
     return await session.scalar(
-        select(SystemConfig).where(SystemConfig.key == DOCTOR_STATE_KEY)
-        .with_for_update().execution_options(populate_existing=True)
+        select(GroupDoctorState)
+        .where(GroupDoctorState.chat_id == chat_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
 
 
-async def current_doctor(session: AsyncSession, *, now: datetime | None = None) -> int | None:
-    row = await session.get(SystemConfig, DOCTOR_STATE_KEY)
-    state = _doctor_state(row.value if row else None)
-    return state["user_id"] if state["day"] == _tehran_day(_utc(now)) else None
+async def current_doctor(
+    session: AsyncSession, chat_id: int, *, now: datetime | None = None
+) -> int | None:
+    row = await session.get(GroupDoctorState, chat_id)
+    if row is None or row.doctor_user_id is None or row.selected_at is None:
+        return None
+    return row.doctor_user_id if _tehran_day(row.selected_at) == _tehran_day(_utc(now)) else None
 
 
-async def select_daily_doctor(session: AsyncSession, *, now: datetime | None = None) -> int | None:
-    """Choose once per Tehran day from players observed in a group in 24h.
+async def select_daily_doctor(
+    session: AsyncSession, *, now: datetime | None = None
+) -> dict[int, int]:
+    """Choose a Doctor of the Day for each active group once per Tehran day.
 
-    The row lock also makes a late maintenance restart and multiple workers
-    safe: the first committed decision is the only decision for the day.
+    Active groups are active ``groups`` rows with at least one eligible member
+    observed in the last 24 hours. Locking each group's state row in ``chat_id``
+    order makes late maintenance restarts and concurrent workers safe.
     """
     now_utc = _utc(now)
     today = _tehran_day(now_utc)
-    row = await _locked_doctor_state(session)
-    state = _doctor_state(row.value)
-    if state["day"] == today:
-        return state["user_id"]
-    try:
-        # A worker started just before midnight can acquire this lock after a
-        # newer-day selection committed. Never overwrite that newer decision.
-        if state["day"] and date.fromisoformat(state["day"]) > date.fromisoformat(today):
-            return None
-    except ValueError:
-        pass  # A malformed saved day is replaced by today's decision.
-    candidates = list((await session.scalars(
-        select(User.id)
-        .join(Inv2GroupMember, Inv2GroupMember.user_id == User.id)
-        .join(Group, Group.id == Inv2GroupMember.group_id)
-        .where(
-            Inv2GroupMember.last_seen_at >= now_utc - timedelta(hours=24),
-            Inv2GroupMember.last_seen_at <= now_utc,
-            User.is_active.is_(True), User.is_bot.is_(False), User.is_banned.is_(False),
-            Group.is_active.is_(True),
+    today_date = date.fromisoformat(today)
+
+    rows = (
+        await session.execute(
+            select(Inv2GroupMember.group_id, User.id)
+            .join(User, User.id == Inv2GroupMember.user_id)
+            .join(Group, Group.id == Inv2GroupMember.group_id)
+            .where(
+                Inv2GroupMember.last_seen_at >= now_utc - timedelta(hours=24),
+                Inv2GroupMember.last_seen_at <= now_utc,
+                User.is_active.is_(True),
+                User.is_bot.is_(False),
+                User.is_banned.is_(False),
+                Group.is_active.is_(True),
+            )
+            .order_by(Inv2GroupMember.group_id, User.id)
         )
-        .distinct().order_by(User.id)
-    )).all())
-    doctor_id = random.choice(candidates) if candidates else None
-    row.value = json.dumps({"day": today, "user_id": doctor_id, "heals": 0}, separators=(",", ":"))
+    ).all()
+
+    candidates_by_group: dict[int, list[int]] = {}
+    for group_id, user_id in rows:
+        candidates_by_group.setdefault(group_id, []).append(user_id)
+
+    existing_chat_ids = set(
+        (await session.scalars(select(GroupDoctorState.chat_id))).all()
+    )
+    all_chat_ids = sorted(existing_chat_ids | set(candidates_by_group))
+
+    selected: dict[int, int] = {}
+    for chat_id in all_chat_ids:
+        candidates = candidates_by_group.get(chat_id)
+        row = await _locked_group_doctor_state(session, chat_id)
+        row_day_str = _tehran_day(row.selected_at) if row.selected_at else None
+        if row_day_str is not None:
+            row_date = date.fromisoformat(row_day_str)
+            if row_date > today_date:
+                continue
+            if row_date == today_date and row.doctor_user_id is not None:
+                selected[chat_id] = row.doctor_user_id
+                continue
+            if row_date == today_date and not candidates:
+                continue
+
+        if candidates:
+            doctor_id = random.choice(candidates)
+            row.doctor_user_id = doctor_id
+            row.selected_at = now_utc
+            row.heals_today = 0
+            selected[chat_id] = doctor_id
+        elif row.doctor_user_id is not None or row.heals_today != 0:
+            row.doctor_user_id = None
+            row.selected_at = now_utc
+            row.heals_today = 0
+
     await session.flush()
-    return doctor_id
+    return selected
 
 
 async def _doctor_config_int(session: AsyncSession, key: str) -> int:
@@ -309,12 +335,15 @@ async def heal_as_doctor(
     The caller must verify Telegram group membership before entering. This
     function re-checks the recorded group association and locked disease state.
     """
-    state_row = await _locked_doctor_state(session)
-    state = _doctor_state(state_row.value)
-    if state["day"] != _tehran_day(_utc(now)) or state["user_id"] != doctor_id:
+    state_row = await _locked_group_doctor_state(session, group_id)
+    if (
+        state_row.doctor_user_id != doctor_id
+        or state_row.selected_at is None
+        or _tehran_day(state_row.selected_at) != _tehran_day(_utc(now))
+    ):
         raise DiseaseItemError(DOCTOR_ONLY)
     limit = await _doctor_config_int(session, "disease_doctor_daily_limit")
-    if state["heals"] >= limit:
+    if state_row.heals_today >= limit:
         raise DiseaseItemError(DOCTOR_LIMIT)
     try:
         await lock_user_rows_in_order(session, (doctor_id, patient_id))
@@ -347,8 +376,7 @@ async def heal_as_doctor(
         session, doctor_id, reward, reason="disease_doctor_heal",
         ref_type="disease_patient", ref_id=patient_id,
     )
-    state["heals"] += 1
-    state_row.value = json.dumps(state, separators=(",", ":"))
+    state_row.heals_today += 1
     await session.flush()
     return patient.first_name
 
@@ -451,10 +479,13 @@ def _doctor_keyboard() -> InlineKeyboardMarkup:
 @router.message(Command("doctor"))
 @router.message(F.text.regexp(DOCTOR_TEXT_PATTERN))
 async def handle_doctor(message: Message) -> None:
-    if message.from_user is None:
+    if message.from_user is None or message.chat is None:
         return
-    async with get_session() as session:
-        doctor = await current_doctor(session)
+    kind = getattr(getattr(message.chat, "type", None), "value", getattr(message.chat, "type", None))
+    doctor = None
+    if kind in ("group", "supergroup"):
+        async with get_session() as session:
+            doctor = await current_doctor(session, message.chat.id)
     if doctor != message.from_user.id:
         await message.reply(DOCTOR_ONLY)
         return
@@ -489,7 +520,7 @@ async def handle_doctor_heal_list(callback: CallbackQuery, bot: Bot) -> None:
         await safe_answer_callback(callback, DOCTOR_GROUP_ONLY, show_alert=True)
         return
     async with get_session() as session:
-        if await current_doctor(session) != callback.from_user.id:
+        if await current_doctor(session, group_id) != callback.from_user.id:
             await safe_answer_callback(callback, DOCTOR_ONLY, show_alert=True)
             return
         patients = (await session.execute(
@@ -538,7 +569,7 @@ async def handle_doctor_heal(callback: CallbackQuery, bot: Bot) -> None:
         return
     # Check before querying Telegram; the transaction rechecks under the mutex.
     async with get_session() as session:
-        if await current_doctor(session) != callback.from_user.id:
+        if await current_doctor(session, group_id) != callback.from_user.id:
             await safe_answer_callback(callback, DOCTOR_ONLY, show_alert=True)
             return
     # Fail closed when Telegram cannot confirm that either party is still here.

@@ -177,15 +177,23 @@ async def _announcement_payloads(session, moment: datetime):
             )
         ).all()
     )
-    doctor_id = await current_doctor(session, now=moment)
-    doctor = None
-    if doctor_id is not None:
-        doctor_name = await session.scalar(
-            select(User.first_name).where(User.id == doctor_id)
-        )
-        doctor = (doctor_id, doctor_name)
     payloads = []
     for group in groups:
+        doctor_id = await current_doctor(session, group.id, now=moment)
+        doctor = None
+        if doctor_id is not None:
+            row = (
+                await session.execute(
+                    select(User.id, User.first_name).where(
+                        User.id == doctor_id,
+                        User.is_active.is_(True),
+                        User.is_bot.is_(False),
+                        User.is_banned.is_(False),
+                    )
+                )
+            ).first()
+            if row is not None:
+                doctor = (row[0], row[1])
         sick = await _sick_group_members(session, group.id)
         payloads.append((group.id, format_disease_announcement(doctor, sick)))
     return payloads

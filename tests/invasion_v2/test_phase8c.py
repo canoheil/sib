@@ -116,7 +116,7 @@ def test_migration_chain_head():
     cfg = Config()
     cfg.set_main_option("script_location", str(ROOT / "database/migrations"))
     scripts = ScriptDirectory.from_config(cfg)
-    assert scripts.get_current_head() == "079_disease_daily_announcement"
+    assert scripts.get_current_head() == "080_group_doctors"
     assert _migration().down_revision == "039_archive_inv1_tables"
     chain = {
         "041_inv2_announcement_narrative": "040_inv2_difficulty_default",
@@ -158,6 +158,7 @@ def test_migration_chain_head():
         "077_pet_rename": "076_pet_system",
         "078_wanted_decay": "077_pet_rename",
         "079_disease_daily_announcement": "078_wanted_decay",
+        "080_group_doctors": "079_disease_daily_announcement",
     }
     for revision, parent in chain.items():
         path = ROOT / f"database/migrations/versions/{revision}.py"

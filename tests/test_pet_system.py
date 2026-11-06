@@ -119,7 +119,7 @@ def test_076_migration_revises_075_and_079_is_the_single_head():
     assert migration.revision == "076_pet_system"
     assert migration.down_revision == "075_rocket_game"
     scripts = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["079_disease_daily_announcement"]
+    assert scripts.get_heads() == ["080_group_doctors"]
     assert scripts.get_revision("077_pet_rename").down_revision == "076_pet_system"
     assert scripts.get_revision("076_pet_system").down_revision == "075_rocket_game"
 
@@ -191,7 +191,7 @@ def test_migration_enforces_user_foreign_key(migration_engine):
 
 def test_alembic_real_upgrade_from_075(tmp_path):
     scripts = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["079_disease_daily_announcement"]
+    assert scripts.get_heads() == ["080_group_doctors"]
 
     database = tmp_path / "pet_migration.db"
     engine = sa.create_engine(f"sqlite:///{database}")
@@ -214,10 +214,10 @@ def test_alembic_real_upgrade_from_075(tmp_path):
         assert result.returncode == 0, result.stdout + result.stderr
         return result.stdout.strip()
 
-    assert alembic("heads") == "079_disease_daily_announcement (head)"
+    assert alembic("heads") == "080_group_doctors (head)"
     alembic("stamp", "075_rocket_game")
     alembic("upgrade", "head")
-    assert "079_disease_daily_announcement" in alembic("current")
+    assert "080_group_doctors" in alembic("current")
 
     engine = sa.create_engine(f"sqlite:///{database}")
     assert sa.inspect(engine).has_table("user_pets")
