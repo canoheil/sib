@@ -57,6 +57,7 @@ async def test_tier_roll_then_uniform_eligible_card_selection(db_session, tiers,
         rng=FixedRng([boundary, len(pool[rarity]) - 1]),
     )
     assert result.reward_kind == "card" and result.reward_rarity == rarity
+    assert result.chest_tier == tier
     assert result.character_id == pool[rarity][-1].id
     assert not result.pity_guaranteed
     assert await ShopChestService.pity_counter(db_session, user_id) == (0 if rarity in ("EPIC", "LEGENDARY") else 1)
@@ -263,9 +264,10 @@ async def test_concurrent_opens_serialize_the_pity_counter(db_session, tiers):
     assert await ShopChestService.pity_counter(db_session, user_id) == 0
 
 
+@pytest.mark.parametrize("tier", EXPECTED_ODDS)
 @pytest.mark.parametrize("initial_pity,rarity,counter_after", [(0, "COMMON", 1), (9, "EPIC", 0)])
 async def test_visual_opening_swaps_media_and_grants_reward_once(
-    db_session, tiers, monkeypatch, initial_pity, rarity, counter_after
+    db_session, tiers, monkeypatch, tier, initial_pity, rarity, counter_after
 ):
     from aiogram.types import CallbackQuery, Chat, Message, PhotoSize, User as TelegramUser
     from sib.handlers import shop
@@ -283,13 +285,13 @@ async def test_visual_opening_swaps_media_and_grants_reward_once(
     )
     callback = CallbackQuery(
         id="detail", from_user=TelegramUser(id=user_id, is_bot=False, first_name="خریدار"),
-        chat_instance="test", message=message, data=f"shop_chest:{tiers['BRONZE'].id}",
+        chat_instance="test", message=message, data=f"shop_chest:{tiers[tier].id}",
     )
     bot = AsyncMock()
     bot.edit_message_media.return_value = message
     await shop.handle_shop_chest(callback, bot)
     closed = bot.edit_message_media.await_args.kwargs
-    assert Path(closed["media"].media.path).name == "chest_closed.jpg"
+    assert Path(closed["media"].media.path).name == f"{tier.lower()}_closed.jpg"
     open_button = next(button for row in closed["reply_markup"].inline_keyboard for button in row
                        if button.callback_data.startswith("shop_chest_open:"))
     assert open_button.text == "🔓 باز کردن" and len(open_button.callback_data.encode()) <= 64
@@ -299,7 +301,7 @@ async def test_visual_opening_swaps_media_and_grants_reward_once(
     await shop.handle_shop_chest_open(opened_callback, bot)
     opened = bot.edit_message_media.await_args.kwargs
     assert opened["message_id"] == closed["message_id"] == 55  # Actual edit, not a new text panel.
-    assert Path(opened["media"].media.path).name == "chest_open.jpg"
+    assert Path(opened["media"].media.path).name == f"{tier.lower()}_open.jpg"
     assert "کارت جدید" in opened["media"].caption
     assert chests.RARITY_LABELS[rarity] in opened["media"].caption
     assert ("جایزهٔ تضمینی" in opened["media"].caption) == bool(initial_pity)
@@ -307,7 +309,9 @@ async def test_visual_opening_swaps_media_and_grants_reward_once(
     assert await ShopChestService.pity_counter(db_session, user_id) == counter_after
     # Double tap: stored reward, no new draw, charge or pity increment.
     await shop.handle_shop_chest_open(opened_callback, bot)
-    assert "دوباره کسر نشد" in bot.edit_message_media.await_args.kwargs["media"].caption
+    replay_media = bot.edit_message_media.await_args.kwargs["media"]
+    assert Path(replay_media.media.path).name == f"{tier.lower()}_open.jpg"
+    assert "دوباره کسر نشد" in replay_media.caption
     assert await db_session.scalar(select(func.count(ShopChestOpening.id))) == 1
     assert await ShopChestService.pity_counter(db_session, user_id) == counter_after
     bot.send_message.assert_not_awaited()
@@ -315,14 +319,28 @@ async def test_visual_opening_swaps_media_and_grants_reward_once(
     again = next(button for row in opened["reply_markup"].inline_keyboard for button in row
                  if button.callback_data.startswith("shop_chest:"))
     await shop.handle_shop_chest(callback.model_copy(update={"data": again.callback_data}), bot)
-    assert Path(bot.edit_message_media.await_args.kwargs["media"].media.path).name == "chest_closed.jpg"
+    assert Path(bot.edit_message_media.await_args.kwargs["media"].media.path).name == f"{tier.lower()}_closed.jpg"
 
 
-def test_closed_and_open_art_are_distinct_square_jpegs():
+def test_all_tier_art_is_distinct_1024_square_rgb_baseline_jpeg():
     root = Path(__file__).resolve().parents[1] / "assets/chests"
-    assert (root / "chest_closed.jpg").read_bytes() != (root / "chest_open.jpg").read_bytes()
-    for name in ("chest_closed.jpg", "chest_open.jpg"):
-        with Image.open(root / name) as image:
-            assert image.format == "JPEG" and image.mode == "RGB"
-            assert not image.info.get("progressive")
-            assert image.width == image.height and image.width >= 512
+    fingerprints = set()
+    for tier in EXPECTED_ODDS:
+        for state in ("closed", "open"):
+            path = root / f"{tier.lower()}_{state}.jpg"
+            fingerprints.add(path.read_bytes())
+            with Image.open(path) as image:
+                assert image.format == "JPEG" and image.mode == "RGB"
+                assert image.size == (1024, 1024)
+                assert not image.info.get("progressive")
+                image.verify()
+    assert len(fingerprints) == 8
+
+
+@pytest.mark.parametrize("tier,expected", [("bronze", "bronze"), ("DIAMOND", "diamond"),
+                                           (None, "bronze"), ("../outside", "bronze")])
+def test_artwork_resolution_normalizes_known_tiers_and_has_a_safe_custom_fallback(tier, expected):
+    from sib.handlers.shop import CHEST_ART_DIR, _chest_photo
+
+    assert Path(_chest_photo(tier).path) == CHEST_ART_DIR / f"{expected}_closed.jpg"
+    assert Path(_chest_photo(tier, opened=True).path) == CHEST_ART_DIR / f"{expected}_open.jpg"

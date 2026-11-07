@@ -1,8 +1,10 @@
 """Green Apple Chest ("صندوق سیبی"): the first shop chest.
 
 Pins the shipped configuration (``data/shop_chests/green_apple_chest.json``),
-its reward table, purchase and duplicate behaviour, idempotency, the daily
-chest's independence and the artwork reference.
+its reward table and artwork reference for historical compatibility. Purchase,
+duplicate, idempotency and daily-chest isolation regressions use the same reward
+table under a clearly separate custom fixture code: the original is retired.
+Live tier purchases and legacy sale refusal are tested in the tier/retirement suites.
 
 SQLite runs everything except the two concurrency tests, which use
 ``requires_row_locks`` and are reported as SKIPPED on SQLite. A skip is not a
@@ -53,6 +55,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 CHEST_FILE = REPO_ROOT / "data" / "shop_chests" / "green_apple_chest.json"
 CHEST_CODE = "green_apple_chest"
 CHEST_NAME = "صندوق سیبی"
+CUSTOM_CODE = "custom_apple_rewards"
 IMAGE_FILE = REPO_ROOT / "assets" / "items" / "green_apple_chest.jpg"
 
 CARD_CODES = ("sib_sorkh", "sib_sabz", "sib_talayi", "sib_mahi")
@@ -76,8 +79,11 @@ class FixedRoll:
         return self.value
 
 
-def _config() -> list:
-    return json.loads(CHEST_FILE.read_text(encoding="utf-8"))
+def _config(*, custom=False) -> list:
+    data = json.loads(CHEST_FILE.read_text(encoding="utf-8"))
+    if custom:
+        data[0].update(code=CUSTOM_CODE, name="Custom apple rewards")
+    return data
 
 
 def _jpeg_size(path: Path) -> tuple[int, int, int]:
@@ -118,14 +124,15 @@ async def _seed_cards(session) -> dict[str, int]:
     return ids
 
 
-async def _apply_shipped(session) -> list[str]:
-    codes = await apply_chest_configs(session, _config())
+async def _apply_custom_rewards(session) -> list[str]:
+    """Exercise the historical reward engine without re-enabling a retired code."""
+    codes = await apply_chest_configs(session, _config(custom=True))
     await session.commit()
     return codes
 
 
 async def _chest(session) -> ShopChest:
-    chest = await ShopChestService.get_by_code(session, CHEST_CODE)
+    chest = await ShopChestService.get_by_code(session, CUSTOM_CODE)
     assert chest is not None
     return chest
 
@@ -259,17 +266,17 @@ def test_artwork_is_a_square_jpeg_and_is_the_image_the_chest_references():
 
 
 @pytest.mark.asyncio
-async def test_shipped_config_registers_exactly_one_active_chest_with_resolved_card_ids(db_session):
+async def test_custom_reward_fixture_registers_with_resolved_card_ids(db_session):
     ids = await _seed_cards(db_session)
-    assert await _apply_shipped(db_session) == [CHEST_CODE]
+    assert await _apply_custom_rewards(db_session) == [CUSTOM_CODE]
 
     active = (
         await db_session.scalars(select(ShopChest).where(ShopChest.is_active.is_(True)))
     ).all()
-    assert [c.code for c in active] == [CHEST_CODE]
+    assert [c.code for c in active] == [CUSTOM_CODE]
 
     chest = await _chest(db_session)
-    assert chest.name == CHEST_NAME and chest.price_apples == 150
+    assert chest.name == "Custom apple rewards" and chest.price_apples == 150
     assert chest.duplicate_apples == 50 and chest.image_key == CHEST_CODE
     rewards = await ShopChestService.validate_chest(db_session, chest)
     by_card = {r.character_id: r.weight for r in rewards if r.kind == "card"}
@@ -282,7 +289,7 @@ async def test_shipped_config_registers_exactly_one_active_chest_with_resolved_c
 @pytest.mark.asyncio
 async def test_character_code_missing_from_this_database_is_refused_and_writes_nothing(db_session):
     await _seed_cards(db_session)
-    config = _config()
+    config = _config(custom=True)
     config[0]["rewards"][0]["character_code"] = "sib_does_not_exist"
 
     with pytest.raises(ShopChestConfigError):
@@ -290,13 +297,13 @@ async def test_character_code_missing_from_this_database_is_refused_and_writes_n
     await db_session.rollback()
 
     async with get_async_sessionmaker()() as session:
-        assert await ShopChestService.get_by_code(session, CHEST_CODE) is None
+        assert await ShopChestService.get_by_code(session, CUSTOM_CODE) is None
 
 
 @pytest.mark.asyncio
 async def test_character_code_and_character_id_together_are_refused(db_session):
     ids = await _seed_cards(db_session)
-    config = _config()
+    config = _config(custom=True)
     config[0]["rewards"][0]["character_id"] = ids["sib_sorkh"]
 
     with pytest.raises(ShopChestConfigError):
@@ -311,11 +318,11 @@ async def test_unreleased_card_code_is_refused_by_eligibility(db_session):
     await db_session.commit()
 
     with pytest.raises(ShopChestConfigError):
-        await apply_chest_configs(db_session, _config())
+        await apply_chest_configs(db_session, _config(custom=True))
     await db_session.rollback()
 
     async with get_async_sessionmaker()() as session:
-        assert await ShopChestService.get_by_code(session, CHEST_CODE) is None
+        assert await ShopChestService.get_by_code(session, CUSTOM_CODE) is None
 
 
 @pytest.mark.asyncio
@@ -339,7 +346,7 @@ async def test_cli_dry_run_accepts_the_shipped_file_and_writes_nothing(db_sessio
 @pytest.mark.asyncio
 async def test_purchase_charges_150_and_credits_100_apples(db_session):
     await _seed_cards(db_session)
-    await _apply_shipped(db_session)
+    await _apply_custom_rewards(db_session)
     chest = await _chest(db_session)
     user_id = await _user_with_apples(db_session, 150)
 
@@ -358,7 +365,7 @@ async def test_purchase_charges_150_and_credits_100_apples(db_session):
 @pytest.mark.asyncio
 async def test_duplicate_card_converts_to_50_apples_once(db_session):
     ids = await _seed_cards(db_session)
-    await _apply_shipped(db_session)
+    await _apply_custom_rewards(db_session)
     chest = await _chest(db_session)
     user_id = await _user_with_apples(db_session, 150)
     await PlayerCardService.acquire(db_session, user_id, ids["sib_sorkh"])
@@ -379,7 +386,7 @@ async def test_duplicate_card_converts_to_50_apples_once(db_session):
 @pytest.mark.asyncio
 async def test_new_card_is_granted_normally_with_collection_xp(db_session):
     ids = await _seed_cards(db_session)
-    await _apply_shipped(db_session)
+    await _apply_custom_rewards(db_session)
     chest = await _chest(db_session)
     user_id = await _user_with_apples(db_session, 150)
 
@@ -399,7 +406,7 @@ async def test_new_card_is_granted_normally_with_collection_xp(db_session):
 @pytest.mark.asyncio
 async def test_ring_is_granted_through_the_item_mechanism(db_session):
     await _seed_cards(db_session)
-    await _apply_shipped(db_session)
+    await _apply_custom_rewards(db_session)
     chest = await _chest(db_session)
     user_id = await _user_with_apples(db_session, 150)
 
@@ -419,7 +426,7 @@ async def test_ring_is_granted_through_the_item_mechanism(db_session):
 @pytest.mark.asyncio
 async def test_insufficient_balance_writes_no_charge_reward_or_success_record(db_session):
     await _seed_cards(db_session)
-    await _apply_shipped(db_session)
+    await _apply_custom_rewards(db_session)
     chest = await _chest(db_session)
     user_id = await _user_with_apples(db_session, 149)
 
@@ -443,7 +450,7 @@ async def test_insufficient_balance_writes_no_charge_reward_or_success_record(db
 @pytest.mark.asyncio
 async def test_same_key_replay_has_no_effect_even_with_a_different_draw(db_session):
     await _seed_cards(db_session)
-    await _apply_shipped(db_session)
+    await _apply_custom_rewards(db_session)
     chest = await _chest(db_session)
     user_id = await _user_with_apples(db_session, 300)
 
@@ -461,7 +468,7 @@ async def test_same_key_replay_has_no_effect_even_with_a_different_draw(db_sessi
 @pytest.mark.asyncio
 async def test_distinct_keys_each_open_and_each_charge(db_session):
     await _seed_cards(db_session)
-    await _apply_shipped(db_session)
+    await _apply_custom_rewards(db_session)
     chest = await _chest(db_session)
     user_id = await _user_with_apples(db_session, 300)
 
@@ -478,7 +485,7 @@ async def test_distinct_keys_each_open_and_each_charge(db_session):
 @pytest.mark.asyncio
 async def test_ambiguous_commit_that_did_commit_is_reconciled_not_repeated(db_session, monkeypatch):
     await _seed_cards(db_session)
-    await _apply_shipped(db_session)
+    await _apply_custom_rewards(db_session)
     chest = await _chest(db_session)
     user_id = await _user_with_apples(db_session, 150)
     real_commit = chests_module.commit_chest_transaction
@@ -502,7 +509,7 @@ async def test_ambiguous_commit_that_did_commit_is_reconciled_not_repeated(db_se
 @pytest.mark.asyncio
 async def test_ambiguous_commit_that_did_not_commit_is_retried_with_the_same_key(db_session, monkeypatch):
     await _seed_cards(db_session)
-    await _apply_shipped(db_session)
+    await _apply_custom_rewards(db_session)
     chest = await _chest(db_session)
     user_id = await _user_with_apples(db_session, 150)
     real_commit = chests_module.commit_chest_transaction
@@ -538,9 +545,9 @@ async def test_ambiguous_commit_that_did_not_commit_is_retried_with_the_same_key
 
 
 @pytest.mark.asyncio
-async def test_opening_the_green_apple_chest_does_not_touch_the_daily_chest(db_session):
+async def test_custom_reward_chest_does_not_touch_the_daily_chest(db_session):
     await _seed_cards(db_session)
-    await _apply_shipped(db_session)
+    await _apply_custom_rewards(db_session)
     chest = await _chest(db_session)
     user_id = await _user_with_apples(db_session, 150)
 
@@ -562,7 +569,7 @@ async def test_opening_the_green_apple_chest_does_not_touch_the_daily_chest(db_s
 @pytest.mark.asyncio
 async def test_chest_image_reference_resolves_to_the_bundled_artwork(db_session):
     await _seed_cards(db_session)
-    await _apply_shipped(db_session)
+    await _apply_custom_rewards(db_session)
     chest = await _chest(db_session)
 
     assert chest.image_key == CHEST_CODE
@@ -580,7 +587,7 @@ async def test_chest_image_reference_resolves_to_the_bundled_artwork(db_session)
 @requires_row_locks
 async def test_concurrent_same_key_requests_charge_once(db_session):
     await _seed_cards(db_session)
-    await _apply_shipped(db_session)
+    await _apply_custom_rewards(db_session)
     chest = await _chest(db_session)
     user_id = await _user_with_apples(db_session, 150)
 
@@ -598,7 +605,7 @@ async def test_concurrent_same_key_requests_charge_once(db_session):
 @requires_row_locks
 async def test_concurrent_distinct_keys_cannot_overspend(db_session):
     await _seed_cards(db_session)
-    await _apply_shipped(db_session)
+    await _apply_custom_rewards(db_session)
     chest = await _chest(db_session)
     user_id = await _user_with_apples(db_session, 150)
 
@@ -619,7 +626,7 @@ async def test_concurrent_distinct_keys_cannot_overspend(db_session):
 
 async def _reprice(session, price: int, expected_version: int) -> None:
     """Apply the shipped file with a new price, as an operator would."""
-    config = _config()
+    config = _config(custom=True)
     config[0]["price_apples"] = price
     config[0]["expected_version"] = expected_version
     await apply_chest_configs(session, config)
@@ -643,7 +650,7 @@ async def _detail_open_callback(user_id: int, chest_id: int) -> str:
 @pytest.mark.asyncio
 async def test_stale_open_page_after_a_price_change_is_refused_without_charge(db_session):
     await _seed_cards(db_session)
-    await _apply_shipped(db_session)
+    await _apply_custom_rewards(db_session)
     chest = await _chest(db_session)
     user_id = await _user_with_apples(db_session, 500)
     shown_version = chest.version
@@ -665,7 +672,7 @@ async def test_stale_open_page_after_a_price_change_is_refused_without_charge(db
 @pytest.mark.asyncio
 async def test_open_with_the_current_version_charges_the_current_price(db_session):
     await _seed_cards(db_session)
-    await _apply_shipped(db_session)
+    await _apply_custom_rewards(db_session)
     chest = await _chest(db_session)
     user_id = await _user_with_apples(db_session, 500)
     async with get_async_sessionmaker()() as session:
@@ -684,7 +691,7 @@ async def test_open_with_the_current_version_charges_the_current_price(db_sessio
 @pytest.mark.asyncio
 async def test_replay_of_a_recorded_opening_survives_later_changes(db_session):
     await _seed_cards(db_session)
-    await _apply_shipped(db_session)
+    await _apply_custom_rewards(db_session)
     chest = await _chest(db_session)
     user_id = await _user_with_apples(db_session, 300)
     first = await ShopChestService.open_chest_reliably(
@@ -708,7 +715,7 @@ async def test_handler_refuses_a_stale_open_button_and_charges_nothing(db_sessio
     from sib.tests.test_shop_sections import _run_handler, _sell_callback
 
     await _seed_cards(db_session)
-    await _apply_shipped(db_session)
+    await _apply_custom_rewards(db_session)
     chest = await _chest(db_session)
     user_id = await _user_with_apples(db_session, 500)
     open_cb = await _detail_open_callback(user_id, chest.id)  # the page the player saw
@@ -734,7 +741,7 @@ async def test_legacy_open_callback_without_a_version_is_refused(db_session):
     from sib.tests.test_shop_sections import _run_handler, _sell_callback
 
     await _seed_cards(db_session)
-    await _apply_shipped(db_session)
+    await _apply_custom_rewards(db_session)
     chest = await _chest(db_session)
     user_id = await _user_with_apples(db_session, 500)
 
@@ -752,7 +759,7 @@ async def test_legacy_open_callback_without_a_version_is_refused(db_session):
 @pytest.mark.asyncio
 async def test_open_callback_carries_the_version_and_fits_telegram_limit(db_session):
     await _seed_cards(db_session)
-    await _apply_shipped(db_session)
+    await _apply_custom_rewards(db_session)
     chest = await _chest(db_session)
     user_id = await _user_with_apples(db_session, 500)
 
@@ -770,7 +777,7 @@ async def test_open_callback_carries_the_version_and_fits_telegram_limit(db_sess
 @pytest.mark.asyncio
 async def test_set_active_refuses_a_stale_version_even_if_the_row_was_loaded_earlier(db_session):
     await _seed_cards(db_session)
-    await _apply_shipped(db_session)
+    await _apply_custom_rewards(db_session)
     chest = await _chest(db_session)
     factory = get_async_sessionmaker()
 
@@ -786,14 +793,14 @@ async def test_set_active_refuses_a_stale_version_even_if_the_row_was_loaded_ear
         await stale.rollback()
 
     async with factory() as session:
-        fresh = await ShopChestService.get_by_code(session, CHEST_CODE)
+        fresh = await ShopChestService.get_by_code(session, CUSTOM_CODE)
         assert fresh.version == 2 and fresh.is_active is False
 
 
 @pytest.mark.asyncio
 async def test_save_chest_refuses_a_stale_version_even_if_the_row_was_loaded_earlier(db_session):
     await _seed_cards(db_session)
-    await _apply_shipped(db_session)
+    await _apply_custom_rewards(db_session)
     chest = await _chest(db_session)
     factory = get_async_sessionmaker()
 
@@ -807,7 +814,7 @@ async def test_save_chest_refuses_a_stale_version_even_if_the_row_was_loaded_ear
         await stale.rollback()
 
     async with factory() as session:
-        fresh = await ShopChestService.get_by_code(session, CHEST_CODE)
+        fresh = await ShopChestService.get_by_code(session, CUSTOM_CODE)
         assert fresh.version == 2 and fresh.price_apples == 300
 
 
@@ -816,7 +823,7 @@ async def test_cli_set_active_with_a_version_takes_the_row_lock(db_session, monk
     from sib.scripts import shop_chests as cli
 
     await _seed_cards(db_session)
-    await _apply_shipped(db_session)
+    await _apply_custom_rewards(db_session)
     seen = []
     real_get_by_code = ShopChestService.get_by_code
 
@@ -826,7 +833,7 @@ async def test_cli_set_active_with_a_version_takes_the_row_lock(db_session, monk
 
     monkeypatch.setattr(cli, "get_async_sessionmaker", get_async_sessionmaker)
     monkeypatch.setattr(ShopChestService, "get_by_code", staticmethod(spy))
-    await cli._cmd_set_active(CHEST_CODE, True, 1, confirm_database=_test_database_name())
+    await cli._cmd_set_active(CUSTOM_CODE, True, 1, confirm_database=_test_database_name())
 
     assert seen and all(seen)  # the lookup used for a versioned write is locked
 
@@ -842,7 +849,7 @@ def _test_database_name() -> str:
 @pytest.mark.asyncio
 async def test_locked_code_lookup_returns_the_stored_row_not_a_stale_copy(db_session):
     await _seed_cards(db_session)
-    await _apply_shipped(db_session)
+    await _apply_custom_rewards(db_session)
     chest = await _chest(db_session)
     factory = get_async_sessionmaker()
 
@@ -850,7 +857,7 @@ async def test_locked_code_lookup_returns_the_stored_row_not_a_stale_copy(db_ses
         assert (await ShopChestService.get_chest(stale, chest.id)).version == 1
         async with factory() as other:
             await _reprice(other, 300, expected_version=1)  # stored version 2
-        locked = await ShopChestService.get_by_code(stale, CHEST_CODE, lock=True)
+        locked = await ShopChestService.get_by_code(stale, CUSTOM_CODE, lock=True)
         version, price = locked.version, locked.price_apples  # read before rollback expires it
         await stale.rollback()
 

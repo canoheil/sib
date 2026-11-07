@@ -43,13 +43,29 @@ transaction under the existing user lock. Refusals, replays, and ambiguous-commi
 reconciliation cannot consume pity twice. The detail screen states the guarantee
 and labels the ordinary odds as excluding pity.
 
-The visual flow uses `assets/chests/chest_closed.jpg` and a **🔓 باز کردن**
-button, then edits that message to `assets/chests/chest_open.jpg` with the reward
-caption after commit. Existing custom chest artwork is retained for its closed
-state when configured. “Another chest” returns to the closed state and issues a
-new operation nonce; retrying an old nonce shows the stored outcome without
+Each tier uses its own `assets/chests/<tier>_closed.jpg` and
+`assets/chests/<tier>_open.jpg` pair (`bronze`, `silver`, `gold`, `diamond`). The
+**🔓 باز کردن** button edits the same message from closed to open artwork with
+the reward caption after commit, including on replay. The old generic
+`chest_closed.jpg` / `chest_open.jpg` are unused. Custom chests retain configured
+closed artwork; otherwise they use Bronze as the fallback for both states.
+“Another chest” returns to the closed state and issues a new operation nonce; retrying an old nonce shows the stored outcome without
 another charge. Downgrade removes pity state/reveal columns, but preserves chest
 definitions and opening history; re-upgrade restores the four reserved tier codes.
+
+## Retired legacy shop chests (Phase 2.5)
+
+`green_apple_chest` (صندوق سیبی), `empire_chest` (صندوق امپراتوری),
+`sages_chest` (صندوق فرزانگان), and `moonlight_chest` (صندوق مهتاب) are no
+longer purchasable. A code-level sale filter hides them even if their stored
+`is_active` flag is still true, and rejects new opens from stale/forged buttons.
+Completed purchases can still be replayed without charging or granting again.
+Definitions, reward tables, purchase history, and already-owned items/cards are
+not deleted. No schema migration or database cleanup is needed; the Alembic head
+remains `082_chest_pity`. The custom Enchanted Garden chest is not retired.
+
+The legacy configuration/artwork notes below are archival references, not
+instructions to make these retired chests buyable again.
 
 ## Custom reward-table configuration
 
@@ -127,11 +143,12 @@ Every row has `weight` ≥ 1. The total weight is capped. Probability of a row
 is exactly `weight / total_weight`, shown to the player as a percentage with
 two decimals (`< 0.01%` for tiny values).
 
-## Green Apple Chest (the first shop chest)
+## Archived Green Apple Chest (retired)
 
 Shipped definition: `data/shop_chests/green_apple_chest.json`. It is data read
 by the CLI on request. **Nothing seeds it at startup and nothing in the bot
-loads it automatically.** It must be registered explicitly, as described below.
+loads it automatically.** Loading the archived file can preserve its definition,
+but the retired code can no longer become buyable.
 
 | Field | Value |
 | --- | --- |
@@ -140,7 +157,7 @@ loads it automatically.** It must be registered explicitly, as described below.
 | Price | 150 apples |
 | Duplicate compensation | 50 apples |
 | Image | `assets/items/green_apple_chest.jpg` (1024×1024, square, centred, no text) |
-| Active | yes; it is the only chest in the initial release |
+| Stored active flag | `true`; the retired code is no longer buyable |
 
 Reward table (weights out of 100, one independent row per reward):
 
@@ -165,7 +182,7 @@ A test checks the total is exactly 100 and that each row has its weight.
 - The card identifiers are the audited codes from `data/characters_seed.json`.
   Their database ids differ per database and are resolved at apply time.
 
-## Four-chest expansion
+## Original four-chest expansion (archival definitions)
 
 Approved definitions: `data/shop_chests/additional_chests.json`. This file
 contains **only the four new chests**, so it can be applied without editing or
@@ -227,10 +244,9 @@ DATABASE_URL='<staging async URL>' python -m sib.scripts.shop_chests apply sib/d
 DATABASE_URL='<staging async URL>' python -m sib.scripts.shop_chests list
 ```
 
-The file has `is_active: true`; the confirmed apply makes all four buyable in
-one transaction. On staging, check all five list entries (including the
-previously registered starter), each picture, name, price, reward probability
-and opening result. On production, repeat only after staging verification and
+The file has `is_active: true`, but only the Garden chest remains buyable in
+Phase 2.5; the three retired codes stay hidden. On staging, check the four
+tier entries and the Garden chest, their artwork, odds, and opening results. On production, repeat only after staging verification and
 explicit operator approval, using the production URL and exact database name.
 No production registration is performed by this repository change.
 
@@ -348,8 +364,8 @@ Opening refuses, before any write, when the stored version differs
 cannot buy the new terms unseen. A recorded opening is still replayed whatever
 the version is now, so a double tap or retry is never charged again. A callback
 in any other shape, including the earlier unversioned `shop_chest_open:<id>:<nonce>`
-form, is refused the same way. The "open again" button on the result screen is
-bound to the version that opening was priced at.
+form, is refused the same way. The "another chest" button returns to the closed
+detail page, reads the current version, and issues a fresh opening nonce.
 
 Length bounds: ids below 10¹², versions up to the INT maximum (10 digits), and
 the 12-character nonce from `secrets.token_urlsafe(9)`. The worst case is 52 bytes.
@@ -391,10 +407,12 @@ three tables and nothing else. No rows are seeded.
   their indexes and constraints, and the version bump. Nothing was executed
   against a database.
 
-## Rollout (commands; not executed by this change)
+## Historical legacy rollout (not a Phase 2.5 deployment step)
 
-The bot needs the migration before it runs the chest code, and the chest needs
-its configuration before any player can see it. Run each step only on the
+These are archival commands from the original rollout. Phase 2.5 needs only
+code/assets and a restart on the existing `082_chest_pity` schema; retired
+codes cannot be re-enabled. The original rollout needed chest configuration
+before players could see it. Run each step only on the
 environment named, after a backup of that environment's database.
 
 1. **Staging first.** Deploy the code (a restart is the operator's step). Then,
@@ -409,9 +427,8 @@ environment named, after a backup of that environment's database.
    DATABASE_URL='<staging async URL>' python -m sib.scripts.shop_chests apply sib/data/shop_chests/green_apple_chest.json --confirm-database <staging DB name>
    DATABASE_URL='<staging async URL>' python -m sib.scripts.shop_chests show green_apple_chest
    ```
-   The shipped file is `is_active: true`, so the apply makes the chest buyable
-   straight away. For a staged release, copy it with `"is_active": false`, apply,
-   check the page, then turn it on:
+   The shipped file has `is_active: true`, but its retired code is no longer
+   buyable. The following commands only edit the stored archival flag:
    ```
    DATABASE_URL='<staging async URL>' python -m sib.scripts.shop_chests set-active green_apple_chest on --expected-version <version from show> --confirm-database <staging DB name>
    ```
@@ -429,7 +446,7 @@ database first with the `target:` line each CLI command prints.
 
 ## Known limits
 
-- The chest image is optional; without one the detail page is text-only.
+- Custom chest images are optional; absent artwork uses the Bronze fallback.
 - Repeat-purchase limits, the card pool source and whether a traded-away card
   may be re-bought at full price are product decisions not yet made. The
   current implementation allows unlimited purchases and a full-price re-buy of

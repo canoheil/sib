@@ -104,13 +104,13 @@ EXPECTED_SHORTCUTS = (
     "بوس سیبی",
 )
 
-#: The five shop chests (data/shop_chests/*.json).
+#: The tier defaults and the remaining custom garden chest.
 EXPECTED_CHESTS = (
-    ("صندوق سیبی", 150),
+    ("صندوق برنزی", 500),
+    ("صندوق نقره‌ای", 1500),
+    ("صندوق طلایی", 4000),
+    ("صندوق الماسی", 8000),
     ("صندوق باغ افسون", 80),
-    ("صندوق امپراتوری", 200),
-    ("صندوق فرزانگان", 200),
-    ("صندوق مهتاب", 200),
 )
 
 LATIN_LETTER = re.compile(r"[A-Za-z]")

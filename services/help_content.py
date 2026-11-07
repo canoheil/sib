@@ -105,13 +105,13 @@ APPLE_MINE_PICKAXE_COSTS: Tuple[Tuple[int, int], ...] = (
 #: Keep the guide in sync with the service's cooldown.
 APPLE_MINE_COOLDOWN_MINUTES = WORK_COOLDOWN_SECONDS // 60
 
-#: The five shop chests and their price in Apples (data/shop_chests/*.json).
+#: Four tier defaults plus the remaining custom garden chest.
 SHOP_CHESTS: Tuple[Tuple[str, int], ...] = (
-    ("صندوق سیبی", 150),
+    ("صندوق برنزی", 500),
+    ("صندوق نقره‌ای", 1500),
+    ("صندوق طلایی", 4000),
+    ("صندوق الماسی", 8000),
     ("صندوق باغ افسون", 80),
-    ("صندوق امپراتوری", 200),
-    ("صندوق فرزانگان", 200),
-    ("صندوق مهتاب", 200),
 )
 
 #: Card progression rules (services/card_progression.py).

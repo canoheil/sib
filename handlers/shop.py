@@ -1087,6 +1087,17 @@ USER_CHEST_UNAVAILABLE_TEXT = "این صندوقچه فعلاً در دسترس 
 CHEST_ART_DIR = Path(__file__).resolve().parents[1] / "assets" / "chests"
 
 
+def _chest_photo(tier: str | None, *, opened: bool = False) -> FSInputFile:
+    """Tier artwork, with Bronze as the fallback for custom reward-table chests."""
+    from sib.services.shop_chests import CHEST_TIER_ODDS
+
+    tier_key = tier.upper() if isinstance(tier, str) else "BRONZE"
+    if tier_key not in CHEST_TIER_ODDS:
+        tier_key = "BRONZE"
+    state = "open" if opened else "closed"
+    return FSInputFile(CHEST_ART_DIR / f"{tier_key.lower()}_{state}.jpg")
+
+
 async def _chests_view(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
     """Chest LIST: name, price and a button per valid active chest."""
     from sib.services.shop_chests import ShopChestConfigError, ShopChestService
@@ -1138,7 +1149,7 @@ async def _chest_detail_view(user_id: int, chest_id: int):
 
     async with get_session() as session:
         chest = await ShopChestService.get_chest(session, chest_id)
-        if chest is None or not chest.is_active:
+        if chest is None or not ShopChestService.is_purchasable(chest):
             return None
         balance = await AppleWalletService.get_balance(session, user_id)
         pity_counter = await ShopChestService.pity_counter(session, user_id)
@@ -1151,7 +1162,7 @@ async def _chest_detail_view(user_id: int, chest_id: int):
         except ShopChestConfigError as exc:
             logger.error(f"shop chest {chest.code} is misconfigured: {exc}")
             table, configured = [], False
-        photo = FSInputFile(CHEST_ART_DIR / "chest_closed.jpg")
+        photo = _chest_photo(chest.tier)
         if chest.image_key and chest.tier is None:
             file_id, fs_path = await AssetService.resolve_photo(session, chest.image_key)
             photo = photo_arg(file_id, fs_path) or photo
@@ -1300,5 +1311,5 @@ async def handle_shop_chest_open(callback: CallbackQuery, bot: Bot):
     await safe_answer_callback(callback, "صندوقچه باز شد! 🎉")
     await safe_edit_callback_message(
         callback, bot, _opened_text(result), reply_markup=kb,
-        photo=FSInputFile(CHEST_ART_DIR / "chest_open.jpg"),
+        photo=_chest_photo(result.chest_tier, opened=True),
     )
