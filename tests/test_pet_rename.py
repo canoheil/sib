@@ -193,7 +193,7 @@ def test_077_migration_revises_076_and_079_is_the_single_head():
     assert migration.down_revision == "076_pet_system"
 
     scripts = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["081_card_rarity"]
+    assert scripts.get_heads() == ["082_chest_pity"]
     assert (
         scripts.get_revision("077_pet_rename").down_revision == "076_pet_system"
     )
@@ -238,6 +238,8 @@ def test_alembic_real_upgrade_through_078(tmp_path):
         connection.execute(sa.text("CREATE TABLE users (id BIGINT PRIMARY KEY)"))
         connection.execute(sa.text("CREATE TABLE characters (code VARCHAR(64) PRIMARY KEY, rarity VARCHAR(20) NOT NULL DEFAULT 'COMMON')"))
         connection.execute(sa.text("CREATE TABLE shop_rotations (is_active BOOLEAN NOT NULL)"))
+        connection.execute(sa.text("CREATE TABLE shop_chests (id INTEGER PRIMARY KEY, code VARCHAR(40))"))
+        connection.execute(sa.text("CREATE TABLE shop_chest_openings (id INTEGER PRIMARY KEY)"))
         connection.execute(
             sa.text(
                 "CREATE TABLE system_config ("
@@ -262,12 +264,12 @@ def test_alembic_real_upgrade_through_078(tmp_path):
         assert result.returncode == 0, result.stdout + result.stderr
         return result.stdout.strip()
 
-    assert alembic("heads") == "081_card_rarity (head)"
+    assert alembic("heads") == "082_chest_pity (head)"
     # 076 creates ``user_pets`` itself, so the synthetic baseline starts at its
     # parent and the whole pet chain (076 create, 077 alter, 078 seed, 079 seed) really runs.
     alembic("stamp", "075_rocket_game")
     alembic("upgrade", "head")
-    assert "081_card_rarity" in alembic("current")
+    assert "082_chest_pity" in alembic("current")
 
     engine = sa.create_engine(f"sqlite:///{database}")
     assert "has_renamed" in {

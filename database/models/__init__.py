@@ -67,6 +67,7 @@ from sib.database.models.transfer import (
 )
 from sib.database.models.shop_chest import (
     ShopChest,
+    ShopChestPity,
     ShopChestOpening,
     ShopChestReward,
 )
@@ -139,6 +140,7 @@ __all__ = [
     "PendingTransfer",
     "PendingTransferState",
     "ShopChest",
+    "ShopChestPity",
     "ShopChestReward",
     "ShopChestOpening",
 ]

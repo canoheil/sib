@@ -327,6 +327,9 @@ async def init_db(engine: AsyncEngine | None = None) -> None:
     async with session_factory() as session:
         await seed_default_data(session)
         await seed_characters(session)
+        from sib.services.shop_chests import ShopChestService
+
+        await ShopChestService.seed_tiers(session)
         await session.commit()
 
     logger.info("Default seed data initialized.")

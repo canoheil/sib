@@ -78,6 +78,8 @@ def _make_migration_baseline(engine):
         connection.execute(sa.text("CREATE TABLE users (id BIGINT PRIMARY KEY)"))
         connection.execute(sa.text("CREATE TABLE characters (code VARCHAR(64) PRIMARY KEY, rarity VARCHAR(20) NOT NULL DEFAULT 'COMMON')"))
         connection.execute(sa.text("CREATE TABLE shop_rotations (is_active BOOLEAN NOT NULL)"))
+        connection.execute(sa.text("CREATE TABLE shop_chests (id INTEGER PRIMARY KEY, code VARCHAR(40))"))
+        connection.execute(sa.text("CREATE TABLE shop_chest_openings (id INTEGER PRIMARY KEY)"))
         connection.execute(
             sa.text(
                 "CREATE TABLE system_config ("
@@ -121,7 +123,7 @@ def test_076_migration_revises_075_and_079_is_the_single_head():
     assert migration.revision == "076_pet_system"
     assert migration.down_revision == "075_rocket_game"
     scripts = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["081_card_rarity"]
+    assert scripts.get_heads() == ["082_chest_pity"]
     assert scripts.get_revision("077_pet_rename").down_revision == "076_pet_system"
     assert scripts.get_revision("076_pet_system").down_revision == "075_rocket_game"
 
@@ -193,7 +195,7 @@ def test_migration_enforces_user_foreign_key(migration_engine):
 
 def test_alembic_real_upgrade_from_075(tmp_path):
     scripts = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["081_card_rarity"]
+    assert scripts.get_heads() == ["082_chest_pity"]
 
     database = tmp_path / "pet_migration.db"
     engine = sa.create_engine(f"sqlite:///{database}")
@@ -216,10 +218,10 @@ def test_alembic_real_upgrade_from_075(tmp_path):
         assert result.returncode == 0, result.stdout + result.stderr
         return result.stdout.strip()
 
-    assert alembic("heads") == "081_card_rarity (head)"
+    assert alembic("heads") == "082_chest_pity (head)"
     alembic("stamp", "075_rocket_game")
     alembic("upgrade", "head")
-    assert "081_card_rarity" in alembic("current")
+    assert "082_chest_pity" in alembic("current")
 
     engine = sa.create_engine(f"sqlite:///{database}")
     assert sa.inspect(engine).has_table("user_pets")

@@ -2,8 +2,8 @@
 
 As with the other portable migrations, the revision runs against a minimal
 schema holding the tables it references (``users``, ``characters``). The test
-also checks that the migrated columns match the ORM models, so the migration
-and ``database/models/shop_chest.py`` cannot drift apart silently.
+also checks that 032 plus the additive 082 tier/pity migration match the
+current ORM models, so the schema cannot drift apart silently.
 """
 
 import importlib.util
@@ -17,10 +17,11 @@ from alembic.operations import Operations
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MIGRATION = REPO_ROOT / "database/migrations/versions/032_shop_chests.py"
 TABLES = ("shop_chests", "shop_chest_rewards", "shop_chest_openings")
+TIER_MIGRATION = REPO_ROOT / "database/migrations/versions/082_chest_pity.py"
 
 
-def _load_migration():
-    spec = importlib.util.spec_from_file_location("migration_032", MIGRATION)
+def _load_migration(path=MIGRATION):
+    spec = importlib.util.spec_from_file_location(path.stem, path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -34,8 +35,8 @@ def _minimal_parents(engine: sa.engine.Engine) -> None:
     metadata.create_all(engine)
 
 
-def _run(engine: sa.engine.Engine, direction: str) -> None:
-    migration = _load_migration()
+def _run(engine: sa.engine.Engine, direction: str, *, path=MIGRATION) -> None:
+    migration = _load_migration(path)
     with engine.begin() as connection:
         context = MigrationContext.configure(connection)
         with Operations.context(context):
@@ -118,7 +119,7 @@ def test_032_creates_tables_constraints_and_downgrades_cleanly(tmp_path):
     assert not (set(TABLES) & after)
 
 
-def test_032_schema_matches_orm_models(tmp_path):
+def test_032_and_082_schema_match_orm_models(tmp_path):
     """The migrated tables and the ORM models must agree on columns and indexes."""
     from sib.database.base import Base
     import sib.database.models  # noqa: F401  (registers the chest models)
@@ -126,8 +127,9 @@ def test_032_schema_matches_orm_models(tmp_path):
     engine = sa.create_engine(f"sqlite:///{tmp_path / 'm032_models.db'}")
     _minimal_parents(engine)
     _run(engine, "upgrade")
+    _run(engine, "upgrade", path=TIER_MIGRATION)
     inspector = sa.inspect(engine)
-    for table in TABLES:
+    for table in (*TABLES, "shop_chest_pity"):
         migrated_cols = {column["name"]: column for column in inspector.get_columns(table)}
         modelled = Base.metadata.tables[table].columns
         assert set(migrated_cols) == {column.name for column in modelled}, table
@@ -139,4 +141,5 @@ def test_032_schema_matches_orm_models(tmp_path):
             assert (migrated["default"] is not None) == (column.server_default is not None), (
                 f"{table}.{column.name} server_default presence"
             )
+    _run(engine, "downgrade", path=TIER_MIGRATION)
     _run(engine, "downgrade")

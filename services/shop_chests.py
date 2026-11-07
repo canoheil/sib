@@ -8,8 +8,12 @@ Product rules (see docs/shop-chests.md):
   card. A card the user already owns is converted to ``duplicate_apples`` with
   NO collection XP.
 * Purchases are unlimited while the user can pay and the chest is active.
-* No game-balance defaults live here: prices, weights and rewards are data,
-  managed through :class:`ShopChestService` (or ``scripts/shop_chests.py``).
+* Four card-chest tiers draw rarity first, then uniformly within that rarity.
+  Custom chests retain their independent reward tables.
+* All paid shop chests share a per-user pity counter: nine consecutive misses
+  guarantee an Epic/Legendary on the tenth opening. A rolled Epic/Legendary
+  resets pity even when converted to duplicate compensation. Daily chests are
+  independent. Pity and reveal metadata commit atomically with the purchase.
 
 Opening transaction (one caller-owned transaction, committed once):
 
@@ -52,8 +56,10 @@ from sib.database.connection import get_async_sessionmaker
 from sib.database.models import (
     Character,
     PlayerCard,
+    ReleaseStatus,
     ShopChest,
     ShopChestOpening,
+    ShopChestPity,
     ShopChestReward,
 )
 from sib.database.models.shop_chest import (
@@ -89,6 +95,42 @@ OPENING_REF_TYPE = "shop_chest_opening"
 USER_CHEST_UNAVAILABLE = "این صندوقچه فعلاً در دسترس نیست."
 STALE_OPEN_TEXT = "این صفحه قدیمی است؛ از فروشگاه دوباره وارد صندوقچه شو."
 CARD_RACE_TEXT = "شما قبلاً این شخصیت را داری؛ صندوقچه دوباره باز نشد."
+
+
+PITY_THRESHOLD = 10  # Includes the guaranteed opening: nine misses, then Epic+.
+HIGH_RARITIES = ("EPIC", "LEGENDARY")
+RARITY_LABELS = {"COMMON": "معمولی", "RARE": "کمیاب", "EPIC": "حماسی", "LEGENDARY": "افسانه‌ای"}
+# Percentages, independent of how many eligible characters each rarity has.
+CHEST_TIER_ODDS = {
+    "BRONZE": {"COMMON": 75, "RARE": 20, "EPIC": 4, "LEGENDARY": 1},
+    "SILVER": {"COMMON": 55, "RARE": 32, "EPIC": 10, "LEGENDARY": 3},
+    "GOLD": {"COMMON": 30, "RARE": 45, "EPIC": 20, "LEGENDARY": 5},
+    "DIAMOND": {"COMMON": 10, "RARE": 35, "EPIC": 45, "LEGENDARY": 10},
+}
+# Only seed missing definitions; prices/activation remain operator-editable.
+TIER_CHEST_DEFAULTS = (
+    ("BRONZE", "bronze_chest", "صندوق برنزی", 500, 50),
+    ("SILVER", "silver_chest", "صندوق نقره‌ای", 1500, 150),
+    ("GOLD", "gold_chest", "صندوق طلایی", 4000, 400),
+    ("DIAMOND", "diamond_chest", "صندوق الماسی", 8000, 1000),
+)
+
+
+def pick_rarity(tier: str, rng: Any, *, guaranteed: bool = False) -> str:
+    """Draw a tier's rarity; pity conditions its odds on Epic/Legendary only."""
+    if not isinstance(tier, str) or tier not in CHEST_TIER_ODDS:
+        raise ShopChestConfigError("ردهٔ صندوقچه نامعتبر است.")
+    weights = {
+        rarity: weight for rarity, weight in CHEST_TIER_ODDS[tier].items()
+        if not guaranteed or rarity in HIGH_RARITIES
+    }
+    roll = rng.randrange(sum(weights.values()))
+    cumulative = 0
+    for rarity, weight in weights.items():
+        cumulative += weight
+        if roll < cumulative:
+            return rarity
+    raise ShopChestConfigError("احتمال‌های صندوقچه نامعتبر است.")  # pragma: no cover
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +213,8 @@ class ChestOpenResult:
     balance_after: int
     chest_version: int
     replayed: bool
+    reward_rarity: Optional[str] = None
+    pity_guaranteed: bool = False
 
 
 def _is_int(value: Any) -> bool:
@@ -380,6 +424,65 @@ class ShopChestService:
         )
         return [_reward_spec_from_row(row) for row in rows.all()]
 
+    @staticmethod
+    async def pity_counter(session: AsyncSession, user_id: int) -> int:
+        return int(await session.scalar(
+            select(ShopChestPity.pity_counter).where(ShopChestPity.user_id == user_id)
+        ) or 0)
+
+    @staticmethod
+    async def tier_card_pool(
+        session: AsyncSession, tier: str, *, guaranteed: bool = False
+    ) -> Dict[str, List[Character]]:
+        if not isinstance(tier, str) or tier not in CHEST_TIER_ODDS:
+            raise ShopChestConfigError("ردهٔ صندوقچه نامعتبر است.")
+        pool = {rarity: [] for rarity in CHEST_TIER_ODDS[tier]
+                if not guaranteed or rarity in HIGH_RARITIES}
+        characters = await session.scalars(
+            select(Character).where(
+                Character.is_active.is_(True), Character.shop_enabled.is_(True),
+                Character.release_status == ReleaseStatus.RELEASED,
+                Character.rarity.in_(pool),
+            ).order_by(Character.id)
+        )
+        for character in characters:
+            pool[character.rarity].append(character)
+        # Do not silently redistribute missing rarities and misstate the odds.
+        if any(not cards for cards in pool.values()):
+            raise ShopChestConfigError("کارت کافی برای همهٔ رده‌های جایزه موجود نیست.")
+        return pool
+
+    @classmethod
+    async def draw_tier_card(
+        cls, session: AsyncSession, tier: str, rng: Any, *, guaranteed: bool = False
+    ) -> RewardSpec:
+        pool = await cls.tier_card_pool(session, tier, guaranteed=guaranteed)
+        rarity = pick_rarity(tier, rng, guaranteed=guaranteed)
+        cards = pool[rarity]
+        return RewardSpec(kind=REWARD_KIND_CARD, weight=1,
+                          character_id=cards[rng.randrange(len(cards))].id)
+
+    @classmethod
+    async def seed_tiers(cls, session: AsyncSession) -> int:
+        """Register the four defaults after roster seeding, without overwrites."""
+        created = 0
+        for order, (tier, code, name, price, duplicate) in enumerate(TIER_CHEST_DEFAULTS):
+            if await cls.get_by_code(session, code) is None:
+                try:
+                    await cls.tier_card_pool(session, tier)
+                    active = True
+                except ShopChestConfigError:
+                    # Operator-disabled rarities must not prevent bot startup.
+                    active = False
+                    logger.warning(f"Seeding {code} inactive: incomplete rarity pool")
+                await cls.save_chest(
+                    session, code=code, name=name, price_apples=price,
+                    duplicate_apples=duplicate, tier=tier, sort_order=order,
+                    is_active=active, expected_version=0,
+                )
+                created += 1
+        return created
+
     # ----- validation ------------------------------------------------------
 
     @staticmethod
@@ -416,6 +519,9 @@ class ShopChestService:
             sort_order=chest.sort_order,
             image_key=chest.image_key,
         )
+        if chest.tier is not None:
+            await cls.tier_card_pool(session, chest.tier)
+            return []
         rewards = await cls.load_rewards(session, chest.id)
         validate_reward_table(rewards)
         await cls.validate_card_eligibility(session, rewards)
@@ -433,6 +539,7 @@ class ShopChestService:
         price_apples: int,
         duplicate_apples: int = 0,
         image_key: Optional[str] = None,
+        tier: Optional[str] = None,
         sort_order: int = 0,
         is_active: bool = False,
         rewards: Optional[Sequence[RewardSpec]] = None,
@@ -440,8 +547,9 @@ class ShopChestService:
     ) -> ShopChest:
         """Create or update a chest by ``code`` (caller commits).
 
-        ``rewards`` replaces the whole reward table when given. The chest must
-        be fully valid to be (or stay) active.
+        ``rewards`` replaces the whole custom reward table when given. A
+        ``tier`` uses rarity odds instead and cannot have custom reward rows.
+        The chest must be fully valid to be (or stay) active.
 
         ``expected_version`` is an optimistic-concurrency check. ``0`` means
         "this code must not exist yet"; a positive value must equal the stored
@@ -458,6 +566,10 @@ class ShopChestService:
             sort_order=sort_order,
             image_key=image_key,
         )
+        if tier is not None and (not isinstance(tier, str) or tier not in CHEST_TIER_ODDS):
+            raise ShopChestConfigError("ردهٔ صندوقچه نامعتبر است.")
+        if tier is not None and rewards:
+            raise ShopChestConfigError("صندوقچهٔ رده‌دار از احتمال‌های کمیابی استفاده می‌کند، نه جدول سفارشی.")
         if expected_version is not None and (not _is_int(expected_version) or expected_version < 0):
             raise ShopChestConfigError("expected_version باید ۰ (صندوقچه جدید) یا نسخه‌ای باشد که خوانده شده.")
         chest = await cls.get_by_code(session, code, lock=expected_version is not None)
@@ -469,22 +581,27 @@ class ShopChestService:
 
         if rewards is not None:
             specs = list(rewards)
-            validate_reward_table(specs)
-            await cls.validate_card_eligibility(session, specs)
+            if tier is None:
+                validate_reward_table(specs)
+                await cls.validate_card_eligibility(session, specs)
         elif chest is not None:
             specs = await cls.load_rewards(session, chest.id)
         else:
             specs = []
 
         if is_active:
-            validate_reward_table(specs)
-            await cls.validate_card_eligibility(session, specs)
+            if tier is not None:
+                await cls.tier_card_pool(session, tier)
+            else:
+                validate_reward_table(specs)
+                await cls.validate_card_eligibility(session, specs)
 
         if chest is None:
             chest = ShopChest(
                 code=code,
                 name=name,
                 image_key=image_key,
+                tier=tier,
                 price_apples=price_apples,
                 duplicate_apples=duplicate_apples,
                 is_active=is_active,
@@ -496,6 +613,7 @@ class ShopChestService:
         else:
             chest.name = name
             chest.image_key = image_key
+            chest.tier = tier
             chest.price_apples = price_apples
             chest.duplicate_apples = duplicate_apples
             chest.is_active = is_active
@@ -545,6 +663,13 @@ class ShopChestService:
     @classmethod
     async def describe(cls, session: AsyncSession, chest: ShopChest) -> List[Tuple[RewardSpec, Fraction, str]]:
         """Reward rows with exact probabilities and a short label each."""
+        if chest.tier is not None:
+            pool = await cls.tier_card_pool(session, chest.tier)
+            return [
+                (RewardSpec(kind=REWARD_KIND_CARD, weight=weight, character_id=pool[rarity][0].id),
+                 Fraction(weight, 100), f"🎴 کارت {RARITY_LABELS[rarity]}")
+                for rarity, weight in CHEST_TIER_ODDS[chest.tier].items()
+            ]
         rewards = await cls.load_rewards(session, chest.id)
         rows = []
         for spec, probability in probability_rows(rewards):
@@ -605,6 +730,8 @@ class ShopChestService:
             balance_after=opening.balance_after,
             chest_version=opening.chest_version,
             replayed=replayed,
+            reward_rarity=opening.reward_rarity,
+            pity_guaranteed=opening.pity_guaranteed,
         )
 
     @classmethod
@@ -675,8 +802,24 @@ class ShopChestService:
             logger.error(f"shop chest {chest.code} misconfigured: {exc}")
             raise ShopChestConfigError(USER_CHEST_UNAVAILABLE) from exc
 
-        # 4. one weighted draw, then duplicate detection under a locking read.
-        reward = pick_reward(rewards, rng if rng is not None else random.SystemRandom())
+        # 4. Pity is per user (all paid shop chests); replay returned above.
+        pity = await session.scalar(
+            select(ShopChestPity).where(ShopChestPity.user_id == user_id)
+            .execution_options(populate_existing=True)
+        )
+        counter = pity.pity_counter if pity is not None else 0
+        guaranteed = counter >= PITY_THRESHOLD - 1
+        draw_rng = rng if rng is not None else random.SystemRandom()
+        if chest.tier is not None or guaranteed:
+            reward = await cls.draw_tier_card(
+                session, chest.tier or "BRONZE", draw_rng, guaranteed=guaranteed
+            )
+        else:
+            reward = pick_reward(rewards, draw_rng)
+        reward_rarity = None
+        if reward.character_id is not None:
+            character = await session.get(Character, reward.character_id)
+            reward_rarity = character.rarity
         duplicate = False
         compensation = 0
         apples = 0
@@ -736,6 +879,8 @@ class ShopChestService:
                 reward_apples=awarded_apples,
                 reward_item_key=reward.item_key,
                 reward_character_id=reward.character_id,
+                reward_rarity=reward_rarity,
+                pity_guaranteed=guaranteed,
                 duplicate_converted=duplicate,
                 compensation_apples=compensation,
                 balance_after=0,
@@ -790,6 +935,14 @@ class ShopChestService:
                     idempotency_key=f"{base_key}:dup",
                 )
 
+            # Pity changes only for a successful new opening, in this same
+            # atomic block. Duplicate Epic/Legendary rolls also reset it.
+            counter_after = 0 if reward_rarity in HIGH_RARITIES else counter + 1
+            if pity is None:
+                session.add(ShopChestPity(user_id=user_id, pity_counter=counter_after))
+            else:
+                pity.pity_counter = counter_after
+
             # 10. collection XP for a NEW card only (progression, always last).
             if reward.kind == REWARD_KIND_CARD and not duplicate:
                 from sib.services.player_xp import PlayerXPService
@@ -837,6 +990,8 @@ class ShopChestService:
                 balance_after=balance,
                 chest_version=chest.version,
                 replayed=False,
+                reward_rarity=reward_rarity,
+                pity_guaranteed=guaranteed,
             )
 
         if savepoints_supported(session):
@@ -978,7 +1133,8 @@ async def apply_chest_configs(
     """Upsert chests and their reward tables from parsed config. Caller commits.
 
     Each dict: code, name, price_apples, duplicate_apples, image_key,
-    sort_order, is_active, rewards (list of reward dicts; a card reward may
+    sort_order, is_active, optional tier, rewards (omitted for tiered chests;
+    otherwise a list of reward dicts; a card reward may
     name its character by ``character_code`` instead of ``character_id``), and
     ``expected_version``: the version the operator read (``0`` for a new chest).
     The check is per chest and is atomic with its write (see
@@ -990,8 +1146,9 @@ async def apply_chest_configs(
             raise ShopChestConfigError(
                 f"صندوقچه {item.get('code')!r} بدون expected_version است."
             )
-        rewards = parse_reward_entries(
-            await _resolve_character_codes(session, item.get("rewards") or [])
+        rewards = (
+            parse_reward_entries(await _resolve_character_codes(session, item.get("rewards") or []))
+            if not item.get("tier") or item.get("rewards") else None
         )
         await ShopChestService.save_chest(
             session,
@@ -1000,6 +1157,7 @@ async def apply_chest_configs(
             price_apples=item.get("price_apples"),
             duplicate_apples=item.get("duplicate_apples", 0),
             image_key=item.get("image_key"),
+            tier=item.get("tier"),
             sort_order=int(item.get("sort_order", 0)),
             is_active=bool(item.get("is_active", False)),
             rewards=rewards,
