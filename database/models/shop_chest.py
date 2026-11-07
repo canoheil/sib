@@ -6,7 +6,10 @@ Independent from the daily chest (``daily_chest_claims`` and its
 * ``shop_chests`` - the chest definition (code, name, optional image key,
   price in apples, active flag, display order, duplicate compensation) plus a
   ``version`` that is bumped on every configuration change.
-* ``shop_chest_rewards`` - an INDEPENDENT weighted reward table per chest.
+* A nullable ``tier`` selects the rarity odds in ``services.shop_chests``;
+  custom chests with no tier keep their existing weighted tables.
+* ``shop_chest_pity`` - one per-user counter shared across paid shop chests.
+* ``shop_chest_rewards`` - an INDEPENDENT weighted reward table per custom chest.
   Each row is one of: a fixed apple amount, an ``ITEM_CATALOG`` item, or a
   character card.
 * ``shop_chest_openings`` - one row per successful opening. It is both the
@@ -55,6 +58,8 @@ class ShopChest(Base, TimestampMixin):
     code: Mapped[str] = mapped_column(String(40), nullable=False)
     name: Mapped[str] = mapped_column(String(80), nullable=False)
     image_key: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    # None retains the custom reward table; tiered chests draw by rarity.
+    tier: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     price_apples: Mapped[int] = mapped_column(Integer, nullable=False)
     # Apples credited instead of a card the user already owns.
     duplicate_apples: Mapped[int] = mapped_column(
@@ -142,6 +147,11 @@ class ShopChestOpening(Base, TimestampMixin):
     )
     reward_item_key: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     reward_character_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    # Immutable reveal metadata, including on replay after a card is reclassified.
+    reward_rarity: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    pity_guaranteed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
     duplicate_converted: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=false()
     )
@@ -151,4 +161,21 @@ class ShopChestOpening(Base, TimestampMixin):
     # Wallet balance right after this opening (set before commit).
     balance_after: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
+    )
+
+
+class ShopChestPity(Base):
+    """Consecutive non-Epic/non-Legendary shop openings, shared across tiers."""
+
+    __tablename__ = "shop_chest_pity"
+    __table_args__ = (
+        CheckConstraint("pity_counter >= 0", name="ck_shop_chest_pity_nonneg"),
+    )
+
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True, autoincrement=False,
+    )
+    pity_counter: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
     )

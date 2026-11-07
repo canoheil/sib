@@ -51,9 +51,9 @@ def _rarities(conn):
     return dict(conn.execute(sa.text("SELECT code, rarity FROM characters")).all())
 
 
-def test_081_is_the_only_head_and_revises_080():
+def test_081_revises_080_and_chain_has_a_single_head():
     scripts = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["081_card_rarity"]
+    assert scripts.get_heads() == ["082_chest_pity"]
     assert scripts.get_revision("081_card_rarity").down_revision == "080_group_doctors"
 
 
@@ -92,14 +92,14 @@ def test_real_alembic_upgrade_from_080_and_downgrade(tmp_path):
         return result.stdout.strip()
 
     alembic("stamp", "080_group_doctors")
-    alembic("upgrade", "head")
+    alembic("upgrade", "081_card_rarity")
     assert "081_card_rarity" in alembic("current")
     engine = sa.create_engine(f"sqlite:///{database}")
     with engine.connect() as conn:
         assert _rarities(conn) == {**EXPECTED, "custom_card": "COMMON"}
     alembic("downgrade", "080_group_doctors")
     assert "080_group_doctors" in alembic("current")
-    alembic("upgrade", "head")
+    alembic("upgrade", "081_card_rarity")
     engine.dispose()
 
 

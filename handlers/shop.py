@@ -15,10 +15,11 @@ entry id + nonce, never a price.
 """
 
 import secrets
+from pathlib import Path
 
 from aiogram import Bot, Router, F
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from sib.core.logging import logger
 from sib.core.text import escape_markdown
@@ -1083,6 +1084,7 @@ async def handle_shop_sell_seedling_all_confirm(callback: CallbackQuery, bot: Bo
 
 CHEST_BACK_CALLBACK = "shop_chests"
 USER_CHEST_UNAVAILABLE_TEXT = "این صندوقچه فعلاً در دسترس نیست."
+CHEST_ART_DIR = Path(__file__).resolve().parents[1] / "assets" / "chests"
 
 
 async def _chests_view(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
@@ -1128,6 +1130,7 @@ async def _chest_detail_view(user_id: int, chest_id: int):
     from sib.services.assets import AssetService
     from sib.services.character_art import photo_arg
     from sib.services.shop_chests import (
+        PITY_THRESHOLD,
         ShopChestConfigError,
         ShopChestService,
         format_probability,
@@ -1138,24 +1141,31 @@ async def _chest_detail_view(user_id: int, chest_id: int):
         if chest is None or not chest.is_active:
             return None
         balance = await AppleWalletService.get_balance(session, user_id)
+        pity_counter = await ShopChestService.pity_counter(session, user_id)
         try:
             await ShopChestService.validate_chest(session, chest)
+            if pity_counter >= PITY_THRESHOLD - 1:
+                await ShopChestService.tier_card_pool(session, chest.tier or "BRONZE", guaranteed=True)
             table = await ShopChestService.describe(session, chest)
             configured = True
         except ShopChestConfigError as exc:
             logger.error(f"shop chest {chest.code} is misconfigured: {exc}")
             table, configured = [], False
-        photo = None
-        if chest.image_key:
+        photo = FSInputFile(CHEST_ART_DIR / "chest_closed.jpg")
+        if chest.image_key and chest.tier is None:
             file_id, fs_path = await AssetService.resolve_photo(session, chest.image_key)
-            photo = photo_arg(file_id, fs_path)
+            photo = photo_arg(file_id, fs_path) or photo
         name, price = chest.name, chest.price_apples
         duplicate_apples = chest.duplicate_apples
 
     lines = [f"🎁 **{name}**", "", f"💰 قیمت: `{price}` سیب 🍎", f"💰 سیب‌های شما: `{balance}`"]
     rows = []
     if configured:
-        lines += ["", "🎲 **جوایز و احتمال هر جایزه:**"]
+        if pity_counter >= PITY_THRESHOLD - 1:
+            lines += ["", "🌟 این باز کردن یک کارت حماسی یا افسانه‌ای تضمینی دارد!"]
+        else:
+            lines += ["", f"🌟 حداکثر {PITY_THRESHOLD - pity_counter} باز کردن تا کارت حماسی یا افسانه‌ای."]
+        lines += ["", "🎲 **احتمال‌های عادی (بدون تضمین):**"]
         for _spec, probability, label in table:
             lines.append(f"• {label} — {format_probability(probability)}")
         if duplicate_apples:
@@ -1164,7 +1174,7 @@ async def _chest_detail_view(user_id: int, chest_id: int):
         nonce = secrets.token_urlsafe(9)
         rows.append([
             success_button(
-                text=f"🎁 باز کردن ({price} 🍎)",
+                text="🔓 باز کردن",
                 callback_data=f"shop_chest_open:{chest.id}:{chest.version}:{nonce}",
             )
         ])
@@ -1193,6 +1203,12 @@ def _opened_text(result, balance_note: str = "") -> str:
     else:
         lines.append(f"🎴 کارت جدید: **{result.character_name or ''}** به مجموعه‌ات اضافه شد!")
     lines.append("")
+    if result.reward_rarity:
+        from sib.services.shop_chests import RARITY_LABELS
+
+        lines.append(f"✨ کمیابی: {RARITY_LABELS.get(result.reward_rarity, result.reward_rarity)}")
+    if result.pity_guaranteed:
+        lines.append("🌟 جایزهٔ تضمینی حماسی یا افسانه‌ای فعال شد!")
     lines.append(f"💸 هزینه: `{result.price_apples}` سیب")
     lines.append(f"💰 موجودی: `{result.balance_after}` سیب 🍎")
     if balance_note:
@@ -1272,15 +1288,17 @@ async def handle_shop_chest_open(callback: CallbackQuery, bot: Bot):
         await safe_answer_callback(callback, CHEST_UNKNOWN_OUTCOME_TEXT, show_alert=True)
         return
 
-    nonce_again = secrets.token_urlsafe(9)
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [success_button(
-                text=f"🎁 باز کردن دوباره ({result.price_apples} 🍎)",
-                callback_data=f"shop_chest_open:{chest_id}:{result.chest_version}:{nonce_again}",
+                text="🎁 یک صندوقچهٔ دیگر",
+                callback_data=f"shop_chest:{chest_id}",
             )],
             [danger_button(text="↩️ بازگشت به صندوقچه‌ها", callback_data=CHEST_BACK_CALLBACK)],
         ]
     )
     await safe_answer_callback(callback, "صندوقچه باز شد! 🎉")
-    await safe_edit_callback_message(callback, bot, _opened_text(result), reply_markup=kb)
+    await safe_edit_callback_message(
+        callback, bot, _opened_text(result), reply_markup=kb,
+        photo=FSInputFile(CHEST_ART_DIR / "chest_open.jpg"),
+    )

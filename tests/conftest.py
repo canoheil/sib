@@ -145,6 +145,7 @@ async def db_session():
         await session.execute(text("DELETE FROM trades"))
         await session.execute(text("DELETE FROM shop_entries"))
         await session.execute(text("DELETE FROM shop_rotations"))
+        await session.execute(text("DELETE FROM shop_chest_pity"))
         await session.execute(text("DELETE FROM shop_chest_openings"))
         await session.execute(text("DELETE FROM shop_chest_rewards"))
         await session.execute(text("DELETE FROM shop_chests"))

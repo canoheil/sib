@@ -7,10 +7,54 @@ Daily chests (`/chest`, `services/daily_chest.py`) are a separate system. Shop
 chests do not change their limits, claim rules, probabilities, claim records or
 operation-key namespace.
 
-## Configuration (data, not code)
+## Tiered card chests and pity (migration 082)
 
-Chest prices, weights, rewards and duplicate compensation are **data**. The
-repository ships no game-balance defaults. Configure them with:
+Run `alembic upgrade head` before deploying. Startup registers four missing
+card-chest definitions **after** the character roster is seeded. Reruns never
+overwrite operator prices, activation flags, versions, or existing custom chests.
+Defaults and odds live in `services/shop_chests.py`:
+
+| Tier | Price (Apples) | Duplicate compensation | Common | Rare | Epic | Legendary |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Bronze | 500 | 50 | 75% | 20% | 4% | 1% |
+| Silver | 1,500 | 150 | 55% | 32% | 10% | 3% |
+| Gold | 4,000 | 400 | 30% | 45% | 20% | 5% |
+| Diamond | 8,000 | 1,000 | 10% | 35% | 45% | 10% |
+
+A tier rolls rarity first, then chooses uniformly among released, active,
+shop-enabled characters of that rarity. Event-exclusive cards remain excluded.
+If an advertised rarity has no eligible cards, the chest is unavailable rather
+than silently changing its odds. Missing defaults are seeded inactive in that
+case so operator-disabled cards cannot prevent startup; activate them through
+the CLI after restoring the pool. Set `tier` to `BRONZE`, `SILVER`, `GOLD`, or
+`DIAMOND` in a CLI apply entry and omit `rewards`; omit `tier` for a custom table.
+
+**Pity:** `shop_chest_pity.pity_counter` is per user and shared across all paid
+shop chests, including custom chests. Each successful non-Epic/non-Legendary
+opening increments it. After **nine misses, the tenth opening is Epic+**;
+a natural Epic/Legendary also resets it. Pity conditions the tier's odds on
+Epic/Legendary only (custom chests use Bronze's 4:1 ratio for this guarantee).
+A rolled Epic/Legendary duplicate still resets pity and uses the existing
+Apple-compensation rule; the guarantee is a high-rarity roll, not a new unique
+card. Daily chests are unaffected.
+
+Pity, the reward, the debit, and immutable reveal metadata commit in the same
+transaction under the existing user lock. Refusals, replays, and ambiguous-commit
+reconciliation cannot consume pity twice. The detail screen states the guarantee
+and labels the ordinary odds as excluding pity.
+
+The visual flow uses `assets/chests/chest_closed.jpg` and a **🔓 باز کردن**
+button, then edits that message to `assets/chests/chest_open.jpg` with the reward
+caption after commit. Existing custom chest artwork is retained for its closed
+state when configured. “Another chest” returns to the closed state and issues a
+new operation nonce; retrying an old nonce shows the stored outcome without
+another charge. Downgrade removes pity state/reveal columns, but preserves chest
+definitions and opening history; re-upgrade restores the four reserved tier codes.
+
+## Custom reward-table configuration
+
+Custom chest prices, weights, rewards and duplicate compensation remain **data**.
+Configure them with:
 
 ```
 python -m sib.scripts.shop_chests list
@@ -63,6 +107,7 @@ defaults.
 | --- | --- |
 | `code` | unique; starts with a lowercase letter; `[a-z0-9_]`; 3–40 characters |
 | `name` | 1–80 characters |
+| `tier` | optional `BRONZE` / `SILVER` / `GOLD` / `DIAMOND`; omit for custom reward tables |
 | `image_key` | optional bare asset key; the file is `assets/items/<key>.jpg`. Keys containing `/` or `..` are rejected |
 | `price_apples` | integer ≥ 1 |
 | `duplicate_apples` | integer ≥ 0; compensation when a card is already owned |
