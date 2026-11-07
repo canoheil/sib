@@ -14,6 +14,7 @@ from sib.handlers.shop import _cards_view, _shop_item_view
 from sib.handlers.wiki import _wiki_index_lines
 from sib.services.apple_wallet import AppleWalletService
 from sib.services.card_upgrade import CardUpgradeService
+from sib.services.config_store import ConfigService
 from sib.services.characters import CharacterService, render_character_card
 from sib.services.player_cards import PlayerCardService
 from sib.services.shop import ShopService
@@ -31,6 +32,9 @@ RED_WIKI = (
     f"💪 قدرت: 22\n⚡ سرعت: 20\n🧠 هوش: 18\n\n*داستان*:{RED_STORY}"
 )
 PRICE_LINE = "💰 قیمت: 300 سیب"
+RARE_PRICE_LINE = "💰 قیمت: 2000 سیب"
+EPIC_PRICE_LINE = "💰 قیمت: 6000 سیب"
+LEGENDARY_PRICE_LINE = "💰 قیمت: 15000 سیب"
 
 
 def _entries():
@@ -49,13 +53,17 @@ def _replace_seed(monkeypatch, entries):
     monkeypatch.setattr(Path, "read_text", fake_read)
 
 
-async def _seeded(session):
+async def _seeded(session, *, shop_code=None):
     await seed_characters(session)
     await session.commit()
-    return {
+    characters = {
         character.code: character
         for character in (await session.scalars(select(Character))).all()
     }
+    if shop_code is not None:
+        await ConfigService.set(session, "shop_pool_character_ids", [characters[shop_code].id])
+        await session.commit()
+    return characters
 
 
 def _buttons(keyboard):
@@ -74,7 +82,7 @@ def test_red_apple_seed_is_the_exact_official_message():
 
 
 async def test_red_apple_wiki_and_shop_share_exact_content(db_session):
-    characters = await _seeded(db_session)
+    characters = await _seeded(db_session, shop_code="sib_sorkh")
     red = characters[RED_CODE]
     assert red.name_fa == RED_NAME
     assert red.affiliations_fa == RED_AFFILIATIONS
@@ -126,8 +134,10 @@ async def test_bold_labels_and_card_names_apply_to_all_cards(db_session):
         page_text, _keyboard = await _cards_view(user.id, page=page)
         listing_pages.append(page_text)
     listing = "\n".join(listing_pages)
+    assert len(entries) == 5
+    offered = {character.id for _, character, _ in entries}
     for character in characters.values():
-        if character.shop_enabled:
+        if character.id in offered:
             assert f"*{escape_markdown(character.name_fa)}*" in listing
         else:
             assert f"*{escape_markdown(character.name_fa)}*" not in listing
@@ -218,7 +228,7 @@ async def test_official_stat_sync_uses_normal_history_once(db_session):
 
 
 async def test_official_purchase_main_card_upgrade_and_back_are_preserved(db_session):
-    red = (await _seeded(db_session))[RED_CODE]
+    red = (await _seeded(db_session, shop_code="sib_sorkh"))[RED_CODE]
     user = await create_test_user(db_session, "بازی با کارت رسمی")
     await _fund(db_session, user, apples=1000, gold=3)
     entry = next(

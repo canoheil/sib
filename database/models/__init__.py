@@ -29,6 +29,7 @@ from sib.database.models.garden import (
 from sib.database.models.system_config import SystemConfig
 from sib.database.models.player_card import PlayerCard, PlayerCardLegacyStats
 from sib.database.models.shop import (
+    CARD_SHOP_PRICES,
     SHOP_CARD_PRICE_APPLES,
     ShopEntry,
     ShopEntryType,

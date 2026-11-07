@@ -9,9 +9,9 @@ Store structure (spec):
 
 Item/chest/garden economic values are config-driven (item_buy_prices /
 item_sell_prices / magic_powder_level_costs / garden_plot_prices), so
-rebalancing never touches this file. Card prices are not: every card
-costs the single unified ``ShopService.card_price()`` (300 Apples), and
-the purchase button carries only an entry id + nonce - never a price.
+rebalancing never touches this file. Card prices depend on rarity through
+``ShopService.card_price(character)``; the purchase button carries only an
+entry id + nonce, never a price.
 """
 
 import secrets
@@ -179,10 +179,9 @@ async def _cards_view(user_id: int, page: int = 0) -> tuple[str, InlineKeyboardM
         lines.extend([f"📖 صفحه {page + 1} از {total_pages}", ""])
 
     buttons: list[list[InlineKeyboardButton]] = []
-    # ONE price for every card (present and future): never per-entry,
-    # per-character or client-supplied. Render five at a time in a single column.
-    price = ShopService.card_price()
+    # Render five at a time in a single column, using server-side rarity prices.
     for entry, character, owned in page_entries:
+        price = ShopService.card_price(character)
         badge = f" {entry.badge}" if entry.badge else ""
         if owned:
             lines.append(f"✅ *{escape_markdown(character.name_fa)}* — (دارید)")
@@ -263,7 +262,7 @@ async def _shop_item_view(user_id: int, entry_id: int, page: int = 0):
         )
         return text, kb, None
 
-    price = ShopService.card_price()
+    price = ShopService.card_price(character)
     badge = f" {entry.badge}" if entry.badge else ""
     lines = [
         render_character_card(character, faction=faction),

@@ -107,7 +107,7 @@ def test_migration_062_revises_061_and_is_the_only_head():
     # 075_rocket_game, 076_pet_system, 077_pet_rename,
     # 078_wanted_decay and 079_disease_daily_announcement revise
     # it; history stays linear with one head.
-    assert set(revisions) - set(parents) == {"080_group_doctors"}
+    assert set(revisions) - set(parents) == {"081_card_rarity"}
 
 
 # ---------------------------------------------------------------------------

@@ -106,7 +106,7 @@ def test_migration_079_revises_078_seeds_config_and_is_the_head():
     assert migration.revision == "079_disease_daily_announcement"
     assert migration.down_revision == "078_wanted_decay"
     scripts = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["080_group_doctors"]
+    assert scripts.get_heads() == ["081_card_rarity"]
     assert (
         scripts.get_revision("079_disease_daily_announcement").down_revision
         == "078_wanted_decay"
@@ -173,11 +173,13 @@ def test_migration_079_mysql_sql_is_non_destructive():
 
 def test_alembic_real_upgrade_and_downgrade_from_078(tmp_path):
     scripts = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["080_group_doctors"]
+    assert scripts.get_heads() == ["081_card_rarity"]
     database = tmp_path / "announcement_migration.db"
     engine = sa.create_engine(f"sqlite:///{database}")
     with engine.begin() as connection:
         connection.execute(sa.text("CREATE TABLE users (id BIGINT PRIMARY KEY)"))
+        connection.execute(sa.text("CREATE TABLE characters (code VARCHAR(64) PRIMARY KEY, rarity VARCHAR(20) NOT NULL DEFAULT 'COMMON')"))
+        connection.execute(sa.text("CREATE TABLE shop_rotations (is_active BOOLEAN NOT NULL)"))
         connection.execute(
             sa.text("CREATE TABLE system_config (`key` VARCHAR(64) PRIMARY KEY, `value` TEXT NOT NULL)")
         )
@@ -197,10 +199,10 @@ def test_alembic_real_upgrade_and_downgrade_from_078(tmp_path):
         assert result.returncode == 0, result.stdout + result.stderr
         return result.stdout.strip()
 
-    assert alembic("heads") == "080_group_doctors (head)"
+    assert alembic("heads") == "081_card_rarity (head)"
     alembic("stamp", "078_wanted_decay")
     alembic("upgrade", "head")
-    assert "080_group_doctors" in alembic("current")
+    assert "081_card_rarity" in alembic("current")
     engine = sa.create_engine(f"sqlite:///{database}")
     assert sa.inspect(engine).has_table("group_doctor_states")
     with engine.connect() as connection:

@@ -15,7 +15,7 @@ from sib.services.player_cards import PlayerCardService
 from sib.services.shop import ShopService
 from sib.services.telegram_ui import photo_caption
 from sib.services.wiki import CollectionService, WikiService
-from sib.tests.test_card_lore import PRICE_LINE, _buttons, _entries, _seeded
+from sib.tests.test_card_lore import LEGENDARY_PRICE_LINE as PRICE_LINE, _buttons, _entries, _seeded
 from sib.tests.test_card_upgrade import _fund
 from sib.tests.test_parties import create_test_user
 
@@ -45,7 +45,7 @@ def test_igris_seed_is_verbatim_without_invented_role_or_mechanics():
 
 
 async def test_igris_wiki_group_shop_and_full_caption_are_consistent(db_session):
-    characters = await _seeded(db_session)
+    characters = await _seeded(db_session, shop_code="igris")
     igris = characters[IGRIS_CODE]
     assert igris.name_fa == IGRIS_NAME and igris.affiliations_fa == IGRIS_AFFILIATIONS
     assert igris.lore_fa == IGRIS_STORY
@@ -155,9 +155,9 @@ async def test_igris_sync_preserves_other_cards_and_player_state(db_session, mon
 
 
 async def test_igris_purchase_main_selection_upgrade_and_back_are_preserved(db_session):
-    igris = (await _seeded(db_session))[IGRIS_CODE]
+    igris = (await _seeded(db_session, shop_code="igris"))[IGRIS_CODE]
     user = await create_test_user(db_session, "بازی با ایگریس رسمی")
-    await _fund(db_session, user, apples=1000, gold=3)
+    await _fund(db_session, user, apples=15700, gold=3)
     entry = next(
         entry for entry, character, _ in await ShopService.list_entries(db_session)
         if character.id == igris.id
@@ -167,7 +167,7 @@ async def test_igris_purchase_main_selection_upgrade_and_back_are_preserved(db_s
     await db_session.commit()
     replay = await ShopService.purchase(db_session, user.id, entry.id, nonce="officialigris01")
     await db_session.commit()
-    assert first.price == 300 and not first.replayed and replay.replayed
+    assert first.price == 15000 and not first.replayed and replay.replayed
     assert await AppleWalletService.get_balance(db_session, user.id) == 700
     card = first.card
     detail, keyboard, photo = await _card_view(user.id, card.id)

@@ -45,7 +45,7 @@ def test_sage_king_seed_preserves_all_official_fields_verbatim():
 
 
 async def test_sage_king_wiki_and_shop_render_full_official_text(db_session):
-    characters = await _seeded(db_session)
+    characters = await _seeded(db_session, shop_code="sage_king")
     king = characters[SAGE_KING_CODE]
     assert king.name_fa == SAGE_KING_NAME
     assert king.affiliations_fa == SAGE_KING_AFFILIATIONS
@@ -164,7 +164,7 @@ async def test_sage_king_sync_preserves_other_cards_and_player_state(db_session,
 
 
 async def test_sage_king_purchase_main_selection_upgrade_and_back_are_preserved(db_session):
-    king = (await _seeded(db_session))[SAGE_KING_CODE]
+    king = (await _seeded(db_session, shop_code="sage_king"))[SAGE_KING_CODE]
     user = await create_test_user(db_session, "بازی با پادشاه فرزانه رسمی")
     await _fund(db_session, user, apples=1000, gold=3)
     entry = next(

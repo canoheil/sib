@@ -15,7 +15,7 @@ from sib.services.player_cards import PlayerCardService
 from sib.services.shop import ShopService
 from sib.services.telegram_ui import photo_caption
 from sib.services.wiki import CollectionService, WikiService
-from sib.tests.test_card_lore import PRICE_LINE, _buttons, _entries, _seeded
+from sib.tests.test_card_lore import RARE_PRICE_LINE as PRICE_LINE, _buttons, _entries, _seeded
 from sib.tests.test_card_upgrade import _fund
 from sib.tests.test_parties import create_test_user
 
@@ -44,7 +44,7 @@ def test_treyni_seed_preserves_the_exact_official_message():
 
 
 async def test_treyni_wiki_and_shop_show_full_story_with_separate_price(db_session):
-    characters = await _seeded(db_session)
+    characters = await _seeded(db_session, shop_code="treyni")
     treyni = characters[TREYNI_CODE]
     assert treyni.name_fa == TREYNI_NAME
     assert treyni.affiliations_fa == TREYNI_AFFILIATIONS
@@ -163,9 +163,9 @@ async def test_treyni_sync_preserves_other_cards_and_player_state(db_session, mo
 
 
 async def test_treyni_purchase_main_selection_upgrade_and_back_are_preserved(db_session):
-    treyni = (await _seeded(db_session))[TREYNI_CODE]
+    treyni = (await _seeded(db_session, shop_code="treyni"))[TREYNI_CODE]
     user = await create_test_user(db_session, "بازی با ترینی رسمی")
-    await _fund(db_session, user, apples=1000, gold=3)
+    await _fund(db_session, user, apples=2700, gold=3)
     entry = next(
         entry for entry, character, _ in await ShopService.list_entries(db_session)
         if character.id == treyni.id
@@ -175,7 +175,7 @@ async def test_treyni_purchase_main_selection_upgrade_and_back_are_preserved(db_
     await db_session.commit()
     replay = await ShopService.purchase(db_session, user.id, entry.id, nonce="officialtreyni01")
     await db_session.commit()
-    assert first.price == 300 and not first.replayed and replay.replayed
+    assert first.price == 2000 and not first.replayed and replay.replayed
     assert await AppleWalletService.get_balance(db_session, user.id) == 700
 
     card = first.card

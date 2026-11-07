@@ -1,19 +1,17 @@
 """Weekly rotating shop service (Phase 11).
 
-Pricing: every card in the shop costs exactly ``SHOP_CARD_PRICE_APPLES``
-(Apples). There is no rarity system and no per-card, per-entry or
-client-supplied price anywhere in this flow: :meth:`ShopService.card_price`
-is the single authoritative value the listing screens, the balance
-pre-check, the apple debit and the ledger row all use. Newly registered
-characters are therefore priced correctly with no configuration.
+Pricing: cards cost 300 / 2,000 / 6,000 / 15,000 Apples for COMMON /
+RARE / EPIC / LEGENDARY. :meth:`ShopService.card_price` is the authoritative
+price used by every screen, the balance pre-check, the debit and the ledger.
+Legacy per-card/per-entry prices and client-supplied prices are ignored.
 
 Rotation policy (deterministic and data-driven):
 - Duration comes from `shop_rotation_hours` (default 168 = 7 days).
-- The pool comes from `shop_pool_character_ids` (empty = all released
-  & shop-enabled characters).
-- Entries rotate round-robin over the pool, so every character re-enters
-  the shop in later weeks automatically. Historical entries remain
-  immutable.
+- The pool comes from `shop_pool_character_ids` (empty = all released,
+  active & shop-enabled characters).
+- Select five distinct cards, weighted toward lower rarities. An undersized
+  pool offers all eligible cards, never duplicates or ineligible fillers.
+- Persist the selection for the whole window; historical entries stay intact.
 
 Purchases are one transaction owned by the caller (``get_session()``):
 user row lock -> replay/ownership checks -> apple debit (keyed per button
@@ -22,6 +20,7 @@ refusal is raised as :class:`ShopError` and must escape the caller's
 transaction block, so nothing a refused purchase wrote is committed.
 """
 
+import random
 import re
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -34,7 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sib.core.logging import Events, log_event, logger
 from sib.database.models import (
-    SHOP_CARD_PRICE_APPLES,
+    CARD_SHOP_PRICES,
     Character,
     PlayerCard,
     ReleaseStatus,
@@ -72,6 +71,10 @@ class ShopError(ValueError):
 OPERATION_NONCE_RE = re.compile(r"^[A-Za-z0-9_-]{8,32}$")
 PURCHASE_KEY_FORMAT = "shop_purchase:{user_id}:{nonce}"
 STALE_PURCHASE_TEXT = "این صفحه خرید قدیمی است؛ از فروشگاه دوباره وارد شو."
+
+SHOP_ROTATION_SIZE = 5
+# Relative per-card weights, not percentages; Legendaries remain possible.
+SHOP_RARITY_WEIGHTS = {"COMMON": 60, "RARE": 25, "EPIC": 10, "LEGENDARY": 1}
 
 
 @dataclass(frozen=True)
@@ -129,11 +132,8 @@ class ShopService:
         for r in old:
             r.is_active = False
 
-        last = await session.scalar(
-            select(ShopRotation).order_by(ShopRotation.id.desc()).limit(1)
-        )
-        # Logical sequence = number of rotations so far (deterministic
-        # round-robin, independent of DB auto-increment gaps).
+        # Logical sequence seeds weighted selection independently of DB
+        # auto-increment gaps.
         from sqlalchemy import func
 
         rotations_count = await session.scalar(select(func.count(ShopRotation.id)))
@@ -150,30 +150,41 @@ class ShopService:
         await session.flush()
 
         pool = await cls._pool_characters(session)
-        if pool:
-            # Deterministic round-robin by rotation sequence.
-            offset = (seq - 1) % len(pool)
-            ordered = pool[offset:] + pool[:offset]
-            for index, character in enumerate(ordered):
-                session.add(
-                    ShopEntry(
-                        rotation_id=rotation.id,
-                        character_id=character.id,
-                        entry_type=ShopEntryType.CHARACTER,
-                        # Legacy column: never written with a per-entry price,
-                        # never read (see ShopService.card_price).
-                        price_override=None,
-                        badge=cls._badge_for(index),
-                        sort_order=index,
-                    )
+        selected = cls._select_characters(pool, seq)
+        for index, character in enumerate(selected):
+            session.add(
+                ShopEntry(
+                    rotation_id=rotation.id,
+                    character_id=character.id,
+                    entry_type=ShopEntryType.CHARACTER,
+                    price_override=None,
+                    badge=cls._badge_for(index),
+                    sort_order=index,
                 )
-            await session.flush()
+            )
+        await session.flush()
 
         log_event(
             Events.SHOP_EVENT,
-            {"action": "rotation_opened", "week_id": week_id, "items": len(pool)},
+            {"action": "rotation_opened", "week_id": week_id, "items": len(selected)},
         )
         return rotation
+
+    @staticmethod
+    def _select_characters(pool: List[Character], sequence: int) -> List[Character]:
+        """Weighted sampling without replacement, stable for a rotation."""
+        rng = random.Random(sequence)
+        remaining = list(pool)
+        selected = []
+        for _ in range(min(SHOP_ROTATION_SIZE, len(remaining))):
+            character = rng.choices(
+                remaining,
+                weights=[SHOP_RARITY_WEIGHTS[c.rarity] for c in remaining],
+                k=1,
+            )[0]
+            selected.append(character)
+            remaining.remove(character)
+        return selected
 
     @staticmethod
     def _badge_for(index: int) -> Optional[str]:
@@ -276,22 +287,9 @@ class ShopService:
         return entry, character, owned
 
     @staticmethod
-    def card_price() -> int:
-        """The price of ANY shop card, in Apples - the ONE authoritative rule.
-
-        Deliberately independent of the entry, the character and the caller:
-
-        * ``ShopEntry.price_override`` is a deprecated column and is never
-          read (migration 033 clears historical values);
-        * ``Character.price`` is a deprecated column and is never read;
-        * the client never supplies a price - purchase callbacks carry only
-          an entry id and a per-press nonce (see :meth:`purchase`).
-
-        Every screen, the balance pre-check, the debit and the ledger row
-        call this method, so they can never disagree, and cards released in
-        the future are priced automatically without any configuration.
-        """
-        return SHOP_CARD_PRICE_APPLES
+    def card_price(character: Character) -> int:
+        """Authoritative rarity price; ignore legacy prices and overrides."""
+        return CARD_SHOP_PRICES[character.rarity]
 
     # ------------------------------------------------------------------
     # Purchase (atomic)
@@ -354,9 +352,9 @@ class ShopService:
         if not is_shop_eligible(character):
             raise ShopError("شخصیت موردنظر در دسترس نیست.")
 
-        # The ONE price: the legacy per-character/per-entry values are never
-        # consulted, and this is the same value used below for the debit.
-        price = cls.card_price()
+        # Price comes only from the persisted character's rarity, never
+        # legacy price columns or callback data.
+        price = cls.card_price(character)
 
         # Ownership check BEFORE any debit (never charge for nothing).
         already_owned = await session.scalar(

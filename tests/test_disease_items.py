@@ -504,7 +504,7 @@ def test_migration_mysql_sql_is_non_destructive():
 
 def test_alembic_real_upgrade_and_downgrade_from_070(tmp_path):
     scripts = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["080_group_doctors"]
+    assert scripts.get_heads() == ["081_card_rarity"]
     assert scripts.get_revision("071_disease_items").down_revision == "070_disease_system"
     database = tmp_path / "migration.db"
     engine = sa.create_engine(f"sqlite:///{database}")
@@ -520,7 +520,7 @@ def test_alembic_real_upgrade_and_downgrade_from_070(tmp_path):
         assert result.returncode == 0, result.stdout + result.stderr
         return result.stdout.strip()
 
-    assert alembic("heads") == "080_group_doctors (head)"
+    assert alembic("heads") == "081_card_rarity (head)"
     alembic("stamp", "070_disease_system")
     alembic("upgrade", "071_disease_items")
     alembic("upgrade", "071_disease_items")

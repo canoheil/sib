@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sib.core.logging import logger, log_event, Events
 from sib.core.text import escape_markdown
 from sib.database.models import (
+    CARD_SHOP_PRICES,
     SHOP_CARD_PRICE_APPLES,
     Character,
     CharacterBalanceVersion,
@@ -35,6 +36,11 @@ class CharacterService:
     # ------------------------------------------------------------------
     # Validation
     # ------------------------------------------------------------------
+    @staticmethod
+    def validate_rarity(rarity: str) -> None:
+        if not isinstance(rarity, str) or rarity not in CARD_SHOP_PRICES:
+            raise CharacterValidationError(f"کمیابی نامعتبر: {rarity}")
+
     @classmethod
     async def validate_base_budget(cls, session: AsyncSession, power: int, speed: int, intelligence: int) -> None:
         """Enforce the permanent Level-1 budget: Power + Speed + Intelligence == 60.
@@ -78,16 +84,15 @@ class CharacterService:
         faction_id: Optional[int] = None,
         faction_role_fa: Optional[str] = None,
         affiliations_fa: Optional[str] = None,
+        rarity: str = "COMMON",
         release_status: str = ReleaseStatus.DRAFT,
     ) -> Character:
         """Register a character/card.
 
-        There is deliberately no ``price`` parameter: every shop card costs
-        the unified ``SHOP_CARD_PRICE_APPLES`` (see
-        :meth:`ShopService.card_price`), so a new card needs no price (and
-        no rarity) configuration. The legacy ``price`` column is written
-        with that unified value for schema/backward compatibility.
+        Rarity determines the shop price; per-card price overrides remain
+        unsupported. New cards default to COMMON.
         """
+        cls.validate_rarity(rarity)
         existing = await session.scalar(select(Character).where(Character.code == code))
         if existing:
             raise CharacterValidationError(f"شخصیت با کد «{code}» قبلاً ثبت شده.")
@@ -108,8 +113,8 @@ class CharacterService:
             hidden_modifiers=Character._dump(hidden_modifiers),
             strengths=Character._dump(strengths or []),
             weaknesses=Character._dump(weaknesses or []),
-            # Unified pricing: never a per-card value.
-            price=SHOP_CARD_PRICE_APPLES,
+            price=SHOP_CARD_PRICE_APPLES,  # Legacy column, not used for pricing.
+            rarity=rarity,
             faction_id=faction_id,
             faction_role_fa=faction_role_fa,
             affiliations_fa=affiliations_fa,
@@ -136,26 +141,16 @@ class CharacterService:
     ) -> Character:
         """Edit a character's data.
 
-        ``price`` is NOT an editable field: shop cards have one global price
-        (``SHOP_CARD_PRICE_APPLES``). An attempt to set a per-card price is
-        refused loudly instead of silently writing a value nothing prices
-        with - there is no per-card pricing left to drift out of sync.
-
-        ``rarity`` is refused for the same reason: the game has no rarity
-        system, so there is no tier to edit (the deprecated column keeps
-        historical values for old installations and is never written here).
+        Shop prices derive from rarity, never the legacy ``price`` field.
         """
         character = await session.get(Character, character_id)
         if not character:
             raise CharacterValidationError("شخصیت پیدا نشد.")
 
-        unsupported = sorted({"price", "rarity"} & set(fields))
-        if unsupported:
-            raise CharacterValidationError(
-                "این فیلدها بخشی از مدل کارت نیستند: "
-                f"{', '.join(unsupported)} — قیمت همهٔ کارت‌ها سراسری است "
-                f"({SHOP_CARD_PRICE_APPLES} سیب) و سیستم کمیابی وجود ندارد."
-            )
+        if "price" in fields:
+            raise CharacterValidationError("قیمت کارت بر اساس کمیابی تعیین می‌شود.")
+        if "rarity" in fields:
+            cls.validate_rarity(fields["rarity"])
 
         stat_keys = {"power", "speed", "intelligence"}
         balance_keys = stat_keys | {"passive_key", "passive_data", "hidden_modifiers"}
@@ -320,7 +315,7 @@ def render_character_card(
     flavor text from older generated definitions. Those fields remain in
     storage and are still shown on legacy cards awaiting official content.
     Single asterisks are bold in Telegram's configured legacy Markdown.
-    Shop price is a separate final line from the existing unified rule.
+    Shop price is a separate final line, derived from rarity.
     """
     official = character.affiliations_fa is not None
     lines = [
@@ -354,5 +349,7 @@ def render_character_card(
         if character.weaknesses_list:
             lines.append(f"⚠️ نقاط ضعف: {escape_markdown(', '.join(character.weaknesses_list))}")
     if show_price:
-        lines += ["", f"💰 قیمت: {SHOP_CARD_PRICE_APPLES} سیب"]
+        from sib.services.shop import ShopService
+
+        lines += ["", f"💰 قیمت: {ShopService.card_price(character)} سیب"]
     return "\n".join(lines)

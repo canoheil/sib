@@ -43,7 +43,7 @@ async def test_shop_root_offers_four_sections(db_session):
 
 
 @pytest.mark.asyncio
-async def test_shop_card_page_handler_renders_requested_five_card_page(db_session):
+async def test_shop_card_page_handler_clamps_stale_page_to_the_five_card_rotation(db_session):
     from unittest.mock import AsyncMock, MagicMock, patch
 
     from sib.handlers import shop as shop_handlers
@@ -67,20 +67,18 @@ async def test_shop_card_page_handler_renders_requested_five_card_page(db_sessio
     answer.assert_awaited_once_with(callback)
     text = edit.await_args.args[2]
     keyboard = edit.await_args.kwargs["reply_markup"]
-    assert "📖 صفحه 2 از 3" in text
+    assert "📖 صفحه" not in text
     card_rows = [
         row for row in keyboard.inline_keyboard
         if row and row[0].callback_data.startswith(("shop_item:", "shop_owned:"))
     ]
     assert len(card_rows) == 5 and all(len(row) == 1 for row in card_rows)
-    assert any(
-        button.text == "◀️ قبلی" and button.callback_data == "shop_cards:0"
+    assert not any(
+        button.text in {"◀️ قبلی", "▶️ بعدی"}
         for row in keyboard.inline_keyboard for button in row
     )
-    assert any(
-        button.text == "▶️ بعدی" and button.callback_data == "shop_cards:2"
-        for row in keyboard.inline_keyboard for button in row
-    )
+    assert keyboard.inline_keyboard[-2][0].callback_data == "shop_cards:0"
+
 
 
 # ---------------------------------------------------------------------------

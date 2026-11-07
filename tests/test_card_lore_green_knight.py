@@ -44,7 +44,7 @@ def test_green_knight_seed_is_exact_without_invented_role_or_mechanics():
 
 
 async def test_green_knight_wiki_group_shop_and_full_text_are_consistent(db_session):
-    characters = await _seeded(db_session)
+    characters = await _seeded(db_session, shop_code="green_knight")
     knight = characters[KNIGHT_CODE]
     assert knight.name_fa == KNIGHT_NAME and knight.affiliations_fa == KNIGHT_AFFILIATIONS
     assert knight.lore_fa == KNIGHT_STORY
@@ -154,7 +154,7 @@ async def test_green_knight_sync_preserves_other_cards_and_player_state(db_sessi
 
 
 async def test_green_knight_purchase_main_selection_upgrade_and_back_are_preserved(db_session):
-    knight = (await _seeded(db_session))[KNIGHT_CODE]
+    knight = (await _seeded(db_session, shop_code="green_knight"))[KNIGHT_CODE]
     user = await create_test_user(db_session, "بازی با شوالیه سبز رسمی")
     await _fund(db_session, user, apples=1000, gold=3)
     entry = next(

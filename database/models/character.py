@@ -85,21 +85,15 @@ class Character(Base, TimestampMixin):
     affiliations_fa: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Economy / availability.
-    # DEPRECATED: the per-card price. Every card costs the unified
-    # ``SHOP_CARD_PRICE_APPLES`` in the shop; this column is kept
-    # (normalized to that value by ``CharacterService`` and migration 033)
-    # so existing installations and raw inserts stay schema-compatible and
-    # nothing that ever stored a price row loses data.
+    # Legacy per-card price, retained for schema/history compatibility.
+    # Shop pricing reads rarity, never this column.
     price: Mapped[int] = mapped_column(
         Integer, default=SHOP_CARD_PRICE_APPLES, nullable=False
     )
-    # DEPRECATED: rarity is no longer a classification at all (cards are
-    # sidegrades; the faction is the lore metadata now) and it has no effect
-    # on pricing, the shop, filters, badges or labels. The column is kept,
-    # with its historical values, so no existing installation loses data -
-    # nothing in the codebase reads it, and CharacterService.update refuses
-    # to write it (the server default only keeps raw inserts valid).
-    rarity: Mapped[str] = mapped_column(String(20), default="COMMON", nullable=False)
+    # Collection/economy tier; combat stats and progression are unchanged.
+    rarity: Mapped[str] = mapped_column(
+        String(20), default="COMMON", server_default="COMMON", nullable=False
+    )
     release_status: Mapped[str] = mapped_column(
         String(20), default=ReleaseStatus.DRAFT, nullable=False, index=True
     )
@@ -165,9 +159,8 @@ class Character(Base, TimestampMixin):
     def snapshot(self) -> Dict[str, Any]:
         """Full balance-relevant snapshot for versioning.
 
-        ``price`` is kept in the snapshot so historical rows stay
-        interpretable; it is always the unified ``SHOP_CARD_PRICE_APPLES``
-        for anything written from now on.
+        ``price`` is retained for historical compatibility; current shop
+        prices are derived from ``rarity``.
         """
         return {
             "code": self.code,
@@ -178,6 +171,7 @@ class Character(Base, TimestampMixin):
             "passive_data": self.passive_params,
             "hidden_modifiers": self.hidden_modifier_params,
             "price": self.price,
+            "rarity": self.rarity,
             "balance_version": self.balance_version,
         }
 

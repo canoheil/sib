@@ -38,7 +38,7 @@ def test_golden_apple_seed_keeps_the_exact_official_message():
 
 
 async def test_golden_apple_wiki_and_shop_have_identical_full_text(db_session):
-    golden = (await _seeded(db_session))[GOLDEN_CODE]
+    golden = (await _seeded(db_session, shop_code="sib_talayi"))[GOLDEN_CODE]
     assert golden.name_fa == GOLDEN_NAME
     assert golden.affiliations_fa == GOLDEN_AFFILIATIONS
     assert golden.lore_fa == GOLDEN_STORY
@@ -135,7 +135,7 @@ async def test_golden_replacement_preserves_other_cards_and_player_state(db_sess
 
 
 async def test_golden_purchase_main_selection_upgrade_and_back_are_preserved(db_session):
-    golden = (await _seeded(db_session))[GOLDEN_CODE]
+    golden = (await _seeded(db_session, shop_code="sib_talayi"))[GOLDEN_CODE]
     user = await create_test_user(db_session, "بازی با سیب طلایی رسمی")
     await _fund(db_session, user, apples=1000, gold=3)
     entry = next(

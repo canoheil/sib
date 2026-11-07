@@ -16,8 +16,7 @@ from sib.tests.test_parties import create_test_user
 
 
 async def _make_characters(db_session, count=4):
-    """Shop characters. Cards carry no price of their own any more: the
-    unified ``ShopService.card_price()`` applies to every one of them."""
+    """Create released COMMON cards, priced by rarity rather than legacy price."""
     chars = []
     for i in range(count):
         character = await CharacterService.create(
@@ -48,8 +47,7 @@ async def test_rotation_created_on_demand_with_entries(db_session):
 
     entries = await ShopService.list_entries(db_session)
     assert len(entries) == 4
-    # Round-robin starts at the beginning of the pool.
-    assert entries[0][1].id == chars[0].id
+    assert {c.id for _, c, _ in entries} == {c.id for c in chars}
     # Badges are Persian.
     assert entries[0][0].badge == "🔥 محبوب این هفته"
 
@@ -64,7 +62,7 @@ async def test_rotation_reuse_and_rotation_policy(db_session):
     rotation2 = await ShopService.current_rotation(db_session)
     assert rotation1.id == rotation2.id
 
-    # Expire the window → a new rotation opens with shifted entries.
+    # Expire the window → a new weighted selection opens.
     rotation1.ends_at = datetime.now(timezone.utc) - timedelta(seconds=1)
     await db_session.commit()
 
@@ -73,10 +71,10 @@ async def test_rotation_reuse_and_rotation_policy(db_session):
     assert rotation3.id != rotation1.id
 
     entries = await ShopService.list_entries(db_session)
-    # Round-robin offset moved by one → first entry is the second character.
-    assert entries[0][1].id == chars[1].id
+    assert len(entries) == 3
+    assert {c.id for _, c, _ in entries} == {c.id for c in chars}
 
-    # After a full cycle, every character re-enters (re-entry allowed).
+    # Small pools still offer every eligible card (re-entry allowed).
     rotation3.ends_at = datetime.now(timezone.utc) - timedelta(seconds=1)
     await db_session.commit()
     await ShopService.current_rotation(db_session)
@@ -96,7 +94,7 @@ async def test_purchase_deducts_apples_and_grants_card(db_session):
     entry, character, owned = entries[0]
     assert not owned
 
-    price = ShopService.card_price()
+    price = ShopService.card_price(character)
     outcome = await ShopService.purchase(db_session, user.id, entry.id, nonce="buytest0001")
     card = outcome.card
     await db_session.commit()
@@ -180,3 +178,64 @@ async def test_pool_config_limits_entries(db_session):
     rotation = await ShopService.current_rotation(db_session)
     entries = await ShopService.list_entries(db_session)
     assert {c.id for _, c, _ in entries} == {chars[1].id, chars[3].id}
+
+
+@pytest.mark.parametrize("pool_size", [5, 6, 21])
+async def test_rotation_selects_exactly_five_unique_cards_and_reuses_them(db_session, pool_size):
+    chars = await _make_characters(db_session, pool_size)
+    entries = await ShopService.list_entries(db_session)
+    selected = [(entry.id, character.id) for entry, character, _ in entries]
+    assert len(selected) == 5
+    assert len({character_id for _, character_id in selected}) == 5
+    assert {character_id for _, character_id in selected} <= {c.id for c in chars}
+    assert [entry.sort_order for entry, _, _ in entries] == list(range(5))
+    await db_session.commit()
+    assert [(e.id, c.id) for e, c, _ in await ShopService.list_entries(db_session)] == selected
+
+    rotation = await ShopService.current_rotation(db_session)
+    rotation.ends_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    await db_session.commit()
+    next_entries = await ShopService.list_entries(db_session)
+    assert len(next_entries) == 5
+    assert len({character.id for _, character, _ in next_entries}) == 5
+    historical = list((await db_session.scalars(
+        select(ShopEntry).where(ShopEntry.rotation_id == rotation.id).order_by(ShopEntry.sort_order)
+    )).all())
+    assert [(entry.id, entry.character_id) for entry in historical] == selected
+
+
+async def test_five_card_selection_respects_configured_pool_and_eligibility(db_session):
+    chars = await _make_characters(db_session, 12)
+    chars[0].is_active = False
+    chars[1].shop_enabled = False
+    chars[2].release_status = ReleaseStatus.DRAFT
+    chars[3].release_status = ReleaseStatus.RETIRED
+    await ConfigService.set(db_session, "shop_pool_character_ids", [c.id for c in chars[:10]])
+    entries = await ShopService.list_entries(db_session)
+    assert len(entries) == 5
+    assert {c.id for _, c, _ in entries} <= {c.id for c in chars[4:10]}
+
+
+def test_weighted_selection_makes_legendaries_rare_but_possible():
+    from collections import Counter
+
+    from sib.database.models import Character
+
+    pool = [
+        Character(id=index * 8 + offset, rarity=rarity)
+        for index, rarity in enumerate(("COMMON", "RARE", "EPIC", "LEGENDARY"))
+        for offset in range(8)
+    ]
+    counts = Counter()
+    for sequence in range(1, 2001):
+        selected = ShopService._select_characters(pool, sequence)
+        assert len(selected) == len({c.id for c in selected}) == 5
+        counts.update(c.rarity for c in selected)
+    assert counts["COMMON"] > counts["RARE"] > counts["EPIC"] > counts["LEGENDARY"] > 0
+    assert counts["LEGENDARY"] < 0.02 * sum(counts.values())
+    assert ShopService._select_characters(pool, 42) == ShopService._select_characters(pool, 42)
+    assert len(pool) == 32  # Sampling does not mutate the pool.
+
+
+def test_empty_rotation_pool_has_no_entries():
+    assert ShopService._select_characters([], 1) == []

@@ -383,7 +383,7 @@ def test_075_migration_revises_074_and_079_is_the_single_head():
     assert migration.revision == "075_rocket_game"
     assert migration.down_revision == "074_theft_system"
     scripts = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["080_group_doctors"]
+    assert scripts.get_heads() == ["081_card_rarity"]
     assert scripts.get_revision("075_rocket_game").down_revision == "074_theft_system"
     assert {key: CONFIG_DEFAULTS[key] for key in EXPECTED_CONFIG} == EXPECTED_CONFIG
     assert migration._CONFIG_DEFAULTS == EXPECTED_SEED
@@ -444,6 +444,8 @@ def test_alembic_upgrade_from_074_and_downgrade(tmp_path):
     engine = sa.create_engine(f"sqlite:///{database}")
     with engine.begin() as connection:
         connection.execute(sa.text("CREATE TABLE users (id BIGINT PRIMARY KEY)"))
+        connection.execute(sa.text("CREATE TABLE characters (code VARCHAR(64) PRIMARY KEY, rarity VARCHAR(20) NOT NULL DEFAULT 'COMMON')"))
+        connection.execute(sa.text("CREATE TABLE shop_rotations (is_active BOOLEAN NOT NULL)"))
         connection.execute(
             sa.text(
                 "CREATE TABLE system_config (`key` VARCHAR(64) PRIMARY KEY, "
@@ -471,8 +473,8 @@ def test_alembic_upgrade_from_074_and_downgrade(tmp_path):
 
     alembic("stamp", "074_theft_system")
     alembic("upgrade", "head")
-    assert alembic("heads") == "080_group_doctors (head)"
-    assert "080_group_doctors" in alembic("current")
+    assert alembic("heads") == "081_card_rarity (head)"
+    assert "081_card_rarity" in alembic("current")
     engine = sa.create_engine(f"sqlite:///{database}")
     assert sa.inspect(engine).has_table("user_rocket_states")
     # Later migrations seed their own keys, so assert only rocket's values.
