@@ -15,7 +15,7 @@ from sib.services.player_cards import PlayerCardService
 from sib.services.shop import ShopService
 from sib.services.telegram_ui import photo_caption
 from sib.services.wiki import CollectionService, WikiService
-from sib.tests.test_card_lore import PRICE_LINE, _buttons, _entries, _seeded
+from sib.tests.test_card_lore import EPIC_PRICE_LINE as PRICE_LINE, _buttons, _entries, _seeded
 from sib.tests.test_card_upgrade import _fund
 from sib.tests.test_parties import create_test_user
 
@@ -43,7 +43,7 @@ def test_goje_seed_is_verbatim_without_invented_role_or_mechanics():
 
 
 async def test_goje_wiki_group_shop_and_full_caption_are_consistent(db_session):
-    characters = await _seeded(db_session)
+    characters = await _seeded(db_session, shop_code="goje")
     goje = characters[GOJE_CODE]
     assert goje.name_fa == GOJE_NAME and goje.affiliations_fa == GOJE_AFFILIATIONS
     assert goje.lore_fa == GOJE_STORY
@@ -153,9 +153,9 @@ async def test_goje_sync_preserves_other_cards_and_player_state(db_session, monk
 
 
 async def test_goje_purchase_main_selection_upgrade_and_back_are_preserved(db_session):
-    goje = (await _seeded(db_session))[GOJE_CODE]
+    goje = (await _seeded(db_session, shop_code="goje"))[GOJE_CODE]
     user = await create_test_user(db_session, "بازی با گوجه رسمی")
-    await _fund(db_session, user, apples=1000, gold=3)
+    await _fund(db_session, user, apples=6700, gold=3)
     entry = next(
         entry for entry, character, _ in await ShopService.list_entries(db_session)
         if character.id == goje.id
@@ -165,7 +165,7 @@ async def test_goje_purchase_main_selection_upgrade_and_back_are_preserved(db_se
     await db_session.commit()
     replay = await ShopService.purchase(db_session, user.id, entry.id, nonce="officialgoje01")
     await db_session.commit()
-    assert first.price == 300 and not first.replayed and replay.replayed
+    assert first.price == 6000 and not first.replayed and replay.replayed
     assert await AppleWalletService.get_balance(db_session, user.id) == 700
     card = first.card
     detail, keyboard, photo = await _card_view(user.id, card.id)

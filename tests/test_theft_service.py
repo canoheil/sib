@@ -204,7 +204,7 @@ def test_migration_074_revises_073_and_079_is_the_single_head():
     assert migration.revision == "074_theft_system"
     assert migration.down_revision == "073_disease_started_flag"
     scripts = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["080_group_doctors"]
+    assert scripts.get_heads() == ["081_card_rarity"]
     assert scripts.get_revision("074_theft_system").down_revision == "073_disease_started_flag"
 
 
@@ -276,7 +276,7 @@ def test_migration_upgrade_creates_table_seeds_and_preserves_overrides(migration
 
 def test_alembic_real_upgrade_and_downgrade_from_073(tmp_path):
     scripts = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["080_group_doctors"]
+    assert scripts.get_heads() == ["081_card_rarity"]
 
     database = tmp_path / "theft_migration.db"
     engine = sa.create_engine(f"sqlite:///{database}")
@@ -294,7 +294,7 @@ def test_alembic_real_upgrade_and_downgrade_from_073(tmp_path):
         assert result.returncode == 0, result.stdout + result.stderr
         return result.stdout.strip()
 
-    assert alembic("heads") == "080_group_doctors (head)"
+    assert alembic("heads") == "081_card_rarity (head)"
     alembic("stamp", "073_disease_started_flag")
     alembic("upgrade", "074_theft_system")
     alembic("upgrade", "074_theft_system")
@@ -337,7 +337,7 @@ def test_migration_078_revises_077_and_seeds_decay_hours():
     assert migration.revision == "078_wanted_decay"
     assert migration.down_revision == "077_pet_rename"
     scripts = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["080_group_doctors"]
+    assert scripts.get_heads() == ["081_card_rarity"]
     assert scripts.get_revision("078_wanted_decay").down_revision == "077_pet_rename"
     # The code default and the seeded value agree.
     assert CONFIG_DEFAULTS["theft_star_decay_hours"] == 3

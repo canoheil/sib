@@ -13,7 +13,7 @@ Covers the whole delivery end to end:
   helper (no formula change);
 * every game surface: shop rotation + list/detail screens, wiki index and
   character page, owned-card collection/detail;
-* shop economics: exactly 300 Apples per card, deducted once, with the
+* shop economics: rarity-based prices, deducted once, with the
   existing ownership/idempotency/balance protections intact;
 * seed safety: re-running creates nothing and never touches player data.
 """
@@ -26,7 +26,6 @@ import pytest
 from sqlalchemy import select
 
 from sib.database.models import (
-    SHOP_CARD_PRICE_APPLES,
     AppleTransaction,
     Character,
     PlayerCard,
@@ -45,6 +44,7 @@ from sib.services.characters import CharacterService, CharacterValidationError
 from sib.services.factions import FactionService
 from sib.services.shop import ShopError, ShopService
 from sib.services.wiki import CollectionService, WikiService
+from sib.services.config_store import ConfigService
 from sib.tests.test_card_lore_filo import FILO_AFFILIATIONS, FILO_STORY
 from sib.tests.test_card_lore_goje import GOJE_AFFILIATIONS, GOJE_STORY
 from sib.tests.test_card_lore_green_knight import KNIGHT_AFFILIATIONS, KNIGHT_STORY
@@ -423,75 +423,49 @@ async def test_power_users_cannot_bypass_the_budget_when_editing(db_session):
 
 
 @pytest.mark.asyncio
-async def test_all_new_cards_are_offered_in_the_shop_rotation(db_session):
-    characters = await _seeded(db_session)
+async def test_all_new_cards_are_in_the_pool_but_only_five_are_offered(db_session):
+    await _seeded(db_session)
+    pool = await ShopService._pool_characters(db_session)
+    assert {c.code for c in pool} == set(AUDITED_CARDS) | set(NEW_CODES)
     entries = await ShopService.list_entries(db_session)
     offered = {character.code for _entry, character, _owned in entries}
-    assert set(NEW_CODES) <= offered
-    assert set(AUDITED_CARDS) <= offered
+    assert len(entries) == len(offered) == 5
+    assert offered <= {c.code for c in pool}
 
 
 @pytest.mark.asyncio
-async def test_shop_card_list_shows_every_new_card_for_300_apples(db_session):
-    from sib.handlers.shop import SHOP_CARDS_PAGE_SIZE, _cards_view
+async def test_shop_card_list_shows_five_cards_at_their_rarity_prices(db_session):
+    from sib.handlers.shop import _cards_view
 
-    characters = await _seeded(db_session)
+    await _seeded(db_session)
     user_id = await _buyer(db_session, apples=0)
     entries = await ShopService.list_entries(db_session, user_id=user_id)
-    total_pages = (len(entries) + SHOP_CARDS_PAGE_SIZE - 1) // SHOP_CARDS_PAGE_SIZE
     await db_session.commit()  # _cards_view reads through the handler's own session
-    assert len(entries) == 19 and total_pages == 4
-
-    all_text = []
-    all_labels = []
-    for page in range(total_pages):
-        text, kb = await _cards_view(user_id, page=page)
-        all_text.append(text)
-        labels = [button.text for row in kb.inline_keyboard for button in row]
-        all_labels.extend(labels)
-
-        card_rows = [
-            row for row in kb.inline_keyboard
-            if row and row[0].callback_data.startswith(("shop_item:", "shop_owned:"))
-        ]
-        expected_count = min(SHOP_CARDS_PAGE_SIZE, len(entries) - page * SHOP_CARDS_PAGE_SIZE)
-        assert len(card_rows) == expected_count
-        # Only the last page may be partial; every other page is full.
-        assert expected_count == SHOP_CARDS_PAGE_SIZE or page + 1 == total_pages
-        assert all(len(row) == 1 for row in card_rows)  # one vertical column
-        visible_entry_ids = [int(row[0].callback_data.split(":")[1]) for row in card_rows]
-        expected_entry_ids = [entry.id for entry, _character, _owned in entries][
-            page * SHOP_CARDS_PAGE_SIZE : (page + 1) * SHOP_CARDS_PAGE_SIZE
-        ]
-        assert visible_entry_ids == expected_entry_ids
-        assert f"📖 صفحه {page + 1} از {total_pages}" in text
-        assert text.count(f"{SHOP_CARD_PRICE_APPLES} سیب") == expected_count
-
-        previous = [button for button in kb.inline_keyboard[-3] if button.text == "◀️ قبلی"]
-        following = [button for button in kb.inline_keyboard[-3] if button.text == "▶️ بعدی"]
-        assert bool(previous) == (page > 0)
-        assert bool(following) == (page + 1 < total_pages)
-        if previous:
-            assert previous[0].callback_data == f"shop_cards:{page - 1}"
-        if following:
-            assert following[0].callback_data == f"shop_cards:{page + 1}"
-        assert kb.inline_keyboard[-2][0].callback_data == f"shop_cards:{page}"
-        assert kb.inline_keyboard[-1][0].callback_data == "shop_refresh"
-
-    joined_text = "\n".join(all_text)
-    for code in NEW_CODES:
-        name = characters[code].name_fa
-        assert joined_text.count(name) == 1
-        assert any(name in label and f"({SHOP_CARD_PRICE_APPLES} 🍎)" in label for label in all_labels), code
-    # Across pages the unified price appears once per purchasable card.
-    assert joined_text.count(f"{SHOP_CARD_PRICE_APPLES} سیب") == len(entries)
+    assert len(entries) == 5
+    text, kb = await _cards_view(user_id)
+    card_rows = [
+        row for row in kb.inline_keyboard
+        if row and row[0].callback_data.startswith(("shop_item:", "shop_owned:"))
+    ]
+    assert len(card_rows) == 5 and all(len(row) == 1 for row in card_rows)
+    assert [int(row[0].callback_data.split(":")[1]) for row in card_rows] == [e.id for e, _, _ in entries]
+    for row, (_entry, character, _) in zip(card_rows, entries):
+        price = ShopService.card_price(character)
+        assert character.name_fa in text
+        assert f"{price} سیب" in text
+        assert character.name_fa in row[0].text and f"({price} 🍎)" in row[0].text
+    assert "📖 صفحه" not in text
+    assert kb.inline_keyboard[-2][0].callback_data == "shop_cards:0"
+    assert kb.inline_keyboard[-1][0].callback_data == "shop_refresh"
 
 
 @pytest.mark.asyncio
-async def test_new_card_detail_screen_shows_its_art_and_the_300_price(db_session):
+async def test_new_card_detail_screen_shows_its_art_and_rarity_price(db_session):
     from sib.handlers.shop import _shop_item_view
 
     characters = await _seeded(db_session)
+    await ConfigService.set(db_session, "shop_pool_character_ids", [characters["moon_lily"].id])
+    await db_session.commit()
     user_id = await _buyer(db_session)
     entries = await ShopService.list_entries(db_session, user_id=user_id)
     entry, character, _owned = next(
@@ -502,7 +476,7 @@ async def test_new_card_detail_screen_shows_its_art_and_the_300_price(db_session
 
     text, kb, art_photo = await _shop_item_view(user_id, entry_id)
     assert character.name_fa in text
-    assert f"💰 قیمت: {SHOP_CARD_PRICE_APPLES} سیب" in text
+    assert f"💰 قیمت: {ShopService.card_price(character)} سیب" in text
     assert art_photo is not None  # the bundled original art
     callbacks = [button.callback_data for row in kb.inline_keyboard for button in row]
     assert any(callback.startswith(f"shop_buy:{entry_id}:") for callback in callbacks)
@@ -510,11 +484,14 @@ async def test_new_card_detail_screen_shows_its_art_and_the_300_price(db_session
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("code", NEW_CODES)
-async def test_every_new_card_is_purchasable_for_exactly_300_apples(db_session, code):
+async def test_every_new_card_is_purchasable_for_its_rarity_price(db_session, code):
     characters = await _seeded(db_session)
-    user_id = await _buyer(db_session, apples=1_000)
+    await ConfigService.set(db_session, "shop_pool_character_ids", [characters[code].id])
+    await db_session.commit()
+    user_id = await _buyer(db_session, apples=20_000)
     entries = await ShopService.list_entries(db_session, user_id=user_id)
     entry, character, _owned = next(item for item in entries if item[1].code == code)
+    price = ShopService.card_price(character)
 
     outcome = await ShopService.purchase(
         db_session, user_id, entry.id, nonce=f"newcard{code[:6]:0<12}"
@@ -522,8 +499,8 @@ async def test_every_new_card_is_purchasable_for_exactly_300_apples(db_session, 
     await db_session.commit()
 
     assert outcome.replayed is False
-    assert outcome.price == SHOP_CARD_PRICE_APPLES
-    assert await AppleWalletService.get_balance(db_session, user_id) == 1_000 - 300
+    assert outcome.price == price
+    assert await AppleWalletService.get_balance(db_session, user_id) == 20_000 - price
     owned = await db_session.scalar(
         select(PlayerCard.id).where(
             PlayerCard.user_id == user_id, PlayerCard.character_id == character.id
@@ -539,7 +516,7 @@ async def test_every_new_card_is_purchasable_for_exactly_300_apples(db_session, 
             )
         )
     ).all()
-    assert [row.amount for row in ledger] == [-300]
+    assert [row.amount for row in ledger] == [-price]
     assert ledger[0].ref_id == entry.id
 
 
@@ -547,6 +524,8 @@ async def test_every_new_card_is_purchasable_for_exactly_300_apples(db_session, 
 async def test_purchase_protections_still_hold_for_a_new_card(db_session):
     """Insufficient balance, duplicate ownership and nonce replay."""
     characters = await _seeded(db_session)
+    await ConfigService.set(db_session, "shop_pool_character_ids", [characters["green_knight"].id])
+    await db_session.commit()
     entry, character, _owned = next(
         item
         for item in await ShopService.list_entries(db_session)
@@ -651,7 +630,9 @@ async def test_collection_lists_new_cards_once_owned(db_session):
     from sib.services.player_cards import PlayerCardService
 
     characters = await _seeded(db_session)
-    user_id = await _buyer(db_session, apples=1_000)
+    await ConfigService.set(db_session, "shop_pool_character_ids", [characters["wizard"].id])
+    await db_session.commit()
+    user_id = await _buyer(db_session, apples=20_000)
     entries = await ShopService.list_entries(db_session, user_id=user_id)
     entry, character, _owned = next(item for item in entries if item[1].code == "wizard")
     await ShopService.purchase(db_session, user_id, entry.id, nonce="newcardsurf01")
@@ -693,7 +674,9 @@ async def test_seed_is_idempotent_and_never_touches_player_data(db_session):
     from sib.database.connection import seed_characters
 
     characters = await _seeded(db_session)
-    user_id = await _buyer(db_session, apples=1_000)
+    await ConfigService.set(db_session, "shop_pool_character_ids", [characters["igris"].id])
+    await db_session.commit()
+    user_id = await _buyer(db_session, apples=20_000)
     igris = characters["igris"]
     entry, character, _owned = next(
         item for item in await ShopService.list_entries(db_session) if item[1].code == "igris"
@@ -806,7 +789,7 @@ async def test_new_cards_enter_an_existing_installations_next_shop_rotation(db_s
         character.code for _e, character, _o in await ShopService.list_entries(db_session)
     } == set(AUDITED_CARDS)  # the historical rotation is immutable
 
-    # --- Weekly rollover: every card is offered, the new ones included -----
+    # --- Weekly rollover: new cards join the five-card selection pool ------
     rotation = await db_session.get(ShopRotation, old_rotation_id)
     rotation.ends_at = datetime.now(timezone.utc) - timedelta(seconds=1)
     await db_session.commit()
@@ -816,7 +799,9 @@ async def test_new_cards_enter_an_existing_installations_next_shop_rotation(db_s
     offered_after = {
         character.code for _e, character, _o in await ShopService.list_entries(db_session)
     }
-    assert offered_after == set(AUDITED_CARDS) | set(NEW_CODES)
+    assert len(offered_after) == 5
+    assert offered_after <= set(AUDITED_CARDS) | set(NEW_CODES)
+    assert offered_after & set(NEW_CODES)
 
 
 @pytest.mark.asyncio

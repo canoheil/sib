@@ -21,7 +21,7 @@ from sib.services.player_cards import PlayerCardService
 from sib.services.shop import ShopService
 from sib.services.telegram_ui import photo_caption
 from sib.services.wiki import CollectionService, WikiService
-from sib.tests.test_card_lore import PRICE_LINE, _buttons, _entries, _seeded
+from sib.tests.test_card_lore import EPIC_PRICE_LINE as PRICE_LINE, _buttons, _entries, _seeded
 from sib.tests.test_card_upgrade import _fund
 from sib.tests.test_parties import create_test_user
 
@@ -64,7 +64,7 @@ def test_tifun_seed_preserves_every_supplied_character_exactly():
 
 
 async def test_tifun_wiki_and_shop_show_full_story_and_separate_price(db_session):
-    characters = await _seeded(db_session)
+    characters = await _seeded(db_session, shop_code="tifun")
     tifun = characters[TIFUN_CODE]
     assert tifun.name_fa == TIFUN_NAME and tifun.name_en == "Tifun"
     assert tifun.affiliations_fa == TIFUN_AFFILIATIONS
@@ -195,9 +195,9 @@ async def test_tifun_purchase_main_selection_upgrade_and_back_are_preserved(db_s
 
     from aiogram.types import FSInputFile
 
-    tifun = (await _seeded(db_session))[TIFUN_CODE]
+    tifun = (await _seeded(db_session, shop_code="tifun"))[TIFUN_CODE]
     user = await create_test_user(db_session, "بازی با طیفان رسمی")
-    await _fund(db_session, user, apples=1000, gold=3)
+    await _fund(db_session, user, apples=6700, gold=3)
     entry = next(
         entry for entry, character, _ in await ShopService.list_entries(db_session)
         if character.id == tifun.id
@@ -207,7 +207,7 @@ async def test_tifun_purchase_main_selection_upgrade_and_back_are_preserved(db_s
     await db_session.commit()
     replay = await ShopService.purchase(db_session, user.id, entry.id, nonce="officialtifun001")
     await db_session.commit()
-    assert first.price == 300 and not first.replayed and replay.replayed
+    assert first.price == 6000 and not first.replayed and replay.replayed
     assert await AppleWalletService.get_balance(db_session, user.id) == 700
 
     card = first.card

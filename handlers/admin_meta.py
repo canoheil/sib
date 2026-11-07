@@ -91,9 +91,9 @@ async def _characters_text() -> str:
         characters = await CharacterService.list_all(session)
     from sib.services.shop import ShopService
 
-    card_price = ShopService.card_price()
     lines = ["👤 **مدیریت شخصیت‌ها**\n"]
     for c in characters:
+        card_price = ShopService.card_price(c)
         status = {"DRAFT": "📝", "RELEASED": "✅", "RETIRED": "🗄"}.get(c.release_status, "?")
         active = "" if c.is_active else " (غیرفعال)"
         lines.append(
@@ -103,9 +103,7 @@ async def _characters_text() -> str:
     lines.append(
         "\nشخصیت‌ها را از طریق داده‌ها (seed JSON / سرویس CharacterService) اضافه کنید — بدون تغییر کد."
     )
-    lines.append(
-        f"💰 قیمت همهٔ کارت‌های فروشگاه ثابت و سراسری است: {card_price} سیب."
-    )
+    lines.append("💰 قیمت کارت‌های فروشگاه بر اساس کمیابی تعیین می‌شود.")
     return "\n".join(lines)
 
 
@@ -116,14 +114,13 @@ async def _shop_text() -> str:
         entries = await ShopService.list_entries(session)
         rotation = await ShopService.current_rotation(session)
 
-    price = ShopService.card_price()
     lines = [
         "🏪 **مدیریت فروشگاه**\n",
         f"چرخش فعلی: `{rotation.week_id}` تا {rotation.ends_at}",
-        f"💰 قیمت سراسری کارت‌ها: `{price}` سیب",
         "",
     ]
     for entry, character, _ in entries:
+        price = ShopService.card_price(character)
         badge = f" | {entry.badge}" if entry.badge else ""
         lines.append(f"🍎 {character.name_fa} — {price} سیب{badge}")
     lines.append("\nتنظیمات: shop_rotation_hours / shop_pool_character_ids در پیکربندی سیستم.")

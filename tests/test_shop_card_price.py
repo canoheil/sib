@@ -1,18 +1,4 @@
-"""Unified shop card pricing: EVERY card costs exactly 300 Apples.
-
-Covers the whole rule end to end:
-
-* the single price definition/accessor (:data:`SHOP_CARD_PRICE_APPLES`,
-  ``ShopService.card_price()``) is 300 and takes no per-card input;
-* every card in every rotation costs the same, including cards whose legacy
-  ``characters.price`` / ``shop_entries.price_override`` columns still hold
-  a historical value, and cards registered AFTER the rule was introduced;
-* the debit, the ledger row and the screens all use that one value;
-* the client cannot supply (or influence) a price;
-* balance/ownership/idempotency validations are unchanged;
-* the deprecated rarity column has no effect on pricing, screens or the
-  purchase itself, and unrelated acquisition/economy paths are untouched.
-"""
+"""Rarity-based card pricing, legacy override isolation, UI and atomic purchases."""
 
 import inspect
 
@@ -78,19 +64,22 @@ async def _card_count(session, user_id: int, character_id: int) -> int:
 
 
 # ---------------------------------------------------------------------------
-# 1. One definition, one value, no per-card input
+# 1. One rarity price map; no per-card/client price input
 # ---------------------------------------------------------------------------
 
 
-def test_the_unified_card_price_is_exactly_300():
-    assert SHOP_CARD_PRICE_APPLES == EXPECTED_PRICE
-    assert ShopService.card_price() == EXPECTED_PRICE
+@pytest.mark.parametrize("rarity, price", [
+    ("COMMON", 300), ("RARE", 2000), ("EPIC", 6000), ("LEGENDARY", 15000),
+])
+def test_card_price_matches_rarity(rarity, price):
+    assert SHOP_CARD_PRICE_APPLES == EXPECTED_PRICE  # Legacy/default COMMON price.
+    assert ShopService.card_price(Character(rarity=rarity, price=1)) == price
 
 
-def test_card_price_takes_no_entry_character_or_client_input():
-    """The price cannot even *be* overridden: nothing is passed in."""
+def test_card_price_uses_a_character_but_never_a_client_price():
+    """Pricing comes from the persisted character, not callback input."""
     params = inspect.signature(ShopService.card_price).parameters
-    assert list(params) == []
+    assert list(params) == ["character"]
     # The purchase API has no price/amount parameter either - it is derived
     # server-side from the single rule.
     purchase_params = inspect.signature(ShopService.purchase).parameters
@@ -100,7 +89,7 @@ def test_card_price_takes_no_entry_character_or_client_input():
 def test_character_service_has_no_per_card_price_api():
     create_params = inspect.signature(CharacterService.create).parameters
     assert "price" not in create_params
-    assert "rarity" not in create_params
+    assert create_params["rarity"].default == "COMMON"
 
 
 async def test_new_cards_get_the_unified_price_without_configuration(db_session):
@@ -119,18 +108,18 @@ async def test_new_cards_get_the_unified_price_without_configuration(db_session)
 
 
 # ---------------------------------------------------------------------------
-# 2. Every listed card costs 300 (identity/faction/stats/release date irrelevant)
+# 2. COMMON defaults and legacy price columns
 # ---------------------------------------------------------------------------
 
 
-async def test_every_card_in_the_rotation_costs_the_same_300(db_session):
+async def test_common_cards_in_the_rotation_cost_300(db_session):
     await _make_characters(db_session, 4)
     await db_session.commit()
 
     entries = await ShopService.list_entries(db_session)
     assert entries
     for _entry, _character, _owned in entries:
-        assert ShopService.card_price() == EXPECTED_PRICE
+        assert ShopService.card_price(_character) == EXPECTED_PRICE
 
 
 async def test_legacy_price_columns_cannot_change_the_price(db_session):
@@ -327,71 +316,90 @@ async def test_duplicate_purchase_and_nonce_replay_are_unchanged(db_session):
 
 
 # ---------------------------------------------------------------------------
-# 7. Rarity: no effect on price, screens or the purchase itself
+# 7. Rarity changes the price, never stats, ownership or progression
 # ---------------------------------------------------------------------------
 
 
-async def test_rarity_is_not_an_editable_field_any_more(db_session):
+async def test_rarity_is_editable_and_validated(db_session):
     from sib.services.characters import CharacterValidationError
 
     character = await CharacterService.create(
-        db_session, code="no_rarity_edit", name_fa="بدون رتبه", power=20, speed=20, intelligence=20
+        db_session, code="rarity_edit", name_fa="کارت", power=20, speed=20, intelligence=20,
+        rarity="EPIC",
     )
-    await db_session.commit()
-
+    assert character.rarity == "EPIC"
+    await CharacterService.update(db_session, character.id, rarity="LEGENDARY")
+    assert character.rarity == "LEGENDARY"
     with pytest.raises(CharacterValidationError):
-        await CharacterService.update(db_session, character.id, rarity="LEGENDARY")
-    await db_session.rollback()
-    # Metadata edits (unrelated to rarity/pricing) still work.
-    await CharacterService.update(db_session, character.id, name_en="No Rarity")
-    await db_session.commit()
-    assert character.name_en == "No Rarity"
+        await CharacterService.update(db_session, character.id, rarity="MYTHIC")
+    assert character.rarity == "LEGENDARY"
+    assert character.stats_dict() == {"power": 20, "speed": 20, "intelligence": 20}
 
 
-def test_the_price_has_no_rarity_input_at_all():
-    """There is no rarity tier to price by: the accessor takes no arguments
-    and the model keeps the (deprecated, unread) column only as data."""
-    assert list(inspect.signature(ShopService.card_price).parameters) == []
-    from sib.database.models.shop import SHOP_CARD_PRICE_APPLES as FROM_MODELS
-
-    assert FROM_MODELS == EXPECTED_PRICE
-
-
-async def test_rarity_values_do_not_change_rendering_or_pricing(db_session):
+async def test_rarity_changes_only_the_price_line_in_rendering(db_session):
     common = await CharacterService.create(
         db_session, code="rarity_common", name_fa="کارت مشترک", power=20, speed=20, intelligence=20
     )
     legendary = await CharacterService.create(
-        db_session, code="rarity_legendary", name_fa="کارت مشترک", power=20, speed=20, intelligence=20
+        db_session, code="rarity_legendary", name_fa="کارت مشترک", power=20, speed=20, intelligence=20,
+        rarity="LEGENDARY",
     )
-    await db_session.commit()
-    common.rarity = "COMMON"
-    legendary.rarity = "LEGENDARY"
-    await db_session.commit()
-
-    # Identical cards -> identical presentation, including the price line.
-    assert render_character_card(common) == render_character_card(legendary)
-    assert f"💰 قیمت: {EXPECTED_PRICE} سیب" in render_character_card(legendary)
-    for tier_label in ("کمیاب", "حماسی", "افسانه‌ای", "معمولی", "LEGENDARY", "COMMON"):
-        assert tier_label not in render_character_card(legendary)
+    assert render_character_card(common, show_price=False) == render_character_card(legendary, show_price=False)
+    assert "💰 قیمت: 300 سیب" in render_character_card(common)
+    assert "💰 قیمت: 15000 سیب" in render_character_card(legendary)
 
 
-async def test_a_rare_flagged_card_is_still_bought_for_300_and_works(db_session):
-    chars = await _make_characters(db_session, 1)
-    character = chars[0]
-    character.rarity = "LEGENDARY"
-    await _set_legacy_prices(db_session, character.id, 5000)
-    user_id = await _buyer(db_session, apples=1000)
+@pytest.mark.parametrize("rarity, price", [
+    ("COMMON", 300), ("RARE", 2000), ("EPIC", 6000), ("LEGENDARY", 15000),
+])
+async def test_rarity_price_matches_screens_debit_ledger_and_replay(db_session, rarity, price):
+    from sib.handlers.shop import _cards_view, _shop_item_view
+
+    (character,) = await _make_characters(db_session, 1)
+    await CharacterService.update(db_session, character.id, rarity=rarity)
+    await _set_legacy_prices(db_session, character.id, 5)
+    user_id = await _buyer(db_session, apples=20_000)
     entry, _character, _owned = (await ShopService.list_entries(db_session))[0]
-
-    outcome = await ShopService.purchase(db_session, user_id, entry.id, nonce="rarebuy00001")
+    entry.price_override = 1
     await db_session.commit()
+    text, kb = await _cards_view(user_id)
+    assert f"{price} سیب" in text
+    assert any(f"({price} 🍎)" in label for label in _labels(kb))
+    text, kb, _photo = await _shop_item_view(user_id, entry.id)
+    assert f"💰 قیمت: {price} سیب" in text
+    assert any(f"({price} 🍎)" in label for label in _labels(kb))
 
-    assert outcome.price == EXPECTED_PRICE
-    assert await AppleWalletService.get_balance(db_session, user_id) == 1000 - EXPECTED_PRICE
+    outcome = await ShopService.purchase(db_session, user_id, entry.id, nonce="raritybuy001")
+    await db_session.commit()
+    assert outcome.price == price and not outcome.replayed
+    assert await AppleWalletService.get_balance(db_session, user_id) == 20_000 - price
+    (ledger,) = await _shop_purchase_rows(db_session, user_id)
+    assert ledger.amount == -price and ledger.balance_after == 20_000 - price
     cards = await PlayerCardService.list_cards(db_session, user_id)
     assert [card.character_id for card in cards] == [character.id]
-    assert cards[0].level == 1  # normal card functionality, untouched
+    assert cards[0].level == 1
+
+    # A replay returns the price actually paid, even after reclassification.
+    await CharacterService.update(db_session, character.id, rarity="COMMON")
+    await db_session.commit()
+    replay = await ShopService.purchase(db_session, user_id, entry.id, nonce="raritybuy001")
+    assert replay.replayed and replay.price == price
+    assert await AppleWalletService.get_balance(db_session, user_id) == 20_000 - price
+    assert len(await _shop_purchase_rows(db_session, user_id)) == 1
+
+
+@pytest.mark.parametrize("rarity, price", [("RARE", 2000), ("EPIC", 6000), ("LEGENDARY", 15000)])
+async def test_higher_rarity_purchase_requires_its_full_price(db_session, rarity, price):
+    (character,) = await _make_characters(db_session, 1)
+    await CharacterService.update(db_session, character.id, rarity=rarity)
+    user_id = await _buyer(db_session, apples=price - 1)
+    entry, _, _ = (await ShopService.list_entries(db_session))[0]
+    with pytest.raises(ShopError, match=str(price)):
+        await ShopService.purchase(db_session, user_id, entry.id, nonce="raritypoor01")
+    await db_session.commit()
+    assert await AppleWalletService.get_balance(db_session, user_id) == price - 1
+    assert await _card_count(db_session, user_id, character.id) == 0
+    assert await _shop_purchase_rows(db_session, user_id) == []
 
 
 # ---------------------------------------------------------------------------
@@ -465,7 +473,7 @@ async def test_other_shop_and_economy_prices_are_untouched():
         15500, 19500, 24000, 29000, 35000,
     ]
     assert CONFIG_DEFAULTS["garden_max_plots"] == 20
-    # The shop card price is a code rule, not a config key that could drift.
+    # Rarity prices are defined in one code map, not a second flat-price key.
     assert "shop_card_price_apples" not in CONFIG_DEFAULTS
 
 

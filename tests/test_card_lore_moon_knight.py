@@ -47,7 +47,7 @@ def test_moon_knight_seed_preserves_all_official_fields_verbatim():
 
 
 async def test_moon_knight_wiki_and_shop_render_the_complete_official_text(db_session):
-    characters = await _seeded(db_session)
+    characters = await _seeded(db_session, shop_code="moon_knight")
     knight = characters[MOON_KNIGHT_CODE]
     assert knight.name_fa == MOON_KNIGHT_NAME
     assert knight.affiliations_fa == MOON_KNIGHT_AFFILIATIONS
@@ -167,7 +167,7 @@ async def test_moon_knight_sync_preserves_other_cards_and_player_state(db_sessio
 
 
 async def test_moon_knight_purchase_main_selection_upgrade_and_back_are_preserved(db_session):
-    knight = (await _seeded(db_session))[MOON_KNIGHT_CODE]
+    knight = (await _seeded(db_session, shop_code="moon_knight"))[MOON_KNIGHT_CODE]
     user = await create_test_user(db_session, "بازی با شوالیه ماه رسمی")
     await _fund(db_session, user, apples=1000, gold=3)
     entry = next(

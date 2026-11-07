@@ -9,7 +9,7 @@ from sib.services.characters import render_character_card
 from sib.services.factions import FactionService
 from sib.services.shop import ShopService
 from sib.services.wiki import WikiService
-from sib.tests.test_card_lore import PRICE_LINE, _entries, _seeded
+from sib.tests.test_card_lore import RARE_PRICE_LINE as PRICE_LINE, _entries, _seeded
 
 DAXIBE_AFFILIATIONS = "فرزانگان🔮"
 DAXIBE_STORY = "دکتر داکسیب، کیمیاگر مرموز فرزانگان، سال‌ها از عمر خود را صرف مطالعه بیماری‌ها و ساخت داروهای کمیاب کرده است. او باور دارد هر بیماری رازی در دل طبیعت پنهان کرده و هیچ درمانی بدون شناخت عمیق آن ممکن نیست."
@@ -28,7 +28,7 @@ def test_daxibe_seed_exact_content():
 
 
 async def test_daxibe_seed_wiki_shop_and_progression(db_session):
-    characters = await _seeded(db_session)
+    characters = await _seeded(db_session, shop_code="dr_daxibe")
     daxibe = characters["dr_daxibe"]
     assert daxibe.affiliations_fa == DAXIBE_AFFILIATIONS and daxibe.lore_fa == DAXIBE_STORY
     assert daxibe.passive_key is None and daxibe.hidden_modifiers is None

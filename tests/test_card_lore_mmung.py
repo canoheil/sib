@@ -15,7 +15,7 @@ from sib.services.player_cards import PlayerCardService
 from sib.services.shop import ShopService
 from sib.services.telegram_ui import photo_caption
 from sib.services.wiki import CollectionService, WikiService
-from sib.tests.test_card_lore import PRICE_LINE, _buttons, _entries, _seeded
+from sib.tests.test_card_lore import EPIC_PRICE_LINE as PRICE_LINE, _buttons, _entries, _seeded
 from sib.tests.test_card_upgrade import _fund
 from sib.tests.test_parties import create_test_user
 
@@ -47,7 +47,7 @@ def test_mmung_seed_preserves_every_supplied_character_exactly():
 
 
 async def test_mmung_wiki_and_shop_show_full_story_and_separate_price(db_session):
-    characters = await _seeded(db_session)
+    characters = await _seeded(db_session, shop_code="mmung")
     mmung = characters[MMUNG_CODE]
     assert mmung.name_fa == MMUNG_NAME
     assert mmung.affiliations_fa == MMUNG_AFFILIATIONS
@@ -167,9 +167,9 @@ async def test_mmung_sync_preserves_other_cards_and_player_state(db_session, mon
 
 
 async def test_mmung_purchase_main_selection_upgrade_and_back_are_preserved(db_session):
-    mmung = (await _seeded(db_session))[MMUNG_CODE]
+    mmung = (await _seeded(db_session, shop_code="mmung"))[MMUNG_CODE]
     user = await create_test_user(db_session, "بازی با ممونگ رسمی")
-    await _fund(db_session, user, apples=1000, gold=3)
+    await _fund(db_session, user, apples=6700, gold=3)
     entry = next(
         entry for entry, character, _ in await ShopService.list_entries(db_session)
         if character.id == mmung.id
@@ -179,7 +179,7 @@ async def test_mmung_purchase_main_selection_upgrade_and_back_are_preserved(db_s
     await db_session.commit()
     replay = await ShopService.purchase(db_session, user.id, entry.id, nonce="officialmmung01")
     await db_session.commit()
-    assert first.price == 300 and not first.replayed and replay.replayed
+    assert first.price == 6000 and not first.replayed and replay.replayed
     assert await AppleWalletService.get_balance(db_session, user.id) == 700
 
     card = first.card

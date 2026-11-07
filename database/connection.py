@@ -281,8 +281,9 @@ async def seed_characters(session) -> int:
                 hidden_modifiers=entry.get("hidden_modifiers"),
                 strengths=entry.get("strengths"),
                 weaknesses=entry.get("weaknesses"),
-                # No price key: every card is priced by the one unified
-                # shop rule (services.shop.ShopService.card_price).
+                # Existing rows are classified by migration 081; do not
+                # overwrite later operator rarity edits on startup.
+                rarity=entry.get("rarity", "COMMON"),
                 faction_id=faction.id if faction else None,
                 faction_role_fa=entry.get("faction_role_fa"),
                 affiliations_fa=entry.get("affiliations_fa"),

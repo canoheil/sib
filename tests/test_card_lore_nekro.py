@@ -8,7 +8,7 @@ from sib.services.characters import render_character_card
 from sib.services.factions import FactionService
 from sib.services.shop import ShopService
 from sib.services.wiki import WikiService
-from sib.tests.test_card_lore import PRICE_LINE, _entries, _seeded
+from sib.tests.test_card_lore import RARE_PRICE_LINE as PRICE_LINE, _entries, _seeded
 
 NEKRO_AFFILIATIONS = "فرزندان ماه🌙 - پنجه‌های ماه🐾"
 NEKRO_STORY = "تا پیش از ورود این موجود که حضورش در دنیای اواریا تابو محسوب می‌شود، امبر تنها کسی بود که برای مقابله با سیبومورتیس از جادوی سیاه استفاده کرده بود؛ اما ملکهٔ ماه که در برابر نیروی اهریمن هالووینی مستأصل شده بود، نکرومنسر را از میان خرابه‌های قبرستانی قدیمی احضار کرد و با وجود بی‌اعتمادی و تردید دربارهٔ نیت و مقاصد این موجود، او را به عضویت پنجه‌های ماه درآورد."
@@ -27,7 +27,7 @@ def test_nekro_seed_exact_content():
 
 
 async def test_nekro_seed_wiki_shop_and_progression(db_session):
-    characters = await _seeded(db_session)
+    characters = await _seeded(db_session, shop_code="nekro")
     nekro = characters["nekro"]
     assert nekro.affiliations_fa == NEKRO_AFFILIATIONS and nekro.lore_fa == NEKRO_STORY
     assert nekro.passive_key is None and nekro.hidden_modifiers is None
@@ -40,4 +40,4 @@ async def test_nekro_seed_wiki_shop_and_progression(db_session):
     assert NEKRO_AFFILIATIONS in wiki and NEKRO_STORY in wiki
     assert render_character_card(nekro) == wiki + "\n\n" + PRICE_LINE
     assert "nekro" in {character.code for _, character, _ in await ShopService.list_entries(db_session)}
-    assert (await _seeded(db_session))["nekro"].id == nekro.id
+    assert (await _seeded(db_session, shop_code="nekro"))["nekro"].id == nekro.id

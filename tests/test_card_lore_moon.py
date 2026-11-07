@@ -39,7 +39,7 @@ def test_moon_apple_seed_keeps_the_exact_official_message():
 
 
 async def test_moon_apple_wiki_and_shop_have_identical_full_text(db_session):
-    moon = (await _seeded(db_session))[MOON_CODE]
+    moon = (await _seeded(db_session, shop_code="sib_mahi"))[MOON_CODE]
     assert moon.name_fa == MOON_NAME
     assert moon.affiliations_fa == MOON_AFFILIATIONS
     assert moon.lore_fa == MOON_STORY
@@ -137,7 +137,7 @@ async def test_moon_replacement_preserves_other_cards_and_player_state(db_sessio
 
 
 async def test_moon_purchase_main_selection_upgrade_and_back_are_preserved(db_session):
-    moon = (await _seeded(db_session))[MOON_CODE]
+    moon = (await _seeded(db_session, shop_code="sib_mahi"))[MOON_CODE]
     # Historical per-card/per-entry prices must not override the 300 rule.
     moon.price = 250
     user = await create_test_user(db_session, "بازی با سیب ماهی رسمی")

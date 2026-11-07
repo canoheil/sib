@@ -1,6 +1,7 @@
 [
   {
     "code": "sib_sorkh",
+    "rarity": "COMMON",
     "name_fa": "سیب سرخ",
     "name_en": "Red Apple",
     "affiliations_fa": "امپراتوری👑 - تیغ های تاج🗡",
@@ -22,6 +23,7 @@
   },
   {
     "code": "sib_sabz",
+    "rarity": "COMMON",
     "name_fa": "سیب سبز",
     "name_en": "Green Apple",
     "affiliations_fa": "فرزانگان🔮",
@@ -43,6 +45,7 @@
   },
   {
     "code": "sib_talayi",
+    "rarity": "COMMON",
     "name_fa": "سیب طلایی",
     "name_en": "Golden Apple",
     "affiliations_fa": "فرزانگان🔮",
@@ -64,6 +67,7 @@
   },
   {
     "code": "sib_mahi",
+    "rarity": "COMMON",
     "name_fa": "سیب ماهی",
     "name_en": "Moon Apple",
     "affiliations_fa": "فرزندان ماه🌙",
@@ -85,6 +89,7 @@
   },
   {
     "code": "filo",
+    "rarity": "EPIC",
     "name_fa": "فیلو",
     "name_en": "Filo",
     "affiliations_fa": "امپراتوری👑",
@@ -100,6 +105,7 @@
   },
   {
     "code": "goje",
+    "rarity": "EPIC",
     "name_fa": "گوجه",
     "name_en": "Goje",
     "affiliations_fa": "امپراتوری👑",
@@ -115,6 +121,7 @@
   },
   {
     "code": "green_knight",
+    "rarity": "COMMON",
     "name_fa": "شوالیه سبز",
     "name_en": "Green Knight",
     "affiliations_fa": "فرزانگان🔮",
@@ -130,6 +137,7 @@
   },
   {
     "code": "igris",
+    "rarity": "LEGENDARY",
     "name_fa": "ایگریس",
     "name_en": "Igris",
     "affiliations_fa": "امپراتوری👑 - تیغ های تاج🗡",
@@ -145,6 +153,7 @@
   },
   {
     "code": "mmung",
+    "rarity": "EPIC",
     "name_fa": "ممونگ",
     "name_en": "Mmung",
     "affiliations_fa": "فرزندان ماه🌙 - پنجه‌های ماه🐾",
@@ -160,6 +169,7 @@
   },
   {
     "code": "moon_knight",
+    "rarity": "COMMON",
     "name_fa": "شوالیه ماه",
     "name_en": "Moon Knight",
     "affiliations_fa": "فرزندان ماه🌙 - پنجه‌های ماه🐾",
@@ -175,6 +185,7 @@
   },
   {
     "code": "moon_lily",
+    "rarity": "RARE",
     "name_fa": "نیلوفر ماه",
     "name_en": "Moon Lily",
     "affiliations_fa": "فرزندان ماه🌙",
@@ -190,6 +201,7 @@
   },
   {
     "code": "sage_king",
+    "rarity": "COMMON",
     "name_fa": "پادشاه فرزانه",
     "name_en": "Sage King",
     "affiliations_fa": "فرزانگان🔮",
@@ -205,6 +217,7 @@
   },
   {
     "code": "treyni",
+    "rarity": "RARE",
     "name_fa": "ترینی",
     "name_en": "Treyni",
     "affiliations_fa": "فرزانگان🔮",
@@ -220,6 +233,7 @@
   },
   {
     "code": "wizard",
+    "rarity": "RARE",
     "name_fa": "ویزارد",
     "name_en": "Wizard",
     "affiliations_fa": "فرزندان ماه🌙 - پنجه‌های ماه🐾",
@@ -235,6 +249,7 @@
   },
   {
     "code": "zarush",
+    "rarity": "EPIC",
     "name_fa": "زاریوش",
     "name_en": "Zarush",
     "affiliations_fa": "امپراتوری👑",
@@ -250,6 +265,7 @@
   },
   {
     "code": "mahmud",
+    "rarity": "RARE",
     "name_fa": "محمود",
     "name_en": "Mahmoud",
     "affiliations_fa": "امپراتوری 👑 - تیغ های تاج 🗡",
@@ -265,6 +281,7 @@
   },
   {
     "code": "tifun",
+    "rarity": "EPIC",
     "name_fa": "طیفان",
     "name_en": "Tifun",
     "affiliations_fa": "فرزانگان🔮",
@@ -280,6 +297,7 @@
   },
   {
     "code": "amber",
+    "rarity": "LEGENDARY",
     "name_fa": "امبر",
     "name_en": "Amber",
     "affiliations_fa": "فرزندان ماه🌙",
@@ -295,6 +313,7 @@
   },
   {
     "code": "hero",
+    "rarity": "LEGENDARY",
     "name_fa": "هیرو",
     "name_en": "Hero",
     "affiliations_fa": "امپراتوری👑",
@@ -311,6 +330,7 @@
   },
   {
     "code": "nekro",
+    "rarity": "RARE",
     "name_fa": "نکرو",
     "name_en": "Nekro",
     "affiliations_fa": "فرزندان ماه🌙 - پنجه‌های ماه🐾",
@@ -326,6 +346,7 @@
   },
   {
     "code": "dr_daxibe",
+    "rarity": "RARE",
     "name_fa": "دکتر داکسیب",
     "name_en": "Dr. Daxibe",
     "affiliations_fa": "فرزانگان🔮",

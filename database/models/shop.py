@@ -5,11 +5,9 @@ data-driven: duration (shop_rotation_hours) and the character pool
 (shop_pool_character_ids; empty = all released & shop-enabled) live in
 system_config.
 
-Card pricing is NOT data-driven and NOT per-card: the shop sells every
-card for exactly :data:`SHOP_CARD_PRICE_APPLES` Apples. There is no rarity
-tier and no per-card/per-entry price - see ``services/shop.py``
-(``ShopService.card_price``), which is the one price the purchase
-transaction and every screen use.
+Cards are priced by rarity through :data:`CARD_SHOP_PRICES`. Legacy
+per-card/per-entry prices are ignored; ``ShopService.card_price`` is the
+authoritative accessor used by purchases and every shop screen.
 """
 
 from datetime import datetime
@@ -20,17 +18,15 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from sib.database.base import Base, TimestampMixin
 
-# THE price of a shop card, in Apples - the single definition in the
-# codebase. Every card costs exactly this, regardless of identity, faction,
-# stats, release date or any legacy column value, and cards added in future
-# updates need no price configuration at all (the price is never read from
-# `characters.price` or `shop_entries.price_override`).
-#
-# It lives with the shop models (rather than in a service) so the character
-# model can reuse it as its backward-compatible column default without the
-# data layer importing services. Application code reads the price through
-# ``ShopService.card_price()``.
+# Backward-compatible default for the deprecated characters.price column.
+# Actual shop prices always come from the rarity map below.
 SHOP_CARD_PRICE_APPLES: int = 300
+CARD_SHOP_PRICES: dict[str, int] = {
+    "COMMON": SHOP_CARD_PRICE_APPLES,
+    "RARE": 2_000,
+    "EPIC": 6_000,
+    "LEGENDARY": 15_000,
+}
 
 
 class ShopEntryType:
@@ -65,10 +61,8 @@ class ShopEntry(Base, TimestampMixin):
     rotation_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
     character_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
     entry_type: Mapped[str] = mapped_column(String(20), default=ShopEntryType.CHARACTER, nullable=False)
-    # DEPRECATED: a per-entry price override. Card prices are unified
-    # (SHOP_CARD_PRICE_APPLES) and this column is never read - it is kept
-    # (always NULL, migration 033 clears any historical value) so no
-    # existing installation loses data and old rows stay loadable.
+    # DEPRECATED: per-entry overrides are ignored in favor of rarity prices.
+    # Kept for schema/history compatibility (migration 033 cleared old values).
     price_override: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     badge: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
