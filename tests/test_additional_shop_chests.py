@@ -1,6 +1,7 @@
 """Approved four-chest expansion: data, art, registration and real reward delivery.
 
-No new opening logic: all definitions use the existing shop-chest service.
+Archived definitions remain inspectable; only the Garden chest is still sold.
+Reward-engine regressions use separate custom fixture codes for retired tables.
 """
 
 import hashlib
@@ -22,6 +23,8 @@ from sib.services.config_store import CONFIG_DEFAULTS
 from sib.services.items import ITEM_CATALOG, ItemService
 from sib.services.player_cards import PlayerCardService
 from sib.services.shop_chests import (
+    RETIRED_CHEST_CODES,
+    ShopChestInactiveError,
     ShopChestInsufficientFundsError,
     ShopChestService,
     apply_chest_configs,
@@ -72,6 +75,15 @@ async def register(session):
     codes = await apply_chest_configs(session, CONFIGS)
     await session.commit()
     return codes
+
+
+async def custom_reward_fixture(session, config):
+    """Retain reward-table coverage without treating retired codes as buyable."""
+    if config["code"] in RETIRED_CHEST_CODES:
+        config = {**config, "code": f"custom_{config['code']}", "name": "Custom reward table"}
+        await apply_chest_configs(session, [config])
+        await session.commit()
+    return await ShopChestService.get_by_code(session, config["code"])
 
 
 async def funded_user(session, amount):
@@ -146,11 +158,11 @@ def test_default_resale_expected_return_is_below_the_purchase_price():
 
 
 @pytest.mark.asyncio
-async def test_registration_keeps_starter_and_renders_all_five_with_their_art(db_session):
+async def test_registration_keeps_historical_rows_but_only_renders_the_garden_chest(db_session):
     assert await register(db_session) == list(EXPECTED)
     user_id = await funded_user(db_session, 1000)
     chests = await ShopChestService.list_active(db_session)
-    assert [c.code for c in chests] == ["green_apple_chest", *EXPECTED]
+    assert [c.code for c in chests] == ["enchanted_garden_chest"]
     text, keyboard = await shop_handlers._chests_view(user_id)
     callbacks = {b.callback_data for row in keyboard.inline_keyboard for b in row}
     for chest in chests:
@@ -175,7 +187,7 @@ async def test_registration_keeps_starter_and_renders_all_five_with_their_art(db
 @pytest.mark.parametrize("config", CONFIGS, ids=lambda c: c["code"])
 async def test_every_reward_is_delivered_once_and_replay_never_charges_again(db_session, config):
     await register(db_session)
-    chest = await ShopChestService.get_by_code(db_session, config["code"])
+    chest = await custom_reward_fixture(db_session, config)
     roll = 0
     for index, reward in enumerate(config["rewards"]):
         user_id = await funded_user(db_session, 1000)
@@ -222,7 +234,7 @@ async def test_every_reward_is_delivered_once_and_replay_never_charges_again(db_
 async def test_faction_chest_duplicate_converts_to_60_apples(db_session, config):
     await register(db_session)
     user_id = await funded_user(db_session, 1000)
-    chest = await ShopChestService.get_by_code(db_session, config["code"])
+    chest = await custom_reward_fixture(db_session, config)
     character_id = await db_session.scalar(select(Character.id).where(
         Character.code == config["rewards"][0]["character_code"],
     ))
@@ -245,7 +257,8 @@ async def test_insufficient_funds_cannot_open_new_chests(db_session, config):
     await register(db_session)
     user_id = await funded_user(db_session, config["price_apples"] - 1)
     chest = await ShopChestService.get_by_code(db_session, config["code"])
-    with pytest.raises(ShopChestInsufficientFundsError):
+    error = ShopChestInactiveError if config["code"] in RETIRED_CHEST_CODES else ShopChestInsufficientFundsError
+    with pytest.raises(error):
         await ShopChestService.open_chest_reliably(
             user_id, chest.id, f"no-funds-{user_id}", rng=FixedRoll(0),
         )

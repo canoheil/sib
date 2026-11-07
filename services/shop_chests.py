@@ -7,7 +7,7 @@ Product rules (see docs/shop-chests.md):
 * A reward is a fixed apple amount, an ``ITEM_CATALOG`` item, or an eligible
   card. A card the user already owns is converted to ``duplicate_apples`` with
   NO collection XP.
-* Purchases are unlimited while the user can pay and the chest is active.
+* Non-retired chests can be purchased while the user can pay and the chest is active.
 * Four card-chest tiers draw rarity first, then uniformly within that rarity.
   Custom chests retain their independent reward tables.
 * All paid shop chests share a per-user pity counter: nine consecutive misses
@@ -96,6 +96,12 @@ USER_CHEST_UNAVAILABLE = "این صندوقچه فعلاً در دسترس نی�
 STALE_OPEN_TEXT = "این صفحه قدیمی است؛ از فروشگاه دوباره وارد صندوقچه شو."
 CARD_RACE_TEXT = "شما قبلاً این شخصیت را داری؛ صندوقچه دوباره باز نشد."
 
+
+# Retire sale by stable code, including rows still active in existing databases.
+# Keep definitions, inventories and recorded openings for historical reads/replays.
+RETIRED_CHEST_CODES = frozenset({
+    "sages_chest", "empire_chest", "moonlight_chest", "green_apple_chest",
+})
 
 PITY_THRESHOLD = 10  # Includes the guaranteed opening: nine misses, then Epic+.
 HIGH_RARITIES = ("EPIC", "LEGENDARY")
@@ -215,6 +221,7 @@ class ChestOpenResult:
     replayed: bool
     reward_rarity: Optional[str] = None
     pity_guaranteed: bool = False
+    chest_tier: Optional[str] = None
 
 
 def _is_int(value: Any) -> bool:
@@ -391,10 +398,18 @@ class ShopChestService:
     # ----- reads -----------------------------------------------------------
 
     @staticmethod
+    def is_purchasable(chest: ShopChest) -> bool:
+        return bool(chest.is_active) and chest.code not in RETIRED_CHEST_CODES
+
+    @staticmethod
     async def list_active(session: AsyncSession) -> List[ShopChest]:
+        """Sale catalog, excluding retired codes even on previously active rows."""
         rows = await session.scalars(
             select(ShopChest)
-            .where(ShopChest.is_active.is_(True))
+            .where(
+                ShopChest.is_active.is_(True),
+                ShopChest.code.not_in(RETIRED_CHEST_CODES),
+            )
             .order_by(ShopChest.sort_order, ShopChest.id)
         )
         return list(rows.all())
@@ -732,6 +747,7 @@ class ShopChestService:
             replayed=replayed,
             reward_rarity=opening.reward_rarity,
             pity_guaranteed=opening.pity_guaranteed,
+            chest_tier=chest.tier if chest is not None else None,
         )
 
     @classmethod
@@ -794,7 +810,7 @@ class ShopChestService:
             raise ShopChestNotFoundError("صندوقچه پیدا نشد.")
         if expected_version is not None and chest.version != expected_version:
             raise ShopChestError(STALE_OPEN_TEXT)
-        if not chest.is_active:
+        if not cls.is_purchasable(chest):
             raise ShopChestInactiveError("این صندوقچه الان برای فروش نیست.")
         try:
             rewards = await cls.validate_chest(session, chest)
@@ -992,6 +1008,7 @@ class ShopChestService:
                 replayed=False,
                 reward_rarity=reward_rarity,
                 pity_guaranteed=guaranteed,
+                chest_tier=chest.tier,
             )
 
         if savepoints_supported(session):
